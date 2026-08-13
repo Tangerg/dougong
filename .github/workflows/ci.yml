@@ -1,0 +1,42 @@
+name: Verify
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: verify-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      # `pnpm install` runs the root `prepare` script, which installs the git
+      # hooks. There is nothing to hook in CI, and husky exits non-zero when it
+      # cannot find a working tree it owns.
+      HUSKY: "0"
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # One gate: types, lint, formatting, tests + coverage thresholds, dead
+      # code, import cycles, layer boundaries, and the published build. Same
+      # command a contributor runs locally, so a green local run means a green CI.
+      - name: Run repository verification
+        run: pnpm check

@@ -7,9 +7,36 @@
     "build": "pnpm --filter @dougong/reactive build && pnpm --filter @dougong/core build && pnpm --filter dougong build",
     "typecheck": "tsc --noEmit -p packages/reactive && tsc --noEmit -p packages/core && tsc --noEmit -p packages/dougong && tsc --noEmit -p tsconfig.test.json",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest --coverage.enabled=false",
+    "lint": "oxlint packages scripts --deny-warnings",
+    "lint:fix": "oxlint packages scripts --fix --deny-warnings",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "knip": "knip",
+    "check:circular": "node scripts/check-circular.mjs",
+    "check:layers": "node scripts/check-layers.mjs",
+    "check": "pnpm typecheck && pnpm lint && pnpm format:check && pnpm test && pnpm knip && pnpm check:circular && pnpm check:layers && pnpm build",
+    "prepare": "husky"
+  },
+  "lint-staged": {
+    "packages/*/{src,test}/**/*.ts": [
+      "prettier --write",
+      "oxlint --fix --deny-warnings"
+    ],
+    "scripts/*.mjs": [
+      "prettier --write",
+      "oxlint --fix --deny-warnings"
+    ],
+    "*.{json,ts,mjs}": "prettier --write"
   },
   "devDependencies": {
+    "@vitest/coverage-istanbul": "^3.2.7",
+    "husky": "^9.1.7",
+    "knip": "^6.32.2",
+    "lint-staged": "^17.3.0",
+    "madge": "^8.0.0",
+    "oxlint": "^1.78.0",
+    "prettier": "^3.9.6",
     "typescript": "^5.9.2",
     "vite": "^7.1.0",
     "vite-plugin-dts": "^4.5.4",

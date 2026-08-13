@@ -1,0 +1,10 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "plugins": ["typescript", "unicorn", "oxc", "import", "promise", "vitest"],
+  "rules": {
+    "unicorn/no-useless-spread": "off",
+    "typescript/no-this-alias": "off",
+    "typescript/consistent-type-imports": "error"
+  },
+  "ignorePatterns": ["packages/*/dist/**", "node_modules/**", "coverage/**"]
+}
