@@ -1,0 +1,18 @@
+{
+  "name": "dougong-workspace",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@10.14.0",
+  "scripts": {
+    "build": "pnpm --filter @dougong/reactive build && pnpm --filter @dougong/core build && pnpm --filter dougong build",
+    "typecheck": "tsc --noEmit -p packages/reactive && tsc --noEmit -p packages/core && tsc --noEmit -p packages/dougong && tsc --noEmit -p tsconfig.test.json",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.2",
+    "vite": "^7.1.0",
+    "vite-plugin-dts": "^4.5.4",
+    "vitest": "^3.2.4"
+  }
+}

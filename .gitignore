@@ -1,0 +1,26 @@
+# —— IDE / 编辑器 —— #
+.idea
+.vscode
+
+# —— Agent / 工具链（本地，不入库） —— #
+.agents
+.claude
+.opencode
+
+# —— 构建产物 —— #
+# 每个包各自 emit 到自己的 dist/。前置 packages/ 而不是裸 dist，
+# 避免顺带忽略任何嵌套的同名目录。
+packages/*/dist
+coverage
+*.tsbuildinfo
+
+# —— 依赖 —— #
+node_modules
+
+# —— 本地环境变量 —— #
+.env
+.env.local
+.env.*.local
+
+# —— OS 噪音 —— #
+.DS_Store
