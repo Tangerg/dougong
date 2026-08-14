@@ -1,6 +1,6 @@
 {
   "name": "@dougongjs/platform",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "type": "module",
   "engines": {
     "node": ">=22"
@@ -18,7 +18,8 @@
     }
   },
   "scripts": {
-    "build": "vite build"
+    "build": "vite build",
+    "prepublishOnly": "vite build"
   },
   "dependencies": {
     "@dougongjs/core": "workspace:*",
