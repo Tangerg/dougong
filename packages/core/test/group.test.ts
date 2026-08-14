@@ -199,12 +199,19 @@ describe("plugin groups", () => {
     expect(() => app.group("async", (async () => undefined) as unknown as () => void)).toThrow(
       "must be synchronous",
     );
+    // oxlint-disable-next-line unicorn/no-thenable -- Deliberately verify that a non-callable field is ordinary data.
+    const ordinaryConfigurationResult = Object.fromEntries([["then", true]]);
+    const ordinaryResult = app.group(
+      "ordinary-result",
+      (() => ordinaryConfigurationResult) as unknown as () => void,
+    );
     expect(() =>
       app.group("self-removing", (group) => {
         void group.remove();
       }),
     ).toThrow("while it is being configured");
 
+    await ordinaryResult.remove();
     await right.remove();
   });
 
@@ -255,6 +262,53 @@ describe("plugin groups", () => {
 
     expect(group.status).toBe("active");
     await expect(group.ready()).resolves.toBeUndefined();
+    await group.remove();
+    await app.stop();
+  });
+
+  it("preserves established readiness across overlapping queued changes", async () => {
+    let releaseSetup!: () => void;
+    let markSetupStarted!: () => void;
+    const setupStarted = new Promise<void>((resolve) => {
+      markSetupStarted = resolve;
+    });
+    const setupGate = new Promise<void>((resolve) => {
+      releaseSetup = resolve;
+    });
+    const slow = definePlugin({
+      name: "group.queued-slow",
+      async setup() {
+        markSetupStarted();
+        await setupGate;
+      },
+    });
+    const broken = definePlugin({
+      name: "group.queued-failure",
+      setup() {
+        throw new Error("queued change failed");
+      },
+    });
+
+    const app = createApp();
+    await app.start();
+    const group = app.group("queued", () => {});
+    await group.ready();
+
+    const first = group.change();
+    first.install(slow);
+    const firstCommit = first.commit();
+    await setupStarted;
+
+    const second = group.change();
+    second.install(broken);
+    const secondCommit = second.commit();
+    releaseSetup();
+
+    await firstCommit;
+    await expect(secondCommit).rejects.toThrow("queued change failed");
+    expect(group.status).toBe("active");
+    await expect(group.ready()).resolves.toBeUndefined();
+
     await group.remove();
     await app.stop();
   });

@@ -124,6 +124,17 @@ describe("lifetime retention", () => {
     expect(Object.isFrozen(fixture.child.signal.reason)).toBe(true);
   });
 
+  it("does not retain an Application through a historical Lifetime diagnostic view", async () => {
+    const forceGc = (globalThis as typeof globalThis & { gc?: () => void }).gc;
+    if (!forceGc) throw new TypeError("Retention tests require Node.js --expose-gc");
+
+    const fixture = await createHistoricalLifetimeDiagnostics();
+    await collectNamedReferences(forceGc, fixture.references);
+
+    expect(fixture.diagnostics.get()).toMatchObject({ phase: "disposed" });
+    expect(fixture.references.get("application")?.deref()).toBeUndefined();
+  });
+
   it("collects an abandoned active Application without retained handles", async () => {
     const forceGc = (globalThis as typeof globalThis & { gc?: () => void }).gc;
     if (!forceGc) throw new TypeError("Retention tests require Node.js --expose-gc");
@@ -364,12 +375,17 @@ async function createRetainedTerminalResourceHandle(
       const cleanupPayload = payload("cleanup-payload");
       handles.set(
         "cleanup",
-        ctx.cleanup(() => void cleanupPayload),
+        ctx.cleanup(() => {
+          throw new Error("retained cleanup failed", { cause: cleanupPayload });
+        }),
       );
 
       const childPayload = payload("child-payload");
       const child = ctx.lifetime("retained-child");
-      child.cleanup(() => void childPayload);
+      child.signal.addEventListener("abort", () => void childPayload);
+      child.cleanup(() => {
+        throw new Error("retained child cleanup failed", { cause: childPayload });
+      });
       handles.set("child-lifetime", child);
 
       const contributionPayload = payload("contribution-payload");
@@ -390,7 +406,9 @@ async function createRetainedTerminalResourceHandle(
       const taskPayload = payload("task-payload");
       handles.set(
         "task",
-        ctx.spawn(() => void taskPayload),
+        ctx.spawn((signal) => {
+          signal.addEventListener("abort", () => void taskPayload);
+        }),
       );
       handles.set("extension-view", ctx.items);
     },
@@ -406,7 +424,13 @@ async function createRetainedTerminalResourceHandle(
   }
   await task.result;
   for (const handle of handles.values()) {
-    if ("dispose" in handle && typeof handle.dispose === "function") await handle.dispose();
+    if ("dispose" in handle && typeof handle.dispose === "function") {
+      try {
+        await handle.dispose();
+      } catch {
+        // This fixture intentionally gives terminal handles a payload-bearing failure.
+      }
+    }
   }
   await app.stop();
   for (const name of [...handles.keys()]) {
@@ -430,6 +454,17 @@ async function createReleasedChildFromAbandonedApplication() {
   if (!child) throw new TypeError("Released child fixture did not initialize");
   await child.dispose();
   return { child, references };
+}
+
+async function createHistoricalLifetimeDiagnostics() {
+  const app = createApp();
+  const handle = app.install(definePlugin({ name: "lifetime.historical-diagnostics", setup() {} }));
+  const references = new Map<string, WeakRef<object>>([["application", new WeakRef(app)]]);
+  await app.start();
+  const diagnostics = app.diagnostics.get().plugins.get(handle.id)?.lifetime;
+  if (!diagnostics) throw new TypeError("Lifetime diagnostics were not published");
+  await app.stop();
+  return { diagnostics, references };
 }
 
 async function createAbandonedActiveApplication() {

@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import { createApp, definePlugin, DougongError, extension, service } from "@dougong/core";
-import {
+import * as platformApi from "../src/index";
+
+const {
   createPlatform,
   defineManifest,
   ImportPluginLoader,
@@ -8,8 +10,22 @@ import {
   PermissionDeniedError,
   PermissionSet,
   PlatformError,
-  type PluginManifest,
-} from "../src/index";
+} = platformApi;
+type PluginManifest = platformApi.PluginManifest;
+
+describe("public API surface", () => {
+  it("keeps the Platform runtime budget explicit", () => {
+    expect(Object.keys(platformApi).sort()).toEqual([
+      "ImportPluginLoader",
+      "MemoryPluginLoader",
+      "PermissionDeniedError",
+      "PermissionSet",
+      "PlatformError",
+      "createPlatform",
+      "defineManifest",
+    ]);
+  });
+});
 
 describe("plugin platform", () => {
   it("validates host ports before constructing runtime state", () => {
@@ -115,6 +131,27 @@ describe("plugin platform", () => {
     }
 
     expect(fixture.managed.status).toBe("removed");
+    expect(
+      Object.fromEntries(
+        Object.entries(fixture.references).map(([name, ref]) => [name, ref.deref() === undefined]),
+      ),
+    ).toEqual({ app: true, loader: true, platform: true });
+  });
+
+  it("does not retain Platform ports through a historical diagnostic view", async () => {
+    const forceGc = (globalThis as typeof globalThis & { gc?: () => void }).gc;
+    if (!forceGc) throw new TypeError("Retention tests require Node.js --expose-gc");
+
+    const fixture = await createHistoricalPlatformDiagnostics();
+    const references = Object.values(fixture.references);
+    for (let pass = 0; pass < 8 && references.some((ref) => ref.deref()); pass++) {
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+      forceGc();
+      forceGc();
+    }
+
+    expect(fixture.diagnostics.get()).toMatchObject({ status: "disposed" });
+    expect(() => fixture.subscription.dispose()).not.toThrow();
     expect(
       Object.fromEntries(
         Object.entries(fixture.references).map(([name, ref]) => [name, ref.deref() === undefined]),
@@ -289,6 +326,55 @@ describe("plugin platform", () => {
     await plugin.remove();
     expect(plugin.status).toBe("removed");
     expect(trace.at(-1)).toBe("active:stop");
+    await app.stop();
+  });
+
+  it("reconciles placeholder presence before lazy activation", async () => {
+    const trace: string[] = [];
+    const placeholder = (version: string) =>
+      definePlugin({
+        name: "demo.placeholder-reconcile",
+        setup(ctx) {
+          trace.push(`${version}:start`);
+          ctx.cleanup(() => trace.push(`${version}:stop`));
+        },
+      });
+    const app = createApp();
+    const platform = createPlatform({
+      container: app,
+      apiVersion: "1.0.0",
+      loader: new MemoryPluginLoader(new Map()),
+    });
+    const managed = await platform.register({
+      manifest: { name: "demo.placeholder-reconcile", version: "1.0.0" },
+      reference: "unused-v1",
+      placeholder: placeholder("v1"),
+    });
+    await app.start();
+
+    await managed.update({
+      manifest: { name: "demo.placeholder-reconcile", version: "1.1.0" },
+      reference: "unused-v2",
+      placeholder: placeholder("v2"),
+    });
+    expect(trace).toEqual(["v1:start", "v1:stop", "v2:start"]);
+
+    await managed.update({
+      manifest: { name: "demo.placeholder-reconcile", version: "1.2.0" },
+      reference: "unused-v3",
+    });
+    expect(trace).toEqual(["v1:start", "v1:stop", "v2:start", "v2:stop"]);
+    expect(app.diagnostics.get().plugins.size).toBe(0);
+
+    await managed.update({
+      manifest: { name: "demo.placeholder-reconcile", version: "1.3.0" },
+      reference: "unused-v4",
+      placeholder: placeholder("v3"),
+    });
+    expect(trace.at(-1)).toBe("v3:start");
+    expect(managed.status).toBe("registered");
+
+    await platform.dispose();
     await app.stop();
   });
 
@@ -699,7 +785,7 @@ describe("plugin platform", () => {
     await expect(managed.remove()).resolves.toBeUndefined();
     await expect(managed.activate()).rejects.toMatchObject({ code: "PLUGIN_REMOVED" });
     expect(() => platform.diagnostics.subscribe(() => undefined)).toThrow(
-      "Platform diagnostics have been closed",
+      "Snapshot publisher is disposed",
     );
     await platform.dispose();
     subscription.dispose();
@@ -893,6 +979,25 @@ async function createTerminalManagedHandle() {
   };
   await platform.dispose();
   return { managed, references };
+}
+
+async function createHistoricalPlatformDiagnostics() {
+  const app = createApp();
+  const loader = new MemoryPluginLoader(new Map());
+  const platform = createPlatform({ container: app, apiVersion: "1.0.0", loader });
+  const diagnostics = platform.diagnostics;
+  const subscription = diagnostics.subscribe(() => {
+    void app;
+    void loader;
+    void platform;
+  });
+  const references = {
+    app: new WeakRef(app),
+    loader: new WeakRef(loader),
+    platform: new WeakRef(platform),
+  };
+  await platform.dispose();
+  return { diagnostics, subscription, references };
 }
 
 async function createAbandonedManagedHandle() {

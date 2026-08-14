@@ -1,4 +1,6 @@
 import type { Disposable, Readable } from "./protocol";
+import { createCompletion } from "./completion";
+import { assertSynchronous, isThenable } from "./sync-result";
 
 export interface ObservationTask<T = void> extends Disposable {
   readonly result: Promise<T>;
@@ -18,14 +20,15 @@ export interface ObservationOwner<Child extends ObservationLifetime = Observatio
 
 export type Observer<T, Child extends ObservationLifetime> = (value: T, lifetime: Child) => void;
 
+type ObservedValue<T> = { readonly present: false } | { readonly present: true; readonly value: T };
+
 class Observation<T, Child extends ObservationLifetime> implements Disposable {
   readonly #owner: ObservationOwner<Child>;
   readonly #source: Readable<T>;
   readonly #observer: Observer<T, Child>;
   #subscription: Disposable | undefined;
   #current: Child | undefined;
-  #value!: T;
-  #hasValue = false;
+  #observed: ObservedValue<T> = { present: false };
   #dirty = false;
   #phase: "active" | "stopped" | "disposed" = "active";
   #drainTask: ObservationTask | undefined;
@@ -49,8 +52,7 @@ class Observation<T, Child extends ObservationLifetime> implements Disposable {
     this.#subscription = subscription;
 
     this.#invokeObserver(value, current);
-    this.#value = value;
-    this.#hasValue = true;
+    this.#observed = { present: true, value };
 
     const runner = this.#owner.spawn((signal) => this.#drain(signal));
     assertObservationTask(runner);
@@ -63,17 +65,21 @@ class Observation<T, Child extends ObservationLifetime> implements Disposable {
 
   dispose() {
     if (this.#disposePromise) return this.#disposePromise;
+    const completion = createCompletion<void>();
+    this.#disposePromise = completion.promise;
     this.#phase = "disposed";
     this.#wakeDrain?.();
-    this.#disposePromise = (async () => {
-      const errors: unknown[] = [];
-      await collect(this.#takeSubscription(), errors);
-      await collect(this.#takeDrainTask(), errors);
-      await collect(this.#takeCurrent(), errors);
-      if (errors.length === 1) throw errors[0];
-      if (errors.length > 1) throw new AggregateError(errors, "Observation cleanup failed");
-    })();
-    return this.#disposePromise;
+    void this.#disposeResources().then(completion.resolve, completion.reject);
+    return completion.promise;
+  }
+
+  async #disposeResources() {
+    const errors: unknown[] = [];
+    await collect(this.#takeSubscription(), errors);
+    await collect(this.#takeDrainTask(), errors);
+    await collect(this.#takeCurrent(), errors);
+    if (errors.length === 1) throw errors[0];
+    if (errors.length > 1) throw new AggregateError(errors, "Observation cleanup failed");
   }
 
   #invalidate() {
@@ -114,7 +120,7 @@ class Observation<T, Child extends ObservationLifetime> implements Disposable {
   async #replaceCurrent() {
     if (this.#phase !== "active") return;
     const value = this.#source.get();
-    if (this.#hasValue && Object.is(value, this.#value)) return;
+    if (this.#observed.present && Object.is(value, this.#observed.value)) return;
 
     const previous = this.#takeCurrent();
     if (previous) {
@@ -127,7 +133,7 @@ class Observation<T, Child extends ObservationLifetime> implements Disposable {
         );
       }
     }
-    this.#hasValue = false;
+    this.#observed = { present: false };
     if (this.#phase !== "active") return;
 
     const current = this.#owner.lifetime("observation");
@@ -147,15 +153,12 @@ class Observation<T, Child extends ObservationLifetime> implements Disposable {
     }
 
     this.#current = current;
-    this.#value = value;
-    this.#hasValue = true;
+    this.#observed = { present: true, value };
   }
 
   #invokeObserver(value: T, lifetime: Child) {
     const result: unknown = this.#observer(value, lifetime);
-    if (!isThenable(result)) return;
-    Promise.resolve(result).catch(() => undefined);
-    throw new TypeError("Observers must be synchronous; use lifetime.spawn() for async work");
+    assertSynchronous(result, "Observers must be synchronous; use lifetime.spawn() for async work");
   }
 
   #takeSubscription() {
@@ -252,12 +255,6 @@ function assertObservationTask(value: unknown): asserts value is ObservationTask
   ) {
     throw new TypeError("ObservationOwner.spawn() must return an ObservationTask");
   }
-}
-
-function isThenable(value: unknown): value is PromiseLike<unknown> {
-  return (
-    value !== null && (typeof value === "object" || typeof value === "function") && "then" in value
-  );
 }
 
 async function collect(resource: Disposable | undefined, errors: unknown[]) {

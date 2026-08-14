@@ -22,6 +22,15 @@ describe("examples", () => {
         `${result.id} should explain its observable outcome`,
       ).toBeGreaterThan(1);
     }
+
+    const facts = new Map(results.map((result) => [result.id, result.facts.join("\n")]));
+    expect(facts.get("04")).toContain("alpha available = false");
+    expect(facts.get("08")).toContain("invalid plan was rejected = true");
+    expect(facts.get("08")).toContain("running service remained 'hello-v1'");
+    expect(facts.get("09")).toContain(
+      "Affected plugin entries were examples.hmr-module-graph.outline, examples.hmr-module-graph.search",
+    );
+    expect(facts.get("09")).toContain("The Extension observer saw 1 committed snapshot");
   });
 
   it("executes both startup topologies without using wall-clock performance gates", async () => {

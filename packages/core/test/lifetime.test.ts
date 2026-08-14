@@ -56,6 +56,44 @@ describe("structured lifetime", () => {
     expect(liveSettled).toBe(true);
   });
 
+  it("publishes the canonical completion before task cancellation can reenter disposal", async () => {
+    let task!: Task;
+    let taskStarted!: () => void;
+    let reentrantCompletion: unknown;
+    const started = new Promise<void>((resolve) => {
+      taskStarted = resolve;
+    });
+    const plugin = definePlugin({
+      name: "lifetime.reentrant-task",
+      setup(ctx) {
+        task = ctx.spawn(
+          (signal) =>
+            new Promise<void>((resolve) => {
+              signal.addEventListener(
+                "abort",
+                () => {
+                  reentrantCompletion = task.dispose();
+                  resolve();
+                },
+                { once: true },
+              );
+              taskStarted();
+            }),
+        );
+      },
+    });
+    const app = createApp();
+    app.install(plugin);
+    await app.start();
+    await started;
+
+    const completion = task.dispose();
+    await completion;
+
+    expect(reentrantCompletion).toBe(completion);
+    await app.stop();
+  });
+
   it("runs cleanup in LIFO order, attempts every item and aggregates failures", async () => {
     const trace: string[] = [];
     const plugin = definePlugin({
@@ -115,6 +153,30 @@ describe("structured lifetime", () => {
     release();
     await Promise.all([early, stopping]);
     expect(stopped).toBe(true);
+  });
+
+  it("publishes the canonical completion before cleanup can reenter disposal", async () => {
+    let cleanup!: { dispose(): void | Promise<void> };
+    let reentrantCompletion: unknown;
+    const disposeBody = vi.fn<() => void>(() => {
+      reentrantCompletion = cleanup.dispose();
+    });
+    const plugin = definePlugin({
+      name: "lifetime.reentrant-cleanup",
+      setup(ctx) {
+        cleanup = ctx.cleanup(disposeBody);
+      },
+    });
+    const app = createApp();
+    app.install(plugin);
+    await app.start();
+
+    const completion = cleanup.dispose();
+    await completion;
+
+    expect(reentrantCompletion).toBe(completion);
+    expect(disposeBody).toHaveBeenCalledOnce();
+    await app.stop();
   });
 
   it("does not replay a failed cleanup after its early disposal has settled", async () => {

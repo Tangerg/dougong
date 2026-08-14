@@ -186,6 +186,8 @@ await change.commit();
 6. 把占位安装、活动定义更新和删除编译进**一份 Core ChangeSet**并提交；
 7. Core 成功后一次切换 Platform 的 Artifact、Handle 与诊断状态。
 
+内部实现同样按这条边界拆分：Artifact 编译器只负责 Manifest、占位定义和加载模块的信任校验；CandidateGraph 只验证完整候选依赖图；CoreChange 编译器只生成一份 Core ChangeSet 及其确定的 Artifact 终态。Platform 协调器在 Core 提交前准备好不会失败的本地提交闭包，因而不会在 Core 已成功后才发现缺失 Handle 或非法注册状态。
+
 这使提供者 `1.x → 2.x` 与消费者依赖范围 `^1 → ^2` 能在一份变更中完成；分两次 `update()` 时第一份非法候选图会被拒绝。模块 import 的顶层副作用不具备事务性，但安装计划、Core 运行实例和 Platform 记录不会出现半提交状态。
 
 若 Core 因配置、服务图、setup 或清理失败拒绝已经准备好的更新，ManagedPlugin 仍指向旧 Artifact 与旧 Manifest；Core 自己的 rollback / fail-closed 语义决定运行实例最终是恢复为 `active` 还是整个 Application 退回 `idle`，Platform 不伪造第二种恢复状态。
@@ -223,6 +225,8 @@ Planet 式媒体源、Lynx Desktop 式命令/菜单/面板分别是 Extension；
 - 每个已注册插件的 name、version、status、activation、permissions、dependencies 与最近错误。
 
 快照、条目和数组冻结，Map 不暴露可变方法。`subscribe()` 只发送未来失效通知，调用方收到后重新 `get()`。诊断订阅者失败经 Platform Logger 上报，不会改变注册或激活结果。
+
+Platform 不实现另一套观察器；它把不可变 PlatformSnapshot 提交给 Core 的 `SnapshotPublisher`。Platform 成功释放后，已经取得的历史 view 停在 `disposed` 终态，现有订阅被摘除，且 reader、Logger 和 Platform owner 都被切断。
 
 ManagedPlugin 和 PlatformChangeSet 都是冻结的 opaque handle。即使在 JavaScript 运行时也不会泄露内部 Artifact、Core Handle、Platform owner 或候选图；Platform 通过私有 WeakMap 验证 Handle 权限。
 

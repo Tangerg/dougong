@@ -3,14 +3,21 @@ import type { AnyPlugin } from "./plugin-installation";
 import type { PluginInstallation } from "./plugin-installation";
 import { definePlugin, type PluginDefinition, type Provisions, type Requirements } from "./plugin";
 
+type PluginDeclarationUpdate =
+  | { readonly kind: "plugin"; readonly plugin: AnyPlugin }
+  | { readonly kind: "config"; readonly config: unknown }
+  | {
+      readonly kind: "plugin-and-config";
+      readonly plugin: AnyPlugin;
+      readonly config: unknown;
+    };
+
 export type PluginChangeOperation =
   | { readonly kind: "install"; readonly installation: PluginInstallation }
   | {
       readonly kind: "update";
       readonly installation: PluginInstallation;
-      readonly plugin?: AnyPlugin;
-      readonly hasConfig: boolean;
-      readonly config: unknown;
+      readonly declaration: PluginDeclarationUpdate;
     }
   | { readonly kind: "remove"; readonly installation: PluginInstallation };
 
@@ -87,20 +94,15 @@ export class PluginChangeSetDraft implements PluginChangeSet {
       if (!replacement) throw new TypeError("Plugin update 'plugin' must be a plugin definition");
       plugin = definePlugin(replacement) as unknown as AnyPlugin;
     }
-    const operation: PluginChangeOperation = plugin
-      ? {
-          kind: "update",
-          installation,
-          plugin,
-          hasConfig,
-          config: update.config,
-        }
-      : {
-          kind: "update",
-          installation,
-          hasConfig,
-          config: update.config,
-        };
+    let declaration: PluginDeclarationUpdate;
+    if (plugin && hasConfig) {
+      declaration = { kind: "plugin-and-config", plugin, config: update.config };
+    } else if (plugin) {
+      declaration = { kind: "plugin", plugin };
+    } else {
+      declaration = { kind: "config", config: update.config };
+    }
+    const operation: PluginChangeOperation = { kind: "update", installation, declaration };
     this.#stage(operation);
     return this;
   }
@@ -120,7 +122,7 @@ export class PluginChangeSetDraft implements PluginChangeSet {
       throw new TypeError("Cannot commit a discarded ChangeSet");
     }
     if (state.phase === "committing") {
-      throw new TypeError("ChangeSet commit is already being prepared");
+      throw new TypeError("Core ChangeSet commit is already being prepared");
     }
     this.#state = { phase: "committing" };
     const operations = Object.freeze([...this.#operations.values()]);

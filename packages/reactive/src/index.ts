@@ -1,4 +1,5 @@
 import type { Disposable, Readable } from "./protocol";
+import { assertSynchronous } from "./sync-result";
 
 export type { Disposable, Readable } from "./protocol";
 
@@ -68,21 +69,11 @@ function flushPendingListeners() {
     const listeners = pendingListeners;
     pendingListeners = new Set();
 
-    for (const listener of listeners) {
-      try {
-        listener();
-      } catch (error) {
-        errors.push(error);
-      }
-    }
+    collectListenerFailures(listeners, errors);
   }
 
   pendingListeners = undefined;
-
-  if (errors.length === 1) throw errors[0];
-  if (errors.length > 1) {
-    throw new AggregateError(errors, "Reactive subscribers failed");
-  }
+  throwListenerFailures(errors);
 }
 
 function publish(listeners: ReadonlySet<Listener>) {
@@ -93,14 +84,21 @@ function publish(listeners: ReadonlySet<Listener>) {
   }
 
   const errors: unknown[] = [];
-  for (const listener of [...listeners]) {
+  collectListenerFailures([...listeners], errors);
+  throwListenerFailures(errors);
+}
+
+function collectListenerFailures(listeners: Iterable<Listener>, errors: unknown[]) {
+  for (const listener of listeners) {
     try {
       listener();
     } catch (error) {
       errors.push(error);
     }
   }
+}
 
+function throwListenerFailures(errors: unknown[]) {
   if (errors.length === 1) throw errors[0];
   if (errors.length > 1) {
     throw new AggregateError(errors, "Reactive subscribers failed");
@@ -115,19 +113,14 @@ export function batch<T>(callback: () => T): T {
   if (typeof callback !== "function") throw new TypeError("batch() expects a function");
   batchDepth++;
 
-  let result!: T;
-  let failure: unknown;
-  let failed = false;
+  let outcome: { readonly ok: true; readonly value: T } | { readonly ok: false; error: unknown };
 
   try {
-    result = callback();
-    if (isThenable(result)) {
-      void Promise.resolve(result).catch(() => undefined);
-      throw new TypeError("Reactive batches must be synchronous");
-    }
+    const value = callback();
+    assertSynchronous(value, "Reactive batches must be synchronous");
+    outcome = { ok: true, value };
   } catch (error) {
-    failed = true;
-    failure = error;
+    outcome = { ok: false, error };
   } finally {
     batchDepth--;
   }
@@ -136,13 +129,14 @@ export function batch<T>(callback: () => T): T {
     try {
       flushPendingListeners();
     } catch (error) {
-      failure = failed ? new AggregateError([failure, error], "Reactive batch failed") : error;
-      failed = true;
+      outcome = outcome.ok
+        ? { ok: false, error }
+        : { ok: false, error: new AggregateError([outcome.error, error], "Reactive batch failed") };
     }
   }
 
-  if (failed) throw failure;
-  return result;
+  if (!outcome.ok) throw outcome.error;
+  return outcome.value;
 }
 
 export function signal<T>(initialValue: T): Signal<T> {
@@ -183,137 +177,141 @@ export function signal<T>(initialValue: T): Signal<T> {
 
 export function computed<T>(calculate: () => T): ReadonlySignal<T> {
   if (typeof calculate !== "function") throw new TypeError("computed() expects a function");
-  let initialized = false;
-  let evaluating = false;
-  let dirty = true;
-  let value!: T;
-  let version = 0;
+  return new ComputedNode(calculate).view;
+}
 
-  const listeners = new Set<Listener>();
-  const dependencies = new Map<ReadonlySignal<unknown>, Dependency>();
+type ComputedValue<T> =
+  { readonly phase: "uninitialized" } | { readonly phase: "cached"; readonly value: T };
 
-  const invalidate = () => {
-    if (dirty) return;
-    dirty = true;
+class ComputedNode<T> implements ReactiveNode {
+  readonly #calculate: () => T;
+  readonly #listeners = new Set<Listener>();
+  readonly #dependencies = new Map<ReadonlySignal<unknown>, Dependency>();
+  #value: ComputedValue<T> = { phase: "uninitialized" };
+  #evaluating = false;
+  #dirty = true;
+  #version = 0;
 
-    publish(listeners);
+  readonly view: ReadonlySignal<T>;
+
+  constructor(calculate: () => T) {
+    this.#calculate = calculate;
+    this.view = Object.freeze({
+      get: () => this.#get(),
+      subscribe: (listener: Listener) => this.#subscribe(listener),
+    }) as ReadonlySignal<T>;
+    nodes.set(this.view, this);
+  }
+
+  get version() {
+    return this.#version;
+  }
+
+  refresh() {
+    this.#evaluate();
+  }
+
+  #get() {
+    track(this.view);
+    return this.#evaluate();
+  }
+
+  #subscribe(listener: Listener) {
+    assertListener(listener);
+    const wasUnobserved = this.#listeners.size === 0;
+    this.#listeners.add(listener);
+
+    if (wasUnobserved) {
+      try {
+        this.#dirty = true;
+        this.#evaluate();
+      } catch (error) {
+        this.#listeners.delete(listener);
+        if (!this.#listeners.size) this.#detachDependencies();
+        throw error;
+      }
+    }
+
+    return createSubscription(() => {
+      this.#listeners.delete(listener);
+      if (!this.#listeners.size) this.#detachDependencies();
+    });
+  }
+
+  readonly #invalidate = () => {
+    if (this.#dirty) return;
+    this.#dirty = true;
+    publish(this.#listeners);
   };
 
-  const detach = () => {
-    for (const dependency of dependencies.values()) {
+  #detachDependencies() {
+    for (const dependency of this.#dependencies.values()) {
       dependency.subscription?.dispose();
       dependency.subscription = undefined;
     }
-  };
+  }
 
-  const evaluate = () => {
-    if (initialized && !dirty) {
-      for (const dependency of dependencies.values()) {
+  #evaluate(): T {
+    const current = this.#value;
+    if (current.phase === "cached" && !this.#dirty) {
+      for (const dependency of this.#dependencies.values()) {
         dependency.node.refresh();
         if (dependency.version !== dependency.node.version) {
-          dirty = true;
+          this.#dirty = true;
           break;
         }
       }
-      if (!dirty) return value;
+      if (!this.#dirty) return current.value;
     }
-    if (evaluating) throw new TypeError("Circular computed signal");
+    if (this.#evaluating) throw new TypeError("Circular computed signal");
 
     const sources = new Set<ReadonlySignal<unknown>>();
     const previousCollector = activeCollector;
-    evaluating = true;
+    this.#evaluating = true;
     activeCollector = (source) => sources.add(source);
 
     let nextValue: T;
     try {
-      nextValue = calculate();
-      if (isThenable(nextValue)) {
-        void Promise.resolve(nextValue).catch(() => undefined);
-        throw new TypeError("Computed signal calculations must be synchronous");
-      }
+      nextValue = this.#calculate();
+      assertSynchronous(nextValue, "Computed signal calculations must be synchronous");
     } finally {
       activeCollector = previousCollector;
-      evaluating = false;
+      this.#evaluating = false;
     }
 
-    for (const [dependency, entry] of dependencies) {
+    for (const [dependency, entry] of this.#dependencies) {
       if (sources.has(dependency)) continue;
       entry.subscription?.dispose();
-      dependencies.delete(dependency);
+      this.#dependencies.delete(dependency);
     }
 
     for (const dependency of sources) {
       const node = nodes.get(dependency);
       if (!node) continue;
 
-      const entry = dependencies.get(dependency) ?? {
+      const entry = this.#dependencies.get(dependency) ?? {
         node,
         version: node.version,
         subscription: undefined,
       };
       entry.version = node.version;
-
-      if (listeners.size && !entry.subscription) {
-        entry.subscription = dependency.subscribe(invalidate);
+      if (this.#listeners.size && !entry.subscription) {
+        entry.subscription = dependency.subscribe(this.#invalidate);
       }
-      dependencies.set(dependency, entry);
+      this.#dependencies.set(dependency, entry);
     }
 
-    if (!initialized || !Object.is(value, nextValue)) version++;
-    value = nextValue;
-    initialized = true;
-    dirty = false;
-    return value;
-  };
-
-  const source = {
-    get() {
-      track(source as ReadonlySignal<unknown>);
-      return evaluate();
-    },
-
-    subscribe(listener) {
-      assertListener(listener);
-      const wasUnobserved = listeners.size === 0;
-      listeners.add(listener);
-
-      if (wasUnobserved) {
-        try {
-          dirty = true;
-          evaluate();
-        } catch (error) {
-          listeners.delete(listener);
-          if (!listeners.size) detach();
-          throw error;
-        }
-      }
-
-      return createSubscription(() => {
-        listeners.delete(listener);
-        if (listeners.size) return;
-        detach();
-      });
-    },
-  } as ReadonlySignal<T>;
-
-  nodes.set(source as ReadonlySignal<unknown>, {
-    get version() {
-      return version;
-    },
-    refresh: evaluate,
-  });
-
-  return Object.freeze(source);
+    if (current.phase === "uninitialized" || !Object.is(current.value, nextValue)) {
+      this.#version++;
+    }
+    this.#value = { phase: "cached", value: nextValue };
+    this.#dirty = false;
+    return nextValue;
+  }
 }
 
 function assertListener(listener: unknown): asserts listener is Listener {
   if (typeof listener !== "function") {
     throw new TypeError("Signal subscriber must be a function");
   }
-}
-
-function isThenable(value: unknown): value is PromiseLike<unknown> {
-  return (
-    value !== null && (typeof value === "object" || typeof value === "function") && "then" in value
-  );
 }

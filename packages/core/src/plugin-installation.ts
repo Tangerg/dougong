@@ -34,10 +34,24 @@ interface TerminalPluginFailure {
   readonly code?: string;
 }
 
-type PluginFailureState =
-  | { readonly phase: "none" }
-  | { readonly phase: "live"; readonly error: Error }
-  | { readonly phase: "terminal"; readonly summary: TerminalPluginFailure };
+type InstallationFailure =
+  | { readonly retention: "live"; readonly error: Error }
+  | { readonly retention: "summary"; readonly summary: TerminalPluginFailure };
+
+type InstallationState =
+  | { readonly phase: "pending" }
+  | {
+      readonly phase: "active";
+      readonly runtime: PluginRuntime;
+      readonly readiness: "unsettled" | "settled";
+    }
+  | { readonly phase: "stopping"; readonly runtime: PluginRuntime }
+  | {
+      readonly phase: "failed";
+      readonly failure: InstallationFailure;
+      readonly readiness: "unsettled" | "settled";
+    }
+  | { readonly phase: "removed"; readonly readiness: "unsettled" | "settled" };
 
 /**
  * A plugin installation is a stable identity whose declaration and runtime may
@@ -45,11 +59,8 @@ type PluginFailureState =
  * cannot create a status that disagrees with the owned runtime.
  */
 export class PluginInstallation {
-  #status: InstallationStatus = "pending";
-  #runtime: PluginRuntime | undefined;
-  #failure: PluginFailureState = { phase: "none" };
-  #readySettled = false;
-  #readinessBarrier: Promise<void> | undefined;
+  #state: InstallationState = { phase: "pending" };
+  #pendingReadiness: { readonly attempt: object; readonly barrier: Promise<void> } | undefined;
   #attachment: InstallationAttachment | undefined;
 
   readonly groupId: string;
@@ -76,17 +87,22 @@ export class PluginInstallation {
   }
 
   get status() {
-    return this.#status;
+    return this.#state.phase;
   }
 
   get runtime() {
-    return this.#runtime;
+    const state = this.#state;
+    return state.phase === "active" || state.phase === "stopping" ? state.runtime : undefined;
   }
 
   get error() {
-    if (this.#failure.phase === "live") return this.#failure.error;
-    if (this.#failure.phase === "terminal") return restoreFailure(this.#failure.summary);
-    if (this.#status === "removed") {
+    const state = this.#state;
+    if (state.phase === "failed") {
+      return state.failure.retention === "live"
+        ? state.failure.error
+        : restoreFailure(state.failure.summary);
+    }
+    if (state.phase === "removed") {
       return new DougongError("PLUGIN_REMOVED", `Plugin '${this.id}' has been removed`);
     }
     return undefined;
@@ -105,33 +121,38 @@ export class PluginInstallation {
   }
 
   ready() {
-    const barrier = this.#readinessBarrier;
-    if (barrier) return barrier.then(() => this.#readyFromCurrentState());
+    const pending = this.#pendingReadiness;
+    if (pending) return pending.barrier.then(() => this.#readyFromCurrentState());
     return this.#readyFromCurrentState();
   }
 
   trackReadiness(operation: Promise<void>) {
-    let barrier: Promise<void>;
-    barrier = operation.then(
+    const attempt = {};
+    const barrier = operation.then(
       () => {
-        if (this.#readinessBarrier === barrier) this.#readinessBarrier = undefined;
+        if (this.#pendingReadiness?.attempt === attempt) this.#pendingReadiness = undefined;
       },
       (error) => {
-        if (this.#readinessBarrier === barrier) this.#readinessBarrier = undefined;
-        if (this.#status !== "active") throw error;
+        if (this.#pendingReadiness?.attempt === attempt) this.#pendingReadiness = undefined;
+        if (this.#state.phase !== "active") throw error;
       },
     );
-    this.#readinessBarrier = barrier;
+    this.#pendingReadiness = { attempt, barrier };
+    // ready() owns this barrier's failure; mark the internal observer branch handled.
     void barrier.catch(() => undefined);
   }
 
   #readyFromCurrentState(): Promise<void> {
-    if (this.#readySettled) {
-      if (this.#status === "active") return Promise.resolve();
-      if (this.#status === "failed" || this.#status === "removed") {
+    const state = this.#state;
+    if (
+      (state.phase === "active" || state.phase === "failed" || state.phase === "removed") &&
+      state.readiness === "settled"
+    ) {
+      if (state.phase === "active") return Promise.resolve();
+      if (state.phase === "failed" || state.phase === "removed") {
         return Promise.reject(
           this.error ??
-            new DougongError("PLUGIN_UNAVAILABLE", `Plugin '${this.id}' is ${this.#status}`),
+            new DougongError("PLUGIN_UNAVAILABLE", `Plugin '${this.id}' is ${state.phase}`),
         );
       }
     }
@@ -142,38 +163,36 @@ export class PluginInstallation {
   }
 
   activate(runtime: PluginRuntime) {
-    this.#runtime = runtime;
-    this.#readySettled = false;
-    this.#transition("active");
+    this.#transition({ phase: "active", runtime, readiness: "unsettled" });
   }
 
   settleReady() {
-    if (this.#readySettled) return;
-    if (this.#status !== "active" && this.#status !== "failed" && this.#status !== "removed") {
+    const state = this.#state;
+    if (state.phase !== "active" && state.phase !== "failed" && state.phase !== "removed") {
       return;
     }
-    this.#readySettled = true;
-    if (this.#status === "active") {
+    if (state.readiness === "settled") return;
+    this.#state = { ...state, readiness: "settled" };
+    if (state.phase === "active") {
       for (const waiter of this.#readyWaiters) waiter.resolve();
     } else {
       const error =
         this.error ??
-        new DougongError("PLUGIN_UNAVAILABLE", `Plugin '${this.id}' is ${this.#status}`);
+        new DougongError("PLUGIN_UNAVAILABLE", `Plugin '${this.id}' is ${state.phase}`);
       for (const waiter of this.#readyWaiters) waiter.reject(error);
     }
     this.#readyWaiters.clear();
   }
 
   beginStopping() {
-    if (!this.#runtime) return false;
-    this.#transition("stopping");
+    const state = this.#state;
+    if (state.phase !== "active") return false;
+    this.#transition({ phase: "stopping", runtime: state.runtime });
     return true;
   }
 
   deactivate() {
-    this.#runtime = undefined;
-    this.#readySettled = false;
-    this.#transition("pending");
+    this.#transition({ phase: "pending" });
   }
 
   fail(error: unknown) {
@@ -181,40 +200,45 @@ export class PluginInstallation {
   }
 
   discard(error: unknown) {
-    const failure = this.#transitionToFailed(error);
-    this.settleReady();
-    this.#failure = { phase: "terminal", summary: snapshotFailure(failure) };
-    this.#readinessBarrier = undefined;
+    const failure = this.#normalizeFailure(error);
+    this.#transition({
+      phase: "failed",
+      failure: { retention: "summary", summary: snapshotFailure(failure) },
+      readiness: "settled",
+    });
+    for (const waiter of this.#readyWaiters) waiter.reject(failure);
+    this.#readyWaiters.clear();
+    this.#pendingReadiness = undefined;
     this.#attachment = undefined;
   }
 
   #transitionToFailed(error: unknown) {
-    const failure = normalizeFailure(
-      error,
-      "PLUGIN_UNAVAILABLE",
-      `Plugin '${this.id}' failed with a non-Error value`,
-    );
-    this.#runtime = undefined;
-    this.#readySettled = false;
-    this.#failure = { phase: "live", error: failure };
-    this.#transition("failed", false);
+    const failure = this.#normalizeFailure(error);
+    this.#transition({
+      phase: "failed",
+      failure: { retention: "live", error: failure },
+      readiness: "unsettled",
+    });
     return failure;
   }
 
   remove() {
-    this.#runtime = undefined;
-    this.#readySettled = false;
-    this.#transition("removed");
-    this.#readinessBarrier = undefined;
+    this.#transition({ phase: "removed", readiness: "unsettled" });
+    this.#pendingReadiness = undefined;
     this.#attachment = undefined;
   }
 
-  #transition(status: InstallationStatus, clearError = true) {
-    this.#status = status;
-    if (clearError) {
-      this.#failure = { phase: "none" };
-    }
+  #transition(state: InstallationState) {
+    this.#state = state;
     this.#attachment?.notifyChanged?.();
+  }
+
+  #normalizeFailure(error: unknown) {
+    return normalizeFailure(
+      error,
+      "PLUGIN_UNAVAILABLE",
+      `Plugin '${this.id}' failed with a non-Error value`,
+    );
   }
 
   #requireAttachment() {

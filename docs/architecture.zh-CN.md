@@ -47,6 +47,8 @@ core 与 reactive 互不依赖
 - Group 所有权树；
 - 只读诊断投影。
 
+Core 内部也保持同一分工：Application 只拥有声明注册表、命令串行化和状态发布；GroupCoordinator 只拥有结构 Group；ApplicationRuntime 只拥有已经提交的 Contract、Service、Event、Extension、Lifetime 与运行图。事务由 Application 发起，但运行图的切换、rollback 与 fail-closed 只在 ApplicationRuntime 中执行，因此声明状态和实例状态各有一个真相源，而不是把全部职责堆进一个总类。
+
 ### `@dougong/reactive`
 
 零依赖值层，负责：
@@ -232,7 +234,7 @@ Plugin Lifetime
 
 同一规则覆盖全部内部 lease：Listener、Contribution、ExtensionView 及其订阅、cleanup 和 Task 在提前终止时都会从父集合摘除；终态对象同时清空 owner、Store、回调、payload 和诊断记账引用。七个资源类别复用同一套活跃资源集合实现，从而获得 O(1) 摘除、幂等 ownership release 与诊断增减。各类别仍使用独立集合表达发布顺序、释放顺序和分类计数，统一机制不混合语义。
 
-主动释放 Lifetime 或 Task 使用模块级冻结 `AbortError` 作为取消原因，父取消则原样转发父 reason。这里共享的只是无状态错误值，不是 ambient scope；它避免每次 `abort()` 自动创建的错误调用栈把终态 `AbortSignal.reason` 变成一条指回 Application 的隐藏保留边。
+主动释放 Lifetime 或 Task 使用模块级冻结 `AbortError` 作为取消原因，父取消则原样转发父 reason。这里共享的只是无状态错误值，不是 ambient scope；它避免每次 `abort()` 自动创建的错误调用栈把终态 `AbortSignal.reason` 变成一条指回 Application 的隐藏保留边。释放完成后，Lifetime 用一个新的同 reason aborted signal 替换运行期 signal；终态 Handle 因而不会继续保留旧 signal 的监听器闭包。进行中的释放 Promise 只属于 `disposing` 状态，进入 `disposed` 后同样被结构性丢弃，原始失败仍由已取得该 Promise 的调用方观察。
 
 父级只拥有仍然存活的资源，保留一个已释放 Handle 不会反向保活整个 Application。ExtensionView 使用显式窄 Handle，而不是从 Store 实例方法返回捕获词法 `this` 的箭头函数；清空 binding 后，公开 View 本身也不能成为 Store 的隐藏所有权边。
 
@@ -278,6 +280,8 @@ Group 解决：
 - 如何原子删除整棵安装子树。
 
 Group 配置、结构所有权、运行状态与 Handle 权限各自使用封闭状态机。配置会话是 `open / failed / sealed`，结构节点是 `attached / detached`，生命周期保存 established 状态与当前 readiness barrier，Handle 是 `configuring / attached / revoked`。
+
+这些状态机由一个内部 `GroupCoordinator` 组合，不再散落在 Application 编排器中。Coordinator 完整拥有 Group 树、Handle authority 与 readiness；Application 只通过窄端口提供插件 ChangeSet、串行命令和诊断发布。这个边界不会新增公共概念，也不会让 Group 获得能力解析权。
 
 嵌套 configure 共享一份配置会话；第一次失败会毒化整笔草稿，外层即使捕获异常也不能继续声明或提交。任意非 `Error` 失败在边界分类后再进入生命周期，因此 `undefined` 永远不同时承担“失败值”和“没有失败”两种含义。已建立 Group 的失败变更若完整回滚，就继续呈现已提交状态；未建立 Group 可由后续成功变更替换失败 barrier。
 
@@ -398,7 +402,7 @@ Group 删除负责安装所有权；领域值中的 workspace ID 负责数据选
 - Core/Platform 源码不导入 Node built-in；
 - runtime 不读取隐藏 clock/entropy；
 - 诊断不直接调用 console；
-- Lifetime 只能由 Application 和 Lifetime 自身构造；
+- Lifetime 只能由 ApplicationRuntime 和 Lifetime 自身构造；
 - 无循环依赖。
 
 架构约束如果只存在于文字里，几个月后就会退化成建议；Dougong 把可以机械判断的部分交给工具。

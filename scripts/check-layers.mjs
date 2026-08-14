@@ -61,9 +61,9 @@ const CORE_MODULE_LAYERS = {
   // Leaf state and fan-out services over standard JavaScript only.
   "core/src/contract-registry.ts": 1,
   "core/src/event-hub.ts": 1,
-  "core/src/extension-store.ts": 1,
   "core/src/snapshot-view.ts": 1,
-  // Lifetime diagnostics project real ownership into immutable read models.
+  // Live extension stores and Lifetime diagnostics share the snapshot protocol.
+  "core/src/extension-store.ts": 2,
   "core/src/lifetime-diagnostics.ts": 2,
   // Resource ownership, built from the leaf services and its diagnostic projection.
   "core/src/lifetime.ts": 3,
@@ -78,23 +78,32 @@ const CORE_MODULE_LAYERS = {
   // Public protocols, then the canonical ChangeSet implementation.
   "core/src/application-api.ts": 7,
   "core/src/change-set.ts": 8,
-  // The orchestrator: the only module allowed to know all of the above.
-  "core/src/application.ts": 9,
+  // Structural Group orchestration and the committed runtime are orthogonal.
+  "core/src/application-runtime.ts": 9,
+  "core/src/group-coordinator.ts": 9,
+  // The Application serializes public commands over both collaborators.
+  "core/src/application.ts": 10,
   // Public barrel.
-  "core/src/index.ts": 10,
+  "core/src/index.ts": 11,
 };
 
 const PLATFORM_MODULE_LAYERS = {
   "platform/src/errors.ts": 0,
   "platform/src/loader.ts": 0,
+  "platform/src/serial-queue.ts": 0,
   "platform/src/manifest.ts": 1,
   "platform/src/diagnostics.ts": 2,
   "platform/src/permissions.ts": 2,
   "platform/src/platform-api.ts": 3,
+  // Artifact declarations compile into validated Core plugin definitions.
+  "platform/src/artifact.ts": 4,
   "platform/src/managed-plugin.ts": 4,
   "platform/src/platform-change-set.ts": 5,
-  "platform/src/platform.ts": 6,
-  "platform/src/index.ts": 7,
+  // Candidate and Core graphs are independent projections of one sealed change.
+  "platform/src/candidate-graph.ts": 6,
+  "platform/src/core-change.ts": 6,
+  "platform/src/platform.ts": 7,
+  "platform/src/index.ts": 8,
 };
 
 const MODULE_LAYERS = { ...CORE_MODULE_LAYERS, ...PLATFORM_MODULE_LAYERS };
@@ -163,6 +172,11 @@ const FILE_RULES = [
     // private command queue as public surface.
     test: (source) => /\bApplicationImpl\b/.test(source),
     message: "the Application implementation class must not be exported",
+  },
+  {
+    matches: (file) => file === "platform/src/diagnostics.ts",
+    test: (source) => !/new\s+SnapshotPublisher\s*\(/.test(source),
+    message: "Platform diagnostics must compile to Core SnapshotPublisher",
   },
 ];
 
@@ -250,7 +264,7 @@ for (const [file, deps] of Object.entries(graph)) {
 // `new Lifetime(...)` is ownership creation. Only the orchestrator (one root
 // lifetime per plugin installation) and Lifetime itself (children) may do it;
 // anywhere else produces a resource tree nobody disposes.
-const LIFETIME_CONSTRUCTORS = new Set(["core/src/application.ts", "core/src/lifetime.ts"]);
+const LIFETIME_CONSTRUCTORS = new Set(["core/src/application-runtime.ts", "core/src/lifetime.ts"]);
 for (const file of Object.keys(graph)) {
   if (!SOURCE_RE.test(file) || TEST_RE.test(file)) continue;
   if (LIFETIME_CONSTRUCTORS.has(file)) continue;

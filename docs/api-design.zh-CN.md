@@ -475,6 +475,7 @@ await session.dispose()
 - 父 Context 与子 Lifetime 使用相同资源 API。
 - `label` 是必填、非空且首尾无空白的诊断描述，不参与运行时查找或身份判定；同级重名合法。
 - 主动释放 Lifetime 或 Task 会用冻结的 `AbortError` 取消其 signal；父级取消仍显式转发父 signal 的 reason。调用方按 `signal.aborted` 与 reason 类型分类，不依赖 reason 对象身份。
+- 释放进行中的重复 `dispose()` 共享同一个完成 Promise；进入终态后的重复调用只是已完成的无操作。发起释放的调用方仍收到原始失败，但终态 Handle 不继续保存已拒绝 Promise 或错误栈。Lifetime 完成释放后以一个新的、同 reason 的 aborted signal 表达终态，从而切断旧 signal 上的监听器闭包。
 
 ### 9.3 spawn
 
@@ -651,6 +652,20 @@ interface Readable<T> {
   subscribe(listener: () => void): Disposable
 }
 ```
+
+生产这类运行诊断时使用 Core 唯一的写侧原语 `SnapshotPublisher`：
+
+```ts
+const snapshots = new SnapshotPublisher(readSnapshot, reportError)
+
+export const diagnostics = snapshots.view // 只暴露 get / subscribe
+snapshots.invalidate()                     // 标记失效并通知
+snapshots.dispose()                        // 固化终态并切断闭包
+```
+
+`view` 是权限收窄，不是第二套观察 API：读取方只能 `get/subscribe`，拥有方只能通过 Publisher 驱动失效和终止。`dispose()` 会在切断 reader、reporter 与现有订阅前固化最后一份快照；历史 view 因而仍可读取终态，但不能反向保活运行时。Application、Lifetime 与 Platform diagnostics 都走这条路径，高层不得重写订阅注册表和错误边界。
+
+快照需要 Map 语义时统一使用 `ReadonlyMapSnapshot`。它复制输入并只暴露 `ReadonlyMap` 方法，避免 `Object.freeze(new Map())` 仍可调用 `set/delete/clear` 的伪不可变性；它只保证容器结构不可变，条目值仍应在进入快照时自行冻结。
 
 `@dougong/reactive` 是独立基础包：
 

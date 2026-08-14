@@ -28,7 +28,6 @@ export interface LifetimeDiagnosticNode {
 
 /** Publishes immutable data snapshots for one root Lifetime ownership tree. */
 export class LifetimeDiagnostics {
-  readonly #reporter: { report: ((error: unknown) => void) | undefined };
   readonly #source: SnapshotPublisher<LifetimeSnapshot>;
 
   readonly root: LifetimeDiagnosticNode;
@@ -36,13 +35,7 @@ export class LifetimeDiagnostics {
 
   constructor(rootLabel: string, report: (error: unknown) => void) {
     this.root = createDiagnosticNode(rootLabel);
-    this.#reporter = { report };
-    this.#source = new SnapshotPublisher(
-      () => snapshotNode(this.root),
-      (error) => {
-        this.#reporter.report?.(error);
-      },
-    );
+    this.#source = new SnapshotPublisher(() => snapshotNode(this.root), report);
     this.view = this.#source.view;
   }
 
@@ -78,8 +71,7 @@ export class LifetimeDiagnostics {
     if (this.root.phase === "disposed") return;
     this.root.phase = "disposed";
     this.#source.invalidate();
-    // A retained historical diagnostic view must not retain the Application.
-    this.#reporter.report = undefined;
+    this.#source.dispose();
   }
 }
 

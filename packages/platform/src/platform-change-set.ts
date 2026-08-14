@@ -21,11 +21,6 @@ export type PlatformChangeOperation<Reference> =
     }
   | { readonly kind: "remove"; readonly registration: ManagedPluginRegistration<Reference> };
 
-export interface CandidateRegistration<Reference> {
-  readonly registration: ManagedPluginRegistration<Reference>;
-  readonly artifact: NormalizedArtifact<Reference>;
-}
-
 export interface PlatformChangeHost<Reference> {
   normalize<
     Config = void,
@@ -104,7 +99,7 @@ export class PlatformChangeSetDraft<Reference> implements PlatformChangeSet<Refe
     const state = this.#state;
     if (state.phase === "submitted") return state.promise;
     if (state.phase === "committing") {
-      throw new TypeError("ChangeSet commit is already being prepared");
+      throw new TypeError("Platform ChangeSet commit is already being prepared");
     }
     this.#state = { phase: "committing" };
     const host = state.host;

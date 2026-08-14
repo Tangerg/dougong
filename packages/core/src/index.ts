@@ -57,4 +57,5 @@ export type { Contribution, ExtensionView } from "./extension-store";
 export type { EventListener } from "./event-hub";
 export { ConfigValidationError, DougongError } from "./errors";
 export type { Disposable } from "./resource";
-export type { SnapshotView } from "./snapshot-view";
+export { ReadonlyMapSnapshot } from "./readonly-map";
+export { SnapshotPublisher, type SnapshotView } from "./snapshot-view";

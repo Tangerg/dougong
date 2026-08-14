@@ -5,8 +5,8 @@ import type {
   PlatformChangeSet,
   PluginArtifact,
 } from "./platform-api";
-import type { ManagedPluginStatus } from "./diagnostics";
 import { PlatformError } from "./errors";
+import { SerialQueue } from "./serial-queue";
 
 export interface ManagedPluginRegistrationOwner<Reference> {
   change(): PlatformChangeSet<Reference>;
@@ -35,10 +35,26 @@ type TerminalManagedPluginFailure =
       readonly domain: "core" | "platform";
     };
 
-type ManagedPluginFailureState =
-  | { readonly phase: "none" }
-  | { readonly phase: "live"; readonly error: Error }
-  | { readonly phase: "terminal"; readonly summary: TerminalManagedPluginFailure };
+type ManagedPluginFailure =
+  | { readonly retention: "live"; readonly error: Error }
+  | { readonly retention: "summary"; readonly summary: TerminalManagedPluginFailure };
+
+type ManagedPluginState =
+  | { readonly phase: "pending" }
+  | { readonly phase: "registered"; readonly coreHandle: PluginHandle | undefined }
+  | { readonly phase: "loading"; readonly coreHandle: PluginHandle | undefined }
+  | { readonly phase: "activated"; readonly coreHandle: PluginHandle }
+  | {
+      readonly phase: "failed";
+      readonly coreHandle: PluginHandle | undefined;
+      readonly failure: ManagedPluginFailure;
+    }
+  | { readonly phase: "removed" };
+
+export type ManagedPluginCoreState = Extract<
+  ManagedPluginState,
+  { readonly phase: "registered" | "activated" }
+>;
 
 class ManagedPluginHandleImpl<Reference> implements ManagedPlugin<Reference> {
   readonly #registration: ManagedPluginRegistration<Reference>;
@@ -86,10 +102,8 @@ class ManagedPluginHandleImpl<Reference> implements ManagedPlugin<Reference> {
 export class ManagedPluginRegistration<Reference> {
   #authority: ManagedPluginAuthority<Reference>;
   #manifest: NormalizedArtifact<Reference>["manifest"];
-  #status: ManagedPluginStatus = "pending";
-  #failure: ManagedPluginFailureState = { phase: "none" };
-  #coreHandle: PluginHandle | undefined;
-  #activationQueue: Promise<void> = Promise.resolve();
+  #state: ManagedPluginState = { phase: "pending" };
+  readonly #activationQueue = new SerialQueue();
   #activationController: AbortController | undefined;
   readonly #readyWaiters = new Set<{ resolve: () => void; reject: (error: unknown) => void }>();
   readonly handle: ManagedPlugin<Reference>;
@@ -123,30 +137,33 @@ export class ManagedPluginRegistration<Reference> {
   }
 
   get status() {
-    return this.#status;
+    return this.#state.phase;
   }
 
   get error() {
-    if (this.#failure.phase === "live") return this.#failure.error;
-    if (this.#failure.phase === "terminal") return restoreFailure(this.#failure.summary);
-    if (this.#status === "removed") {
+    const state = this.#state;
+    if (state.phase === "failed") {
+      return state.failure.retention === "live"
+        ? state.failure.error
+        : restoreFailure(state.failure.summary);
+    }
+    if (state.phase === "removed") {
       return new PlatformError("PLUGIN_REMOVED", `Plugin '${this.name}' has been removed`);
     }
     return undefined;
   }
 
   get coreHandle() {
-    return this.#coreHandle;
+    const state = this.#state;
+    return "coreHandle" in state ? state.coreHandle : undefined;
   }
 
   ready() {
-    if (this.#status === "activated") {
-      const handle = this.#coreHandle;
-      return handle
-        ? handle.ready()
-        : Promise.reject(new TypeError(`Activated plugin '${this.name}' has no Core handle`));
+    const state = this.#state;
+    if (state.phase === "activated") {
+      return state.coreHandle.ready();
     }
-    if (this.#status === "failed" || this.#status === "removed") {
+    if (state.phase === "failed" || state.phase === "removed") {
       return Promise.reject(
         this.error ??
           new PlatformError("PLUGIN_UNAVAILABLE", `Plugin '${this.name}' is unavailable`),
@@ -175,7 +192,7 @@ export class ManagedPluginRegistration<Reference> {
   async remove(): Promise<void> {
     const owner = this.#attachedOwner();
     if (!owner) {
-      if (this.#status === "removed" || this.#status === "failed") return;
+      if (this.#state.phase === "removed" || this.#state.phase === "failed") return;
       throw this.#unavailable();
     }
     await owner.change().remove(this.handle).commit();
@@ -188,38 +205,34 @@ export class ManagedPluginRegistration<Reference> {
   }
 
   beginActivation() {
-    this.#failure = { phase: "none" };
-    this.#status = "loading";
+    this.#state = { phase: "loading", coreHandle: this.coreHandle };
   }
 
   commitActivation(handle: PluginHandle) {
-    this.#coreHandle = handle;
-    this.#failure = { phase: "none" };
-    this.#status = "activated";
+    this.#state = { phase: "activated", coreHandle: handle };
     for (const waiter of this.#readyWaiters) {
       void handle.ready().then(waiter.resolve, waiter.reject);
     }
     this.#readyWaiters.clear();
   }
 
-  commitArtifact(
-    artifact: NormalizedArtifact<Reference>,
-    handle: PluginHandle | undefined,
-    activated = false,
-  ) {
+  prepareArtifactCommit(artifact: NormalizedArtifact<Reference>, state: ManagedPluginCoreState) {
     const authority = this.#authority;
     if (authority.phase !== "attached") throw this.#unavailable();
-    authority.artifact = artifact;
-    this.#manifest = artifact.manifest;
-    this.#coreHandle = handle;
-    this.#failure = { phase: "none" };
-    this.#status = activated ? "activated" : "registered";
+    return () => {
+      authority.artifact = artifact;
+      this.#manifest = artifact.manifest;
+      this.#state = state;
+    };
   }
 
   fail(error: unknown) {
     const failure = normalizeFailure(error, this.name);
-    this.#failure = { phase: "live", error: failure };
-    this.#status = "failed";
+    this.#state = {
+      phase: "failed",
+      coreHandle: this.coreHandle,
+      failure: { retention: "live", error: failure },
+    };
     for (const waiter of this.#readyWaiters) waiter.reject(failure);
     this.#readyWaiters.clear();
     return failure;
@@ -227,16 +240,18 @@ export class ManagedPluginRegistration<Reference> {
 
   discard(error: unknown) {
     const failure = this.fail(error);
-    this.#failure = { phase: "terminal", summary: snapshotFailure(failure) };
+    this.#state = {
+      phase: "failed",
+      coreHandle: undefined,
+      failure: { retention: "summary", summary: snapshotFailure(failure) },
+    };
     this.#authority = { phase: "terminal" };
   }
 
   markRemoved() {
     const error = new PlatformError("PLUGIN_REMOVED", `Plugin '${this.name}' has been removed`);
-    this.#coreHandle = undefined;
     this.#authority = { phase: "terminal" };
-    this.#failure = { phase: "none" };
-    this.#status = "removed";
+    this.#state = { phase: "removed" };
     for (const waiter of this.#readyWaiters) waiter.reject(error);
     this.#readyWaiters.clear();
   }
@@ -246,7 +261,7 @@ export class ManagedPluginRegistration<Reference> {
   }
 
   whenActivationSettled() {
-    return this.#activationQueue;
+    return this.#activationQueue.settled;
   }
 
   #attachedOwner() {
@@ -264,12 +279,7 @@ export class ManagedPluginRegistration<Reference> {
         if (this.#activationController === controller) this.#activationController = undefined;
       }
     };
-    const result = this.#activationQueue.then(run, run);
-    this.#activationQueue = result.then(
-      () => undefined,
-      () => undefined,
-    );
-    return result;
+    return this.#activationQueue.run(run);
   }
 
   #unavailable() {

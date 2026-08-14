@@ -1,15 +1,13 @@
 import type { Extension } from "./contracts";
 import { ReadonlyMapSnapshot } from "./readonly-map";
 import type { Disposable, Publication, StagedResource } from "./resource";
+import type { SnapshotView } from "./snapshot-view";
 
 export interface Contribution<T> extends Disposable {
   update(value: T): void;
 }
 
-export interface ExtensionView<T> {
-  get(): ReadonlyMap<string, T>;
-  subscribe(listener: () => void): Disposable;
-}
+export type ExtensionView<T> = SnapshotView<ReadonlyMap<string, T>>;
 
 export type ExtensionLeaseKind = "view" | "subscription";
 
@@ -121,7 +119,7 @@ class ContributionRecord<T> implements StagedResource<Contribution<T>> {
     if (state.phase === "disposed") return;
     this.#state = { phase: "disposed" };
     try {
-      state.store.removeContribution(this.#id, this, state.phase === "published");
+      state.store.removeContribution(this.#id, this, state.phase);
     } finally {
       state.detachFromOwner(this);
     }
@@ -230,9 +228,13 @@ export class ExtensionStore<T> {
     this.#invalidate(this as ExtensionStore<unknown>);
   }
 
-  removeContribution(id: string, contribution: ContributionRecord<T>, published: boolean) {
+  removeContribution(
+    id: string,
+    contribution: ContributionRecord<T>,
+    visibility: "staged" | "published",
+  ) {
     if (this.#claims.get(id) === contribution) this.#claims.delete(id);
-    if (published && this.#entries.get(id)?.contribution === contribution) {
+    if (visibility === "published" && this.#entries.get(id)?.contribution === contribution) {
       this.#entries.delete(id);
       this.#invalidate(this as ExtensionStore<unknown>);
     }

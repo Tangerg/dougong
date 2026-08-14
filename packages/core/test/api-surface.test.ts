@@ -6,6 +6,8 @@ describe("public API surface", () => {
     expect(Object.keys(core).sort()).toEqual([
       "ConfigValidationError",
       "DougongError",
+      "ReadonlyMapSnapshot",
+      "SnapshotPublisher",
       "createApp",
       "definePlugin",
       "event",

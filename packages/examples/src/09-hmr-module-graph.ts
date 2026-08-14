@@ -76,8 +76,8 @@ class ModuleGraph {
       queue.push(id);
     }
 
-    for (let cursor = 0; cursor < queue.length; cursor++) {
-      for (const importer of this.#importers.get(queue[cursor]!)!) {
+    for (const id of queue) {
+      for (const importer of this.#importers.get(id) ?? []) {
         if (affected.has(importer)) continue;
         affected.add(importer);
         queue.push(importer);
@@ -86,7 +86,7 @@ class ModuleGraph {
 
     const plugins = new Set<string>();
     for (const id of affected) {
-      const plugin = this.#modules.get(id)!.plugin;
+      const plugin = this.#modules.get(id)?.plugin;
       if (plugin) plugins.add(plugin);
     }
     return Object.freeze({
@@ -180,7 +180,12 @@ export async function hmrModuleGraph(): Promise<ExampleResult> {
   ]);
   const change = platform.change();
   for (const name of invalidation.plugins) {
-    change.update(handles.get(name)!, replacements.get(name)!);
+    const handle = handles.get(name);
+    const replacement = replacements.get(name);
+    if (!handle || !replacement) {
+      throw new TypeError(`HMR plan is incomplete for plugin '${name}'`);
+    }
+    change.update(handle, replacement);
   }
   snapshots.length = 0;
   await change.commit();

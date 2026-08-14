@@ -1,26 +1,21 @@
 import {
-  definePlugin,
   type Logger,
-  type PluginChangeSet,
   type PluginContainer,
-  type PluginHandle,
   type Provisions,
   type Requirements,
   type SnapshotView,
 } from "@dougong/core";
 import { validate } from "compare-versions";
-import {
-  PlatformDiagnostics,
-  type PluginPlatformSnapshot,
-  type PluginPlatformStatus,
-} from "./diagnostics";
+import { loadPluginDefinition, normalizeArtifact } from "./artifact";
+import { validateCandidateGraph } from "./candidate-graph";
+import { stageCoreChange } from "./core-change";
+import { PlatformDiagnostics, type PluginPlatformSnapshot } from "./diagnostics";
 import { PlatformError } from "./errors";
 import type { PluginLoader } from "./loader";
 import { ManagedPluginRegistration, type ManagedPluginRegistrationOwner } from "./managed-plugin";
-import { defineManifest, matchesVersion, type PluginManifest } from "./manifest";
+import { matchesVersion } from "./manifest";
 import {
   PlatformChangeSetDraft,
-  type CandidateRegistration,
   type PlatformChangeOperation,
   type PlatformChangeHost,
 } from "./platform-change-set";
@@ -34,6 +29,7 @@ import type {
   PluginPlatform,
 } from "./platform-api";
 import { PermissionSet, type PermissionAuthorizer } from "./permissions";
+import { SerialQueue } from "./serial-queue";
 
 interface PlatformAuthority<Reference> {
   current: PluginPlatformImpl<Reference> | undefined;
@@ -46,8 +42,16 @@ interface PlatformPorts<Reference> {
   readonly logger: Logger;
 }
 
+type PlatformState<Reference> =
+  | { readonly phase: "active"; readonly ports: PlatformPorts<Reference> }
+  | {
+      readonly phase: "disposing";
+      readonly ports: PlatformPorts<Reference>;
+      readonly completion: Promise<void>;
+    }
+  | { readonly phase: "disposed" };
+
 class PluginPlatformImpl<Reference> implements PluginPlatform<Reference> {
-  #ports: PlatformPorts<Reference> | undefined;
   readonly #registrations = new Map<string, ManagedPluginRegistration<Reference>>();
   readonly #ownedRegistrations = new WeakMap<object, ManagedPluginRegistration<Reference>>();
   readonly #lockedRegistrations = new Set<ManagedPluginRegistration<Reference>>();
@@ -55,10 +59,9 @@ class PluginPlatformImpl<Reference> implements PluginPlatform<Reference> {
   readonly #registrationOwner: ManagedPluginRegistrationOwner<Reference>;
   readonly #changeHost: PlatformChangeHost<Reference>;
   readonly #authority: PlatformAuthority<Reference>;
-  #status: PluginPlatformStatus = "active";
-  #changeQueue: Promise<void> = Promise.resolve();
+  readonly #changeQueue = new SerialQueue();
+  #state: PlatformState<Reference>;
   #changeController: AbortController | undefined;
-  #disposePromise: Promise<void> | undefined;
 
   readonly apiVersion: string;
   readonly diagnostics: SnapshotView<PluginPlatformSnapshot>;
@@ -88,16 +91,19 @@ class PluginPlatformImpl<Reference> implements PluginPlatform<Reference> {
     const authority: PlatformAuthority<Reference> = { current: this };
     this.#authority = authority;
     this.apiVersion = options.apiVersion;
-    this.#ports = Object.freeze({
-      container: options.container,
-      loader: options.loader,
-      permissions: options.permissions ?? new PermissionSet(),
-      logger: options.logger ?? console,
-    });
+    this.#state = {
+      phase: "active",
+      ports: Object.freeze({
+        container: options.container,
+        loader: options.loader,
+        permissions: options.permissions ?? new PermissionSet(),
+        logger: options.logger ?? console,
+      }),
+    };
     this.#diagnosticModel = new PlatformDiagnostics(this.apiVersion, (error) => {
       const platform = authority.current;
       if (!platform) return;
-      const ports = platform.#ports;
+      const ports = platform.#livePorts();
       if (!ports) return;
       try {
         ports.logger.error(error);
@@ -113,7 +119,10 @@ class PluginPlatformImpl<Reference> implements PluginPlatform<Reference> {
       },
     };
     this.#changeHost = {
-      normalize: (artifact) => requirePlatform(authority).#normalize(artifact),
+      normalize: (artifact) => {
+        const platform = requirePlatform(authority);
+        return normalizeArtifact(platform.apiVersion, artifact);
+      },
       createRegistration: (artifact) => requirePlatform(authority).#createRegistration(artifact),
       attachRegistration: (registration) =>
         requirePlatform(authority).#attachRegistration(registration),
@@ -124,7 +133,7 @@ class PluginPlatformImpl<Reference> implements PluginPlatform<Reference> {
   }
 
   get status() {
-    return this.#status;
+    return this.#state.phase;
   }
 
   async register<
@@ -163,15 +172,16 @@ class PluginPlatformImpl<Reference> implements PluginPlatform<Reference> {
   }
 
   dispose() {
-    if (this.#disposePromise) return this.#disposePromise;
-    if (this.#status === "disposed") return Promise.resolve();
+    const state = this.#state;
+    if (state.phase === "disposing") return state.completion;
+    if (state.phase === "disposed") return Promise.resolve();
 
-    this.#status = "disposing";
+    const completion = this.#changeQueue.settled.then(() => this.#disposeRegistrations());
+    this.#state = { phase: "disposing", ports: state.ports, completion };
     this.#changeController?.abort();
     for (const registration of this.#registrations.values()) registration.cancelActivation();
     this.#publish();
-    this.#disposePromise = this.#changeQueue.then(() => this.#disposeRegistrations());
-    return this.#disposePromise;
+    return completion;
   }
 
   [Symbol.asyncDispose]() {
@@ -201,37 +211,6 @@ class PluginPlatformImpl<Reference> implements PluginPlatform<Reference> {
       throw new TypeError("ManagedPlugin belongs to a different PluginPlatform");
     }
     return registration;
-  }
-
-  #normalize<
-    Config = void,
-    Requires extends Requirements = {},
-    Provides extends Provisions = {},
-    ConfigInput = Config,
-  >(
-    artifact: PluginArtifact<Reference, Config, Requires, Provides, ConfigInput>,
-  ): NormalizedArtifact<Reference> {
-    if (!artifact || typeof artifact !== "object") {
-      throw new TypeError("Plugin artifact must be an object");
-    }
-    const manifest = defineManifest(artifact.manifest);
-    if (!matchesVersion(this.apiVersion, manifest.apiVersion)) {
-      throw new PlatformError(
-        "API_INCOMPATIBLE",
-        `Plugin '${manifest.name}' requires API ${manifest.apiVersion}, host is ${this.apiVersion}`,
-      );
-    }
-
-    const placeholder =
-      artifact.placeholder === undefined
-        ? undefined
-        : this.#normalizePlaceholder(manifest, artifact.placeholder);
-    return Object.freeze({
-      manifest,
-      reference: artifact.reference,
-      config: artifact.config,
-      ...(placeholder ? { placeholder } : {}),
-    });
   }
 
   #execute(operations: ReadonlyArray<PlatformChangeOperation<Reference>>) {
@@ -281,7 +260,11 @@ class PluginPlatformImpl<Reference> implements PluginPlatform<Reference> {
       const { container, permissions } = this.#requirePorts();
       await permissions.authorize(registration.manifest, signal);
       await this.#activateDependencies(registration, [...stack, registration], signal);
-      const definition = await this.#loadDefinition(registration.artifact, signal);
+      const definition = await loadPluginDefinition(
+        this.#requirePorts().loader,
+        registration.artifact,
+        signal,
+      );
       const change = container.change();
       let handle = registration.coreHandle;
       if (handle)
@@ -298,6 +281,28 @@ class PluginPlatformImpl<Reference> implements PluginPlatform<Reference> {
   }
 
   async #applyChanges(operations: ReadonlyArray<PlatformChangeOperation<Reference>>) {
+    const targets = this.#lockChangeTargets(operations);
+    const controller = new AbortController();
+    this.#changeController = controller;
+    try {
+      const { container, permissions } = this.#requirePorts();
+      await Promise.all(targets.map((registration) => registration.whenActivationSettled()));
+      controller.signal.throwIfAborted();
+      validateCandidateGraph(this.#registrations.values(), operations);
+      await this.#authorizeChanges(operations, permissions, controller.signal);
+      const definitions = await this.#loadUpdatedDefinitions(operations, controller.signal);
+      const coreChange = stageCoreChange(container, operations, definitions);
+      const commitPlatformChange = this.#prepareChangeCommit(operations, coreChange.artifactStates);
+      await coreChange.commit();
+      commitPlatformChange();
+      this.#publish();
+    } finally {
+      for (const registration of targets) this.#lockedRegistrations.delete(registration);
+      if (this.#changeController === controller) this.#changeController = undefined;
+    }
+  }
+
+  #lockChangeTargets(operations: ReadonlyArray<PlatformChangeOperation<Reference>>) {
     const targets: ManagedPluginRegistration<Reference>[] = [];
     for (const operation of operations) {
       if (operation.kind === "register") continue;
@@ -308,181 +313,59 @@ class PluginPlatformImpl<Reference> implements PluginPlatform<Reference> {
       registration.cancelActivation();
       targets.push(registration);
     }
+    return targets;
+  }
 
-    const controller = new AbortController();
-    this.#changeController = controller;
-    try {
-      const { container, permissions } = this.#requirePorts();
-      await Promise.all(targets.map((registration) => registration.whenActivationSettled()));
-      controller.signal.throwIfAborted();
-
-      const candidate = this.#buildCandidate(operations);
-      this.#validateCandidate(candidate);
-
-      for (const operation of operations) {
-        if (operation.kind !== "remove") {
-          await permissions.authorize(operation.artifact.manifest, controller.signal);
-        }
+  async #authorizeChanges(
+    operations: ReadonlyArray<PlatformChangeOperation<Reference>>,
+    permissions: PermissionAuthorizer,
+    signal: AbortSignal,
+  ) {
+    for (const operation of operations) {
+      if (operation.kind !== "remove") {
+        await permissions.authorize(operation.artifact.manifest, signal);
       }
+    }
+  }
 
-      const definitions = new Map<ManagedPluginRegistration<Reference>, AnyPluginDefinition>();
-      for (const operation of operations) {
-        if (operation.kind === "update" && operation.registration.status === "activated") {
-          definitions.set(
-            operation.registration,
-            await this.#loadDefinition(operation.artifact, controller.signal),
-          );
-        }
+  async #loadUpdatedDefinitions(
+    operations: ReadonlyArray<PlatformChangeOperation<Reference>>,
+    signal: AbortSignal,
+  ) {
+    const definitions = new Map<ManagedPluginRegistration<Reference>, AnyPluginDefinition>();
+    for (const operation of operations) {
+      if (operation.kind === "update" && operation.registration.status === "activated") {
+        definitions.set(
+          operation.registration,
+          await loadPluginDefinition(this.#requirePorts().loader, operation.artifact, signal),
+        );
       }
+    }
+    return definitions;
+  }
 
-      let coreChange: PluginChangeSet | undefined;
-      const getCoreChange = () => (coreChange ??= container.change());
-      const handles = new Map<ManagedPluginRegistration<Reference>, PluginHandle | undefined>();
-      for (const operation of operations) {
-        if (operation.kind === "register") {
-          const handle = operation.artifact.placeholder
-            ? getCoreChange().install(operation.artifact.placeholder, operation.artifact.config)
-            : undefined;
-          handles.set(operation.registration, handle);
-          continue;
-        }
-
-        const current = operation.registration.coreHandle;
-        if (operation.kind === "remove") {
-          if (current && current.status !== "removed") getCoreChange().remove(current);
-          continue;
-        }
-
-        const definition = definitions.get(operation.registration);
-        if (definition && current) {
-          getCoreChange().update(current, {
-            plugin: definition,
-            config: operation.artifact.config,
-          });
-          handles.set(operation.registration, current);
-        } else if (definition) {
-          handles.set(
-            operation.registration,
-            getCoreChange().install(definition, operation.artifact.config),
-          );
-        } else if (current && operation.artifact.placeholder) {
-          getCoreChange().update(current, {
-            plugin: operation.artifact.placeholder,
-            config: operation.artifact.config,
-          });
-          handles.set(operation.registration, current);
-        } else if (current) {
-          if (current.status !== "removed") getCoreChange().remove(current);
-          handles.set(operation.registration, undefined);
-        } else if (operation.artifact.placeholder) {
-          handles.set(
-            operation.registration,
-            getCoreChange().install(operation.artifact.placeholder, operation.artifact.config),
-          );
-        }
-      }
-      await coreChange?.commit();
-
+  #prepareChangeCommit(
+    operations: ReadonlyArray<PlatformChangeOperation<Reference>>,
+    artifactStates: ReturnType<typeof stageCoreChange<Reference>>["artifactStates"],
+  ) {
+    const artifactCommits = artifactStates.map(({ operation, state }) => ({
+      operation,
+      commit: operation.registration.prepareArtifactCommit(operation.artifact, state),
+    }));
+    return () => {
       for (const operation of operations) {
         if (operation.kind === "remove") {
           this.#registrations.delete(operation.registration.name);
           operation.registration.markRemoved();
-          continue;
         }
+      }
+      for (const { operation, commit } of artifactCommits) {
         if (operation.kind === "register") {
           this.#registrations.set(operation.registration.name, operation.registration);
         }
-        operation.registration.commitArtifact(
-          operation.artifact,
-          handles.get(operation.registration),
-          operation.kind === "update" && definitions.has(operation.registration),
-        );
+        commit();
       }
-      this.#publish();
-    } finally {
-      for (const registration of targets) this.#lockedRegistrations.delete(registration);
-      if (this.#changeController === controller) this.#changeController = undefined;
-    }
-  }
-
-  #buildCandidate(operations: ReadonlyArray<PlatformChangeOperation<Reference>>) {
-    const candidate = new Map<string, CandidateRegistration<Reference>>(
-      [...this.#registrations.values()].map((registration) => [
-        registration.name,
-        { registration, artifact: registration.artifact },
-      ]),
-    );
-
-    for (const operation of operations) {
-      if (operation.kind === "register") {
-        if (candidate.has(operation.registration.name)) {
-          throw new PlatformError(
-            "PLUGIN_DUPLICATE",
-            `Plugin '${operation.registration.name}' is already registered`,
-          );
-        }
-        candidate.set(operation.registration.name, {
-          registration: operation.registration,
-          artifact: operation.artifact,
-        });
-      } else if (operation.kind === "update") {
-        candidate.set(operation.registration.name, {
-          registration: operation.registration,
-          artifact: operation.artifact,
-        });
-      } else {
-        candidate.delete(operation.registration.name);
-      }
-    }
-    return candidate;
-  }
-
-  #validateCandidate(candidate: ReadonlyMap<string, CandidateRegistration<Reference>>) {
-    const visiting = new Set<string>();
-    const visited = new Set<string>();
-    const visit = (name: string, path: ReadonlyArray<string>) => {
-      if (visiting.has(name)) {
-        throw new PlatformError(
-          "PLUGIN_CYCLE",
-          `Plugin dependency cycle: ${[...path, name].join(" -> ")}`,
-        );
-      }
-      if (visited.has(name)) return;
-      const current = candidate.get(name);
-      if (!current) return;
-      visiting.add(name);
-      for (const dependency of Object.keys(current.artifact.manifest.dependencies)) {
-        if (candidate.has(dependency)) visit(dependency, [...path, name]);
-      }
-      visiting.delete(name);
-      visited.add(name);
     };
-    for (const name of candidate.keys()) visit(name, []);
-
-    for (const { registration, artifact } of candidate.values()) {
-      if (registration.status !== "activated") continue;
-      for (const [name, range] of Object.entries(artifact.manifest.dependencies)) {
-        const dependency = candidate.get(name);
-        if (!dependency) {
-          throw new PlatformError(
-            "PLUGIN_DEPENDENCY_MISSING",
-            `Activated plugin '${registration.name}' requires missing plugin '${name}'`,
-          );
-        }
-        if (!matchesVersion(dependency.artifact.manifest.version, range)) {
-          throw new PlatformError(
-            "PLUGIN_DEPENDENCY_INCOMPATIBLE",
-            `Plugin '${registration.name}' requires '${name}' ${range}, found ${dependency.artifact.manifest.version}`,
-          );
-        }
-        if (dependency.registration.status !== "activated") {
-          throw new PlatformError(
-            "PLUGIN_DEPENDENCY_INACTIVE",
-            `Activated plugin '${registration.name}' requires plugin '${name}' to be activated`,
-          );
-        }
-      }
-    }
   }
 
   async #activateDependencies(
@@ -517,57 +400,10 @@ class PluginPlatformImpl<Reference> implements PluginPlatform<Reference> {
     }
   }
 
-  async #loadDefinition(artifact: NormalizedArtifact<Reference>, signal: AbortSignal) {
-    signal.throwIfAborted();
-    let loaded: unknown;
-    try {
-      loaded = await this.#requirePorts().loader.load(artifact.reference, signal);
-    } catch (error) {
-      if (signal.aborted) throw signal.reason;
-      throw new PlatformError(
-        "MODULE_LOAD_FAILED",
-        `Failed to load plugin '${artifact.manifest.name}'`,
-        { cause: error },
-      );
-    }
-    signal.throwIfAborted();
-    if (!loaded || (typeof loaded !== "object" && typeof loaded !== "function")) {
-      throw new PlatformError("MODULE_INVALID", `Plugin '${artifact.manifest.name}' has no module`);
-    }
-    const candidate = (loaded as { default?: unknown }).default;
-    let definition: AnyPluginDefinition;
-    try {
-      definition = definePlugin(candidate as AnyPluginDefinition);
-    } catch (error) {
-      throw new PlatformError(
-        "MODULE_INVALID",
-        `Plugin '${artifact.manifest.name}' default export is not a plugin definition`,
-        { cause: error },
-      );
-    }
-    if (definition.name !== artifact.manifest.name) {
-      throw new PlatformError(
-        "PLUGIN_IDENTITY",
-        `Manifest '${artifact.manifest.name}' loaded plugin '${definition.name}'`,
-      );
-    }
-    return definition;
-  }
-
-  #normalizePlaceholder(manifest: PluginManifest, placeholder: unknown) {
-    const definition = definePlugin(placeholder as AnyPluginDefinition);
-    if (definition.name !== manifest.name) {
-      throw new PlatformError(
-        "PLUGIN_IDENTITY",
-        `Manifest '${manifest.name}' placeholder is named '${definition.name}'`,
-      );
-    }
-    return definition;
-  }
-
   #assertActive() {
-    if (this.#status !== "active") {
-      throw new PlatformError("PLATFORM_UNAVAILABLE", `Plugin platform is ${this.#status}`);
+    const status = this.#state.phase;
+    if (status !== "active") {
+      throw new PlatformError("PLATFORM_UNAVAILABLE", `Plugin platform is ${status}`);
     }
   }
 
@@ -581,25 +417,26 @@ class PluginPlatformImpl<Reference> implements PluginPlatform<Reference> {
   }
 
   #requirePorts() {
-    const ports = this.#ports;
+    const ports = this.#livePorts();
     if (!ports) throw new PlatformError("PLATFORM_UNAVAILABLE", "Plugin platform is disposed");
     return ports;
   }
 
+  #livePorts() {
+    const state = this.#state;
+    return state.phase === "disposed" ? undefined : state.ports;
+  }
+
   #publish() {
-    this.#diagnosticModel.publish(this.#status, this.#registrations.values());
+    this.#diagnosticModel.publish(this.#state.phase, this.#registrations.values());
   }
 
   #enqueueChange(operation: () => Promise<void>) {
-    const result = this.#changeQueue.then(operation, operation);
-    this.#changeQueue = result.then(
-      () => undefined,
-      () => undefined,
-    );
-    return result;
+    return this.#changeQueue.run(operation);
   }
 
   async #disposeRegistrations() {
+    const ports = this.#requirePorts();
     const registrations = [...this.#registrations.values()];
     for (const registration of registrations) registration.cancelActivation();
     await Promise.all(registrations.map((registration) => registration.whenActivationSettled()));
@@ -610,20 +447,18 @@ class PluginPlatformImpl<Reference> implements PluginPlatform<Reference> {
         return handle && handle.status !== "removed" ? [handle] : [];
       });
       if (handles.length) {
-        const change = this.#requirePorts().container.change();
+        const change = ports.container.change();
         for (const handle of handles) change.remove(handle);
         await change.commit();
       }
       this.#registrations.clear();
       for (const registration of registrations) registration.markRemoved();
-      this.#status = "disposed";
+      this.#state = { phase: "disposed" };
       this.#publish();
-      this.#diagnosticModel.close();
+      this.#diagnosticModel.dispose();
       this.#authority.current = undefined;
-      this.#ports = undefined;
     } catch (error) {
-      this.#status = "active";
-      this.#disposePromise = undefined;
+      this.#state = { phase: "active", ports };
       this.#publish();
       throw error;
     }

@@ -32,7 +32,7 @@ export class GroupConfigurationSession<Draft> {
   requireDraft() {
     const state = this.#state;
     if (state.phase === "failed") throw state.error;
-    if (state.phase === "sealed") throw new TypeError("Group configuration has been sealed");
+    if (state.phase === "sealed") throw groupConfigurationSealedError();
     return state.draft;
   }
 
@@ -43,7 +43,7 @@ export class GroupConfigurationSession<Draft> {
   fail(error: unknown) {
     const state = this.#state;
     if (state.phase === "failed") return state.error;
-    if (state.phase === "sealed") throw new TypeError("Group configuration has been sealed");
+    if (state.phase === "sealed") throw groupConfigurationSealedError();
     const failure = state.normalize(error);
     this.#state = {
       phase: "failed",
@@ -57,7 +57,7 @@ export class GroupConfigurationSession<Draft> {
   seal() {
     const state = this.#state;
     if (state.phase === "failed") throw state.error;
-    if (state.phase === "sealed") throw new TypeError("Group configuration has been sealed");
+    if (state.phase === "sealed") throw groupConfigurationSealedError();
     this.#state = { phase: "sealed" };
     return state.draft;
   }
@@ -69,6 +69,10 @@ export class GroupConfigurationSession<Draft> {
     this.#state = { phase: "sealed" };
     state.discard(state.draft, failure);
   }
+}
+
+function groupConfigurationSealedError() {
+  return new TypeError("Group configuration has been sealed");
 }
 
 type GroupNodeState =

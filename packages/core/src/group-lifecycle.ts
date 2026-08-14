@@ -8,48 +8,48 @@ import type { InstallationStatus } from "./plugin-installation";
  * restored committed state.
  */
 export class GroupLifecycle {
-  #established: boolean;
-  #pending = false;
-  #failure: Error | undefined;
-  #barrier: Promise<void> | undefined;
+  #state: GroupLifecycleState;
   #notifyChanged: (() => void) | undefined;
 
   constructor(
     readonly node: GroupNode,
-    established: boolean,
+    initialState: "new" | "established",
     notifyChanged: () => void,
   ) {
-    this.#established = established;
+    this.#state = { phase: initialState };
     this.#notifyChanged = notifyChanged;
   }
 
   status(contents: InstallationStatus): InstallationStatus {
     if (!this.node.attached) return "removed";
-    if (this.#pending) return contents === "stopping" ? "stopping" : "pending";
-    if (this.#failure) return "failed";
-    return this.#established ? contents : "pending";
+    const state = this.#state;
+    if (state.phase === "pending") return contents === "stopping" ? "stopping" : "pending";
+    if (state.phase === "failed") return "failed";
+    return state.phase === "established" ? contents : "pending";
   }
 
   async ready(readyContents: () => Promise<void>) {
     this.node.assertAttached();
-    await this.#barrier;
+    const state = this.#state;
+    if (state.phase === "pending") await state.barrier;
     this.node.assertAttached();
-    if (this.#failure) throw this.#failure;
+    const settled = this.#state;
+    if (settled.phase === "failed") throw settled.error;
     await readyContents();
   }
 
   track(operation: Promise<void>) {
     this.node.assertAttached();
-    const preserveCommittedState = this.#established;
-    this.#pending = true;
-    this.#failure = undefined;
+    const current = this.#state;
+    const preserveCommittedState =
+      current.phase === "established" ||
+      (current.phase === "pending" && current.baseline === "established");
+    const attempt = {};
 
-    let barrier: Promise<void>;
-    barrier = operation.then(
+    const barrier = operation.then(
       () => {
-        if (this.#barrier !== barrier) return;
-        this.#established = true;
-        this.#pending = false;
+        if (!this.#isCurrent(attempt)) return;
+        this.#state = { phase: "established" };
         this.#notifyChanged?.();
       },
       (error) => {
@@ -58,26 +58,47 @@ export class GroupLifecycle {
           "GROUP_UNAVAILABLE",
           `Group '${this.node.id}' operation failed with a non-Error value`,
         );
-        if (this.#barrier === barrier) {
-          this.#pending = false;
-          this.#failure = preserveCommittedState ? undefined : failure;
+        if (this.#isCurrent(attempt)) {
+          this.#state = preserveCommittedState
+            ? { phase: "established" }
+            : { phase: "failed", error: failure };
           this.#notifyChanged?.();
         }
         if (!preserveCommittedState) throw failure;
       },
     );
-    this.#barrier = barrier;
+    this.#state = {
+      phase: "pending",
+      attempt,
+      barrier,
+      baseline: preserveCommittedState ? "established" : "new",
+    };
     this.#notifyChanged?.();
+    // ready() owns this barrier's failure; mark the internal observer branch handled.
     void barrier.catch(() => undefined);
   }
 
   release() {
-    this.#pending = false;
-    this.#failure = undefined;
-    this.#barrier = undefined;
+    this.#state = { phase: "released" };
     this.#notifyChanged = undefined;
   }
+
+  #isCurrent(attempt: object) {
+    const state = this.#state;
+    return state.phase === "pending" && state.attempt === attempt;
+  }
 }
+
+type GroupLifecycleState =
+  | { readonly phase: "new" | "established" }
+  | {
+      readonly phase: "pending";
+      readonly attempt: object;
+      readonly barrier: Promise<void>;
+      readonly baseline: "new" | "established";
+    }
+  | { readonly phase: "failed"; readonly error: Error }
+  | { readonly phase: "released" };
 
 export function groupRemovedError(group: GroupNode) {
   return new DougongError("GROUP_REMOVED", `Group '${group.id}' has been removed`);

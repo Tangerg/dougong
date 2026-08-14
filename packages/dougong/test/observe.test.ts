@@ -164,6 +164,17 @@ describe("observe composition", () => {
     expect(() =>
       observe(owner, { get: () => 1, subscribe: () => ({}) as Disposable }, () => {}),
     ).toThrow("Readable.subscribe() must return a Disposable");
+    const malformedResult: Record<string, unknown> = {};
+    // oxlint-disable-next-line unicorn/no-thenable -- Deliberately exercise the runtime protocol guard.
+    malformedResult["then"] = true;
+    const malformedTaskOwner = {
+      cleanup: (dispose: () => void | Promise<void>) => ({ dispose }),
+      lifetime: (_label: string) => manualLifetime(() => undefined),
+      spawn: () => ({ dispose() {}, result: malformedResult }),
+    } as unknown as ObservationOwner;
+    expect(() => observe(malformedTaskOwner, source, () => {})).toThrow(
+      "ObservationOwner.spawn() must return an ObservationTask",
+    );
     await tick();
   });
 

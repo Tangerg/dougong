@@ -1,5 +1,13 @@
 import { describe, expect, it, vi } from "vitest";
-import { batch, computed, signal } from "../src/index";
+import * as reactive from "../src/index";
+
+const { batch, computed, signal } = reactive;
+
+describe("public API surface", () => {
+  it("keeps the reactive runtime budget explicit", () => {
+    expect(Object.keys(reactive).sort()).toEqual(["batch", "computed", "observe", "signal"]);
+  });
+});
 
 describe("signal", () => {
   it("stores values and only notifies changes", () => {
