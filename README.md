@@ -77,7 +77,11 @@ The provider may be installed after its consumer: Dougong derives startup order 
 - `ctx.cleanup()` runs in LIFO order. A lifetime moves through `active → disposing → disposed`; cleanup may still emit events while it is disposing, but cannot acquire new owned resources.
 - `computed()` only auto-tracks Dougong signals. The structural `Readable` protocol is deliberately broader and is accepted by `ctx.observe()` for integration with external stores.
 
-For the design rationale, boundaries, and desktop/frontend/backend composition examples, see [docs/architecture.zh-CN.md](docs/architecture.zh-CN.md).
+Two documents cover the design. [docs/architecture.zh-CN.md](docs/architecture.zh-CN.md) is the
+rationale: why the layering is what it is, where the kernel's boundaries are, and how the primitives
+map onto desktop, frontend, and backend applications. [docs/api-design.zh-CN.md](docs/api-design.zh-CN.md)
+is the specification: what each API does precisely, what it does at every edge, and which deviations
+between spec and implementation are currently known.
 
 ## Development
 
