@@ -1,13 +1,15 @@
 {
   "name": "dougong",
-  "version": "0.0.0",
+  "version": "0.0.1",
   "type": "module",
   "engines": {
     "node": ">=22"
   },
   "sideEffects": false,
   "files": [
-    "dist"
+    "dist",
+    "README.md",
+    "LICENSE"
   ],
   "exports": {
     ".": {
@@ -22,5 +24,28 @@
     "@dougong/core": "workspace:*",
     "@dougong/platform": "workspace:*",
     "@dougong/reactive": "workspace:*"
+  },
+  "description": "Capability composition and structured lifetime kernel, plus its plugin distribution layer.",
+  "license": "MIT",
+  "author": "Dougong contributors",
+  "homepage": "https://tangerg.github.io/dougong/",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Tangerg/dougong.git",
+    "directory": "packages/dougong"
+  },
+  "bugs": {
+    "url": "https://github.com/Tangerg/dougong/issues"
+  },
+  "keywords": [
+    "plugin",
+    "plugin-system",
+    "dependency-injection",
+    "lifetime",
+    "service-container",
+    "typescript"
+  ],
+  "publishConfig": {
+    "access": "public"
   }
 }

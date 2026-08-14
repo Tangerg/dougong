@@ -1,13 +1,15 @@
 {
   "name": "@dougong/reactive",
-  "version": "0.0.0",
+  "version": "0.0.1",
   "type": "module",
   "engines": {
     "node": ">=22"
   },
   "sideEffects": false,
   "files": [
-    "dist"
+    "dist",
+    "README.md",
+    "LICENSE"
   ],
   "exports": {
     ".": {
@@ -17,5 +19,28 @@
   },
   "scripts": {
     "build": "vite build"
+  },
+  "description": "Zero-dependency signal, computed, batch and observe primitives.",
+  "license": "MIT",
+  "author": "Dougong contributors",
+  "homepage": "https://tangerg.github.io/dougong/",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Tangerg/dougong.git",
+    "directory": "packages/reactive"
+  },
+  "bugs": {
+    "url": "https://github.com/Tangerg/dougong/issues"
+  },
+  "keywords": [
+    "plugin",
+    "plugin-system",
+    "dependency-injection",
+    "lifetime",
+    "service-container",
+    "typescript"
+  ],
+  "publishConfig": {
+    "access": "public"
   }
 }

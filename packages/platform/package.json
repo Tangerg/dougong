@@ -1,13 +1,15 @@
 {
   "name": "@dougong/platform",
-  "version": "0.0.0",
+  "version": "0.0.1",
   "type": "module",
   "engines": {
     "node": ">=22"
   },
   "sideEffects": false,
   "files": [
-    "dist"
+    "dist",
+    "README.md",
+    "LICENSE"
   ],
   "exports": {
     ".": {
@@ -22,5 +24,28 @@
     "@dougong/core": "workspace:*",
     "compare-versions": "^6.1.1",
     "zod": "^4.4.3"
+  },
+  "description": "External plugin distribution layer compiled onto @dougong/core.",
+  "license": "MIT",
+  "author": "Dougong contributors",
+  "homepage": "https://tangerg.github.io/dougong/",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Tangerg/dougong.git",
+    "directory": "packages/platform"
+  },
+  "bugs": {
+    "url": "https://github.com/Tangerg/dougong/issues"
+  },
+  "keywords": [
+    "plugin",
+    "plugin-system",
+    "dependency-injection",
+    "lifetime",
+    "service-container",
+    "typescript"
+  ],
+  "publishConfig": {
+    "access": "public"
   }
 }

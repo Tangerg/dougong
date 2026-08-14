@@ -1,13 +1,15 @@
 {
   "name": "@dougong/core",
-  "version": "0.0.0",
+  "version": "0.0.1",
   "type": "module",
   "engines": {
     "node": ">=22"
   },
   "sideEffects": false,
   "files": [
-    "dist"
+    "dist",
+    "README.md",
+    "LICENSE"
   ],
   "exports": {
     ".": {
@@ -20,5 +22,28 @@
   },
   "dependencies": {
     "@standard-schema/spec": "^1.0.0"
+  },
+  "description": "Capability composition and structured lifetime kernel for JavaScript/TypeScript.",
+  "license": "MIT",
+  "author": "Dougong contributors",
+  "homepage": "https://tangerg.github.io/dougong/",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Tangerg/dougong.git",
+    "directory": "packages/core"
+  },
+  "bugs": {
+    "url": "https://github.com/Tangerg/dougong/issues"
+  },
+  "keywords": [
+    "plugin",
+    "plugin-system",
+    "dependency-injection",
+    "lifetime",
+    "service-container",
+    "typescript"
+  ],
+  "publishConfig": {
+    "access": "public"
   }
 }
