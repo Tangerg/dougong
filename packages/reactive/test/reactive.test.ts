@@ -14,9 +14,15 @@ describe("signal", () => {
     expect(count.get()).toBe(1);
     expect(listener).toHaveBeenCalledTimes(1);
 
+    subscription[Symbol.dispose]?.();
     subscription.dispose();
     count.set(2);
     expect(listener).toHaveBeenCalledTimes(1);
+    expect(Object.isFrozen(count)).toBe(true);
+    expect(Object.isFrozen(subscription)).toBe(true);
+    expect(() => count.subscribe(undefined as never)).toThrow(
+      "Signal subscriber must be a function",
+    );
   });
 
   it("batches notifications through one subscriber path", () => {
@@ -59,10 +65,20 @@ describe("signal", () => {
     }
 
     expect(thrown).toBe(true);
+    expect(() => batch(undefined as never)).toThrow("batch() expects a function");
   });
 });
 
 describe("computed", () => {
+  it("validates its callable and subscriber boundaries eagerly", () => {
+    expect(() => computed(undefined as never)).toThrow("computed() expects a function");
+    const value = computed(() => 1);
+    expect(Object.isFrozen(value)).toBe(true);
+    expect(() => value.subscribe(undefined as never)).toThrow(
+      "Signal subscriber must be a function",
+    );
+  });
+
   it("tracks dynamic dependencies", () => {
     const enabled = signal(true);
     const left = signal(1);

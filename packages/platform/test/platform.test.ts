@@ -1,0 +1,774 @@
+import { describe, expect, it, vi } from "vitest";
+import { createApp, definePlugin, DougongError, extension, service } from "@dougong/core";
+import {
+  createPlatform,
+  defineManifest,
+  ImportPluginLoader,
+  MemoryPluginLoader,
+  PermissionDeniedError,
+  PermissionSet,
+  PlatformError,
+  type PluginManifest,
+} from "../src/index";
+
+describe("plugin platform", () => {
+  it("validates host ports before constructing runtime state", () => {
+    expect(() => createPlatform(null as never)).toThrow("options must be an object");
+    expect(() =>
+      createPlatform({
+        container: createApp(),
+        apiVersion: "1.0.0",
+        loader: {} as never,
+      }),
+    ).toThrow("loader must implement load()");
+    expect(() =>
+      createPlatform({
+        container: createApp(),
+        apiVersion: "1.0.0",
+        loader: new MemoryPluginLoader(new Map()),
+        permissions: null as never,
+      }),
+    ).toThrow("permissions must implement authorize()");
+    expect(() =>
+      createPlatform({
+        container: createApp(),
+        apiVersion: "1.0.0",
+        loader: new MemoryPluginLoader(new Map()),
+        logger: {} as never,
+      }),
+    ).toThrow("logger must implement debug/info/warn/error");
+  });
+
+  it("keeps managed handles and ChangeSets opaque at runtime", async () => {
+    const plugin = definePlugin({ name: "opaque.plugin", setup() {} });
+    const app = createApp();
+    const platform = createPlatform({
+      container: app,
+      apiVersion: "1.0.0",
+      loader: new MemoryPluginLoader(new Map([["opaque", { default: plugin }]])),
+    });
+    const change = platform.change();
+    const managed = change.register({
+      manifest: { name: "opaque.plugin", version: "1.0.0" },
+      reference: "opaque",
+    });
+
+    expect(Object.keys(change)).toEqual([]);
+    expect(Object.keys(managed)).toEqual([]);
+    expect(Object.isFrozen(change)).toBe(true);
+    expect(Object.isFrozen(managed)).toBe(true);
+    expect(Object.isFrozen(platform)).toBe(true);
+    expect(managed.status).toBe("pending");
+    const diagnosticSubscription = platform.diagnostics.subscribe(() => undefined);
+    expect("notify" in diagnosticSubscription).toBe(false);
+    expect("close" in diagnosticSubscription).toBe(false);
+    diagnosticSubscription[Symbol.dispose]?.();
+    for (const internal of [
+      "createRecord",
+      "attachRecord",
+      "resolve",
+      "normalize",
+      "execute",
+      "activateRecord",
+    ]) {
+      expect(internal in platform).toBe(false);
+    }
+    await expect(managed.activate()).rejects.toMatchObject({ code: "PLUGIN_UNAVAILABLE" });
+    await expect(managed.remove()).rejects.toMatchObject({ code: "PLUGIN_UNAVAILABLE" });
+    const before = platform.diagnostics.get();
+    await platform.change().commit();
+    expect(platform.diagnostics.get()).toBe(before);
+    await change.commit();
+    await platform.dispose();
+  });
+
+  it("revokes uncommitted drafts when the Platform reaches its terminal state", async () => {
+    const platform = createPlatform({
+      container: createApp(),
+      apiVersion: "1.0.0",
+      loader: new MemoryPluginLoader(new Map()),
+    });
+    const change = platform.change();
+    const managed = change.register({
+      manifest: { name: "stale.draft", version: "1.0.0" },
+      reference: "missing",
+    });
+    await platform.dispose();
+
+    const committing = change.commit();
+    expect(change.commit()).toBe(committing);
+    await expect(committing).rejects.toMatchObject({ code: "PLATFORM_UNAVAILABLE" });
+    expect(managed.status).toBe("failed");
+    await expect(managed.activate()).rejects.toMatchObject({ code: "PLATFORM_UNAVAILABLE" });
+  });
+
+  it("normalizes and freezes manifests at the trust boundary", () => {
+    const manifest = defineManifest({ name: "demo", version: "1.2.3" });
+    expect(manifest).toEqual({
+      name: "demo",
+      version: "1.2.3",
+      apiVersion: "*",
+      activation: ["startup"],
+      permissions: [],
+      dependencies: {},
+    });
+    expect(Object.isFrozen(manifest)).toBe(true);
+    expect(Object.isFrozen(manifest.activation)).toBe(true);
+    expect(() => defineManifest({ name: "demo", version: "nope" })).toThrow(PlatformError);
+    expect(() => defineManifest({ name: "demo", version: "nope" })).toThrow(DougongError);
+    expect(() => defineManifest({ name: " demo", version: "1.0.0" })).toThrow(PlatformError);
+    expect(() =>
+      defineManifest({
+        name: "demo",
+        version: "1.0.0",
+        dependencies: { dependency: "not-a-range" },
+      }),
+    ).toThrow(PlatformError);
+    expect(() =>
+      defineManifest({
+        name: "demo",
+        version: "1.0.0",
+        permissions: ["fs", "fs"],
+      }),
+    ).toThrow("duplicate permission");
+  });
+
+  it("rejects malformed optional placeholders instead of treating them as absent", () => {
+    const platform = createPlatform({
+      container: createApp(),
+      apiVersion: "1.0.0",
+      loader: new MemoryPluginLoader(new Map()),
+    });
+    expect(() =>
+      platform.change().register({
+        manifest: { name: "demo.placeholder", version: "1.0.0" },
+        reference: "missing",
+        placeholder: null,
+      } as never),
+    ).toThrow("Plugin name must be a non-empty string");
+  });
+
+  it("loads trusted ESM through the abort-aware import adapter", async () => {
+    const loader = new ImportPluginLoader();
+    const module = (await loader.load(
+      "data:text/javascript,export const value = 42",
+      new AbortController().signal,
+    )) as { value: number };
+    expect(module.value).toBe(42);
+
+    const controller = new AbortController();
+    controller.abort(new Error("cancelled"));
+    await expect(
+      loader.load("data:text/javascript,export default 1", controller.signal),
+    ).rejects.toThrow("cancelled");
+  });
+
+  it("stages a lazy placeholder and atomically replaces it on activation", async () => {
+    const SURFACES = extension<string>("platform/surfaces");
+    const trace: string[] = [];
+    const placeholder = definePlugin({
+      name: "demo.lazy",
+      setup(ctx) {
+        trace.push("placeholder:start");
+        ctx.contribute(SURFACES, "main", "placeholder");
+        ctx.cleanup(() => trace.push("placeholder:stop"));
+      },
+    });
+    const active = definePlugin({
+      name: "demo.lazy",
+      setup(ctx) {
+        trace.push("active:start");
+        ctx.contribute(SURFACES, "main", "active");
+        ctx.cleanup(() => trace.push("active:stop"));
+      },
+    });
+
+    const app = createApp();
+    const platform = createPlatform({
+      container: app,
+      apiVersion: "1.0.0",
+      loader: new MemoryPluginLoader(new Map([["lazy", { default: active }]])),
+    });
+    const plugin = await platform.register({
+      manifest: {
+        name: "demo.lazy",
+        version: "1.0.0",
+        apiVersion: "^1.0.0",
+        activation: ["command:open"],
+      },
+      reference: "lazy",
+      placeholder,
+    });
+
+    await app.start();
+    const instanceId = [...app.diagnostics.get().plugins.keys()][0];
+    expect(plugin.status).toBe("registered");
+    expect(trace).toEqual(["placeholder:start"]);
+
+    const ready = plugin.ready();
+    await platform.trigger("command:open");
+    await ready;
+
+    expect(plugin.status).toBe("active");
+    expect(trace).toEqual(["placeholder:start", "placeholder:stop", "active:start"]);
+    expect([...app.diagnostics.get().plugins.keys()]).toEqual([instanceId]);
+
+    await plugin.remove();
+    expect(plugin.status).toBe("removed");
+    expect(trace.at(-1)).toBe("active:stop");
+    await app.stop();
+  });
+
+  it("activates compatible manifest dependencies before their consumers", async () => {
+    const DATABASE = service<{ read(): string }>("platform/database");
+    const trace: string[] = [];
+    const database = definePlugin({
+      name: "demo.database",
+      provides: { database: DATABASE },
+      setup() {
+        trace.push("database");
+        return { database: { read: () => "value" } };
+      },
+    });
+    const consumer = definePlugin({
+      name: "demo.consumer",
+      requires: { database: DATABASE },
+      setup(ctx) {
+        trace.push(`consumer:${ctx.database.read()}`);
+      },
+    });
+
+    const app = createApp();
+    await app.start();
+    const platform = createPlatform({
+      container: app,
+      apiVersion: "2.1.0",
+      loader: new MemoryPluginLoader(
+        new Map([
+          ["database", { default: database }],
+          ["consumer", { default: consumer }],
+        ]),
+      ),
+    });
+    const dependency = await platform.register({
+      manifest: {
+        name: "demo.database",
+        version: "1.4.0",
+        apiVersion: "^2.0.0",
+        activation: ["manual"],
+      },
+      reference: "database",
+    });
+    const dependent = await platform.register({
+      manifest: {
+        name: "demo.consumer",
+        version: "1.0.0",
+        apiVersion: "^2.0.0",
+        activation: ["startup"],
+        dependencies: { "demo.database": "^1.3.0" },
+      },
+      reference: "consumer",
+    });
+
+    await platform.trigger("startup");
+
+    expect(trace).toEqual(["database", "consumer:value"]);
+    expect(dependency.status).toBe("active");
+    expect(dependent.status).toBe("active");
+    await app.stop();
+  });
+
+  it("enforces API compatibility and explicit permission policy before execution", async () => {
+    const plugin = definePlugin({ name: "demo.secure", setup() {} });
+    const modules = new MemoryPluginLoader(new Map([["secure", { default: plugin }]]));
+    const app = createApp();
+
+    const denied = createPlatform({ container: app, apiVersion: "1.0.0", loader: modules });
+    await expect(
+      denied.register({
+        manifest: { name: "demo.secure", version: "1.0.0", permissions: ["filesystem"] },
+        reference: "secure",
+      }),
+    ).rejects.toBeInstanceOf(PermissionDeniedError);
+
+    const allowed = createPlatform({
+      container: app,
+      apiVersion: "1.0.0",
+      loader: modules,
+      permissions: new PermissionSet(["filesystem"]),
+    });
+    await expect(
+      allowed.register({
+        manifest: {
+          name: "demo.secure",
+          version: "1.0.0",
+          apiVersion: "^2.0.0",
+          permissions: ["filesystem"],
+        },
+        reference: "secure",
+      }),
+    ).rejects.toMatchObject({ code: "API_INCOMPATIBLE" });
+  });
+
+  it("updates an active plugin through the existing Core handle", async () => {
+    const trace: string[] = [];
+    const v1 = definePlugin({
+      name: "demo.hmr",
+      setup(ctx) {
+        trace.push("v1:start");
+        ctx.cleanup(() => trace.push("v1:stop"));
+      },
+    });
+    const v2 = definePlugin({
+      name: "demo.hmr",
+      setup(ctx) {
+        trace.push("v2:start");
+        ctx.cleanup(() => trace.push("v2:stop"));
+      },
+    });
+    const app = createApp();
+    await app.start();
+    const platform = createPlatform({
+      container: app,
+      apiVersion: "1.0.0",
+      loader: new MemoryPluginLoader(
+        new Map([
+          ["v1", { default: v1 }],
+          ["v2", { default: v2 }],
+        ]),
+      ),
+    });
+    const managed = await platform.register({
+      manifest: { name: "demo.hmr", version: "1.0.0" },
+      reference: "v1",
+    });
+    await managed.activate();
+    const id = [...app.diagnostics.get().plugins.keys()][0];
+
+    await managed.update({
+      manifest: { name: "demo.hmr", version: "1.1.0" },
+      reference: "v2",
+    });
+
+    expect(trace).toEqual(["v1:start", "v1:stop", "v2:start"]);
+    expect([...app.diagnostics.get().plugins.keys()]).toEqual([id]);
+    expect(managed.manifest.version).toBe("1.1.0");
+    await app.stop();
+  });
+
+  it("keeps the previous Artifact when Core rejects a prepared update", async () => {
+    const positive = {
+      "~standard": {
+        version: 1 as const,
+        vendor: "test",
+        validate(value: unknown) {
+          return typeof value === "number" && value > 0
+            ? { value }
+            : { issues: [{ message: "must be positive" }] };
+        },
+      },
+    };
+    const trace: string[] = [];
+    const v1 = definePlugin({
+      name: "demo.rollback",
+      config: positive,
+      setup(_ctx, config) {
+        trace.push(`v1:${config}`);
+      },
+    });
+    const v2 = definePlugin({
+      name: "demo.rollback",
+      config: positive,
+      setup(_ctx, config) {
+        trace.push(`v2:${config}`);
+      },
+    });
+    const app = createApp();
+    await app.start();
+    const platform = createPlatform({
+      container: app,
+      apiVersion: "1.0.0",
+      loader: new MemoryPluginLoader(
+        new Map([
+          ["rollback-v1", { default: v1 }],
+          ["rollback-v2", { default: v2 }],
+        ]),
+      ),
+    });
+    const managed = await platform.register({
+      manifest: { name: "demo.rollback", version: "1.0.0" },
+      reference: "rollback-v1",
+      config: 1,
+    });
+    await managed.activate();
+
+    await expect(
+      managed.update({
+        manifest: { name: "demo.rollback", version: "2.0.0" },
+        reference: "rollback-v2",
+        config: -1,
+      }),
+    ).rejects.toMatchObject({ code: "CONFIG_INVALID" });
+
+    expect(managed.manifest.version).toBe("1.0.0");
+    expect(managed.status).toBe("active");
+    expect(trace).toEqual(["v1:1"]);
+    await platform.dispose();
+    await app.stop();
+  });
+
+  it("reports missing, incompatible and cyclic manifest dependencies", async () => {
+    const a = definePlugin({ name: "demo.a", setup() {} });
+    const b = definePlugin({ name: "demo.b", setup() {} });
+    const app = createApp();
+    await app.start();
+    const platform = createPlatform({
+      container: app,
+      apiVersion: "1.0.0",
+      loader: new MemoryPluginLoader(
+        new Map([
+          ["a", { default: a }],
+          ["b", { default: b }],
+        ]),
+      ),
+    });
+
+    const missing = await platform.register({
+      manifest: {
+        name: "demo.a",
+        version: "1.0.0",
+        activation: ["missing"],
+        dependencies: { "demo.nope": "^1.0.0" },
+      },
+      reference: "a",
+    });
+    await expect(missing.activate()).rejects.toMatchObject({ code: "PLUGIN_DEPENDENCY_MISSING" });
+    await missing.remove();
+
+    const first = await platform.register({
+      manifest: {
+        name: "demo.a",
+        version: "1.0.0",
+        activation: ["cycle"],
+        dependencies: { "demo.b": "^1.0.0" },
+      },
+      reference: "a",
+    });
+    await expect(
+      platform.register({
+        manifest: {
+          name: "demo.b",
+          version: "1.0.0",
+          activation: ["cycle"],
+          dependencies: { "demo.a": "^1.0.0" },
+        },
+        reference: "b",
+      }),
+    ).rejects.toMatchObject({ code: "PLUGIN_CYCLE" });
+
+    await first.remove();
+    await app.stop();
+  });
+
+  it("migrates active manifest and Core contracts in one canonical ChangeSet", async () => {
+    const API = service<{ version: number }>("platform/migration-api");
+    const trace: string[] = [];
+    const providerV1 = definePlugin({
+      name: "migration.provider",
+      provides: { api: API },
+      setup: () => ({ api: { version: 1 } }),
+    });
+    const providerV2 = definePlugin({
+      name: "migration.provider",
+      provides: { api: API },
+      setup: () => ({ api: { version: 2 } }),
+    });
+    const consumerV1 = definePlugin({
+      name: "migration.consumer",
+      requires: { api: API },
+      setup: (ctx) => {
+        trace.push(`consumer:${ctx.api.version}`);
+      },
+    });
+    const consumerV2 = definePlugin({
+      name: "migration.consumer",
+      requires: { api: API },
+      setup: (ctx) => {
+        trace.push(`consumer:${ctx.api.version}`);
+      },
+    });
+    const app = createApp();
+    await app.start();
+    const platform = createPlatform({
+      container: app,
+      apiVersion: "1.0.0",
+      loader: new MemoryPluginLoader(
+        new Map([
+          ["provider-v1", { default: providerV1 }],
+          ["provider-v2", { default: providerV2 }],
+          ["consumer-v1", { default: consumerV1 }],
+          ["consumer-v2", { default: consumerV2 }],
+        ]),
+      ),
+    });
+    const provider = await platform.register({
+      manifest: { name: "migration.provider", version: "1.0.0" },
+      reference: "provider-v1",
+    });
+    const consumer = await platform.register({
+      manifest: {
+        name: "migration.consumer",
+        version: "1.0.0",
+        dependencies: { "migration.provider": "^1.0.0" },
+      },
+      reference: "consumer-v1",
+    });
+    await consumer.activate();
+    expect(trace).toEqual(["consumer:1"]);
+
+    await expect(
+      provider.update({
+        manifest: { name: "migration.provider", version: "2.0.0" },
+        reference: "provider-v2",
+      }),
+    ).rejects.toMatchObject({ code: "PLUGIN_DEPENDENCY_INCOMPATIBLE" });
+
+    const change = platform.change();
+    change.update(provider, {
+      manifest: { name: "migration.provider", version: "2.0.0" },
+      reference: "provider-v2",
+    });
+    change.update(consumer, {
+      manifest: {
+        name: "migration.consumer",
+        version: "2.0.0",
+        dependencies: { "migration.provider": "^2.0.0" },
+      },
+      reference: "consumer-v2",
+    });
+    await change.commit();
+
+    expect(trace).toEqual(["consumer:1", "consumer:2"]);
+    expect(provider.manifest.version).toBe("2.0.0");
+    expect(consumer.manifest.version).toBe("2.0.0");
+    await platform.dispose();
+    await app.stop();
+  });
+
+  it("separates module activation from the Core ready barrier and owns disposal", async () => {
+    const plugin = definePlugin({ name: "demo.lifecycle", setup() {} });
+    const app = createApp();
+    const platform = createPlatform({
+      container: app,
+      apiVersion: "1.0.0",
+      loader: new MemoryPluginLoader(new Map([["lifecycle", { default: plugin }]])),
+    });
+    const revisions: number[] = [];
+    const subscription = platform.diagnostics.subscribe(() => {
+      revisions.push(platform.diagnostics.get().revision);
+    });
+    const managed = await platform.register({
+      manifest: { name: "demo.lifecycle", version: "1.0.0" },
+      reference: "lifecycle",
+    });
+    let ready = false;
+    const barrier = managed.ready().then(() => {
+      ready = true;
+    });
+
+    await managed.activate();
+    await Promise.resolve();
+    expect(managed.status).toBe("active");
+    expect(ready).toBe(false);
+
+    await app.start();
+    await barrier;
+    const snapshot = platform.diagnostics.get();
+    expect(snapshot.plugins.get("demo.lifecycle")).toMatchObject({
+      status: "active",
+      version: "1.0.0",
+    });
+    expect(Object.isFrozen(snapshot)).toBe(true);
+    expect(Object.isFrozen(snapshot.plugins.get("demo.lifecycle"))).toBe(true);
+    expect("set" in snapshot.plugins).toBe(false);
+    expect(snapshot.plugins.size).toBe(1);
+    expect(snapshot.plugins.has("demo.lifecycle")).toBe(true);
+    expect([...snapshot.plugins.keys()]).toEqual(["demo.lifecycle"]);
+    expect([...snapshot.plugins.values()]).toHaveLength(1);
+    expect([...snapshot.plugins.entries()]).toHaveLength(1);
+    expect([...snapshot.plugins]).toHaveLength(1);
+    let visits = 0;
+    snapshot.plugins.forEach(() => visits++);
+    expect(visits).toBe(1);
+    expect(revisions.length).toBeGreaterThan(1);
+
+    const report = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const failingSubscription = platform.diagnostics.subscribe(() => {
+      throw new Error("diagnostic subscriber failed");
+    });
+    await managed.update({
+      manifest: { name: "demo.lifecycle", version: "1.1.0" },
+      reference: "lifecycle",
+    });
+    expect(report).toHaveBeenCalledWith(
+      expect.objectContaining({ message: "diagnostic subscriber failed" }),
+    );
+    failingSubscription.dispose();
+    failingSubscription.dispose();
+    expect(() => platform.diagnostics.subscribe(undefined as never)).toThrow(
+      "Subscriber must be a function",
+    );
+
+    await platform.dispose();
+    expect(platform.status).toBe("disposed");
+    expect(managed.status).toBe("removed");
+    expect(app.diagnostics.get().plugins.size).toBe(0);
+    await expect(managed.remove()).resolves.toBeUndefined();
+    await expect(managed.activate()).rejects.toMatchObject({ code: "PLUGIN_REMOVED" });
+    expect(() => platform.diagnostics.subscribe(() => undefined)).toThrow(
+      "Platform diagnostics have been closed",
+    );
+    await platform.dispose();
+    subscription.dispose();
+    await app.stop();
+  });
+
+  it("reauthorizes immediately before module execution and supports an explicit retry", async () => {
+    const plugin = definePlugin({ name: "demo.reauthorize", setup() {} });
+    let allowed = true;
+    const authorize = vi.fn<(manifest: PluginManifest, signal: AbortSignal) => void>(() => {
+      if (!allowed) throw new PermissionDeniedError("demo.reauthorize", ["network"]);
+    });
+    const load = vi.fn<(reference: string, signal: AbortSignal) => unknown>(() => ({
+      default: plugin,
+    }));
+    const app = createApp();
+    await app.start();
+    const platform = createPlatform({
+      container: app,
+      apiVersion: "1.0.0",
+      permissions: { authorize },
+      loader: { load },
+    });
+    const managed = await platform.register({
+      manifest: {
+        name: "demo.reauthorize",
+        version: "1.0.0",
+        permissions: ["network"],
+      },
+      reference: "secure",
+    });
+
+    allowed = false;
+    await expect(managed.activate()).rejects.toBeInstanceOf(PermissionDeniedError);
+    expect(load).not.toHaveBeenCalled();
+    expect(managed.status).toBe("failed");
+
+    allowed = true;
+    await managed.activate();
+    expect(load).toHaveBeenCalledOnce();
+    expect(authorize).toHaveBeenCalledTimes(3);
+    await platform.dispose();
+    await app.stop();
+  });
+
+  it("attempts every matching activation and aggregates independent failures", async () => {
+    const app = createApp();
+    const platform = createPlatform({
+      container: app,
+      apiVersion: "1.0.0",
+      loader: { load: () => Promise.reject(new Error("unavailable")) },
+    });
+    await platform.register({
+      manifest: { name: "failed.one", version: "1.0.0", activation: ["event"] },
+      reference: "one",
+    });
+    await platform.register({
+      manifest: { name: "failed.two", version: "1.0.0", activation: ["event"] },
+      reference: "two",
+    });
+
+    const failure = await platform.trigger("event").catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(AggregateError);
+    expect((failure as AggregateError).errors).toHaveLength(2);
+    expect([...platform.diagnostics.get().plugins.values()].map((plugin) => plugin.status)).toEqual(
+      ["failed", "failed"],
+    );
+    await platform.dispose();
+  });
+
+  it("makes Platform ChangeSet one-shot, authoritative and commit-idempotent", async () => {
+    const plugin = definePlugin({ name: "demo.change-owner", setup() {} });
+    const modules = new MemoryPluginLoader(new Map([["plugin", { default: plugin }]]));
+    const first = createPlatform({
+      container: createApp(),
+      apiVersion: "1.0.0",
+      loader: modules,
+    });
+    const second = createPlatform({
+      container: createApp(),
+      apiVersion: "1.0.0",
+      loader: modules,
+    });
+    const managed = await first.register({
+      manifest: { name: "demo.change-owner", version: "1.0.0" },
+      reference: "plugin",
+    });
+    expect(() => second.change().remove(managed)).toThrow("different PluginPlatform");
+
+    const change = first.change();
+    change.update(managed, {
+      manifest: { name: "demo.change-owner", version: "1.1.0" },
+      reference: "plugin",
+    });
+    expect(() => change.remove(managed)).toThrow("can only appear once");
+    const committing = change.commit();
+    expect(change.commit()).toBe(committing);
+    expect(() =>
+      change.register({
+        manifest: { name: "demo.late", version: "1.0.0" },
+        reference: "plugin",
+      }),
+    ).toThrow("committed ChangeSet");
+    await committing;
+    expect(managed.manifest.version).toBe("1.1.0");
+    await Promise.all([first.dispose(), second.dispose()]);
+  });
+
+  it("cancels in-flight activation before removing its stable identity", async () => {
+    let entered!: () => void;
+    const loading = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    const app = createApp();
+    const platform = createPlatform({
+      container: app,
+      apiVersion: "1.0.0",
+      loader: {
+        load(_reference: string, signal: AbortSignal) {
+          entered();
+          return new Promise<never>((_resolve, reject) => {
+            signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+          });
+        },
+      },
+    });
+    const managed = await platform.register({
+      manifest: { name: "demo.cancel", version: "1.0.0" },
+      reference: "slow",
+    });
+
+    const activation = managed.activate();
+    await loading;
+    const removal = managed.remove();
+    await expect(activation).rejects.toBeDefined();
+    await removal;
+
+    expect(managed.status).toBe("removed");
+    const repeated = platform.change();
+    repeated.remove(managed);
+    await expect(repeated.commit()).resolves.toBeUndefined();
+    expect(app.diagnostics.get().plugins.size).toBe(0);
+    await platform.dispose();
+  });
+});

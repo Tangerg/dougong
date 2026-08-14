@@ -13,12 +13,24 @@ export default defineConfig({
         new URL("./packages/reactive/src/index.ts", import.meta.url),
       ),
       "@dougong/core": fileURLToPath(new URL("./packages/core/src/index.ts", import.meta.url)),
+      "@dougong/platform": fileURLToPath(
+        new URL("./packages/platform/src/index.ts", import.meta.url),
+      ),
       dougong: fileURLToPath(new URL("./packages/dougong/src/index.ts", import.meta.url)),
     },
   },
 
   test: {
     include: ["packages/*/test/**/*.test.ts"],
+
+    // Resource-retention tests need an explicit GC boundary. Forked workers
+    // are required because V8 flags cannot be added to an existing thread.
+    pool: "forks",
+    poolOptions: {
+      forks: {
+        execArgv: ["--expose-gc"],
+      },
+    },
 
     // Mocks are per-package listeners and event handlers; leaking one into the
     // next test would show up as a phantom extra call, not as a failure here.
@@ -38,6 +50,12 @@ export default defineConfig({
       // that should show up in review.
       thresholds: {
         "packages/core/src/**": { statements: 84, functions: 85, branches: 72, lines: 88 },
+        "packages/platform/src/**": {
+          statements: 89,
+          functions: 94,
+          branches: 78,
+          lines: 90,
+        },
         "packages/reactive/src/**": { statements: 92, functions: 100, branches: 75, lines: 96 },
       },
     },

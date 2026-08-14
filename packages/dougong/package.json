@@ -17,6 +17,7 @@
   },
   "dependencies": {
     "@dougong/core": "workspace:*",
+    "@dougong/platform": "workspace:*",
     "@dougong/reactive": "workspace:*"
   }
 }

@@ -15,9 +15,16 @@ export {
 export {
   createApp,
   type Application,
+  type ApplicationSnapshot,
   type ApplicationStatus,
   type CreateAppOptions,
+  type GroupSnapshot,
+  type InstallHandle,
+  type PluginChangeSet,
+  type PluginContainer,
+  type PluginGroup,
   type PluginHandle,
+  type PluginSnapshot,
   type PluginStatus,
   type PluginUpdate,
 } from "./application";
@@ -39,8 +46,9 @@ export {
   type Cleanup,
   type LifetimeContext,
   type LifetimeOperations,
+  type LifetimePhase,
+  type LifetimeSnapshot,
   type Logger,
-  type Observer,
   type PluginMeta,
   type Task,
 } from "./lifetime";
@@ -48,4 +56,5 @@ export {
 export type { Contribution, ExtensionView } from "./extension-store";
 export type { EventListener } from "./event-hub";
 export { ConfigValidationError, DougongError } from "./errors";
-export type { Disposable, Readable, ReadonlySignal } from "@dougong/reactive";
+export type { Disposable } from "./resource";
+export type { SnapshotView } from "./snapshot-view";

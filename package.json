@@ -4,8 +4,8 @@
   "type": "module",
   "packageManager": "pnpm@10.14.0",
   "scripts": {
-    "build": "pnpm --filter @dougong/reactive build && pnpm --filter @dougong/core build && pnpm --filter dougong build",
-    "typecheck": "tsc --noEmit -p packages/reactive && tsc --noEmit -p packages/core && tsc --noEmit -p packages/dougong && tsc --noEmit -p tsconfig.test.json",
+    "build": "pnpm --filter @dougong/reactive build && pnpm --filter @dougong/core build && pnpm --filter @dougong/platform build && pnpm --filter dougong build && pnpm --filter @dougong/examples build",
+    "typecheck": "tsc --noEmit -p packages/reactive && tsc --noEmit -p packages/core && tsc --noEmit -p packages/platform && tsc --noEmit -p packages/dougong && tsc --noEmit -p packages/examples && tsc --noEmit -p tsconfig.test.json",
     "test": "vitest run",
     "test:watch": "vitest --coverage.enabled=false",
     "lint": "oxlint packages scripts --deny-warnings",
@@ -15,6 +15,8 @@
     "knip": "knip",
     "check:circular": "node scripts/check-circular.mjs",
     "check:layers": "node scripts/check-layers.mjs",
+    "examples": "pnpm --filter @dougong/examples example",
+    "examples:benchmark": "pnpm --filter @dougong/examples benchmark",
     "check": "pnpm typecheck && pnpm lint && pnpm format:check && pnpm test && pnpm knip && pnpm check:circular && pnpm check:layers && pnpm build",
     "prepare": "husky"
   },

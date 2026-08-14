@@ -1,14 +1,6 @@
-export interface Disposable {
-  dispose(): void | Promise<void>;
-  [Symbol.dispose]?(): void;
-  [Symbol.asyncDispose]?(): Promise<void>;
-}
+import type { Disposable, Readable } from "./protocol";
 
-/** A value that can be read and observed, regardless of which library owns it. */
-export interface Readable<T> {
-  get(): T;
-  subscribe(listener: () => void): Disposable;
-}
+export type { Disposable, Readable } from "./protocol";
 
 declare const dougongSignal: unique symbol;
 
@@ -20,6 +12,14 @@ export interface ReadonlySignal<T> extends Readable<T> {
 export interface Signal<T> extends ReadonlySignal<T> {
   set(value: T): void;
 }
+
+export {
+  observe,
+  type ObservationLifetime,
+  type ObservationOwner,
+  type ObservationTask,
+  type Observer,
+} from "./observe";
 
 type Listener = () => void;
 type ReactiveNode = {
@@ -40,15 +40,26 @@ let activeCollector: ((source: ReadonlySignal<unknown>) => void) | undefined;
 const nodes = new WeakMap<ReadonlySignal<unknown>, ReactiveNode>();
 
 function disposable(dispose: () => void): Disposable {
-  let active = true;
+  return new ReactiveSubscription(dispose);
+}
 
-  return {
-    dispose() {
-      if (!active) return;
-      active = false;
-      dispose();
-    },
-  };
+class ReactiveSubscription implements Disposable {
+  #dispose: (() => void) | undefined;
+
+  constructor(dispose: () => void) {
+    this.#dispose = dispose;
+    Object.freeze(this);
+  }
+
+  dispose() {
+    const dispose = this.#dispose;
+    this.#dispose = undefined;
+    dispose?.();
+  }
+
+  [Symbol.dispose]() {
+    this.dispose();
+  }
 }
 
 function flush() {
@@ -102,6 +113,7 @@ function track(source: ReadonlySignal<unknown>) {
 }
 
 export function batch<T>(callback: () => T): T {
+  if (typeof callback !== "function") throw new TypeError("batch() expects a function");
   batchDepth++;
 
   let result!: T;
@@ -150,6 +162,7 @@ export function signal<T>(initialValue: T): Signal<T> {
     },
 
     subscribe(listener) {
+      assertListener(listener);
       listeners.add(listener);
       return disposable(() => listeners.delete(listener));
     },
@@ -162,10 +175,11 @@ export function signal<T>(initialValue: T): Signal<T> {
     refresh() {},
   });
 
-  return source;
+  return Object.freeze(source);
 }
 
 export function computed<T>(calculate: () => T): ReadonlySignal<T> {
+  if (typeof calculate !== "function") throw new TypeError("computed() expects a function");
   let initialized = false;
   let evaluating = false;
   let dirty = true;
@@ -253,6 +267,7 @@ export function computed<T>(calculate: () => T): ReadonlySignal<T> {
     },
 
     subscribe(listener) {
+      assertListener(listener);
       const wasUnobserved = listeners.size === 0;
       listeners.add(listener);
 
@@ -282,5 +297,11 @@ export function computed<T>(calculate: () => T): ReadonlySignal<T> {
     refresh: evaluate,
   });
 
-  return source;
+  return Object.freeze(source);
+}
+
+function assertListener(listener: unknown): asserts listener is Listener {
+  if (typeof listener !== "function") {
+    throw new TypeError("Signal subscriber must be a function");
+  }
 }

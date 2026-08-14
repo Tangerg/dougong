@@ -44,9 +44,6 @@ importers:
 
   packages/core:
     dependencies:
-      '@dougong/reactive':
-        specifier: workspace:*
-        version: link:../reactive
       '@standard-schema/spec':
         specifier: ^1.0.0
         version: 1.1.0
@@ -56,9 +53,30 @@ importers:
       '@dougong/core':
         specifier: workspace:*
         version: link:../core
+      '@dougong/platform':
+        specifier: workspace:*
+        version: link:../platform
       '@dougong/reactive':
         specifier: workspace:*
         version: link:../reactive
+
+  packages/examples:
+    dependencies:
+      dougong:
+        specifier: workspace:*
+        version: link:../dougong
+
+  packages/platform:
+    dependencies:
+      '@dougong/core':
+        specifier: workspace:*
+        version: link:../core
+      compare-versions:
+        specifier: ^6.1.1
+        version: 6.1.1
+      zod:
+        specifier: ^4.4.3
+        version: 4.4.3
 
   packages/reactive: {}
 

@@ -17,11 +17,31 @@ export interface ValidationIssue {
 
 export class ConfigValidationError extends DougongError {
   override name = "ConfigValidationError";
+  readonly issues: ReadonlyArray<ValidationIssue>;
 
-  constructor(public readonly issues: ReadonlyArray<ValidationIssue>) {
+  constructor(issues: ReadonlyArray<ValidationIssue>) {
+    const snapshot = Object.freeze(
+      issues.map((issue) =>
+        Object.freeze({
+          message: issue.message,
+          ...(issue.path === undefined
+            ? {}
+            : {
+                path: Object.freeze(
+                  issue.path.map((part) =>
+                    typeof part === "object" && part !== null
+                      ? Object.freeze({ key: part.key })
+                      : part,
+                  ),
+                ),
+              }),
+        }),
+      ),
+    );
     super(
       "CONFIG_INVALID",
-      `Invalid plugin config:\n${issues.map((issue) => `  - ${issue.message}`).join("\n")}`,
+      `Invalid plugin config:\n${snapshot.map((issue) => `  - ${issue.message}`).join("\n")}`,
     );
+    this.issues = snapshot;
   }
 }

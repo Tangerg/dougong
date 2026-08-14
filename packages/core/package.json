@@ -16,7 +16,6 @@
     "build": "vite build"
   },
   "dependencies": {
-    "@dougong/reactive": "workspace:*",
     "@standard-schema/spec": "^1.0.0"
   }
 }

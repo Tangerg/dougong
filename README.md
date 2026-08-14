@@ -1,40 +1,57 @@
 # Dougong
 
-Dougong is a small, composable application runtime for JavaScript and TypeScript.
+Dougong（斗拱）是一个面向 JavaScript/TypeScript 的**能力组合与结构化生命周期内核**，以及建立在它之上的插件分发层。
 
-It is built around five ideas:
+它只用普通对象、普通函数、Promise、AbortSignal 和 Disposable，解决六件事：
 
-- **Service** — a stable capability supplied by one plugin.
-- **Extension** — a live collection of contributions owned by plugins.
-- **Event** — a transient fact broadcast without retained state.
-- **Signal** — a current value with composable derived values.
-- **Lifetime** — explicit ownership for listeners, tasks, contributions, and cleanup.
+- `Service`：稳定的一对一能力；
+- `Extension`：可动态增减的开放贡献集合；
+- `Event`：不保留状态的瞬时事实；
+- `Lifetime`：监听、贡献、任务和资源的所有权；
+- `Plugin`：一次 setup 产生一组能力；
+- `Application`：依赖图、事务与实例编排。
 
-Plugins receive declared capabilities, return declared services, and contribute to open extensions. There are no decorators, context proxies, base classes, dependency arrays, or lifecycle hook matrices.
+Signal 不是第五种插件能力。`@dougong/reactive` 提供 `signal()`、`computed()`、`batch()` 和基于公开 Lifetime API 的 `observe()`；Core 不依赖它，也不提供隐式 effect。
 
-The core follows one rule: one semantic has one canonical API. Higher-level packages may add domain vocabulary, but must compile it to these primitives instead of introducing a second runtime path.
+## 单路径原则
+
+同一层、同一种语义只有一个正式入口。高层语法糖必须机械展开到这个入口，不能拥有第二套状态机：
+
+| 语义 | 正式入口 |
+| --- | --- |
+| 安装插件 | `install()` |
+| 原子修改安装计划 | `change()` |
+| 发布 Service | `provides` + `setup()` 返回值 |
+| 贡献 Extension | `contribute()` |
+| 监听 / 发送 Event | `on()` / `emit()` |
+| 注册资源 | `cleanup()` |
+| 创建子生命周期 / 任务 | `lifetime()` / `spawn()` |
+| 读取 / 订阅实时值 | `get()` / `subscribe()` |
+| 更新 / 删除安装 | `update()` / `remove()` |
+| 提前释放资源 | `dispose()` |
+
+同时遵守**显式优于隐式**：Service 选择写进 Contract ID，依赖写进 `requires`，资源归属写进 Lifetime，运行期租户选择写进普通方法参数。Core 不从 Group、调用栈、祖先 Context 或全局“当前 workspace”猜测关系。
 
 ## Workspace
 
 ```text
 packages/
-  reactive/   Signal, computed, batch, and the observable protocol
-  core/       Contracts, plugins, lifetimes, and application orchestration
-  dougong/    Public facade package
+  core/       六个内核原子、依赖图、事务、Group 与诊断
+  reactive/   独立的 Signal 值层与 Lifetime 组合器
+  platform/   Manifest、Loader、权限、懒激活与 HMR
+  dougong/    纯 re-export 的便利入口
+  examples/   从基础原子到 Planet / Lynx 宿主的可执行示例
 ```
+
+`core` 与 `reactive` 是互不依赖的基础层；`platform` 只依赖 `core`；`dougong` 只是组合入口。
 
 ## Example
 
 ```ts
-import {
-  createApp,
-  definePlugin,
-  extension,
-  service,
-} from "dougong"
+import { createApp, definePlugin, extension, service } from "dougong"
 
-const DATABASE = service<{ query(sql: string): Promise<unknown> }>("app/database")
-const ROUTES = extension<{ path: string; run(): unknown }>("http/routes")
+const DATABASE = service<Database>("app/database")
+const ROUTES = extension<Route>("http/routes")
 
 const database = definePlugin({
   name: "app.database",
@@ -64,24 +81,23 @@ app.install(database)
 await app.start()
 ```
 
-The provider may be installed after its consumer: Dougong derives startup order from declared services. Shutdown always runs in reverse dependency order.
+安装顺序不必等于启动顺序；Dougong 从 Service 声明推导依赖图，同一拓扑层并发 prepare、整层成功后统一发布，并按逆依赖顺序停止。
 
-## Runtime semantics
+## Guarantees
 
-- Plugin definitions are immutable declarations; active plugin instances own a separate resolved config and `Lifetime`.
-- Install, update, remove, start, and stop are linearized through one command queue.
-- An active change restarts only the changed plugin and the transitive service dependents affected in the old or new dependency graph.
-- Configs for the affected graph are validated before running instances are stopped.
-- A failed change disposes its partial runtime and restores the previous affected graph. If cleanup or restoration is incomplete, the whole app fails closed to `idle` instead of claiming to be healthy.
-- `ctx.emit()` has one meaning: listeners run in parallel, the call awaits all of them, and failures are aggregated. Use `ctx.spawn(() => ctx.emit(...))` when the emission is intentionally background work.
-- `ctx.cleanup()` runs in LIFO order. A lifetime moves through `active → disposing → disposed`; cleanup may still emit events while it is disposing, but cannot acquire new owned resources.
-- `computed()` only auto-tracks Dougong signals. The structural `Readable` protocol is deliberately broader and is accepted by `ctx.observe()` for integration with external stores.
+- 插件拿到的是整个实例期不变的 Service 快照；提供者变化会重建消费者，不使用 live Proxy。
+- Extension 只保存原始贡献。排序、领域 key、覆盖和 pipeline 是公开 API 上的高层组合策略，不进入 Core。
+- setup 期间的监听与贡献先暂存；输出校验通过后才与 Service 一起发布。
+- 多插件变更只走一份 ChangeSet；失败时恢复旧图，无法可靠恢复时 fail closed。
+- Group 只负责组合、批量提交和子树所有权，不改变 Service、Extension 或 Event 的可见性。
+- 同型多实例使用显式 Contract family；Group 不参与 Service shadow 或作用域查找。
+- 插件诊断包含独立的实时 Lifetime 资源计数视图，高频资源变化不重建整张 Application 快照。
+- 所有公共 Handle 都是冻结的窄对象；不会在 JavaScript 运行时泄露内部 record、registry、host 或事务发布方法。
+- Core 不理解 Node、DOM、React、HTTP、文件系统、Loader 或权限。
 
-Two documents cover the design. [docs/architecture.zh-CN.md](docs/architecture.zh-CN.md) is the
-rationale: why the layering is what it is, where the kernel's boundaries are, and how the primitives
-map onto desktop, frontend, and backend applications. [docs/api-design.zh-CN.md](docs/api-design.zh-CN.md)
-is the specification: what each API does precisely, what it does at every edge, and which deviations
-between spec and implementation are currently known.
+完整规范见 [API 设计](docs/api-design.zh-CN.md)、[架构说明](docs/architecture.zh-CN.md) 与 [Platform 设计](docs/platform-design.zh-CN.md)。
+
+从最小 Service 到 Planet / Lynx 级组合的完整学习路径见 [examples package](packages/examples/README.md)，可运行 `pnpm examples`。
 
 ## Development
 
@@ -90,28 +106,4 @@ pnpm install
 pnpm check
 ```
 
-`pnpm check` is the whole gate, and it is the same command CI runs:
-
-| Step               | Tool               | What it guards                                          |
-| ------------------ | ------------------ | ------------------------------------------------------- |
-| `typecheck`        | tsc                | each package plus the test project, under strict options |
-| `lint`             | oxlint             | correctness and idiom, warnings included                 |
-| `format:check`     | prettier           | formatting                                              |
-| `test`             | vitest + istanbul  | behaviour, with per-package coverage floors             |
-| `knip`             | knip               | unused exports, files, and dependencies                 |
-| `check:circular`   | madge              | import cycles, against an allowlist                     |
-| `check:layers`     | madge + script     | package and module direction, architecture invariants   |
-| `build`            | vite + dts         | the published ESM bundle and declarations               |
-
-Individual steps run on their own (`pnpm lint`, `pnpm test`, …). `pnpm lint:fix` and
-`pnpm format` write fixes; `pnpm test:watch` runs the suite without coverage.
-
-A husky pre-commit hook runs prettier and oxlint over staged files only. Set
-`HUSKY=0` to skip it.
-
-`scripts/check-layers.mjs` encodes the dependency direction
-(`reactive ← core ← dougong`, and a strict module order inside `core`) plus the
-architecture invariants that the type system cannot express — no Node built-ins,
-no ambient clock or entropy, no direct `console` calls, and `Lifetime`
-construction confined to the orchestrator. Moving a boundary means editing the
-table there with a reason.
+`pnpm check` 依次执行类型检查、lint、格式检查、测试与覆盖率、未使用代码检查、循环依赖检查、架构层级检查和发布构建。

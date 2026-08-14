@@ -1,0 +1,23 @@
+{
+  "name": "@dougong/platform",
+  "version": "0.0.0",
+  "type": "module",
+  "sideEffects": false,
+  "files": [
+    "dist"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "vite build"
+  },
+  "dependencies": {
+    "@dougong/core": "workspace:*",
+    "compare-versions": "^6.1.1",
+    "zod": "^4.4.3"
+  }
+}

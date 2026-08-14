@@ -1,9 +1,10 @@
 import type { StandardSchemaV1 } from "@standard-schema/spec";
 import type { Extension, OptionalService, Requirement, Service } from "./contracts";
-import type { ExtensionView } from "./extension-store";
+import type { ExtensionRequirementView } from "./extension-store";
 import type { LifetimeOperations, Logger, PluginMeta } from "./lifetime";
+import type { Awaitable } from "./resource";
 
-export type Awaitable<T> = T | PromiseLike<T>;
+export type { Awaitable } from "./resource";
 
 export type Requirements = Readonly<Record<string, Requirement>>;
 export type Provisions = Readonly<Record<string, Service<unknown>>>;
@@ -15,8 +16,8 @@ export type ResolvedRequirement<T> =
     ? Value | undefined
     : T extends Service<infer Value>
       ? Value
-      : T extends Extension<infer Value>
-        ? ExtensionView<Value>
+      : T extends Extension<unknown>
+        ? ExtensionRequirementView<T>
         : never;
 
 export type ResolvedRequirements<T extends Requirements> = {
@@ -26,6 +27,8 @@ export type ResolvedRequirements<T extends Requirements> = {
 export type ProvidedServices<T extends Provisions> = {
   readonly [Key in keyof T]: ServiceValue<T[Key]>;
 };
+
+type SetupOutput<T extends Provisions> = keyof T extends never ? void : ProvidedServices<T>;
 
 export type PluginContext<T extends Requirements = Requirements> = LifetimeOperations &
   ResolvedRequirements<T> & {
@@ -46,7 +49,7 @@ export interface PluginDefinition<
   readonly setup: (
     context: PluginContext<Requires>,
     config: Config,
-  ) => Awaitable<keyof Provides extends never ? void : ProvidedServices<Provides>>;
+  ) => Awaitable<SetupOutput<NoInfer<Provides>>>;
 }
 
 const reservedContextKeys = new Set([
@@ -56,7 +59,6 @@ const reservedContextKeys = new Set([
   "cleanup",
   "lifetime",
   "spawn",
-  "observe",
   "on",
   "emit",
   "contribute",
@@ -99,6 +101,9 @@ export function definePlugin<
 
   for (const [key, requirement] of Object.entries(definition.requires ?? {})) {
     if (!key.trim()) throw new TypeError("Plugin requirement alias cannot be empty");
+    if (key !== key.trim()) {
+      throw new TypeError("Plugin requirement alias cannot start or end with whitespace");
+    }
     if (reservedContextKeys.has(key)) {
       throw new TypeError(`Plugin requirement '${key}' conflicts with the context API`);
     }
@@ -117,6 +122,9 @@ export function definePlugin<
 
   for (const [key, provision] of Object.entries(definition.provides ?? {})) {
     if (!key.trim()) throw new TypeError("Plugin provision alias cannot be empty");
+    if (key !== key.trim()) {
+      throw new TypeError("Plugin provision alias cannot start or end with whitespace");
+    }
     if (!isContract(provision, "service")) {
       throw new TypeError(`Plugin provision '${key}' must be a service contract`);
     }

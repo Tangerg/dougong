@@ -1,150 +1,401 @@
-# Dougong 架构设计
+# Dougong 架构说明
 
-Dougong 是纯 JavaScript/TypeScript 的应用运行时内核。它不是模块加载器、DI 容器、事件总线和响应式库的简单拼盘，而是一套围绕“能力声明 + 组合 + 所有权”的统一插件模型。
+本文解释 Dougong 为什么采用当前分层，以及能力如何向前端、后端和桌面插件系统组合。精确 API 行为见 [api-design.zh-CN.md](./api-design.zh-CN.md)。
 
-当前阶段允许 breaking change，因此设计优先保证语义正确和长期一致，不为旧的内部实现保留兼容旁路。
+## 一、定位
 
-本文回答“为什么这样分层”。每个 API 精确做什么、在边界情形上做什么，见 [api-design.zh-CN.md](./api-design.zh-CN.md)。
+Dougong Core 是“能力组合与结构化生命周期内核”，不是大一统框架。
 
-## 一条总原则
+它要解决的共同问题是：
 
-同一抽象层、同一种语义，只保留一个正式入口。高层语法糖可以提供更贴近业务的名字，但必须落到 Core 的原子能力，不能拥有第二套生命周期、依赖图或事件机制。
-
-| 语义 | 唯一入口 | 不引入的平行概念 |
-| --- | --- | --- |
-| 稳定能力依赖 | `requires` / `provides` + `service()` | 容器查找、全局 locator、隐式注入 |
-| 可选能力 | `optional(service)` | 第二套 optional getter |
-| 开放注册点 | `extension()` + `ctx.contribute()` | 每个领域各造一套 registry |
-| 瞬时消息 | `event()` + `ctx.on()` / `ctx.emit()` | sync emit、fire-and-forget emit 两套总线 |
-| 当前值与派生值 | `signal()` / `computed()` / `batch()` | hook、依赖数组、隐式 effect 系统 |
-| 资源所有权 | `cleanup()` / `lifetime()` / `spawn()` / `observe()` | start/stop hook 矩阵、手写销毁列表 |
-| 插件变更 | `PluginHandle.update()` / `remove()` | 另一套 reload 或 patch API |
-
-这里的“原子”不是 API 越少越好，而是每个原子只有一个清楚的职责，并且可以无损组合。
-
-## 五个正交原语
-
-### Service：稳定、唯一、决定依赖顺序
-
-Service 表达“插件运行前必须拿到的能力”。同一应用内，一个 Service 只能有一个提供者。它形成有向依赖图，因此 Dougong 可以推导启动顺序、逆序停止顺序，以及插件变化时需要重启的最小传递闭包。
-
-Service 只能由 `setup()` 的返回值发布。禁止在 `setup()` 中再调用一套 `provide()`，这样声明、类型和运行时发布不会分叉。
-
-### Extension：动态、多源、不制造重启依赖
-
-Extension 表达菜单、命令、路由、面板、编解码器等开放注册点。多个插件可以贡献带稳定 key 的值，消费者得到实时 `ReadonlyMap`。
-
-贡献由当前 Lifetime 自动拥有；插件停止时贡献自动撤销。贡献变化是数据变化，不是 Service 图变化，因此消费者无需重启。
-
-### Event：瞬时事实
-
-Event 不保存状态。`emit()` 始终异步：并行调用当前监听器、等待全部结束、聚合全部错误。
-
-需要后台发送时不增加 `emitDetached()`，而是组合已有原子：
-
-```ts
-ctx.spawn(() => ctx.emit(INDEX_INVALIDATED, { path }))
+```text
+能力从哪里来
+→ 哪些实例依赖它
+→ 开放贡献如何动态变化
+→ 事实如何广播
+→ 资源属于谁、何时释放
+→ 多项变更如何原子提交与恢复
 ```
 
-### Signal：状态计算，不负责副作用生命周期
+它刻意不解决具体领域：HTTP、React、命令面板、音乐 Provider、文件系统、窗口和 Agent tool 都是上层 vocabulary。
 
-Core 只提供 `signal`、`computed`、`batch`。没有类似 React hooks 的调用顺序规则，没有依赖数组，也不把 Solid 的 `createEffect` 或 Effect-TS 变成插件基础模型。
+## 二、分层
 
-`ReadonlySignal` 是 Dougong 自己的响应式节点，能被 `computed()` 自动跟踪。`Readable` 只是结构协议：
+```text
+                         examples
+                            │
+                            ▼
+                         dougong facade
+                  ┌──────────┼──────────┐
+                  ▼          ▼          ▼
+              platform      core     reactive
+                  │
+                  └──────────► core
+
+core 与 reactive 互不依赖
+```
+
+### `@dougong/core`
+
+只依赖标准 JavaScript 与 Standard Schema 类型契约，负责：
+
+- Service / Extension / Event Contract；
+- PluginDefinition 与冻结 Context；
+- Service 依赖图和稳定快照；
+- Lifetime、AbortSignal、任务和资源释放；
+- ChangeSet、增量重建、rollback 与 fail-closed；
+- Group 所有权树；
+- 只读诊断投影。
+
+### `@dougong/reactive`
+
+零依赖值层，负责：
+
+- `signal()`：当前值；
+- `computed()`：纯计算派生；
+- `batch()`：合并失效通知；
+- `observe()`：用公开 Lifetime 协议把当前值同步到外部资源。
+
+Core 不导入 reactive。二者通过结构化 `get()/subscribe()` 和 Lifetime 对象协议组合，因此第三方 Observable 也能接入。
+
+`Disposable` 等极小协议会在两个基础包中分别声明。它们没有运行时对象或实现，TypeScript 依靠结构类型互通。这是有意的协议声明重复，用来换取双向零依赖；单路径原则禁止的是重复状态机和运行时语义，不是要求独立基础包共享一个类型来源。
+
+### `@dougong/platform`
+
+外部插件分发层，负责：
+
+- Manifest 与版本约束；
+- Loader 与模块边界；
+- 权限决策端口；
+- lazy activation 与占位插件；
+- Manifest 依赖；
+- HMR / Artifact 更新；
+- Platform ChangeSet。
+
+Platform 把结果编译成普通 Core PluginDefinition 和一份 Core ChangeSet，不复制运行时。
+
+### `dougong`
+
+纯 re-export 便利入口，没有逻辑、状态或第二条路径。严格分层的库作者仍可直接依赖细包。
+
+### `@dougong/examples`
+
+最外层的可执行学习与宿主参考包，只依赖公开 `dougong` facade。它从最小 Service 示例逐层覆盖 Extension、Event、Lifetime、Signal、ChangeSet、Group 和 Platform，并提供 Planet / Lynx 级组合场景。任何基础包都禁止反向依赖 examples；示例若必须访问内部模块，说明公共组合能力尚未闭合。
+
+## 三、为什么是四种能力
+
+能力变化的四种基本时间语义彼此不同：
+
+| 问题 | 原子 | 关键保证 |
+| --- | --- | --- |
+| “谁能为我完成这个操作？” | Service | 一个提供者、实例期稳定 |
+| “目前有哪些开放贡献？” | Extension | Map 快照、动态增删 |
+| “刚刚发生了什么？” | Event | 不保留、并发广播 |
+| “这组资源活到什么时候？” | Lifetime | 结构化取消和释放 |
+
+把它们合并会产生坏味道：
+
+- Event 若返回业务结果，会同时变成命令、查询和 middleware；
+- Service 若动态替换对象而不重建消费者，闭包会持有不可预测引用；
+- Extension 若内置 key selector、order 和 override，就把 Command/Theme/HTTP 的策略泄露进 Core；
+- Lifetime 若解析依赖，就会变成隐藏 Scope 或 IoC 容器。
+
+四者分离后，Plugin 只负责生产，Application 只负责编排。
+
+## 四、组合优于继承的可验证含义
+
+Dougong 不把“不写 class”误认为组合。判断标准有四个。
+
+### 4.1 高级功能没有内核特权
+
+官方与第三方实现必须使用同一公开 API。以下能力都不需要修改 Core：
+
+- HTTP Route 与 middleware pipeline；
+- 命令、快捷键、菜单和命令面板；
+- UI Slot、Panel、Theme、Renderer；
+- 音乐 Provider 与播放策略；
+- Agent Tool、模型 Provider 与事件 fold；
+- Scheduler、后台作业、日志 sink、指标；
+- Loader、HMR、DevTools 和测试工具。
+
+若官方 Catalog 需要直接读 `ExtensionStore`，说明抽象还未闭合。
+
+### 4.2 高层能力机械展开
+
+```text
+commands.register(command)
+  = ctx.contribute(COMMANDS, command.id, command)
+
+using(ctx, resource)
+  = ctx.cleanup(() => dispose(resource))
+
+observe(ctx, source, callback)
+  = source.get + source.subscribe
+  + ctx.lifetime + ctx.spawn + ctx.cleanup
+
+platform.reload(artifact)
+  = coreHandle.update({ plugin, config })
+```
+
+高层可以增加 Schema、默认值、策略和领域错误，但不能绕过所有权、事务或权限。
+
+### 4.3 Handle 同构
+
+- 安装计划中的实体：`status / ready / remove`；Plugin 额外 `update`。
+- 可提前释放的资源：统一 `dispose`。
+- 可观察值：统一 `get / subscribe`。
+- Application 与 Group：统一 `install / group / change`。
+
+跨层 API 的差异来自职责，不来自随意命名。
+
+### 4.4 显式关系是组合的前提
+
+组合只有在边界可见时才比继承更容易推理。Dougong 不从 Group、祖先 Context、调用栈或全局“当前值”猜测 Service 提供者，也不从安装顺序猜测 setup 顺序。能力选择写进 Contract ID，依赖写进 `requires`，所有权写进 Lifetime，运行期选择写进普通方法参数。
+
+这也约束高层语法糖：它可以生成 token、PluginDefinition 或 ChangeSet，但展开结果必须完整表达关系，不能把一部分语义藏在另一张 scope/shadow/interceptor 图里。
+
+## 五、Service 图与普通闭包
+
+Service 不使用 live Proxy：
+
+```text
+provider A ──► consumer B ──► consumer C
+```
+
+更新 A 时，Application 计算新旧图的影响闭包，按 `C → B → A` 停止，再按 `A → B → C` 启动。未受影响插件不重启。
+
+Application 只缓存当前 active runtime 对应的已验证图。`app.get()` 在该图上做常数级 Map 查询；候选图只在 `start()` 或 ChangeSet 校验时构建，并在事务完全成功后替换缓存。idle 安装计划可以暂时缺少依赖，从而不破坏“先声明多个安装、最后统一 start”的使用方式。
+
+active ChangeSet 的停止与重建窗口是显式的 `changing` 状态，不是假 active。此时宿主 Service 读取关闭；成功提交或完整 rollback 后才恢复 `active`，从而避免同一读取边界混合旧图与新 runtime。
+
+这样插件可以放心使用普通闭包：
 
 ```ts
-interface Readable<T> {
-  get(): T
-  subscribe(listener: () => void): Disposable
+setup(ctx) {
+  const database = ctx.database
+  return createUsers(database)
 }
 ```
 
-外部 store 可以直接交给 `ctx.observe()`。它不会被伪装成可自动跟踪的 Dougong Signal，从类型层面避免“看起来能组合、实际上不更新”的承诺。
+它不需要 Signal、Proxy 或“依赖是否已经变了”的防御逻辑。稳定 Service 是低心智负担的重要来源。
 
-### Lifetime：统一所有副作用的所有权
+依赖图同时给出不可变拓扑层。Application 对一层执行并发 prepare，等所有 setup 与 Service 输出校验成功后，再按稳定安装序统一 commit；下一层只能读取已经提交的前置 Service。任一同层插件失败会取消同层其余 setup，并释放整层所有未公开 Lifetime。
 
-监听器、贡献、后台任务、观察过程、子 Lifetime 和普通 cleanup 最终都归属于 Lifetime。释放顺序是 LIFO，释放具有幂等性，并聚合错误。
-
-状态机是 `active → disposing → disposed`：
-
-- `active` 可以获取和登记资源；
-- `disposing` 不允许再登记新资源，但 cleanup 可以发送最终事件；
-- `disposed` 不允许再执行上下文操作。
-
-`observe(source, observer)` 是明确的高层组合：每次值变化时先销毁旧的子 Lifetime，再为新值建立一个子 Lifetime。它解决的是“某个当前值对应一组资源”的常见问题，而不是一个无边界的全局 effect。
-
-## 运行时分成两层
-
-旧式实现很容易把“已安装插件”和“正在运行的插件”揉成一个可变对象，更新时只能全停全启。Dougong 将它们彻底分开：
-
-```mermaid
-flowchart LR
-  A["InstallationSpec<br/>definition + raw config"] --> B["StartPlan<br/>providers + graph + order"]
-  B --> C["PluginRuntime<br/>definition + resolved config + Lifetime"]
-  C --> D["Published Services"]
+```text
+layer 0  [database, cache, logger]  ── concurrent prepare ── commit
+layer 1  [users, search]            ── concurrent prepare ── commit
+layer 2  [http]                     ── prepare ───────────── commit
 ```
 
-- `InstallationSpec` 是下一次计划使用的不可变声明；
-- `StartPlan` 是一次完整校验后的依赖图；
-- `PluginRuntime` 是当前真正运行的实例；
-- Service 绑定记录提供者实例，停止旧实例时不会误删新定义的 Service。
+这不是“尽量猜测哪些插件可以并发”：唯一依据仍是显式 Service 边。Event 和 Extension 不形成启动依赖；独立 setup 的先后顺序未定义。需要顺序的插件必须声明 Service，不得依赖安装先后或微任务时序。停止保持依赖逆序串行，因为资源撤销顺序是可观察语义，而不是启动吞吐瓶颈的镜像问题。
 
-这使 breaking update 不再是给“全停全启”加条件，而是直接以图差异为基础实现。
+## 六、Extension 为什么保持原始
 
-## 在线变更算法
+Core Extension 的信息保真度最高：所有贡献都保留，真实 key 带实例前缀。它不提前丢弃同领域 key 的旧值，也不强加顺序。
 
-安装、更新、删除、启动、停止都进入同一条串行命令队列。命令执行时读取真实应用状态，不使用一个容易与现实脱节的 `desiredStarted` 布尔值。
+因此不同领域能独立选择策略：
 
-在线变更按以下步骤执行：
+```text
+raw contributions
+├── group by command.id + reject duplicate  → CommandCatalog
+├── group by theme.id + last wins stack     → ThemeCatalog
+├── sort by order + reduceRight             → MiddlewarePipeline
+├── filter by slot                          → UI Slot
+└── score + select                          → ProviderSelector
+```
 
-1. 保存旧安装声明、旧解析配置和旧依赖图；
-2. 在声明层应用变更并构建新图；
-3. 同时沿旧图和新图计算“变化节点 + 所有传递依赖者”的并集；
-4. 在停止任何实例之前，验证新图和所有受影响配置；
-5. 按旧图逆序只停止受影响实例；
-6. 按新图拓扑顺序只启动受影响实例；
-7. 若启动失败且部分新实例已被完整释放，按旧计划恢复同一闭包；
-8. 若任意 cleanup 不完整，或恢复失败，停止整个应用并进入 `idle`，绝不冒险重复启动可能仍残留资源的实例，也不保留一个名义 active、实际残缺的状态。
+如果 Core 只暴露“当前 winner”，卸载后恢复旧 Theme 所需的信息已经丢失；如果 Core 直接规定 last-wins，命令系统希望 reject 时又需要旁路。保留原始集合，策略才能真正组合。
 
-它保证的是受控的生命周期变更和失败恢复，不假装提供数据库式隔离。插件对外部系统产生的不可逆副作用仍应由插件自身避免，或通过幂等协议处理。
+ExtensionView 与 Signal 共享结构协议，但不是 Signal 节点。`computed()` 只追踪 Dougong Signal，避免一个看似纯的计算暗中订阅任意外部 Store。需要跨层同步时，使用显式 subscribe 或 reactive `observe()`。
 
-## 为什么启动暂时串行
+## 七、Lifetime 是组合地基
 
-依赖图已经具备并行启动互不依赖节点的条件，但 Core 当前保持确定性的串行拓扑启动。并行调度会引入并发上限、失败取消、日志顺序和回滚竞态等额外策略；在有真实性能数据前，这些不应污染基础模型。未来可以在不改变插件 API 的前提下替换计划执行器。
+每个插件实例拥有根 Lifetime，并形成资源树：
 
-## 前端、后端与桌面如何组合
+```text
+Plugin Lifetime
+├── Event subscription
+├── Extension contribution
+├── ExtensionView subscription
+├── background task
+├── child Lifetime
+│   ├── task
+│   └── cleanup
+└── cleanup stack
+```
 
-Core 不认识 React、Vue、HTTP、数据库、窗口或文件系统。领域包只需定义契约和少量适配器。
+这不是 Hook 或响应式 Effect，只是所有权。
 
-桌面应用可以这样映射：
+顺序被明确编码为对象状态机：先撤销公开能力，再取消任务和子级，最后执行用户 cleanup。内部不依赖“恰好按某种注册顺序 reverse”来获得正确语义。
 
-- `WINDOWS`、`FILESYSTEM`、`STORAGE`：Service；
-- `COMMANDS`、`MENUS`、`PANELS`、`SETTINGS_PAGES`：Extension；
-- `WORKSPACE_OPENED`、`THEME_CHANGED`：Event；
-- 当前主题、连接状态、活动工作区：Signal；
-- 文件监听、进程、快捷键、WebSocket：Lifetime。
+子 Lifetime 提前 dispose 后会从父拥有集合脱离。后台 Task 自然 settle 后也会从父任务集合和父 AbortSignal 监听器中脱离；父释放只取消并等待仍在运行的任务。两者都避免长生命周期按历史创建次数积累已完成对象。
 
-前端应用可以将路由、导航项、组件插槽做成 Extension，把鉴权和请求客户端做成 Service。后端可以将路由、任务处理器、序列化器做成 Extension，把数据库、缓存和队列做成 Service。
+同一规则覆盖全部内部 lease：Listener、Contribution、ExtensionView 及其订阅、cleanup 和 Task 在提前终止时都会从父集合摘除；终态对象同时清空 owner、Store、回调和 payload 引用。父级只拥有仍然存活的资源，保留一个已释放 Handle 不会反向保活整个 Application。
 
-因此，这个内核足以承载 Planet 或 Lynx Desktop 的“插件能力模型”，但下面这些应属于更高层包，而不是塞进 Core：
+ExtensionView 订阅包含两条正交的内部所有权边：Lifetime 拥有 subscription handle，ExtensionStore 拥有 listener 注册。一次公开 `dispose()` 必须同时切断两者；前者保证父 Lifetime 不积累终态 Handle，后者保证 Store 不继续通知或保活已退订的回调。这只是同一 Disposable 操作的内部原子释放，不形成第二套公开 API。
 
-- manifest、版本范围和插件发现；
-- `import()` / npm / 本地目录加载；
-- 权限、签名、信任和沙箱；
-- Worker、iframe、进程间 RPC；
-- UI 框架绑定和领域专用语法糖；
-- 插件市场、安装和升级策略。
+每个根 Lifetime 还维护一份聚合整棵资源树的只读诊断视图，按 cleanup、task、listener、contribution、ExtensionView、subscription 和 child Lifetime 分类计数。它复用 `get/subscribe` 协议，并与 Application 结构快照分离：高频资源变化不会重建整张插件图，DevTools 又能实时回答“这个插件当前持有什么”。终态视图只保留全零快照，不反向保活 Application 或资源对象。
 
-高层包可以把 manifest 中的命令声明编译成 `ctx.contribute(COMMANDS, ...)`，但运行时仍然只有 Extension 这一条路径。
+## 八、事务模型
 
-## 当前刻意不做的事情
+Core 区分三类事务边界：
 
-- 不把 Application 暴露成全局 Service Locator；
-- 不用 Proxy 隐藏依赖来源；
-- 不提供 class 继承树或装饰器协议；
-- 不提供两套事件错误语义；
-- 不让 Signal 自动执行资源副作用；
-- 不在没有数据前加入并行启动调度器；
-- 不在 Core 中绑定具体模块加载和安全模型。
+### 插件 setup
 
-这些边界让 Dougong 保持足够小，同时为上层组合保留足够大的表达空间。
+Listener 和 Contribution 先作为 staged publication 归入 Lifetime。Service 输出全部验证成功后才发布。公共 Handle 只暴露 `dispose/update`，不暴露内部 `publish()`，因此 JavaScript 插件也无法提前越过提交点。
+
+### Extension 通知
+
+Application start、stop 和 ChangeSet 使用批次。内部 Map 可以经历停止与重建，但 View 的公开快照只在事务结束时切换一次。
+
+active ChangeSet 先产生 committed 或 rolled-back outcome，Extension 批次完成发布后才 settle 对应 Plugin Handle。`ready()` 因而是事务屏障，不会早于最终 Extension 快照。
+
+### 多插件图变更
+
+ChangeSet 先构造和验证完整候选图，再触碰当前 runtime。进入执行窗口后 Application 为 `changing`，`app.get()` 不观察逐实例停止与启动；成功或 rollback 完成后才恢复 active。任何清理不完整都会 fail closed，而不是留下“看起来 active”的混合状态。
+
+动态 import 的模块顶层副作用、网络请求或操作系统资源本身无法由内存事务回滚。这些属于 Loader/插件的补偿责任，文档不能把框架事务包装成分布式事务承诺。
+
+## 九、Group 为什么不是 Scope
+
+Group 解决：
+
+- 一组安装如何共享一次提交；
+- 如何嵌套组织；
+- 如何等待一组实例 ready；
+- 如何原子删除整棵安装子树。
+
+它不解决“谁能看见什么能力”。Service、Extension 和 Event 在同一个 Application 内全局一致。
+
+把能力 Scope 塞进 Group 会带来三套新规则：祖先继承、局部遮蔽、事件冒泡/隔离；随后 Loader、诊断和事务都必须理解空间图。这不是四个能力原子自然推出的结果，而且很容易被误解为安全隔离。
+
+真正需要隔离时选择明确边界：
+
+| 需求 | 建议 |
+| --- | --- |
+| 仅批量安装/卸载 | Group |
+| 少量固定工作区各有一份同型能力 | 显式 Contract family |
+| 请求期动态选择工作区数据 | Service API 显式带 workspace ID |
+| 独立能力图 | 多个 Application |
+| 不可信代码 | Worker / iframe / 进程 / 受限 Realm |
+| 远程能力 | RPC Service Proxy |
+
+这样“组织”和“隔离”不会在一个模糊抽象中互相泄露。
+
+Contract family 只是现有 `service()` 的普通函数组合，不是第五种 Contract：
+
+```ts
+const workspaceStore = (workspace: string) =>
+  service<Store>(`workspace/${encodeURIComponent(workspace)}/store`)
+
+const ALPHA_STORE = workspaceStore("alpha")
+
+const alphaStorePlugin = definePlugin({
+  name: "workspace.alpha.store",
+  provides: { store: ALPHA_STORE },
+  setup: () => ({ store: createStore("alpha") }),
+})
+
+const alphaSearchPlugin = definePlugin({
+  name: "workspace.alpha.search",
+  requires: { store: ALPHA_STORE },
+  setup: ctx => createSearch(ctx.store),
+})
+```
+
+同一接口可以有多个提供者，但每个提供者属于不同的显式 ID，冲突、缺失、依赖闭包和诊断仍由同一张 PluginGraph 处理。若要给某一份 Service 叠加配置，使用一个显式 adapter plugin：它 requires 基础 token、provides 新 token，并用该 Service 自己理解的类型构造包装值。Core 不提供无法类型检查的通用 `intercept()` 或 Proxy shadow 链。
+
+## 十、Signal 与副作用边界
+
+Signal 值得存在，但自动追踪只进入纯 computed：
+
+```text
+signal   当前值
+computed 值如何纯推导
+observe  值变化后如何重建一组资源
+Lifetime 这组同步何时结束
+```
+
+`observe()` 放在 reactive 层而不是 Context：
+
+1. 它能完全用公开协议实现，Core 不需要特权；
+2. 不使用 Signal 的后端无需承担响应式概念；
+3. Context API 预算不膨胀；
+4. 第三方 Readable 结构兼容；
+5. 自动追踪不会控制插件 setup 或资源边界。
+
+Effect-TS 与 Core 在 DI、Scope、Fiber 和错误运行时上高度重叠，因此只允许单向适配，不进入基础模型。
+
+## 十一、Platform 与安全边界
+
+同 Realm JavaScript 永远可以访问全局环境。Manifest permissions 表达宿主政策，不构成沙箱。
+
+```text
+可信插件      同 Realm ESM，可贡献函数和 UI 组件
+半可信插件    同 Realm + admission/activation 权限审核
+不可信插件    Worker / iframe / 独立进程
+跨 Realm      序列化消息或 RPC Service
+不可信 UI     声明式数据，由宿主渲染
+```
+
+Platform 的 Loader 可以返回宿主编写的 RPC PluginDefinition。Core 只看到普通 Service 与 Lifetime，不需要认识传输协议。
+
+## 十二、真实项目映射
+
+### Planet
+
+| 需求 | Dougong 组合 |
+| --- | --- |
+| 播放器 / 数据库 | Service |
+| 音乐来源 | Extension 原始贡献 + ProviderSelector |
+| 曲目变化 | Event 或 Store Service |
+| 音频连接 | Lifetime + spawn + cleanup |
+| Provider 热插拔 | Platform activation + Core update/remove |
+
+动态 Provider 贡献变化不会重启播放器；播放器订阅 ExtensionView 并更新自己的选择器。
+
+### Lynx Desktop
+
+| 需求 | Dougong 组合 |
+| --- | --- |
+| 命令、菜单、面板、renderer | Extension |
+| 唯一命令与覆盖主题 | 领域 Catalog Service |
+| 文件系统、窗口、存储 | 宿主 Service |
+| 一组工作区插件 | Group |
+| sideload / lazy / HMR | Platform |
+| React 实时展示 | `useSyncExternalStore` 薄适配 |
+| 不可信扩展 | Worker/iframe + RPC Service |
+
+Group 删除负责安装所有权；领域值中的 workspace ID 负责数据选择。二者职责清楚，不依赖隐式 Scope。
+
+## 十三、依赖方向门禁
+
+`scripts/check-layers.mjs` 把以下规则变成 CI 失败：
+
+- core 与 reactive 互不导入；
+- platform 不被 core/reactive 反向依赖；
+- facade 只能 re-export；
+- examples 只能作为最外层消费者，其他包不得反向依赖；
+- Core/Platform 内部模块只能向更低 rank 导入；
+- Core/Platform 源码不导入 Node built-in；
+- runtime 不读取隐藏 clock/entropy；
+- 诊断不直接调用 console；
+- Lifetime 只能由 Application 和 Lifetime 自身构造；
+- 无循环依赖。
+
+架构约束如果只存在于文字里，几个月后就会退化成建议；Dougong 把可以机械判断的部分交给工具。
+
+## 十四、长期判断标准
+
+新增抽象前逐项检查：
+
+1. 是否能由现有四种能力表达？
+2. 是否只是某个领域的 key/order/conflict 策略？
+3. 是否与已有 API 形成同层近义词？
+4. 是否需要 Core 私有状态，还是公开协议已经足够？
+5. 是否改变生命周期、事务或错误模型？
+6. 是否在类型之外泄露内部对象？
+7. 是否把组织、权限或便利误称为安全隔离？
+8. 删除具体框架和宿主后，这个抽象是否仍成立？
+
+Dougong 的目标不是“功能最多的 Core”，而是“最小且闭合的 Core”：原子足够少，组合表达力足够大，任何高级能力都不需要逃逸到底层。

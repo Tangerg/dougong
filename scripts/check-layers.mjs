@@ -3,12 +3,12 @@
 // forbids cycles): this one forbids *upward* / wrong-direction import edges, and
 // asserts a handful of architecture invariants that the type system cannot.
 //
-// Package rule (one-way, inner <- outer):
-//   reactive <- core <- dougong
+// Package rule: Core and reactive are independent foundations; Platform only
+// depends on Core, the facade may re-export all three, and examples is the
+// outermost consumer that no runtime package may import.
 //
-// Module rule inside @dougong/core (one-way, strictly increasing):
-//   contracts/errors <- event-hub/extension-store <- lifetime <- plugin
-//     <- application <- index
+// Module rules inside @dougong/core and @dougong/platform are one-way and
+// strictly increasing. Their tables below are exhaustive by design.
 //
 // Every invariant below is either stated in docs/architecture.zh-CN.md or was a
 // deliberate narrowing that the compiler would happily let us undo.
@@ -24,8 +24,10 @@ const PACKAGES_DIR = "packages";
 
 // Ordered longest-prefix-first: first match wins.
 const PACKAGE_PREFIXES = [
+  ["examples/", "examples"],
   ["reactive/", "reactive"],
   ["core/", "core"],
+  ["platform/", "platform"],
   ["dougong/", "dougong"],
 ];
 
@@ -36,9 +38,11 @@ function packageOf(path) {
 
 // Per package: the packages it must NEVER import (everything strictly outward).
 const FORBIDDEN_PACKAGES = {
-  reactive: ["core", "dougong"],
-  core: ["dougong"],
-  dougong: [],
+  reactive: ["core", "platform", "dougong", "examples"],
+  core: ["reactive", "platform", "dougong", "examples"],
+  platform: ["dougong", "examples"],
+  dougong: ["examples"],
+  examples: [],
 };
 
 // —— Core module layers ————————————————————————————————————————————————
@@ -48,25 +52,52 @@ const FORBIDDEN_PACKAGES = {
 // without a rank is a hard error rather than an unguarded default: the point of
 // the table is that someone has to decide where a new module sits.
 const CORE_MODULE_LAYERS = {
-  // Foundation: pure declarations, zero imports.
+  // Foundation: pure declarations and structural values.
   "core/src/contracts.ts": 0,
   "core/src/errors.ts": 0,
-  // Leaf services over @dougong/reactive.
+  "core/src/group.ts": 0,
+  "core/src/readonly-map.ts": 0,
+  "core/src/resource.ts": 0,
+  // Leaf state and fan-out services over standard JavaScript only.
   "core/src/event-hub.ts": 1,
   "core/src/extension-store.ts": 1,
+  "core/src/snapshot-view.ts": 1,
   // Resource ownership, built from the leaf services.
   "core/src/lifetime.ts": 2,
   // Plugin shape, declared in terms of lifetime operations.
   "core/src/plugin.ts": 3,
+  // Stable installation identity and runtime state machine.
+  "core/src/plugin-instance.ts": 4,
+  // Derived graphs and immutable operational read models.
+  "core/src/diagnostics.ts": 5,
+  "core/src/plugin-graph.ts": 5,
+  // Public protocols, then the canonical ChangeSet implementation.
+  "core/src/application-api.ts": 6,
+  "core/src/change-set.ts": 7,
   // The orchestrator: the only module allowed to know all of the above.
-  "core/src/application.ts": 4,
+  "core/src/application.ts": 8,
   // Public barrel.
-  "core/src/index.ts": 5,
+  "core/src/index.ts": 9,
 };
+
+const PLATFORM_MODULE_LAYERS = {
+  "platform/src/errors.ts": 0,
+  "platform/src/loader.ts": 0,
+  "platform/src/manifest.ts": 1,
+  "platform/src/diagnostics.ts": 2,
+  "platform/src/permissions.ts": 2,
+  "platform/src/platform-api.ts": 3,
+  "platform/src/managed-plugin.ts": 4,
+  "platform/src/platform-change-set.ts": 5,
+  "platform/src/platform.ts": 6,
+  "platform/src/index.ts": 7,
+};
+
+const MODULE_LAYERS = { ...CORE_MODULE_LAYERS, ...PLATFORM_MODULE_LAYERS };
 
 // —— Source-text invariants ————————————————————————————————————————————
 
-const SOURCE_RE = /^(?:reactive|core|dougong)\/src\//;
+const SOURCE_RE = /^(?:reactive|core|platform|dougong)\/src\//;
 const TEST_RE = /\.(test|spec)\.ts$/;
 
 // Checks that run over the text of every source file under a package's `src`.
@@ -95,8 +126,8 @@ const SOURCE_RULES = [
     // A package entry is the only surface the published `exports` map exposes.
     // A deep path would couple consumers to our file layout.
     test: (source) =>
-      /from\s*["']@dougong\/(?:reactive|core)\//.test(source) ||
-      /from\s*["']\.\.\/\.\.\/(?:reactive|core|dougong)\//.test(source),
+      /from\s*["']@dougong\/(?:reactive|core|platform)\//.test(source) ||
+      /from\s*["']\.\.\/\.\.\/(?:reactive|core|platform|dougong)\//.test(source),
     message: "deep-imports another package instead of using its entry",
   },
 ];
@@ -116,10 +147,9 @@ const FILE_RULES = [
     // core, which is exactly what the one-canonical-API rule forbids.
     test: (source) =>
       source
-        .split("\n")
-        .map((line) => line.trim())
-        .filter((line) => line.length > 0 && !line.startsWith("//"))
-        .some((line) => !line.startsWith("export")),
+        .replace(/\/\/[^\n]*/g, "")
+        .replace(/export\s+(?:type\s+)?(?:\*|{[\s\S]*?})\s+from\s+["'][^"']+["'];?/g, "")
+        .trim().length > 0,
     message: "the dougong facade must contain only re-exports",
   },
   {
@@ -129,14 +159,6 @@ const FILE_RULES = [
     // private command queue as public surface.
     test: (source) => /\bApplicationImpl\b/.test(source),
     message: "the Application implementation class must not be exported",
-  },
-  {
-    file: "core/src/lifetime.ts",
-    // `observe()` takes the structural `Readable` on purpose so external stores
-    // can be observed, while `computed()` auto-tracks only branded Dougong
-    // signals. Narrowing this back would silently drop external-store support.
-    test: (source) => /observe<T>\(\s*source:\s*ReadonlySignal</.test(source),
-    message: "observe() must accept the structural Readable, not ReadonlySignal",
   },
 ];
 
@@ -183,10 +205,15 @@ for (const [file, deps] of Object.entries(graph)) {
 
   const from = packageOf(file);
   const forbidden = FORBIDDEN_PACKAGES[from] ?? [];
-  const fromRank = CORE_MODULE_LAYERS[file];
+  const fromRank = MODULE_LAYERS[file];
 
   if (from === "core" && file.startsWith("core/src/") && fromRank === undefined) {
     architectureViolations.push(`${file}: new core module has no rank in CORE_MODULE_LAYERS`);
+  }
+  if (from === "platform" && file.startsWith("platform/src/") && fromRank === undefined) {
+    architectureViolations.push(
+      `${file}: new platform module has no rank in PLATFORM_MODULE_LAYERS`,
+    );
   }
 
   for (const dep of deps) {
@@ -196,9 +223,9 @@ for (const [file, deps] of Object.entries(graph)) {
     }
 
     // Within core, the module order is the finer-grained rule.
-    const toRank = CORE_MODULE_LAYERS[dep];
-    if (fromRank !== undefined && toRank !== undefined && toRank >= fromRank) {
-      violations.push({ file, dep, from: `core:${fromRank}`, to: `core:${toRank}` });
+    const toRank = MODULE_LAYERS[dep];
+    if (from === to && fromRank !== undefined && toRank !== undefined && toRank >= fromRank) {
+      violations.push({ file, dep, from: `${from}:${fromRank}`, to: `${to}:${toRank}` });
     }
   }
 
@@ -216,7 +243,7 @@ for (const [file, deps] of Object.entries(graph)) {
 }
 
 // `new Lifetime(...)` is ownership creation. Only the orchestrator (one root
-// lifetime per plugin instance) and Lifetime itself (child scopes) may do it;
+// lifetime per plugin instance) and Lifetime itself (children) may do it;
 // anywhere else produces a resource tree nobody disposes.
 const LIFETIME_CONSTRUCTORS = new Set(["core/src/application.ts", "core/src/lifetime.ts"]);
 for (const file of Object.keys(graph)) {

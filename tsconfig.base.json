@@ -13,6 +13,7 @@
     "paths": {
       "@dougong/reactive": ["packages/reactive/src/index.ts"],
       "@dougong/core": ["packages/core/src/index.ts"],
+      "@dougong/platform": ["packages/platform/src/index.ts"],
       "dougong": ["packages/dougong/src/index.ts"]
     }
   }
