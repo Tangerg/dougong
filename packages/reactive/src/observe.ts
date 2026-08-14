@@ -1,5 +1,4 @@
 import type { Disposable, Readable } from "./protocol";
-import { createCompletion } from "./completion";
 import { assertSynchronous, isThenable } from "./sync-result";
 
 export interface ObservationTask<T = void> extends Disposable {
@@ -65,7 +64,7 @@ class Observation<T, Child extends ObservationLifetime> implements Disposable {
 
   dispose() {
     if (this.#disposePromise) return this.#disposePromise;
-    const completion = createCompletion<void>();
+    const completion = Promise.withResolvers<void>();
     this.#disposePromise = completion.promise;
     this.#phase = "disposed";
     this.#wakeDrain?.();

@@ -4,7 +4,7 @@ Dougong 当前处于仓库内开发阶段。最直接的体验方式是运行已
 
 ## 运行仓库
 
-需要 Node.js 22 和仓库声明的 pnpm 版本：
+需要 Node.js 22 和仓库声明的 pnpm 版本。发布包以 ES2024 为运行时基线；浏览器或其他 JavaScript 宿主同样必须提供 ES2024 标准能力，包括 `Promise.withResolvers()`：
 
 ```sh
 pnpm install
