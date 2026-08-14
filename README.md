@@ -1,5 +1,7 @@
 # Dougong
 
+[文档站](https://tangerg.github.io/dougong/) · [API 设计](docs/api-design.zh-CN.md) · [整体架构](docs/architecture.zh-CN.md) · [可执行示例](packages/examples/README.md)
+
 Dougong（斗拱）是一个面向 JavaScript/TypeScript 的**能力组合与结构化生命周期内核**，以及建立在它之上的插件分发层。
 
 它只用普通对象、普通函数、Promise、AbortSignal 和 Disposable，解决六件事：
@@ -40,7 +42,7 @@ packages/
   reactive/   独立的 Signal 值层与 Lifetime 组合器
   platform/   Manifest、Loader、权限、懒激活与 HMR
   dougong/    纯 re-export 的便利入口
-  examples/   从基础原子到 Planet / Lynx 宿主的可执行示例
+  examples/   从基础原子到 Planet / Lynx、声明式计划与模块图 HMR 的可执行示例
 ```
 
 `core` 与 `reactive` 是互不依赖的基础层；`platform` 只依赖 `core`；`dougong` 只是组合入口。
@@ -97,7 +99,7 @@ await app.start()
 
 完整规范见 [API 设计](docs/api-design.zh-CN.md)、[架构说明](docs/architecture.zh-CN.md) 与 [Platform 设计](docs/platform-design.zh-CN.md)。
 
-从最小 Service 到 Planet / Lynx 级组合的完整学习路径见 [examples package](packages/examples/README.md)，可运行 `pnpm examples`。
+从最小 Service 到 Planet / Lynx、声明式计划与模块图 HMR 的完整学习路径见 [examples package](packages/examples/README.md)，可运行 `pnpm examples`。
 
 ## Development
 

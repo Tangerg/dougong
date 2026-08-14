@@ -5,6 +5,8 @@ export { transactionsAndGroups } from "./04-transactions-groups";
 export { lazyPlatform } from "./05-lazy-platform";
 export { planetScenario } from "./06-planet";
 export { lynxScenario } from "./07-lynx";
+export { declarativePlan } from "./08-declarative-plan";
+export { hmrModuleGraph } from "./09-hmr-module-graph";
 export { benchmarkStartup, type StartupBenchmark } from "./startup-benchmark";
 export { runAllExamples } from "./suite";
 export type { Example, ExampleResult } from "./example";

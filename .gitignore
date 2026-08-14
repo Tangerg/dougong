@@ -11,6 +11,8 @@
 # 每个包各自 emit 到自己的 dist/。前置 packages/ 而不是裸 dist，
 # 避免顺带忽略任何嵌套的同名目录。
 packages/*/dist
+docs/.vitepress/cache
+docs/.vitepress/dist
 coverage
 *.tsbuildinfo
 

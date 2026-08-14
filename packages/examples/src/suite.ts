@@ -5,6 +5,8 @@ import { transactionsAndGroups } from "./04-transactions-groups";
 import { lazyPlatform } from "./05-lazy-platform";
 import { planetScenario } from "./06-planet";
 import { lynxScenario } from "./07-lynx";
+import { declarativePlan } from "./08-declarative-plan";
+import { hmrModuleGraph } from "./09-hmr-module-graph";
 import type { Example, ExampleResult } from "./example";
 
 const examples: ReadonlyArray<Example> = [
@@ -15,6 +17,8 @@ const examples: ReadonlyArray<Example> = [
   lazyPlatform,
   planetScenario,
   lynxScenario,
+  declarativePlan,
+  hmrModuleGraph,
 ];
 
 export async function runAllExamples(): Promise<ReadonlyArray<ExampleResult>> {

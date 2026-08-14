@@ -22,40 +22,80 @@ const RESOURCE_COUNT = 64;
 const RELEASE_PASSES = 8;
 
 describe("lifetime retention", () => {
-  it("releases terminal resources while their parent lifetime remains active", async () => {
+  it("removes terminal resources from the active lifetime snapshot", async () => {
+    const fixture = await startRetentionFixture();
+
+    try {
+      await fixture.release();
+
+      expect(fixture.lifetime.get()).toEqual({
+        phase: "active",
+        cleanups: 0,
+        tasks: 0,
+        listeners: 0,
+        contributions: 0,
+        extensionViews: 1,
+        subscriptions: 0,
+        childLifetimes: 0,
+      });
+    } finally {
+      await fixture.app.stop();
+    }
+  });
+
+  it("does not strongly retain terminal resources while their parent remains active", async () => {
     const forceGc = (globalThis as typeof globalThis & { gc?: () => void }).gc;
     if (!forceGc) throw new TypeError("Retention tests require Node.js --expose-gc");
 
-    const NOTICE = event<void>("lifetime/retention-notice");
-    const ITEMS = extension<number>("lifetime/retention-items");
-    const references = createReferenceGroups();
-    let releaseResources: (() => Promise<void>) | undefined;
-    const plugin = definePlugin({
-      name: "lifetime.retention",
-      requires: { items: ITEMS },
-      setup(ctx) {
-        releaseResources = () => createAndReleaseResources(ctx, references, NOTICE, ITEMS);
-      },
-    });
-    const app = createApp();
-    app.install(plugin);
-    await app.start();
+    const fixture = await startRetentionFixture();
 
     try {
-      const release = releaseResources;
-      if (!release) throw new TypeError("Retention fixture did not start");
-      await release();
-      releaseResources = undefined;
+      await fixture.release();
 
-      const retained = await collectReleasedResources(forceGc, references);
+      const retained = await collectReleasedResources(forceGc, fixture.references);
       for (const [kind, count] of retained) {
         expect.soft(count, `${kind} remained strongly owned`).toBe(0);
       }
     } finally {
-      await app.stop();
+      await fixture.app.stop();
     }
   });
 });
+
+async function startRetentionFixture() {
+  const NOTICE = event<void>("lifetime/retention-notice");
+  const ITEMS = extension<number>("lifetime/retention-items");
+  const references = createReferenceGroups();
+  let releaseResources: (() => Promise<void>) | undefined;
+  const plugin = definePlugin({
+    name: "lifetime.retention",
+    requires: { items: ITEMS },
+    setup(ctx) {
+      releaseResources = () => createAndReleaseResources(ctx, references, NOTICE, ITEMS);
+    },
+  });
+  const app = createApp();
+  const handle = app.install(plugin);
+  await app.start();
+
+  const lifetime = app.diagnostics.get().plugins.get(handle.id)?.lifetime;
+  if (!lifetime) {
+    await app.stop();
+    throw new TypeError("Retention fixture did not publish lifetime diagnostics");
+  }
+
+  return {
+    app,
+    lifetime,
+    references,
+    async release() {
+      const release = releaseResources;
+      releaseResources = undefined;
+      if (!release) throw new TypeError("Retention fixture is unavailable or already released");
+      await release();
+    },
+  };
+}
 
 function createReferenceGroups() {
   return new Map<ResourceKind, WeakRef<object>[]>([

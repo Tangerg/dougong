@@ -27,6 +27,8 @@ pnpm examples:benchmark
 | 05 | [`05-lazy-platform.ts`](./src/05-lazy-platform.ts) | Manifest、权限、placeholder 与编译到 Core 的懒激活 |
 | 06 | [`06-planet.ts`](./src/06-planet.ts) | Planet 风格媒体 Provider、播放 Lifetime、动态选择与诊断 |
 | 07 | [`07-lynx.ts`](./src/07-lynx.ts) | Lynx 风格 Catalog、工作区所有权、权限、懒激活与 HMR |
+| 08 | [`08-declarative-plan.ts`](./src/08-declarative-plan.ts) | 声明式期望状态、显式内容版本与 Platform ChangeSet 回滚 |
+| 09 | [`09-hmr-module-graph.ts`](./src/09-hmr-module-graph.ts) | 显式模块图、失效传播与多插件原子 HMR |
 
 每个导出函数都会创建并完整释放自己的 Application：
 
@@ -55,5 +57,13 @@ console.log(result.facts)
 - Explorer placeholder 在激活前贡献可展示的元数据。
 - 懒激活和 HMR 通过 Platform 与 canonical Core ChangeSet 更新同一个托管插件。
 - 根级消费者能看到工作区贡献，诚实展示 Group 不是能力 Scope。
+
+### 宿主策略
+
+- 声明式计划只是宿主的期望状态控制器；每次 reconcile 都机械编译到一份 Platform ChangeSet，不复制校验、加载或回滚状态机。
+- 插件身份只使用 Manifest name；计划另带显式内容 revision 判断声明是否变化，不从路径、对象内容或当前运行状态猜测。
+- HMR 图由 watcher / bundler 适配器显式提供；示例只计算反向依赖闭包，不接管文件监听或 ESM cache。
+- 受影响的多个插件仍通过一份 Platform ChangeSet 更新，因此消费者只看到提交前或提交后的 Extension 快照。
+- 这两项先作为可执行宿主参考；只有多个真实宿主复用出稳定边界后，才值得提炼成独立包。
 
 这些不是唯一的领域策略，而是展示如何组合出复杂能力，同时不引入隐藏 Provider 查找、第二套事务引擎或框架专属生命周期 Hook。

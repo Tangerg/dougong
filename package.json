@@ -17,7 +17,11 @@
     "check:layers": "node scripts/check-layers.mjs",
     "examples": "pnpm --filter @dougong/examples example",
     "examples:benchmark": "pnpm --filter @dougong/examples benchmark",
-    "check": "pnpm typecheck && pnpm lint && pnpm format:check && pnpm test && pnpm knip && pnpm check:circular && pnpm check:layers && pnpm build",
+    "docs:dev": "vitepress dev docs",
+    "docs:build": "vitepress build docs",
+    "docs:preview": "vitepress preview docs",
+    "docs:check": "pnpm docs:build",
+    "check": "pnpm typecheck && pnpm lint && pnpm format:check && pnpm test && pnpm knip && pnpm check:circular && pnpm check:layers && pnpm build && pnpm docs:check",
     "prepare": "husky"
   },
   "lint-staged": {
@@ -42,6 +46,7 @@
     "typescript": "^5.9.2",
     "vite": "^7.1.0",
     "vite-plugin-dts": "^4.5.4",
+    "vitepress": "2.0.0-alpha.19",
     "vitest": "^3.2.4"
   }
 }
