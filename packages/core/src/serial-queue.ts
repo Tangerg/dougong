@@ -6,8 +6,11 @@ export class SerialQueue {
     return this.#tail;
   }
 
-  run<T>(operation: () => Promise<T>): Promise<T> {
-    const result = this.#tail.then(operation, operation);
+  run<T>(operation: () => T | PromiseLike<T>): Promise<T> {
+    if (typeof operation !== "function") {
+      throw new TypeError("SerialQueue operation must be a function");
+    }
+    const result = this.#tail.then(operation);
     this.#tail = result.then(
       () => undefined,
       () => undefined,

@@ -45,9 +45,10 @@ core 与 reactive 互不依赖
 - Lifetime、AbortSignal、任务和资源释放；
 - ChangeSet、增量重建、rollback 与 fail-closed；
 - Group 所有权树；
+- 跨层共用、失败不污染后续命令的 SerialQueue；
 - 只读诊断投影。
 
-Core 内部也保持同一分工：Application 只拥有声明注册表、命令串行化和状态发布；GroupCoordinator 只拥有结构 Group；ApplicationRuntime 只拥有已经提交的 Contract、Service、Event、Extension、Lifetime 与运行图。事务由 Application 发起，但运行图的切换、rollback 与 fail-closed 只在 ApplicationRuntime 中执行，因此声明状态和实例状态各有一个真相源，而不是把全部职责堆进一个总类。
+Core 内部也保持同一分工：Application 只拥有声明注册表、`SerialQueue` 和状态发布；GroupCoordinator 只拥有结构 Group；ApplicationRuntime 只拥有已经提交的 Contract、Service、Event、Extension、Lifetime 与运行图。Platform 直接复用 Core 的同一串行原语，不复制失败隔离状态机。事务由 Application 发起，但运行图的切换、rollback 与 fail-closed 只在 ApplicationRuntime 中执行，因此声明状态和实例状态各有一个真相源，而不是把全部职责堆进一个总类。
 
 ### `@dougong/reactive`
 

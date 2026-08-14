@@ -3,6 +3,7 @@ import {
   type PluginContainer,
   type Provisions,
   type Requirements,
+  SerialQueue,
   type SnapshotView,
 } from "@dougong/core";
 import { validate } from "compare-versions";
@@ -29,7 +30,6 @@ import type {
   PluginPlatform,
 } from "./platform-api";
 import { PermissionSet, type PermissionAuthorizer } from "./permissions";
-import { SerialQueue } from "./serial-queue";
 
 interface PlatformAuthority<Reference> {
   current: PluginPlatformImpl<Reference> | undefined;

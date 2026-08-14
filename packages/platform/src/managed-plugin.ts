@@ -1,4 +1,10 @@
-import { DougongError, type PluginHandle, type Provisions, type Requirements } from "@dougong/core";
+import {
+  DougongError,
+  SerialQueue,
+  type PluginHandle,
+  type Provisions,
+  type Requirements,
+} from "@dougong/core";
 import type {
   ManagedPlugin,
   NormalizedArtifact,
@@ -6,7 +12,6 @@ import type {
   PluginArtifact,
 } from "./platform-api";
 import { PlatformError } from "./errors";
-import { SerialQueue } from "./serial-queue";
 
 export interface ManagedPluginRegistrationOwner<Reference> {
   change(): PlatformChangeSet<Reference>;

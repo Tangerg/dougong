@@ -7,6 +7,7 @@ describe("public API surface", () => {
       "ConfigValidationError",
       "DougongError",
       "ReadonlyMapSnapshot",
+      "SerialQueue",
       "SnapshotPublisher",
       "createApp",
       "definePlugin",

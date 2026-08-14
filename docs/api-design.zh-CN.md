@@ -531,6 +531,16 @@ await database.ready()
 
 命令队列线性化 install、update、remove、start 和 stop。一次失败不会破坏后续命令排队能力。
 
+Core 用唯一的 `SerialQueue` 表达这条语义，Platform 的变更与激活队列也复用同一原语：
+
+```ts
+const commands = new SerialQueue()
+const result = commands.run(operation) // 调用方收到自己的值或错误
+await commands.settled                 // 等待读取时已经排入的全部操作
+```
+
+`run()` 无论前一项成功还是失败都会继续执行下一项；内部 tail 只记录完成边界且永不 reject，单项原始结果只返回给对应调用方。它是宿主和高层编排器共享的命令串行协议，不拥有 Application、事务或错误分类状态。
+
 ### 10.2 PluginHandle
 
 ```ts

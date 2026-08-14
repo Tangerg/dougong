@@ -25,6 +25,7 @@ import {
   PluginInstallation,
 } from "./plugin-installation";
 import type { PluginDefinition, Provisions, Requirements } from "./plugin";
+import { SerialQueue } from "./serial-queue";
 import type { SnapshotView } from "./snapshot-view";
 
 export type { InstallationStatus } from "./plugin-installation";
@@ -169,7 +170,7 @@ class ApplicationImpl implements Application {
 
   #installationSequence = 0;
   #status: ApplicationStatus = "idle";
-  #commandQueue: Promise<void> = Promise.resolve();
+  readonly #commands = new SerialQueue();
 
   constructor(options: CreateAppOptions = {}) {
     if (!options || typeof options !== "object") {
@@ -207,7 +208,7 @@ class ApplicationImpl implements Application {
       discardInstallation: (installation, error) => {
         this.#discardInstallation(installation, error);
       },
-      runExclusive: (operation) => this.#enqueue(operation),
+      runExclusive: (operation) => this.#commands.run(operation),
       removeInstallations: (operations) => this.#removeInstallations(operations),
       notifyChanged: () => this.#publishDiagnostics(),
     });
@@ -243,7 +244,7 @@ class ApplicationImpl implements Application {
   }
 
   start() {
-    return this.#enqueue(async () => {
+    return this.#commands.run(async () => {
       if (this.#status === "active") return;
       this.#setStatus("starting");
       try {
@@ -263,7 +264,7 @@ class ApplicationImpl implements Application {
   }
 
   stop() {
-    return this.#enqueue(async () => {
+    return this.#commands.run(async () => {
       if (this.#status === "idle") return;
       this.#setStatus("stopping");
       const errors = await this.#runtime.stop();
@@ -302,7 +303,7 @@ class ApplicationImpl implements Application {
       })
       .map((operation) => operation.installation);
 
-    return this.#enqueue(async () => {
+    return this.#commands.run(async () => {
       try {
         if (this.#status === "active") {
           await this.#transact(operations);
@@ -328,16 +329,6 @@ class ApplicationImpl implements Application {
       this.#applyChanges(operations);
       this.#settleChanges(operations);
     }
-  }
-
-  #enqueue<T>(operation: () => Promise<T>): Promise<T> {
-    const result = this.#commandQueue.then(operation, operation);
-    // The caller receives result; this observer only keeps the serial tail usable.
-    this.#commandQueue = result.then(
-      () => undefined,
-      () => undefined,
-    );
-    return result;
   }
 
   async #transact(operations: ReadonlyArray<PluginChangeOperation>) {

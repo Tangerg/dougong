@@ -58,6 +58,7 @@ const CORE_MODULE_LAYERS = {
   "core/src/group.ts": 0,
   "core/src/readonly-map.ts": 0,
   "core/src/resource.ts": 0,
+  "core/src/serial-queue.ts": 0,
   // Leaf state and fan-out services over standard JavaScript only.
   "core/src/contract-registry.ts": 1,
   "core/src/event-hub.ts": 1,
@@ -90,7 +91,6 @@ const CORE_MODULE_LAYERS = {
 const PLATFORM_MODULE_LAYERS = {
   "platform/src/errors.ts": 0,
   "platform/src/loader.ts": 0,
-  "platform/src/serial-queue.ts": 0,
   "platform/src/manifest.ts": 1,
   "platform/src/diagnostics.ts": 2,
   "platform/src/permissions.ts": 2,
@@ -172,6 +172,19 @@ const FILE_RULES = [
     // private command queue as public surface.
     test: (source) => /\bApplicationImpl\b/.test(source),
     message: "the Application implementation class must not be exported",
+  },
+  {
+    matches: (file) => file === "core/src/application.ts",
+    test: (source) =>
+      !/new\s+SerialQueue\s*\(/.test(source) ||
+      /\.then\(\s*operation\s*,\s*operation\s*\)/.test(source),
+    message: "Application command serialization must use Core SerialQueue",
+  },
+  {
+    matches: (file) =>
+      file === "platform/src/platform.ts" || file === "platform/src/managed-plugin.ts",
+    test: (source) => !/new\s+SerialQueue\s*\(/.test(source),
+    message: "Platform command serialization must use Core SerialQueue",
   },
   {
     matches: (file) => file === "platform/src/diagnostics.ts",

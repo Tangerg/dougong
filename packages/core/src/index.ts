@@ -58,4 +58,5 @@ export type { EventListener } from "./event-hub";
 export { ConfigValidationError, DougongError } from "./errors";
 export type { Disposable } from "./resource";
 export { ReadonlyMapSnapshot } from "./readonly-map";
+export { SerialQueue } from "./serial-queue";
 export { SnapshotPublisher, type SnapshotView } from "./snapshot-view";
