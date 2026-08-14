@@ -214,8 +214,11 @@ export class ExtensionStore<T> {
   }
 
   insert(id: string, contribution: ContributionRecord<T>, value: T) {
-    if (this.#claims.get(id) !== contribution || this.#entries.has(id)) {
-      throw new TypeError(`Duplicate extension contribution '${id}'`);
+    if (this.#claims.get(id) !== contribution) {
+      throw new Error(`Extension contribution '${id}' is not the current claim`);
+    }
+    if (this.#entries.has(id)) {
+      throw new Error(`Extension contribution '${id}' is already published`);
     }
     this.#entries.set(id, { contribution, value });
     this.#invalidate(this as ExtensionStore<unknown>);
