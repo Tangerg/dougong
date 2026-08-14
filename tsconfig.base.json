@@ -17,9 +17,9 @@
     "skipLibCheck": true,
     "baseUrl": ".",
     "paths": {
-      "@dougong/reactive": ["packages/reactive/src/index.ts"],
-      "@dougong/core": ["packages/core/src/index.ts"],
-      "@dougong/platform": ["packages/platform/src/index.ts"],
+      "@dougongjs/reactive": ["packages/reactive/src/index.ts"],
+      "@dougongjs/core": ["packages/core/src/index.ts"],
+      "@dougongjs/platform": ["packages/platform/src/index.ts"],
       "dougong": ["packages/dougong/src/index.ts"]
     }
   }

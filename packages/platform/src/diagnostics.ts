@@ -1,4 +1,4 @@
-import { ReadonlyMapSnapshot, SnapshotPublisher, type SnapshotView } from "@dougong/core";
+import { ReadonlyMapSnapshot, SnapshotPublisher, type SnapshotView } from "@dougongjs/core";
 import type { PluginManifest } from "./manifest";
 
 export type PluginPlatformStatus = "active" | "disposing" | "disposed";

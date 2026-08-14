@@ -1,6 +1,6 @@
 # 可执行示例
 
-`@dougong/examples` 不是静态代码片段集合，而是 Dougong 公共 API 的可执行验证装置。全部场景会按顺序运行，并进入仓库的类型检查、测试、覆盖率与构建门禁。
+`@dougongjs/examples` 不是静态代码片段集合，而是 Dougong 公共 API 的可执行验证装置。全部场景会按顺序运行，并进入仓库的类型检查、测试、覆盖率与构建门禁。
 
 ```sh
 pnpm examples

@@ -1,5 +1,5 @@
-export * from "@dougong/core";
-export * from "@dougong/platform";
+export * from "@dougongjs/core";
+export * from "@dougongjs/platform";
 export {
   batch,
   computed,
@@ -12,4 +12,4 @@ export {
   type Readable,
   type ReadonlySignal,
   type Signal,
-} from "@dougong/reactive";
+} from "@dougongjs/reactive";

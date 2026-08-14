@@ -21,9 +21,9 @@
     "build": "vite build"
   },
   "dependencies": {
-    "@dougong/core": "workspace:*",
-    "@dougong/platform": "workspace:*",
-    "@dougong/reactive": "workspace:*"
+    "@dougongjs/core": "workspace:*",
+    "@dougongjs/platform": "workspace:*",
+    "@dougongjs/reactive": "workspace:*"
   },
   "description": "Capability composition and structured lifetime kernel, plus its plugin distribution layer.",
   "license": "MIT",

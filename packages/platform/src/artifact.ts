@@ -1,4 +1,4 @@
-import { definePlugin, type Provisions, type Requirements } from "@dougong/core";
+import { definePlugin, type Provisions, type Requirements } from "@dougongjs/core";
 import { PlatformError } from "./errors";
 import type { PluginLoader } from "./loader";
 import { defineManifest, matchesVersion, type PluginManifest } from "./manifest";

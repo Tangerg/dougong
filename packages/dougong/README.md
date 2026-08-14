@@ -1,6 +1,6 @@
 # dougong
 
-Dougong 的门面包，聚合 `@dougong/core`、`@dougong/reactive` 与 `@dougong/platform`。
+Dougong 的门面包，聚合 `@dougongjs/core`、`@dougongjs/reactive` 与 `@dougongjs/platform`。
 
 只做 re-export，不包含任何逻辑——架构门禁会强制这一点。
 

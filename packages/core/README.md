@@ -1,4 +1,4 @@
-# @dougong/core
+# @dougongjs/core
 
 能力组合与结构化生命周期内核。
 

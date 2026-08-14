@@ -13,7 +13,7 @@ Dougong（斗拱）是一个面向 JavaScript/TypeScript 的能力组合与结�
 - `Plugin`：一次 setup 产生一组能力；
 - `Application`：依赖图、事务与实例编排。
 
-Signal 不是第五种插件能力。`@dougong/reactive` 提供 `signal()`、`computed()`、`batch()` 和基于公开 Lifetime API 的 `observe()`；Core 不依赖它，也不提供隐式 effect。
+Signal 不是第五种插件能力。`@dougongjs/reactive` 提供 `signal()`、`computed()`、`batch()` 和基于公开 Lifetime API 的 `observe()`；Core 不依赖它，也不提供隐式 effect。
 
 ## 单路径原则
 

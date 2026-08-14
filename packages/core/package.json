@@ -1,5 +1,5 @@
 {
-  "name": "@dougong/core",
+  "name": "@dougongjs/core",
   "version": "0.0.1",
   "type": "module",
   "engines": {

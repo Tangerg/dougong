@@ -1,4 +1,4 @@
-import type { Provisions, Requirements } from "@dougong/core";
+import type { Provisions, Requirements } from "@dougongjs/core";
 import { PlatformError } from "./errors";
 import type { ManagedPluginRegistration } from "./managed-plugin";
 import type {

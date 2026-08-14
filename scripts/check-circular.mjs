@@ -3,7 +3,7 @@
 // allowlist. Allowlist entries are full file-sets of a known, benign cycle.
 //
 // Cycles matter more here than in an app: every package ships as a library, and
-// a runtime cycle between two modules of `@dougong/core` would surface as a
+// a runtime cycle between two modules of `@dougongjs/core` would surface as a
 // partially-initialised binding in a consumer's bundler, not in our tests.
 
 import { execFileSync } from "node:child_process";

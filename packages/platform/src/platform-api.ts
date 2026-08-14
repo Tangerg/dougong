@@ -5,7 +5,7 @@ import type {
   Provisions,
   Requirements,
   SnapshotView,
-} from "@dougong/core";
+} from "@dougongjs/core";
 import type {
   ManagedPluginStatus,
   PluginPlatformSnapshot,

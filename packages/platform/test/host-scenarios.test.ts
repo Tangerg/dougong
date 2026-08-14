@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createApp, definePlugin, extension, service, type ExtensionView } from "@dougong/core";
+import { createApp, definePlugin, extension, service, type ExtensionView } from "@dougongjs/core";
 import { createPlatform, MemoryPluginLoader, PermissionSet } from "../src/index";
 
 describe("host composition scenarios", () => {

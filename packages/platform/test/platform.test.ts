@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { createApp, definePlugin, DougongError, extension, service } from "@dougong/core";
+import { createApp, definePlugin, DougongError, extension, service } from "@dougongjs/core";
 import * as platformApi from "../src/index";
 
 const {

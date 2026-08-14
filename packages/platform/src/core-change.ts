@@ -1,4 +1,4 @@
-import type { PluginChangeSet, PluginContainer, PluginHandle } from "@dougong/core";
+import type { PluginChangeSet, PluginContainer, PluginHandle } from "@dougongjs/core";
 import type { ManagedPluginCoreState, ManagedPluginRegistration } from "./managed-plugin";
 import type { PlatformChangeOperation } from "./platform-change-set";
 import type { AnyPluginDefinition } from "./platform-api";

@@ -1,5 +1,5 @@
 {
-  "name": "@dougong/platform",
+  "name": "@dougongjs/platform",
   "version": "0.0.1",
   "type": "module",
   "engines": {
@@ -21,11 +21,11 @@
     "build": "vite build"
   },
   "dependencies": {
-    "@dougong/core": "workspace:*",
+    "@dougongjs/core": "workspace:*",
     "compare-versions": "^6.1.1",
     "zod": "^4.4.3"
   },
-  "description": "External plugin distribution layer compiled onto @dougong/core.",
+  "description": "External plugin distribution layer compiled onto @dougongjs/core.",
   "license": "MIT",
   "author": "Dougong contributors",
   "homepage": "https://tangerg.github.io/dougong/",

@@ -18,7 +18,7 @@ export default defineConfig({
       fileName: "index",
     },
     rollupOptions: {
-      external: ["@dougong/core", "compare-versions", "zod"],
+      external: ["@dougongjs/core", "compare-versions", "zod"],
     },
   },
 });

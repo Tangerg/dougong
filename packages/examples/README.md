@@ -33,7 +33,7 @@ pnpm examples:benchmark
 每个导出函数都会创建并完整释放自己的 Application：
 
 ```ts
-import { planetScenario } from "@dougong/examples"
+import { planetScenario } from "@dougongjs/examples"
 
 const result = await planetScenario()
 console.log(result.facts)

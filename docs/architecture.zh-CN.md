@@ -35,7 +35,7 @@ Dougong Core 是“能力组合与结构化生命周期内核”，不是大一�
 core 与 reactive 互不依赖
 ```
 
-### `@dougong/core`
+### `@dougongjs/core`
 
 只依赖标准 JavaScript 与 Standard Schema 类型契约，负责：
 
@@ -50,7 +50,7 @@ core 与 reactive 互不依赖
 
 Core 内部也保持同一分工：Application 只拥有声明注册表、`SerialQueue` 和状态发布；GroupCoordinator 只拥有结构 Group；ApplicationRuntime 只拥有已经提交的 Contract、Service、Event、Extension、Lifetime 与运行图。Platform 直接复用 Core 的同一串行原语，不复制失败隔离状态机。事务由 Application 发起，但运行图的切换、rollback 与 fail-closed 只在 ApplicationRuntime 中执行，因此声明状态和实例状态各有一个真相源，而不是把全部职责堆进一个总类。
 
-### `@dougong/reactive`
+### `@dougongjs/reactive`
 
 零依赖值层，负责：
 
@@ -63,7 +63,7 @@ Core 不导入 reactive。二者通过结构化 `get()/subscribe()` 和 Lifetime
 
 `Disposable` 等极小协议会在两个基础包中分别声明。它们没有运行时对象或实现，TypeScript 依靠结构类型互通。这是有意的协议声明重复，用来换取双向零依赖；单路径原则禁止的是重复状态机和运行时语义，不是要求独立基础包共享一个类型来源。
 
-### `@dougong/platform`
+### `@dougongjs/platform`
 
 外部插件分发层，负责：
 
@@ -81,7 +81,7 @@ Platform 把结果编译成普通 Core PluginDefinition 和一份 Core ChangeSet
 
 纯 re-export 便利入口，没有逻辑、状态或第二条路径。严格分层的库作者仍可直接依赖细包。
 
-### `@dougong/examples`
+### `@dougongjs/examples`
 
 最外层的可执行学习与宿主参考包，只依赖公开 `dougong` facade。它从最小 Service 示例逐层覆盖 Extension、Event、Lifetime、Signal、ChangeSet、Group 和 Platform，并提供 Planet / Lynx、声明式计划与模块图 HMR 场景。宿主策略先在这里接受真实使用与回归测试；只有多个宿主复用出稳定边界后才提炼成独立包。任何基础包都禁止反向依赖 examples；示例若必须访问内部模块，说明公共组合能力尚未闭合。
 

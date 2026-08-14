@@ -7,7 +7,7 @@
 // depends on Core, the facade may re-export all three, and examples is the
 // outermost consumer that no runtime package may import.
 //
-// Module rules inside @dougong/core and @dougong/platform are one-way and
+// Module rules inside @dougongjs/core and @dougongjs/platform are one-way and
 // strictly increasing. Their tables below are exhaustive by design.
 //
 // Every invariant below is either stated in docs/architecture.zh-CN.md or was a
@@ -47,7 +47,7 @@ const FORBIDDEN_PACKAGES = {
 
 // Core module layers
 
-// Every module of @dougong/core declares its rank. A module may import another
+// Every module of @dougongjs/core declares its rank. A module may import another
 // core module only when that module's rank is strictly lower. Adding a file
 // without a rank is a hard error rather than an unguarded default: the point of
 // the table is that someone has to decide where a new module sits.
@@ -152,7 +152,7 @@ const FILE_RULES = [
     // The package declares no `dependencies`. Any non-relative import would be
     // an undeclared one, and the zero-dependency claim is part of its appeal.
     test: (source) => /from\s*["'][^."']/.test(source),
-    message: "@dougong/reactive must have zero external imports",
+    message: "@dougongjs/reactive must have zero external imports",
   },
   {
     matches: (file) => file === "dougong/src/index.ts",

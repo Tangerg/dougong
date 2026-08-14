@@ -1,4 +1,4 @@
-# @dougong/platform
+# @dougongjs/platform
 
 外部插件分发层：manifest 校验、权限授权、模块加载、惰性激活与热更新。
 

@@ -4,7 +4,7 @@ import {
   type PluginHandle,
   type Provisions,
   type Requirements,
-} from "@dougong/core";
+} from "@dougongjs/core";
 import type {
   ManagedPlugin,
   NormalizedArtifact,

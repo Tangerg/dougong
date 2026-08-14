@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import type { Disposable } from "@dougong/core";
+import type { Disposable } from "@dougongjs/core";
 import {
   createApp,
   definePlugin,

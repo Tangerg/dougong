@@ -1,4 +1,4 @@
-import { DougongError } from "@dougong/core";
+import { DougongError } from "@dougongjs/core";
 
 export class PlatformError extends DougongError {
   override name = "PlatformError";

@@ -18,7 +18,7 @@ export default defineConfig({
       fileName: "index",
     },
     rollupOptions: {
-      external: ["@dougong/core", "@dougong/platform", "@dougong/reactive"],
+      external: ["@dougongjs/core", "@dougongjs/platform", "@dougongjs/reactive"],
     },
   },
 });

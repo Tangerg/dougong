@@ -9,11 +9,11 @@ export default defineConfig({
   // rather than a stale `dist/`. Keep in sync with tsconfig.base.json's paths.
   resolve: {
     alias: {
-      "@dougong/reactive": fileURLToPath(
+      "@dougongjs/reactive": fileURLToPath(
         new URL("./packages/reactive/src/index.ts", import.meta.url),
       ),
-      "@dougong/core": fileURLToPath(new URL("./packages/core/src/index.ts", import.meta.url)),
-      "@dougong/platform": fileURLToPath(
+      "@dougongjs/core": fileURLToPath(new URL("./packages/core/src/index.ts", import.meta.url)),
+      "@dougongjs/platform": fileURLToPath(
         new URL("./packages/platform/src/index.ts", import.meta.url),
       ),
       dougong: fileURLToPath(new URL("./packages/dougong/src/index.ts", import.meta.url)),

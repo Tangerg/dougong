@@ -1,6 +1,6 @@
 # Dougong Core API 设计规范
 
-本文是 `@dougong/core` 的可观察行为规范。实现与本文冲突时，应治本式修改实现或规范，不增加兼容别名。
+本文是 `@dougongjs/core` 的可观察行为规范。实现与本文冲突时，应治本式修改实现或规范，不增加兼容别名。
 
 Dougong Core 的定位是：
 
@@ -104,7 +104,7 @@ import {
   extension,
   event,
   optional,
-} from "@dougong/core"
+} from "@dougongjs/core"
 ```
 
 错误类是捕获边界，不属于能力原子预算。
@@ -654,7 +654,7 @@ Application start、stop 和 active 状态下提交的 ChangeSet 使用 Extensio
 
 ## 十三、统一观察协议与 reactive 层
 
-ExtensionView、Application diagnostics、Platform diagnostics 和 `@dougong/reactive` Signal 统一采用结构协议：
+ExtensionView、Application diagnostics、Platform diagnostics 和 `@dougongjs/reactive` Signal 统一采用结构协议：
 
 ```ts
 interface Readable<T> {
@@ -677,7 +677,7 @@ snapshots.dispose()                        // 固化终态并切断闭包
 
 快照需要 Map 语义时统一使用 `ReadonlyMapSnapshot`。它复制输入并只暴露 `ReadonlyMap` 方法，避免 `Object.freeze(new Map())` 仍可调用 `set/delete/clear` 的伪不可变性；它只保证容器结构不可变，条目值仍应在进入快照时自行冻结。
 
-`@dougong/reactive` 是独立基础包：
+`@dougongjs/reactive` 是独立基础包：
 
 ```ts
 signal(initial)

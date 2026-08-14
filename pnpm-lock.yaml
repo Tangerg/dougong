@@ -53,13 +53,13 @@ importers:
 
   packages/dougong:
     dependencies:
-      '@dougong/core':
+      '@dougongjs/core':
         specifier: workspace:*
         version: link:../core
-      '@dougong/platform':
+      '@dougongjs/platform':
         specifier: workspace:*
         version: link:../platform
-      '@dougong/reactive':
+      '@dougongjs/reactive':
         specifier: workspace:*
         version: link:../reactive
 
@@ -71,7 +71,7 @@ importers:
 
   packages/platform:
     dependencies:
-      '@dougong/core':
+      '@dougongjs/core':
         specifier: workspace:*
         version: link:../core
       compare-versions:

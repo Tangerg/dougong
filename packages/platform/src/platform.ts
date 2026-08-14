@@ -5,7 +5,7 @@ import {
   type Requirements,
   SerialQueue,
   type SnapshotView,
-} from "@dougong/core";
+} from "@dougongjs/core";
 import { validate } from "compare-versions";
 import { loadPluginDefinition, normalizeArtifact } from "./artifact";
 import { validateCandidateGraph } from "./candidate-graph";
