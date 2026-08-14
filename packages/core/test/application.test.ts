@@ -158,7 +158,7 @@ describe("application", () => {
         name,
         requires: { store: token },
         setup(ctx) {
-          observed.push(`${ctx.meta.group}:${ctx.store.workspace}`);
+          observed.push(`${ctx.meta.groupId}:${ctx.store.workspace}`);
         },
       });
 
@@ -910,7 +910,10 @@ describe("application", () => {
         setup: () => ({ b: "b" }),
       }),
     );
-    await expect(cyclicApp.start()).rejects.toMatchObject({ code: "SERVICE_CYCLE" });
+    await expect(cyclicApp.start()).rejects.toMatchObject({
+      code: "SERVICE_CYCLE",
+      message: "Plugin dependency cycle: test.cycle-a:1 -> test.cycle-b:2 -> test.cycle-a:1",
+    });
 
     const DUPLICATE = service<number>("test/duplicate");
     const duplicateApp = createApp();
@@ -945,12 +948,63 @@ describe("application", () => {
     await expect(collisionApp.start()).rejects.toMatchObject({ code: "CONTRACT_CONFLICT" });
   });
 
+  it("commits runtime Contract identities only after a successful transaction", async () => {
+    const VALUES = extension<number>("test/transactional-contract-kind");
+    const VALUE = service<number>("test/transactional-contract-kind");
+    const app = createApp();
+    await app.start();
+
+    const failed = app.install(
+      definePlugin({
+        name: "test.failed-contract-declaration",
+        setup(ctx) {
+          ctx.contribute(VALUES, "value", 1);
+          throw new Error("setup failed");
+        },
+      }),
+    );
+    await expect(failed.ready()).rejects.toThrow("setup failed");
+
+    const provider = app.install(
+      definePlugin({
+        name: "test.recovered-contract-declaration",
+        provides: { value: VALUE },
+        setup: () => ({ value: 2 }),
+      }),
+    );
+    await provider.ready();
+
+    expect(app.get(VALUE)).toBe(2);
+    await app.stop();
+  });
+
+  it("does not reserve a Contract identity for an unavailable host read", async () => {
+    const VALUE = service<number>("test/unavailable-contract-read");
+    const VALUES = extension<number>("test/unavailable-contract-read");
+    const app = createApp();
+    await app.start();
+
+    expect(() => app.get(VALUE)).toThrow("is not active");
+    const reader = app.install(
+      definePlugin({
+        name: "test.extension-after-unavailable-read",
+        requires: { values: VALUES },
+        setup(ctx) {
+          expect(ctx.values.get().size).toBe(0);
+        },
+      }),
+    );
+    await reader.ready();
+
+    await app.stop();
+  });
+
   it("cancels spawned work and disposes nested lifetimes", async () => {
     const trace: string[] = [];
     const worker = definePlugin({
       name: "test.structured-lifetime",
       setup(ctx) {
-        const child = ctx.lifetime();
+        const child = ctx.lifetime("ordered-child");
         child.cleanup(() => {
           trace.push("child:stop");
         });
@@ -1074,7 +1128,7 @@ describe("application", () => {
     expect(() => change.remove(handle)).toThrow("can only appear once");
     const committing = change.commit();
     expect(change.commit()).toBe(committing);
-    expect(() => change.install(plugin)).toThrow("committed ChangeSet");
+    expect(() => change.install(plugin)).toThrow("submitted ChangeSet");
     await committing;
   });
 
@@ -1126,7 +1180,7 @@ describe("application", () => {
         expect(Object.isFrozen(ctx)).toBe(true);
         expect(Object.isFrozen(ctx.meta)).toBe(true);
         expect(() => {
-          (ctx.meta as { name: string }).name = "changed";
+          (ctx.meta as { pluginName: string }).pluginName = "changed";
         }).toThrow(TypeError);
       },
     });
@@ -1201,7 +1255,7 @@ describe("application", () => {
       requires: { items: ITEMS },
       setup(ctx) {
         const cleanup = ctx.cleanup(() => undefined);
-        const child = ctx.lifetime();
+        const child = ctx.lifetime("diagnostic-child");
         const task = ctx.spawn(
           () =>
             new Promise<void>((resolve) => {
@@ -1230,6 +1284,7 @@ describe("application", () => {
     expect(Object.keys(lifetime ?? {}).sort()).toEqual(["get", "subscribe"]);
     expect(Object.isFrozen(lifetime)).toBe(true);
     expect(lifetime?.get()).toEqual({
+      label: handle.id,
       phase: "active",
       cleanups: 1,
       tasks: 1,
@@ -1237,8 +1292,22 @@ describe("application", () => {
       contributions: 1,
       extensionViews: 1,
       subscriptions: 1,
-      childLifetimes: 1,
+      children: [
+        {
+          label: "diagnostic-child",
+          phase: "active",
+          cleanups: 0,
+          tasks: 0,
+          listeners: 0,
+          contributions: 0,
+          extensionViews: 0,
+          subscriptions: 0,
+          children: [],
+        },
+      ],
     });
+    expect(Object.isFrozen(lifetime?.get().children)).toBe(true);
+    expect(Object.isFrozen(lifetime?.get().children[0])).toBe(true);
     let notifications = 0;
     const subscription = lifetime!.subscribe(() => notifications++);
 
@@ -1246,6 +1315,7 @@ describe("application", () => {
     completeTask();
     await taskResult;
     expect(lifetime?.get()).toEqual({
+      label: handle.id,
       phase: "active",
       cleanups: 0,
       tasks: 0,
@@ -1253,13 +1323,14 @@ describe("application", () => {
       contributions: 0,
       extensionViews: 1,
       subscriptions: 0,
-      childLifetimes: 0,
+      children: [],
     });
     expect(app.diagnostics.get()).toBe(applicationSnapshot);
     expect(notifications).toBeGreaterThan(0);
 
     await app.stop();
     expect(lifetime?.get()).toEqual({
+      label: handle.id,
       phase: "disposed",
       cleanups: 0,
       tasks: 0,
@@ -1267,7 +1338,7 @@ describe("application", () => {
       contributions: 0,
       extensionViews: 0,
       subscriptions: 0,
-      childLifetimes: 0,
+      children: [],
     });
     expect(app.diagnostics.get().plugins.get(handle.id)?.lifetime).toBeUndefined();
     subscription.dispose();
@@ -1291,5 +1362,28 @@ describe("application", () => {
       status: "failed",
       error: failure,
     });
+  });
+
+  it("classifies non-Error setup failures for stable handles", async () => {
+    const failure: unknown = undefined;
+    const app = createApp();
+    const handle = app.install(
+      definePlugin({
+        name: "test.non-error-failure",
+        setup() {
+          throw failure;
+        },
+      }),
+    );
+
+    await app.start().catch(() => undefined);
+    const classified = await handle.ready().catch((error: unknown) => error);
+    expect(classified).toMatchObject({
+      name: "DougongError",
+      code: "PLUGIN_UNAVAILABLE",
+      message: `Plugin '${handle.id}' failed with a non-Error value`,
+    });
+    expect(app.diagnostics.get().plugins.get(handle.id)?.error).toBe(classified);
+    await app.stop();
   });
 });

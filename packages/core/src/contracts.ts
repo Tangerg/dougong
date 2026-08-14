@@ -2,8 +2,12 @@ const contractType: unique symbol = Symbol("dougong.contract.type");
 
 export type ContractKind = "service" | "extension" | "event";
 
-interface Contract<T, K extends ContractKind> {
+export interface ContractIdentity {
   readonly id: string;
+  readonly kind: ContractKind;
+}
+
+interface Contract<T, K extends ContractKind> extends ContractIdentity {
   readonly kind: K;
   readonly [contractType]?: T;
 }
@@ -35,6 +39,28 @@ function contract<T, K extends ContractKind>(kind: K, id: string): Contract<T, K
   return Object.freeze({ id, kind }) as Contract<T, K>;
 }
 
+export function isContract(value: unknown, expected?: ContractKind): value is ContractIdentity {
+  if (!value || typeof value !== "object") return false;
+  const candidate = value as Partial<ContractIdentity>;
+  return (
+    typeof candidate.id === "string" &&
+    candidate.id.length > 0 &&
+    candidate.id === candidate.id.trim() &&
+    (candidate.kind === "service" ||
+      candidate.kind === "extension" ||
+      candidate.kind === "event") &&
+    (expected === undefined || candidate.kind === expected)
+  );
+}
+
+export function assertContract(
+  value: unknown,
+  expected?: ContractKind,
+): asserts value is ContractIdentity {
+  if (isContract(value, expected)) return;
+  throw new TypeError(expected ? `Expected a ${expected} contract` : "Invalid contract");
+}
+
 export function service<T>(id: string): Service<T> {
   return contract<T, "service">("service", id);
 }
@@ -48,13 +74,7 @@ export function extension<T>(id: string): Extension<T> {
 }
 
 export function optional<T>(token: Service<T>): OptionalService<T> {
-  if (
-    !token ||
-    token.kind !== "service" ||
-    typeof token.id !== "string" ||
-    !token.id.trim() ||
-    token.id !== token.id.trim()
-  ) {
+  if (!isContract(token, "service")) {
     throw new TypeError("optional() expects a service contract");
   }
   return Object.freeze({ kind: "optional", service: token });

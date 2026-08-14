@@ -8,7 +8,7 @@ export class ImportPluginLoader implements PluginLoader<string | URL> {
     signal.throwIfAborted();
     const module = await import(/* @vite-ignore */ String(reference));
     signal.throwIfAborted();
-    return module as unknown;
+    return module;
   }
 }
 

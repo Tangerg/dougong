@@ -28,7 +28,6 @@ type ReactiveNode = {
 };
 
 type Dependency = {
-  readonly source: ReadonlySignal<unknown>;
   readonly node: ReactiveNode;
   version: number;
   subscription: Disposable | undefined;
@@ -39,7 +38,7 @@ let pendingListeners: Set<Listener> | undefined;
 let activeCollector: ((source: ReadonlySignal<unknown>) => void) | undefined;
 const nodes = new WeakMap<ReadonlySignal<unknown>, ReactiveNode>();
 
-function disposable(dispose: () => void): Disposable {
+function createSubscription(dispose: () => void): Disposable {
   return new ReactiveSubscription(dispose);
 }
 
@@ -62,7 +61,7 @@ class ReactiveSubscription implements Disposable {
   }
 }
 
-function flush() {
+function flushPendingListeners() {
   const errors: unknown[] = [];
 
   while (pendingListeners?.size) {
@@ -122,6 +121,10 @@ export function batch<T>(callback: () => T): T {
 
   try {
     result = callback();
+    if (isThenable(result)) {
+      void Promise.resolve(result).catch(() => undefined);
+      throw new TypeError("Reactive batches must be synchronous");
+    }
   } catch (error) {
     failed = true;
     failure = error;
@@ -131,7 +134,7 @@ export function batch<T>(callback: () => T): T {
 
   if (!batchDepth) {
     try {
-      flush();
+      flushPendingListeners();
     } catch (error) {
       failure = failed ? new AggregateError([failure, error], "Reactive batch failed") : error;
       failed = true;
@@ -164,7 +167,7 @@ export function signal<T>(initialValue: T): Signal<T> {
     subscribe(listener) {
       assertListener(listener);
       listeners.add(listener);
-      return disposable(() => listeners.delete(listener));
+      return createSubscription(() => listeners.delete(listener));
     },
   } as Signal<T>;
 
@@ -224,6 +227,10 @@ export function computed<T>(calculate: () => T): ReadonlySignal<T> {
     let nextValue: T;
     try {
       nextValue = calculate();
+      if (isThenable(nextValue)) {
+        void Promise.resolve(nextValue).catch(() => undefined);
+        throw new TypeError("Computed signal calculations must be synchronous");
+      }
     } finally {
       activeCollector = previousCollector;
       evaluating = false;
@@ -240,7 +247,6 @@ export function computed<T>(calculate: () => T): ReadonlySignal<T> {
       if (!node) continue;
 
       const entry = dependencies.get(dependency) ?? {
-        source: dependency,
         node,
         version: node.version,
         subscription: undefined,
@@ -282,7 +288,7 @@ export function computed<T>(calculate: () => T): ReadonlySignal<T> {
         }
       }
 
-      return disposable(() => {
+      return createSubscription(() => {
         listeners.delete(listener);
         if (listeners.size) return;
         detach();
@@ -304,4 +310,10 @@ function assertListener(listener: unknown): asserts listener is Listener {
   if (typeof listener !== "function") {
     throw new TypeError("Signal subscriber must be a function");
   }
+}
+
+function isThenable(value: unknown): value is PromiseLike<unknown> {
+  return (
+    value !== null && (typeof value === "object" || typeof value === "function") && "then" in value
+  );
 }

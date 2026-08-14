@@ -19,13 +19,13 @@ export {
   type ApplicationStatus,
   type CreateAppOptions,
   type GroupSnapshot,
-  type InstallHandle,
+  type InstallationHandle,
   type PluginChangeSet,
   type PluginContainer,
   type PluginGroup,
   type PluginHandle,
   type PluginSnapshot,
-  type PluginStatus,
+  type InstallationStatus,
   type PluginUpdate,
 } from "./application";
 

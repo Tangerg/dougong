@@ -64,12 +64,12 @@ describe("plugin platform", () => {
     expect("close" in diagnosticSubscription).toBe(false);
     diagnosticSubscription[Symbol.dispose]?.();
     for (const internal of [
-      "createRecord",
-      "attachRecord",
+      "createRegistration",
+      "attachRegistration",
       "resolve",
       "normalize",
       "execute",
-      "activateRecord",
+      "activateRegistration",
     ]) {
       expect(internal in platform).toBe(false);
     }
@@ -100,6 +100,79 @@ describe("plugin platform", () => {
     await expect(committing).rejects.toMatchObject({ code: "PLATFORM_UNAVAILABLE" });
     expect(managed.status).toBe("failed");
     await expect(managed.activate()).rejects.toMatchObject({ code: "PLATFORM_UNAVAILABLE" });
+  });
+
+  it("does not retain Platform ports through a terminal managed handle", async () => {
+    const forceGc = (globalThis as typeof globalThis & { gc?: () => void }).gc;
+    if (!forceGc) throw new TypeError("Retention tests require Node.js --expose-gc");
+
+    const fixture = await createTerminalManagedHandle();
+    const references = Object.values(fixture.references);
+    for (let pass = 0; pass < 8 && references.some((ref) => ref.deref()); pass++) {
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+      forceGc();
+      forceGc();
+    }
+
+    expect(fixture.managed.status).toBe("removed");
+    expect(
+      Object.fromEntries(
+        Object.entries(fixture.references).map(([name, ref]) => [name, ref.deref() === undefined]),
+      ),
+    ).toEqual({ app: true, loader: true, platform: true });
+  });
+
+  it("does not retain Platform ports through an abandoned managed handle", async () => {
+    const forceGc = (globalThis as typeof globalThis & { gc?: () => void }).gc;
+    if (!forceGc) throw new TypeError("Retention tests require Node.js --expose-gc");
+
+    const fixture = await createAbandonedManagedHandle();
+    const references = Object.values(fixture.references);
+    for (let pass = 0; pass < 8 && references.some((ref) => ref.deref()); pass++) {
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+      forceGc();
+      forceGc();
+    }
+
+    expect(fixture.managed.status).toBe("failed");
+    expect(
+      Object.fromEntries(
+        Object.entries(fixture.references).map(([name, ref]) => [name, ref.deref() === undefined]),
+      ),
+    ).toEqual({ app: true, loader: true, platform: true });
+    await expect(fixture.managed.ready()).rejects.toMatchObject({
+      code: "PLUGIN_DUPLICATE",
+    });
+  });
+
+  it("preserves Core error identity after a managed registration becomes terminal", async () => {
+    const missing = service<string>("terminal/core-missing");
+    const placeholder = definePlugin({
+      name: "terminal.core-failure",
+      requires: { missing },
+      setup() {},
+    });
+    const app = createApp();
+    await app.start();
+    const platform = createPlatform({
+      container: app,
+      apiVersion: "1.0.0",
+      loader: new MemoryPluginLoader(new Map()),
+    });
+    const change = platform.change();
+    const managed = change.register({
+      manifest: { name: "terminal.core-failure", version: "1.0.0" },
+      reference: "unused",
+      placeholder,
+    });
+
+    await expect(change.commit()).rejects.toMatchObject({ code: "SERVICE_MISSING" });
+    await expect(managed.ready()).rejects.toMatchObject({
+      name: "DougongError",
+      code: "SERVICE_MISSING",
+    });
+    await platform.dispose();
+    await app.stop();
   });
 
   it("normalizes and freezes manifests at the trust boundary", () => {
@@ -209,7 +282,7 @@ describe("plugin platform", () => {
     await platform.trigger("command:open");
     await ready;
 
-    expect(plugin.status).toBe("active");
+    expect(plugin.status).toBe("activated");
     expect(trace).toEqual(["placeholder:start", "placeholder:stop", "active:start"]);
     expect([...app.diagnostics.get().plugins.keys()]).toEqual([instanceId]);
 
@@ -273,8 +346,8 @@ describe("plugin platform", () => {
     await platform.trigger("startup");
 
     expect(trace).toEqual(["database", "consumer:value"]);
-    expect(dependency.status).toBe("active");
-    expect(dependent.status).toBe("active");
+    expect(dependency.status).toBe("activated");
+    expect(dependent.status).toBe("activated");
     await app.stop();
   });
 
@@ -411,7 +484,7 @@ describe("plugin platform", () => {
     ).rejects.toMatchObject({ code: "CONFIG_INVALID" });
 
     expect(managed.manifest.version).toBe("1.0.0");
-    expect(managed.status).toBe("active");
+    expect(managed.status).toBe("activated");
     expect(trace).toEqual(["v1:1"]);
     await platform.dispose();
     await app.stop();
@@ -578,14 +651,14 @@ describe("plugin platform", () => {
 
     await managed.activate();
     await Promise.resolve();
-    expect(managed.status).toBe("active");
+    expect(managed.status).toBe("activated");
     expect(ready).toBe(false);
 
     await app.start();
     await barrier;
     const snapshot = platform.diagnostics.get();
     expect(snapshot.plugins.get("demo.lifecycle")).toMatchObject({
-      status: "active",
+      status: "activated",
       version: "1.0.0",
     });
     expect(Object.isFrozen(snapshot)).toBe(true);
@@ -697,6 +770,38 @@ describe("plugin platform", () => {
     await platform.dispose();
   });
 
+  it("classifies non-Error activation failures for stable managed state", async () => {
+    const failure: unknown = undefined;
+    let failAuthorization = false;
+    const app = createApp();
+    const plugin = definePlugin({ name: "failed.non-error", setup() {} });
+    const platform = createPlatform({
+      container: app,
+      apiVersion: "1.0.0",
+      loader: new MemoryPluginLoader(new Map([["failure", { default: plugin }]])),
+      permissions: {
+        authorize() {
+          if (failAuthorization) throw failure;
+        },
+      },
+    });
+    const managed = await platform.register({
+      manifest: { name: "failed.non-error", version: "1.0.0", activation: ["event"] },
+      reference: "failure",
+    });
+
+    failAuthorization = true;
+    await managed.activate().catch(() => undefined);
+    const classified = await managed.ready().catch((error: unknown) => error);
+    expect(classified).toMatchObject({
+      name: "PlatformError",
+      code: "PLUGIN_UNAVAILABLE",
+      message: "Plugin 'failed.non-error' failed with a non-Error value",
+    });
+    expect(platform.diagnostics.get().plugins.get(managed.name)?.error).toBe(classified);
+    await platform.dispose();
+  });
+
   it("makes Platform ChangeSet one-shot, authoritative and commit-idempotent", async () => {
     const plugin = definePlugin({ name: "demo.change-owner", setup() {} });
     const modules = new MemoryPluginLoader(new Map([["plugin", { default: plugin }]]));
@@ -729,7 +834,7 @@ describe("plugin platform", () => {
         manifest: { name: "demo.late", version: "1.0.0" },
         reference: "plugin",
       }),
-    ).toThrow("committed ChangeSet");
+    ).toThrow("submitted ChangeSet");
     await committing;
     expect(managed.manifest.version).toBe("1.1.0");
     await Promise.all([first.dispose(), second.dispose()]);
@@ -772,3 +877,43 @@ describe("plugin platform", () => {
     await platform.dispose();
   });
 });
+
+async function createTerminalManagedHandle() {
+  const app = createApp();
+  const loader = new MemoryPluginLoader(new Map());
+  const platform = createPlatform({ container: app, apiVersion: "1.0.0", loader });
+  const managed = await platform.register({
+    manifest: { name: "retention.managed", version: "1.0.0" },
+    reference: "unused",
+  });
+  const references = {
+    app: new WeakRef(app),
+    loader: new WeakRef(loader),
+    platform: new WeakRef(platform),
+  };
+  await platform.dispose();
+  return { managed, references };
+}
+
+async function createAbandonedManagedHandle() {
+  const app = createApp();
+  const loader = new MemoryPluginLoader(new Map());
+  const platform = createPlatform({ container: app, apiVersion: "1.0.0", loader });
+  await platform.register({
+    manifest: { name: "retention.abandoned-managed", version: "1.0.0" },
+    reference: "first",
+  });
+  const change = platform.change();
+  const managed = change.register({
+    manifest: { name: "retention.abandoned-managed", version: "1.0.0" },
+    reference: "duplicate",
+  });
+  const references = {
+    app: new WeakRef(app),
+    loader: new WeakRef(loader),
+    platform: new WeakRef(platform),
+  };
+  await change.commit().catch(() => undefined);
+  await platform.dispose();
+  return { managed, references };
+}

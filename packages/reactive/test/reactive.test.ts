@@ -67,6 +67,15 @@ describe("signal", () => {
     expect(thrown).toBe(true);
     expect(() => batch(undefined as never)).toThrow("batch() expects a function");
   });
+
+  it("rejects asynchronous batch callbacks", async () => {
+    expect(() =>
+      batch(async () => {
+        throw new Error("async batch failure");
+      }),
+    ).toThrow("Reactive batches must be synchronous");
+    await Promise.resolve();
+  });
 });
 
 describe("computed", () => {
@@ -142,5 +151,16 @@ describe("computed", () => {
     expect(() => broken.subscribe(() => {})).toThrow("cannot calculate");
     expect(() => broken.subscribe(() => {})).toThrow("cannot calculate");
     expect(calculate).toHaveBeenCalledTimes(2);
+  });
+
+  it("rejects asynchronous computed calculations", async () => {
+    const value = signal(1);
+    const derived = computed(async () => {
+      value.get();
+      throw new Error("async computed failure");
+    });
+
+    expect(() => derived.get()).toThrow("Computed signal calculations must be synchronous");
+    await Promise.resolve();
   });
 });

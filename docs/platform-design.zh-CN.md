@@ -126,7 +126,7 @@ interface PluginArtifact<Reference> {
 }
 ```
 
-`placeholder` 必须由宿主信任的代码创建。它适合在懒加载前贡献命令标题、菜单元数据或占位面板。Platform 注册时把它作为普通 Core 插件安装；激活时使用**同一个 Core Handle**原子更新成加载定义，因此实例 ID、Group 归属和下游观测身份保持稳定。
+`placeholder` 必须由宿主信任的代码创建。它适合在懒加载前贡献命令标题、菜单元数据或占位面板。Platform 注册时把它作为普通 Core 插件安装；激活时使用同一个 Core Handle 原子更新成加载定义，因此 installation ID、Group 归属和下游观测身份保持稳定。
 
 `ManagedPlugin.status`：
 
@@ -135,13 +135,13 @@ interface PluginArtifact<Reference> {
 | `pending` | 仍由未提交的 Platform ChangeSet 拥有，尚未进入注册表 |
 | `registered` | Artifact 已登记，外部实现尚未选中；占位定义可能已在 Core 中 |
 | `loading` | 正在授权、激活依赖或加载模块 |
-| `active` | 外部定义已提交到 Core；不代表 Application 此刻一定处于 `active` |
+| `activated` | 外部定义已提交到 Core；不代表 Application 此刻一定处于 `active` |
 | `failed` | 最近一次激活失败；保留错误供诊断，允许再次显式 `activate()` |
 | `removed` | 已从 Platform 与 Core 安装计划移除，不可复活 |
 
-`activate()` 在 Application 为 `idle` 时也可以完成：它负责把定义提交进安装计划，不偷偷启动 Application。此时 `status === "active"`，但先前或随后调用的 `ready()` 仍会等待 `app.start()`；这明确分开“模块已激活”和“运行实例已就绪”。
+`activate()` 在 Application 为 `idle` 时也可以完成：它负责把定义提交进安装计划，不偷偷启动 Application。此时 `status === "activated"`，但先前或随后调用的 `ready()` 仍会等待 `app.start()`；这明确分开“模块已激活”和“运行实例已就绪”。
 
-`ready()` 在 `pending` / `registered` / `loading` 时等待首次激活及 Core ready barrier；在 `active` 时委托当前 Core Handle；在 `failed` / `removed` 时立即拒绝。一次失败的等待不会因以后重试自动复活，重试成功后应重新调用 `ready()`。
+`ready()` 在 `pending` / `registered` / `loading` 时等待首次激活及 Core ready barrier；在 `activated` 时委托当前 Core Handle；在 `failed` / `removed` 时立即拒绝。一次失败的等待不会因以后重试自动复活，重试成功后应重新调用 `ready()`。
 
 ## 六、Manifest 依赖与激活条件
 
@@ -180,9 +180,9 @@ await change.commit();
 
 1. 锁定并取消待更新/删除目标的飞行中激活；
 2. 在当前注册表上一次应用全部操作，形成候选 Manifest 图；
-3. 检查重复身份和依赖环；对最终仍为 active 的插件，要求全部依赖存在、版本兼容且已经 active；
+3. 检查重复身份和依赖环；对最终仍为 activated 的插件，要求全部依赖存在、版本兼容且已经 activated；
 4. 对新增/更新 Manifest 执行授权；
-5. 预加载所有 active 目标的新定义，任何失败都尚未触碰 Core；
+5. 预加载所有 activated 目标的新定义，任何失败都尚未触碰 Core；
 6. 把占位安装、活动定义更新和删除编译进**一份 Core ChangeSet**并提交；
 7. Core 成功后一次切换 Platform 的 Artifact、Handle 与诊断状态。
 
@@ -252,9 +252,9 @@ Platform 的可判定错误使用 `PlatformError.code`。`PlatformError extends 
 | `PERMISSION_DENIED` | 权限策略拒绝；具体类型是 `PermissionDeniedError` |
 | `PLUGIN_DUPLICATE` | 候选注册表出现重复 name |
 | `PLUGIN_IDENTITY` | Manifest、占位定义或加载定义 name 不一致 |
-| `PLUGIN_DEPENDENCY_MISSING` | active/待激活插件缺少 Manifest 依赖 |
+| `PLUGIN_DEPENDENCY_MISSING` | activated/待激活插件缺少 Manifest 依赖 |
 | `PLUGIN_DEPENDENCY_INCOMPATIBLE` | Manifest 依赖版本不满足 |
-| `PLUGIN_DEPENDENCY_INACTIVE` | active 候选插件依赖尚未 active 的插件 |
+| `PLUGIN_DEPENDENCY_INACTIVE` | activated 候选插件依赖尚未 activated 的插件 |
 | `PLUGIN_CYCLE` | Manifest 依赖图存在闭环 |
 | `PLUGIN_BUSY` | 激活与同一目标的声明变更发生竞争 |
 | `MODULE_LOAD_FAILED` | Loader 自身失败 |
@@ -263,4 +263,4 @@ Platform 的可判定错误使用 `PlatformError.code`。`PlatformError extends 
 | `PLUGIN_UNAVAILABLE` | `ready()` 无法等待的兜底状态 |
 | `PLATFORM_UNAVAILABLE` | Platform 正在释放或已经释放 |
 
-错误消息用于人读，不是稳定解析协议。编程形状错误、跨 Platform Handle、重复 ChangeSet 目标和 committed 后继续修改使用 `TypeError`。
+错误消息用于人读，不是稳定解析协议。编程形状错误、跨 Platform Handle、重复 ChangeSet 目标和 submitted 后继续修改使用 `TypeError`。

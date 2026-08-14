@@ -5,6 +5,7 @@ import {
   event,
   extension,
   type Contribution,
+  type LifetimeContext,
   type Task,
 } from "../src/index";
 
@@ -133,6 +134,110 @@ describe("structured lifetime", () => {
 
     await expect(cleanup.dispose()).rejects.toBe(failure);
     await expect(app.stop()).resolves.toBeUndefined();
+  });
+
+  it("projects real nested ownership into immutable diagnostics", async () => {
+    let session: LifetimeContext | undefined;
+    let connection: LifetimeContext | undefined;
+    const plugin = definePlugin({
+      name: "lifetime.diagnostic-tree",
+      setup(ctx) {
+        expect(() => ctx.lifetime("")).toThrow("non-empty string");
+        expect(() => ctx.lifetime(" padded ")).toThrow("whitespace");
+
+        ctx.cleanup(() => undefined);
+        session = ctx.lifetime("session");
+        session.cleanup(() => undefined);
+        connection = session.lifetime("connection");
+        connection.cleanup(() => undefined);
+      },
+    });
+    const app = createApp();
+    const handle = app.install(plugin);
+    await app.start();
+    if (!session || !connection) throw new TypeError("Lifetime fixture did not initialize");
+
+    const diagnostics = app.diagnostics.get().plugins.get(handle.id)?.lifetime;
+    if (!diagnostics) throw new TypeError("Lifetime diagnostics were not published");
+    const snapshot = diagnostics.get();
+    expect(snapshot).toEqual({
+      label: handle.id,
+      phase: "active",
+      cleanups: 1,
+      tasks: 0,
+      listeners: 0,
+      contributions: 0,
+      extensionViews: 0,
+      subscriptions: 0,
+      children: [
+        {
+          label: "session",
+          phase: "active",
+          cleanups: 1,
+          tasks: 0,
+          listeners: 0,
+          contributions: 0,
+          extensionViews: 0,
+          subscriptions: 0,
+          children: [
+            {
+              label: "connection",
+              phase: "active",
+              cleanups: 1,
+              tasks: 0,
+              listeners: 0,
+              contributions: 0,
+              extensionViews: 0,
+              subscriptions: 0,
+              children: [],
+            },
+          ],
+        },
+      ],
+    });
+    expect(Object.isFrozen(snapshot)).toBe(true);
+    expect(Object.isFrozen(snapshot.children)).toBe(true);
+    expect(Object.isFrozen(snapshot.children[0])).toBe(true);
+    expect(Object.isFrozen(snapshot.children[0]?.children)).toBe(true);
+    expect(Object.isFrozen(snapshot.children[0]?.children[0])).toBe(true);
+
+    await connection.dispose();
+    expect(diagnostics.get()).toMatchObject({
+      cleanups: 1,
+      children: [{ label: "session", cleanups: 1, children: [] }],
+    });
+
+    await session.dispose();
+    expect(diagnostics.get()).toMatchObject({
+      cleanups: 1,
+      children: [],
+    });
+
+    await app.stop();
+    expect(diagnostics.get()).toMatchObject({
+      label: handle.id,
+      phase: "disposed",
+      cleanups: 0,
+      children: [],
+    });
+  });
+
+  it("keeps Lifetime labels descriptive rather than turning them into identities", async () => {
+    const plugin = definePlugin({
+      name: "lifetime.duplicate-labels",
+      setup(ctx) {
+        ctx.lifetime("worker");
+        ctx.lifetime("worker");
+      },
+    });
+    const app = createApp();
+    const handle = app.install(plugin);
+    await app.start();
+
+    const snapshot = app.diagnostics.get().plugins.get(handle.id)?.lifetime?.get();
+    expect(snapshot?.children.map((child) => child.label)).toEqual(["worker", "worker"]);
+
+    await app.stop();
   });
 
   it("does not publish listeners or contributions from a failed setup", async () => {
@@ -360,6 +465,73 @@ describe("structured lifetime", () => {
     expect(notified).toHaveBeenCalledTimes(1);
     expect([...view.get().values()]).toEqual(["first", "second"]);
     expect([...view.get().keys()].every((key) => key.endsWith("/shared"))).toBe(true);
+    await app.stop();
+  });
+
+  it("qualifies contribution keys without collisions between owners and local keys", async () => {
+    const ITEMS = extension<number>("lifetime/collision-free-items");
+    let view!: { get(): ReadonlyMap<string, number> };
+
+    const first = definePlugin({
+      name: "owner",
+      setup(ctx) {
+        ctx.contribute(ITEMS, "nested:2/item", 1);
+      },
+    });
+    const second = definePlugin({
+      name: "owner:1/nested",
+      setup(ctx) {
+        ctx.contribute(ITEMS, "item", 2);
+      },
+    });
+    const reader = definePlugin({
+      name: "reader",
+      requires: { items: ITEMS },
+      setup(ctx) {
+        view = ctx.items;
+      },
+    });
+
+    const app = createApp();
+    app.install(first);
+    app.install(second);
+    app.install(reader);
+    await app.start();
+
+    expect([...view.get().values()]).toEqual([1, 2]);
+    expect([...view.get().keys()]).toEqual(["owner:1/nested:2%2Fitem", "owner:1%2Fnested:2/item"]);
+    await app.stop();
+  });
+
+  it("preserves undefined as a live Extension contribution value", async () => {
+    const ITEMS = extension<number | undefined>("lifetime/undefined-items");
+    let contribution: Contribution<number | undefined> | undefined;
+    let view: { get(): ReadonlyMap<string, number | undefined> } | undefined;
+    const writer = definePlugin({
+      name: "undefined-writer",
+      setup(ctx) {
+        contribution = ctx.contribute(ITEMS, "item", undefined);
+      },
+    });
+    const reader = definePlugin({
+      name: "undefined-reader",
+      requires: { items: ITEMS },
+      setup(ctx) {
+        view = ctx.items;
+      },
+    });
+
+    const app = createApp();
+    app.install(writer);
+    app.install(reader);
+    await app.start();
+    if (!contribution || !view) throw new TypeError("Extension fixture did not initialize");
+
+    expect([...view.get().values()]).toEqual([undefined]);
+    contribution.update(1);
+    expect([...view.get().values()]).toEqual([1]);
+    contribution.update(undefined);
+    expect([...view.get().values()]).toEqual([undefined]);
     await app.stop();
   });
 });

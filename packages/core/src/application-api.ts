@@ -1,6 +1,6 @@
 import type { ApplicationSnapshot, ApplicationStatus } from "./diagnostics";
 import type { Logger } from "./lifetime";
-import type { PluginStatus } from "./plugin-instance";
+import type { InstallationStatus } from "./plugin-installation";
 import type { PluginDefinition, Provisions, Requirements } from "./plugin";
 import type { Service } from "./contracts";
 import type { SnapshotView } from "./snapshot-view";
@@ -20,9 +20,9 @@ export type PluginUpdate<
       readonly config: ConfigInput;
     };
 
-export interface InstallHandle {
+export interface InstallationHandle {
   readonly id: string;
-  readonly status: PluginStatus;
+  readonly status: InstallationStatus;
   ready(): Promise<void>;
   remove(): Promise<void>;
 }
@@ -32,8 +32,8 @@ export interface PluginHandle<
   Requires extends Requirements = Requirements,
   Provides extends Provisions = Provisions,
   ConfigInput = Config,
-> extends InstallHandle {
-  readonly group: string;
+> extends InstallationHandle {
+  readonly groupId: string;
   update(update: PluginUpdate<Config, Requires, Provides, ConfigInput>): Promise<void>;
 }
 
@@ -67,7 +67,7 @@ export interface PluginContainer {
   group(name: string, configure: (group: PluginGroup) => void): PluginGroup;
 }
 
-export interface PluginGroup extends PluginContainer, InstallHandle {
+export interface PluginGroup extends PluginContainer, InstallationHandle {
   readonly name: string;
 }
 

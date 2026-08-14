@@ -37,7 +37,7 @@ describe("public API surface", () => {
           listener: ctx.on(NOTICE, () => undefined),
           contribution: ctx.contribute(ITEMS, "item", "value"),
           cleanup: ctx.cleanup(() => undefined),
-          child: ctx.lifetime(),
+          child: ctx.lifetime("surface-child"),
           task: ctx.spawn(() => undefined),
         };
       },

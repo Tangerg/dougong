@@ -60,7 +60,10 @@ function logger(): Logger & { error: ReturnType<typeof vi.fn> } {
   };
 }
 
-function manualOwner(child: ObservationLifetime): ObservationOwner {
+function manualOwner(
+  child: ObservationLifetime,
+  onLifetime: (label: string) => void = () => undefined,
+): ObservationOwner {
   return {
     cleanup(dispose) {
       let active = true;
@@ -72,9 +75,23 @@ function manualOwner(child: ObservationLifetime): ObservationOwner {
         },
       };
     },
-    lifetime: () => child,
-    spawn: () => {
-      throw new Error("Unexpected background task");
+    lifetime: (label) => {
+      onLifetime(label);
+      return child;
+    },
+    spawn: (task) => {
+      const controller = new AbortController();
+      const result = Promise.resolve().then(() => task(controller.signal));
+      return {
+        result,
+        dispose() {
+          controller.abort();
+          return result.then(
+            () => undefined,
+            () => undefined,
+          );
+        },
+      };
     },
   };
 }
@@ -85,7 +102,7 @@ function manualLifetime(dispose: () => void | Promise<void>): ObservationLifetim
     cleanup: () => {
       throw new Error("Unexpected cleanup registration");
     },
-    lifetime: () => lifetime,
+    lifetime: (_label) => lifetime,
     spawn: () => {
       throw new Error("Unexpected background task");
     },
@@ -114,7 +131,7 @@ describe("observe composition", () => {
       observe(
         {
           cleanup: () => ({}) as Disposable,
-          lifetime: () => manualLifetime(() => undefined),
+          lifetime: (_label) => manualLifetime(() => undefined),
           spawn: () => {
             throw new Error("Unexpected background task");
           },
@@ -129,7 +146,7 @@ describe("observe composition", () => {
           cleanup: (dispose) => ({
             dispose: () => dispose() as void | Promise<void>,
           }),
-          lifetime: () => ({ dispose() {} }) as ObservationLifetime,
+          lifetime: (_label) => ({ dispose() {} }) as ObservationLifetime,
           spawn: () => {
             throw new Error("Unexpected background task");
           },
@@ -147,7 +164,7 @@ describe("observe composition", () => {
     expect(() =>
       observe(owner, { get: () => 1, subscribe: () => ({}) as Disposable }, () => {}),
     ).toThrow("Readable.subscribe() must return a Disposable");
-    await Promise.resolve();
+    await tick();
   });
 
   it("aggregates failures from the source and current lifetime during disposal", async () => {
@@ -172,6 +189,22 @@ describe("observe composition", () => {
 
     expect(failure).toBeInstanceOf(AggregateError);
     expect((failure as AggregateError).errors).toEqual([subscriptionFailure, lifetimeFailure]);
+  });
+
+  it("creates owned child lifetimes under one semantic label", async () => {
+    const labels: string[] = [];
+    const source = new ControlledReadable(1);
+    const observation = observe(
+      manualOwner(
+        manualLifetime(() => undefined),
+        (label) => labels.push(label),
+      ),
+      source,
+      () => undefined,
+    );
+
+    expect(labels).toEqual(["observation"]);
+    await observation.dispose();
   });
 
   it("rejects callable thenables and releases the initial subscription", async () => {
@@ -221,7 +254,7 @@ describe("observe composition", () => {
     expect(callback).not.toHaveBeenCalled();
   });
 
-  it("preserves current resources after a read failure and retries", async () => {
+  it("stops and releases current resources after a read failure", async () => {
     const source = new ControlledReadable(1);
     const trace: string[] = [];
     const log = logger();
@@ -242,14 +275,33 @@ describe("observe composition", () => {
     source.getError = new Error("read failed");
     source.notify();
     await tick();
-    expect(trace).toEqual(["start:1"]);
+    await tick();
+    expect(trace).toEqual(["start:1", "stop:1"]);
+    expect(source.subscriptionsDisposed).toBe(1);
     expect(log.error).toHaveBeenCalledWith(expect.objectContaining({ message: "read failed" }));
 
     source.notify();
     await tick();
-    await tick();
-    expect(trace).toEqual(["start:1", "stop:1", "start:2"]);
+    expect(trace).toEqual(["start:1", "stop:1"]);
     await app.stop();
+  });
+
+  it("surfaces a synchronous failure while creating the owned drain task", async () => {
+    const source = new ControlledReadable(1);
+    let childDisposed = false;
+    const owner = manualOwner(
+      manualLifetime(() => {
+        childDisposed = true;
+      }),
+    );
+    owner.spawn = () => {
+      throw new Error("owner spawn failed");
+    };
+
+    expect(() => observe(owner, source, () => {})).toThrow("owner spawn failed");
+    expect(source.subscriptionsDisposed).toBe(1);
+    await tick();
+    expect(childDisposed).toBe(true);
   });
 
   it("coalesces invalidations behind one live replacement task", async () => {
@@ -272,7 +324,7 @@ describe("observe composition", () => {
           },
         };
       },
-      lifetime() {
+      lifetime(_label: string) {
         const index = childIndex++;
         return manualLifetime(() => (index === 0 ? barrier : undefined));
       },
@@ -345,7 +397,7 @@ describe("observe composition", () => {
     await app.stop();
   });
 
-  it("cleans a failed replacement and retries the same value", async () => {
+  it("cleans a failed replacement and stops the observation", async () => {
     const source = new ControlledReadable(1);
     const trace: string[] = [];
     const log = logger();
@@ -372,11 +424,11 @@ describe("observe composition", () => {
     await tick();
     await tick();
     expect(trace).toEqual(["start:1", "stop:1", "start:2", "stop:2"]);
+    expect(source.subscriptionsDisposed).toBe(1);
 
     source.notify();
     await tick();
-    await tick();
-    expect(trace).toEqual(["start:1", "stop:1", "start:2", "stop:2", "start:2"]);
+    expect(trace).toEqual(["start:1", "stop:1", "start:2", "stop:2"]);
     await app.stop();
   });
 

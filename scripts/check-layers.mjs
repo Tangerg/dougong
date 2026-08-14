@@ -20,7 +20,7 @@ import { join } from "node:path";
 // madge reports paths relative to `packages/`, e.g. `core/src/application.ts`.
 const PACKAGES_DIR = "packages";
 
-// —— Package layers ——————————————————————————————————————————————————
+// Package layers
 
 // Ordered longest-prefix-first: first match wins.
 const PACKAGE_PREFIXES = [
@@ -45,7 +45,7 @@ const FORBIDDEN_PACKAGES = {
   examples: [],
 };
 
-// —— Core module layers ————————————————————————————————————————————————
+// Core module layers
 
 // Every module of @dougong/core declares its rank. A module may import another
 // core module only when that module's rank is strictly lower. Adding a file
@@ -59,25 +59,29 @@ const CORE_MODULE_LAYERS = {
   "core/src/readonly-map.ts": 0,
   "core/src/resource.ts": 0,
   // Leaf state and fan-out services over standard JavaScript only.
+  "core/src/contract-registry.ts": 1,
   "core/src/event-hub.ts": 1,
   "core/src/extension-store.ts": 1,
   "core/src/snapshot-view.ts": 1,
-  // Resource ownership, built from the leaf services.
-  "core/src/lifetime.ts": 2,
+  // Lifetime diagnostics project real ownership into immutable read models.
+  "core/src/lifetime-diagnostics.ts": 2,
+  // Resource ownership, built from the leaf services and its diagnostic projection.
+  "core/src/lifetime.ts": 3,
   // Plugin shape, declared in terms of lifetime operations.
-  "core/src/plugin.ts": 3,
+  "core/src/plugin.ts": 4,
   // Stable installation identity and runtime state machine.
-  "core/src/plugin-instance.ts": 4,
+  "core/src/plugin-installation.ts": 5,
   // Derived graphs and immutable operational read models.
-  "core/src/diagnostics.ts": 5,
-  "core/src/plugin-graph.ts": 5,
+  "core/src/diagnostics.ts": 6,
+  "core/src/group-lifecycle.ts": 6,
+  "core/src/plugin-graph.ts": 6,
   // Public protocols, then the canonical ChangeSet implementation.
-  "core/src/application-api.ts": 6,
-  "core/src/change-set.ts": 7,
+  "core/src/application-api.ts": 7,
+  "core/src/change-set.ts": 8,
   // The orchestrator: the only module allowed to know all of the above.
-  "core/src/application.ts": 8,
+  "core/src/application.ts": 9,
   // Public barrel.
-  "core/src/index.ts": 9,
+  "core/src/index.ts": 10,
 };
 
 const PLATFORM_MODULE_LAYERS = {
@@ -95,7 +99,7 @@ const PLATFORM_MODULE_LAYERS = {
 
 const MODULE_LAYERS = { ...CORE_MODULE_LAYERS, ...PLATFORM_MODULE_LAYERS };
 
-// —— Source-text invariants ————————————————————————————————————————————
+// Source-text invariants
 
 const SOURCE_RE = /^(?:reactive|core|platform|dougong)\/src\//;
 const TEST_RE = /\.(test|spec)\.ts$/;
@@ -117,7 +121,7 @@ const SOURCE_RULES = [
   },
   {
     // Diagnostics route through the `Logger` port so a host can redirect them.
-    // `const defaultLogger: Logger = console` is the one sanctioned binding —
+    // `const defaultLogger: Logger = console` is the one sanctioned binding.
     // an assignment, not a call, so this rule does not catch it.
     test: (source) => /console\.\w+\s*\(/.test(source),
     message: "calls console directly instead of going through the Logger port",
@@ -135,14 +139,14 @@ const SOURCE_RULES = [
 // Checks scoped to one file, keyed by that file's madge path.
 const FILE_RULES = [
   {
-    file: "reactive/src/index.ts",
+    matches: (file) => file.startsWith("reactive/src/"),
     // The package declares no `dependencies`. Any non-relative import would be
     // an undeclared one, and the zero-dependency claim is part of its appeal.
     test: (source) => /from\s*["'][^."']/.test(source),
     message: "@dougong/reactive must have zero external imports",
   },
   {
-    file: "dougong/src/index.ts",
+    matches: (file) => file === "dougong/src/index.ts",
     // A pure facade. Logic here would be a second runtime path living outside
     // core, which is exactly what the one-canonical-API rule forbids.
     test: (source) =>
@@ -153,7 +157,7 @@ const FILE_RULES = [
     message: "the dougong facade must contain only re-exports",
   },
   {
-    file: "core/src/index.ts",
+    matches: (file) => file === "core/src/index.ts",
     // `Application` is deliberately an interface; `createApp()` is the only
     // constructor. Exporting the class would re-expose `LifetimeHost` and the
     // private command queue as public surface.
@@ -162,13 +166,14 @@ const FILE_RULES = [
   },
 ];
 
-// —— Build the graph ——————————————————————————————————————————————————
+// Build the graph
 
 let raw = "";
 try {
   raw = execFileSync(
-    "npx",
+    "pnpm",
     [
+      "exec",
       "madge",
       "--extensions",
       "ts",
@@ -195,7 +200,7 @@ try {
   process.exit(2);
 }
 
-// —— Apply ————————————————————————————————————————————————————————————
+// Apply the rules
 
 const violations = [];
 const architectureViolations = [];
@@ -236,14 +241,14 @@ for (const [file, deps] of Object.entries(graph)) {
     if (rule.test(source)) architectureViolations.push(`${file}: ${rule.message}`);
   }
   for (const rule of FILE_RULES) {
-    if (rule.file === file && rule.test(source)) {
+    if (rule.matches(file) && rule.test(source)) {
       architectureViolations.push(`${file}: ${rule.message}`);
     }
   }
 }
 
 // `new Lifetime(...)` is ownership creation. Only the orchestrator (one root
-// lifetime per plugin instance) and Lifetime itself (children) may do it;
+// lifetime per plugin installation) and Lifetime itself (children) may do it;
 // anywhere else produces a resource tree nobody disposes.
 const LIFETIME_CONSTRUCTORS = new Set(["core/src/application.ts", "core/src/lifetime.ts"]);
 for (const file of Object.keys(graph)) {
@@ -270,4 +275,4 @@ if (violations.length > 0 || architectureViolations.length > 0) {
   process.exit(1);
 }
 
-console.log("[check-layers] OK — no package, module, or architecture violations.");
+console.log("[check-layers] OK: no package, module, or architecture violations.");

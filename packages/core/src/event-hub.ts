@@ -2,6 +2,15 @@ import type { Disposable, Publication, StagedResource } from "./resource";
 
 export type EventListener<T> = (payload: T) => unknown;
 
+type ListenerRegistrationState<T> =
+  | {
+      phase: "staged" | "published";
+      readonly hub: EventHub;
+      readonly listener: EventListener<T>;
+      readonly release: (publication: Publication) => void;
+    }
+  | { readonly phase: "removed" };
+
 class ListenerHandle implements Disposable {
   #registration: ListenerRegistration<unknown> | undefined;
 
@@ -22,11 +31,8 @@ class ListenerHandle implements Disposable {
 }
 
 class ListenerRegistration<T> implements StagedResource<Disposable> {
-  #state: "staged" | "published" | "removed" = "staged";
-  #hub: EventHub | undefined;
+  #state: ListenerRegistrationState<T>;
   readonly #eventId: string;
-  #listener: EventListener<T> | undefined;
-  #release: ((publication: Publication) => void) | undefined;
   readonly handle: Disposable;
 
   constructor(
@@ -35,31 +41,26 @@ class ListenerRegistration<T> implements StagedResource<Disposable> {
     listener: EventListener<T>,
     release: (publication: Publication) => void,
   ) {
-    this.#hub = hub;
     this.#eventId = eventId;
-    this.#listener = listener;
-    this.#release = release;
+    this.#state = { phase: "staged", hub, listener, release };
     this.handle = new ListenerHandle(this as ListenerRegistration<unknown>);
   }
 
   publish() {
-    if (this.#state !== "staged") return;
-    this.#hub!.add(this.#eventId, this.#listener!);
-    this.#state = "published";
+    const state = this.#state;
+    if (state.phase !== "staged") return;
+    state.hub.add(this.#eventId, state.listener);
+    state.phase = "published";
   }
 
   dispose() {
-    if (this.#state === "removed") return;
-    const published = this.#state === "published";
-    this.#state = "removed";
+    const state = this.#state;
+    if (state.phase === "removed") return;
+    this.#state = { phase: "removed" };
     try {
-      if (published) this.#hub!.delete(this.#eventId, this.#listener!);
+      if (state.phase === "published") state.hub.delete(this.#eventId, state.listener);
     } finally {
-      this.#hub = undefined;
-      this.#listener = undefined;
-      const release = this.#release;
-      this.#release = undefined;
-      release?.(this);
+      state.release(this);
     }
   }
 

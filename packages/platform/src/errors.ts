@@ -13,13 +13,13 @@ export class PermissionDeniedError extends PlatformError {
   readonly denied: ReadonlyArray<string>;
 
   constructor(
-    readonly plugin: string,
+    readonly pluginName: string,
     denied: ReadonlyArray<string>,
   ) {
     const immutableDenied = Object.freeze([...denied]);
     super(
       "PERMISSION_DENIED",
-      `Plugin '${plugin}' was denied permissions: ${immutableDenied.join(", ")}`,
+      `Plugin '${pluginName}' was denied permissions: ${immutableDenied.join(", ")}`,
     );
     this.denied = immutableDenied;
   }

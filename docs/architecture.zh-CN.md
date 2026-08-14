@@ -166,7 +166,7 @@ provider A ──► consumer B ──► consumer C
 
 Application 只缓存当前 active runtime 对应的已验证图。`app.get()` 在该图上做常数级 Map 查询；候选图只在 `start()` 或 ChangeSet 校验时构建，并在事务完全成功后替换缓存。idle 安装计划可以暂时缺少依赖，从而不破坏“先声明多个安装、最后统一 start”的使用方式。
 
-active ChangeSet 的停止与重建窗口是显式的 `changing` 状态，不是假 active。此时宿主 Service 读取关闭；成功提交或完整 rollback 后才恢复 `active`，从而避免同一读取边界混合旧图与新 runtime。
+Application active 时提交 ChangeSet，其停止与重建窗口是显式的 `changing` 状态，不是假 active。此时宿主 Service 读取关闭；成功提交或完整 rollback 后才恢复 `active`，从而避免同一读取边界混合旧图与新 runtime。
 
 这样插件可以放心使用普通闭包：
 
@@ -218,23 +218,35 @@ Plugin Lifetime
 ├── Extension contribution
 ├── ExtensionView subscription
 ├── background task
-├── child Lifetime
+├── child Lifetime ("session")
 │   ├── task
 │   └── cleanup
 └── cleanup stack
 ```
 
-这不是 Hook 或响应式 Effect，只是所有权。
+这不是 Hook 或响应式 Effect，只是所有权。子级通过唯一入口 `lifetime(label)` 创建；label 描述这组资源共同存活的原因，不参与依赖解析、运行时查找或身份判定。
 
 顺序被明确编码为对象状态机：先撤销公开能力，再取消任务和子级，最后执行用户 cleanup。内部不依赖“恰好按某种注册顺序 reverse”来获得正确语义。
 
 子 Lifetime 提前 dispose 后会从父拥有集合脱离。后台 Task 自然 settle 后也会从父任务集合和父 AbortSignal 监听器中脱离；父释放只取消并等待仍在运行的任务。两者都避免长生命周期按历史创建次数积累已完成对象。
 
-同一规则覆盖全部内部 lease：Listener、Contribution、ExtensionView 及其订阅、cleanup 和 Task 在提前终止时都会从父集合摘除；终态对象同时清空 owner、Store、回调和 payload 引用。父级只拥有仍然存活的资源，保留一个已释放 Handle 不会反向保活整个 Application。
+同一规则覆盖全部内部 lease：Listener、Contribution、ExtensionView 及其订阅、cleanup 和 Task 在提前终止时都会从父集合摘除；终态对象同时清空 owner、Store、回调、payload 和诊断记账引用。七个资源类别复用同一套活跃资源集合实现，从而获得 O(1) 摘除、幂等 ownership release 与诊断增减。各类别仍使用独立集合表达发布顺序、释放顺序和分类计数，统一机制不混合语义。
+
+主动释放 Lifetime 或 Task 使用模块级冻结 `AbortError` 作为取消原因，父取消则原样转发父 reason。这里共享的只是无状态错误值，不是 ambient scope；它避免每次 `abort()` 自动创建的错误调用栈把终态 `AbortSignal.reason` 变成一条指回 Application 的隐藏保留边。
+
+父级只拥有仍然存活的资源，保留一个已释放 Handle 不会反向保活整个 Application。ExtensionView 使用显式窄 Handle，而不是从 Store 实例方法返回捕获词法 `this` 的箭头函数；清空 binding 后，公开 View 本身也不能成为 Store 的隐藏所有权边。
+
+相同约束也适用于安装所有权：终态 PluginInstallation 只保留不可变 group ID，已分离 Group 清空 parent、事务屏障与历史 failure。历史 Handle 因而不能经由所有权树或错误调用栈保活兄弟 Group 或 Application 根节点。
+
+终态摘除也覆盖错误对象。V8 的 `Error.stack` 可能携带创建错误时的编排调用帧，因此已脱离 Core 或 Platform 的失败 Handle 只保存 `name/message/code` 摘要，并在调用方再次读取失败时重建错误；正在等待提交的调用方仍接收原始错误。错误没有被静默丢弃，调用栈也不会成为一条不可见的宿主所有权边。
+
+ExtensionRegistry 也只保留仍有 claim、View 或 subscription 的 Store；最后一个所有者释放后，空 Store 会从注册表摘除。失败 setup 即使尝试过从未提交的 Extension ID，也不会让 Application 按历史失败次数积累空 Store。
 
 ExtensionView 订阅包含两条正交的内部所有权边：Lifetime 拥有 subscription handle，ExtensionStore 拥有 listener 注册。一次公开 `dispose()` 必须同时切断两者；前者保证父 Lifetime 不积累终态 Handle，后者保证 Store 不继续通知或保活已退订的回调。这只是同一 Disposable 操作的内部原子释放，不形成第二套公开 API。
 
-每个根 Lifetime 还维护一份聚合整棵资源树的只读诊断视图，按 cleanup、task、listener、contribution、ExtensionView、subscription 和 child Lifetime 分类计数。它复用 `get/subscribe` 协议，并与 Application 结构快照分离：高频资源变化不会重建整张插件图，DevTools 又能实时回答“这个插件当前持有什么”。终态视图只保留全零快照，不反向保活 Application 或资源对象。
+每个根 Lifetime 还维护一份只读诊断视图。它逐节点投影真实的 Lifetime 所有权关系：根 label 是 installation ID，子节点 label 来自 `lifetime(label)`；每个节点按 cleanup、task、listener、contribution、ExtensionView 和 subscription 分类报告自己直接拥有的资源。子树总量可递归推导，不重复保存在节点中。诊断树不保存叶资源，也不从调用栈或函数名猜测伪节点。只有真实的共同释放边界才能形成节点，因此诊断结构与运行语义始终一致。
+
+这份视图复用 `get/subscribe` 协议，并与 Application 结构快照分离：高频资源变化不会重建整张插件图，DevTools 又能回答“哪组资源当前持有什么”。子 Lifetime 终止即从父节点摘除；根终态视图只保留无子节点、全零计数的快照，不反向保活 Application 或资源对象。
 
 ## 八、事务模型
 
@@ -242,13 +254,13 @@ Core 区分三类事务边界：
 
 ### 插件 setup
 
-Listener 和 Contribution 先作为 staged publication 归入 Lifetime。Service 输出全部验证成功后才发布。公共 Handle 只暴露 `dispose/update`，不暴露内部 `publish()`，因此 JavaScript 插件也无法提前越过提交点。
+Contract kind、Listener 和 Contribution 都先进入事务草稿。Service 输出与整笔运行切换全部成功后，Contract kind 才进入 Application 注册表；Listener 和 Contribution 则随所属拓扑层的 Lifetime 发布。失败 setup 与 rollback 会丢弃草稿，同时切断草稿对注册表 authority 的引用，既不能留下幽灵 Contract 身份，也不能让终态草稿反向保活注册表。公共 Handle 只暴露 `dispose/update`，不暴露内部 `publish()`，因此 JavaScript 插件也无法提前越过提交点。
 
 ### Extension 通知
 
 Application start、stop 和 ChangeSet 使用批次。内部 Map 可以经历停止与重建，但 View 的公开快照只在事务结束时切换一次。
 
-active ChangeSet 先产生 committed 或 rolled-back outcome，Extension 批次完成发布后才 settle 对应 Plugin Handle。`ready()` 因而是事务屏障，不会早于最终 Extension 快照。
+Application active 时提交的 ChangeSet 先产生 committed 或 rolled-back outcome，Extension 批次完成发布后才 settle 对应 Plugin Handle。`ready()` 因而是事务屏障，不会早于最终 Extension 快照。
 
 ### 多插件图变更
 
@@ -264,6 +276,10 @@ Group 解决：
 - 如何嵌套组织；
 - 如何等待一组实例 ready；
 - 如何原子删除整棵安装子树。
+
+Group 配置、结构所有权、运行状态与 Handle 权限各自使用封闭状态机。配置会话是 `open / failed / sealed`，结构节点是 `attached / detached`，生命周期保存 established 状态与当前 readiness barrier，Handle 是 `configuring / attached / revoked`。
+
+嵌套 configure 共享一份配置会话；第一次失败会毒化整笔草稿，外层即使捕获异常也不能继续声明或提交。任意非 `Error` 失败在边界分类后再进入生命周期，因此 `undefined` 永远不同时承担“失败值”和“没有失败”两种含义。已建立 Group 的失败变更若完整回滚，就继续呈现已提交状态；未建立 Group 可由后续成功变更替换失败 barrier。
 
 它不解决“谁能看见什么能力”。Service、Extension 和 Event 在同一个 Application 内全局一致。
 
@@ -315,6 +331,8 @@ computed 值如何纯推导
 observe  值变化后如何重建一组资源
 Lifetime 这组同步何时结束
 ```
+
+`computed()` 和 `batch()` 都拒绝 thenable 结果，避免把同步追踪或批次边界错误地延伸到 `await` 之后。`observe()` 创建一项长期受 owner 管理的 drain task；通知只唤醒它，替换失败则通过 task 结果上报并停止观察。
 
 `observe()` 放在 reactive 层而不是 Context：
 

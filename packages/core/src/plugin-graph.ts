@@ -1,57 +1,55 @@
-import type { ContractKind, Service } from "./contracts";
+import type { ContractKind } from "./contracts";
+import { rememberContractKind } from "./contract-registry";
 import { DougongError } from "./errors";
-import type { PluginInstance } from "./plugin-instance";
-
-export interface ServiceProvider {
-  readonly instance: PluginInstance;
-  readonly alias: string;
-  readonly token: Service<unknown>;
-}
+import type { PluginInstallation } from "./plugin-installation";
 
 /** Immutable validated dependency plan over one application-wide capability graph. */
 export class PluginGraph {
-  readonly #resolvedProviders: ReadonlyMap<PluginInstance, ReadonlyMap<string, ServiceProvider>>;
+  readonly #resolvedProviders: ReadonlyMap<
+    PluginInstallation,
+    ReadonlyMap<string, PluginInstallation>
+  >;
 
   private constructor(
-    readonly order: ReadonlyArray<PluginInstance>,
-    readonly layers: ReadonlyArray<ReadonlyArray<PluginInstance>>,
-    readonly providers: ReadonlyMap<string, ServiceProvider>,
-    readonly dependents: ReadonlyMap<PluginInstance, ReadonlySet<PluginInstance>>,
+    readonly order: ReadonlyArray<PluginInstallation>,
+    readonly layers: ReadonlyArray<ReadonlyArray<PluginInstallation>>,
+    readonly providers: ReadonlyMap<string, PluginInstallation>,
+    readonly dependents: ReadonlyMap<PluginInstallation, ReadonlySet<PluginInstallation>>,
     readonly contractKinds: ReadonlyMap<string, ContractKind>,
-    resolvedProviders: ReadonlyMap<PluginInstance, ReadonlyMap<string, ServiceProvider>>,
+    resolvedProviders: ReadonlyMap<PluginInstallation, ReadonlyMap<string, PluginInstallation>>,
   ) {
     this.#resolvedProviders = resolvedProviders;
   }
 
   static build(
-    installations: Iterable<PluginInstance>,
+    source: Iterable<PluginInstallation>,
     committedKinds: ReadonlyMap<string, ContractKind>,
   ) {
-    const instances = [...installations].sort((left, right) => left.index - right.index);
-    const providers = new Map<string, ServiceProvider>();
-    const resolvedProviders = new Map<PluginInstance, Map<string, ServiceProvider>>();
-    const dependents = new Map<PluginInstance, Set<PluginInstance>>();
-    const indegree = new Map(instances.map((instance) => [instance, 0]));
+    const installations = [...source].sort((left, right) => left.index - right.index);
+    const providers = new Map<string, PluginInstallation>();
+    const resolvedProviders = new Map<PluginInstallation, Map<string, PluginInstallation>>();
+    const dependents = new Map<PluginInstallation, Set<PluginInstallation>>();
+    const indegree = new Map(installations.map((installation) => [installation, 0]));
     const contractKinds = new Map(committedKinds);
 
-    for (const instance of instances) {
-      for (const [alias, token] of Object.entries(instance.spec.plugin.provides ?? {})) {
-        rememberKind(contractKinds, token);
+    for (const installation of installations) {
+      for (const token of Object.values(installation.spec.plugin.provides ?? {})) {
+        rememberContractKind(contractKinds, token);
         const previous = providers.get(token.id);
         if (previous) {
           throw new DougongError(
             "SERVICE_CONFLICT",
-            `Service '${token.id}' is provided by both '${previous.instance.id}' and '${instance.id}'`,
+            `Service '${token.id}' is provided by both '${previous.id}' and '${installation.id}'`,
           );
         }
-        providers.set(token.id, { instance, alias, token });
+        providers.set(token.id, installation);
       }
     }
 
-    for (const instance of instances) {
-      for (const requirement of Object.values(instance.spec.plugin.requires ?? {})) {
+    for (const installation of installations) {
+      for (const requirement of Object.values(installation.spec.plugin.requires ?? {})) {
         const token = requirement.kind === "optional" ? requirement.service : requirement;
-        rememberKind(contractKinds, token);
+        rememberContractKind(contractKinds, token);
         if (token.kind === "extension") continue;
 
         const provider = providers.get(token.id);
@@ -59,40 +57,40 @@ export class PluginGraph {
           if (requirement.kind === "optional") continue;
           throw new DougongError(
             "SERVICE_MISSING",
-            `Plugin '${instance.id}' requires missing service '${token.id}'`,
+            `Plugin '${installation.id}' requires missing service '${token.id}'`,
           );
         }
 
-        const resolved = resolvedProviders.get(instance) ?? new Map();
+        const resolved = resolvedProviders.get(installation) ?? new Map();
         resolved.set(token.id, provider);
-        resolvedProviders.set(instance, resolved);
+        resolvedProviders.set(installation, resolved);
 
-        if (provider.instance === instance) {
+        if (provider === installation) {
           throw new DougongError(
             "SERVICE_CYCLE",
-            `Plugin '${instance.id}' cannot require service '${token.id}' that it provides`,
+            `Plugin '${installation.id}' cannot require service '${token.id}' that it provides`,
           );
         }
 
-        const targets = dependents.get(provider.instance) ?? new Set();
-        if (targets.has(instance)) continue;
-        targets.add(instance);
-        dependents.set(provider.instance, targets);
-        indegree.set(instance, (indegree.get(instance) ?? 0) + 1);
+        const targets = dependents.get(provider) ?? new Set();
+        if (targets.has(installation)) continue;
+        targets.add(installation);
+        dependents.set(provider, targets);
+        indegree.set(installation, (indegree.get(installation) ?? 0) + 1);
       }
     }
 
-    let frontier = instances.filter((instance) => indegree.get(instance) === 0);
-    const order: PluginInstance[] = [];
-    const layers: PluginInstance[][] = [];
+    let frontier = installations.filter((installation) => indegree.get(installation) === 0);
+    const order: PluginInstallation[] = [];
+    const layers: PluginInstallation[][] = [];
     while (frontier.length) {
       frontier.sort((left, right) => left.index - right.index);
       const layer = frontier;
       frontier = [];
       layers.push(layer);
       order.push(...layer);
-      for (const instance of layer) {
-        for (const dependent of dependents.get(instance) ?? []) {
+      for (const installation of layer) {
+        for (const dependent of dependents.get(installation) ?? []) {
           const next = (indegree.get(dependent) ?? 0) - 1;
           indegree.set(dependent, next);
           if (!next) frontier.push(dependent);
@@ -100,11 +98,12 @@ export class PluginGraph {
       }
     }
 
-    if (order.length !== instances.length) {
-      const cycle = instances
-        .filter((instance) => !order.includes(instance))
-        .map((instance) => instance.id);
-      throw new DougongError("SERVICE_CYCLE", `Plugin dependency cycle: ${cycle.join(" -> ")}`);
+    if (order.length !== installations.length) {
+      const cycle = findDependencyCycle(installations, dependents);
+      throw new DougongError(
+        "SERVICE_CYCLE",
+        `Plugin dependency cycle: ${cycle.map((installation) => installation.id).join(" -> ")}`,
+      );
     }
 
     return new PluginGraph(
@@ -117,44 +116,68 @@ export class PluginGraph {
     );
   }
 
-  providerFor(instance: PluginInstance, serviceId: string) {
-    return this.#resolvedProviders.get(instance)?.get(serviceId);
+  providerFor(installation: PluginInstallation, serviceId: string) {
+    return this.#resolvedProviders.get(installation)?.get(serviceId);
   }
 
   provider(serviceId: string) {
     return this.providers.get(serviceId);
   }
 
-  affectedWith(other: PluginGraph, changed: ReadonlySet<PluginInstance>) {
-    const affected = new Set<PluginInstance>();
+  affectedByTransitionTo(other: PluginGraph, changed: ReadonlySet<PluginInstallation>) {
+    const affected = new Set<PluginInstallation>();
     this.#expand(changed, affected);
     other.#expand(changed, affected);
     return affected;
   }
 
-  #expand(changed: ReadonlySet<PluginInstance>, affected: Set<PluginInstance>) {
+  #expand(changed: ReadonlySet<PluginInstallation>, affected: Set<PluginInstallation>) {
     const queue = [...changed];
-    const visited = new Set<PluginInstance>();
-    while (queue.length) {
-      const instance = queue.shift()!;
-      if (visited.has(instance)) continue;
-      visited.add(instance);
-      affected.add(instance);
-      for (const dependent of this.dependents.get(instance) ?? []) queue.push(dependent);
+    const visited = new Set<PluginInstallation>();
+    for (let index = 0; index < queue.length; index++) {
+      const installation = queue[index];
+      if (!installation) continue;
+      if (visited.has(installation)) continue;
+      visited.add(installation);
+      affected.add(installation);
+      for (const dependent of this.dependents.get(installation) ?? []) queue.push(dependent);
     }
   }
 }
 
-function rememberKind(
-  kinds: Map<string, ContractKind>,
-  token: { readonly id: string; readonly kind: ContractKind },
+function findDependencyCycle(
+  installations: ReadonlyArray<PluginInstallation>,
+  dependents: ReadonlyMap<PluginInstallation, ReadonlySet<PluginInstallation>>,
 ) {
-  const previous = kinds.get(token.id);
-  if (previous && previous !== token.kind) {
-    throw new DougongError(
-      "CONTRACT_CONFLICT",
-      `Contract '${token.id}' is used as both '${previous}' and '${token.kind}'`,
-    );
+  const visited = new Set<PluginInstallation>();
+  const visiting = new Set<PluginInstallation>();
+  const path: PluginInstallation[] = [];
+
+  const visit = (installation: PluginInstallation): PluginInstallation[] | undefined => {
+    visiting.add(installation);
+    path.push(installation);
+
+    for (const dependent of dependents.get(installation) ?? []) {
+      if (visiting.has(dependent)) {
+        const cycleStart = path.indexOf(dependent);
+        return [...path.slice(cycleStart), dependent];
+      }
+      if (visited.has(dependent)) continue;
+      const cycle = visit(dependent);
+      if (cycle) return cycle;
+    }
+
+    path.pop();
+    visiting.delete(installation);
+    visited.add(installation);
+    return undefined;
+  };
+
+  for (const installation of installations) {
+    if (visited.has(installation)) continue;
+    const cycle = visit(installation);
+    if (cycle) return cycle;
   }
-  kinds.set(token.id, token.kind);
+
+  throw new TypeError("Dependency graph is cyclic but no cycle path was found");
 }

@@ -1,6 +1,6 @@
 import type { GroupNode } from "./group";
 import type { LifetimeSnapshot } from "./lifetime";
-import type { PluginInstance, PluginStatus } from "./plugin-instance";
+import type { PluginInstallation, InstallationStatus } from "./plugin-installation";
 import { ReadonlyMapSnapshot } from "./readonly-map";
 import { SnapshotPublisher, type SnapshotView } from "./snapshot-view";
 
@@ -9,8 +9,8 @@ export type ApplicationStatus = "idle" | "starting" | "active" | "changing" | "s
 export interface PluginSnapshot {
   readonly id: string;
   readonly name: string;
-  readonly group: string;
-  readonly status: PluginStatus;
+  readonly groupId: string;
+  readonly status: InstallationStatus;
   readonly requires: ReadonlyArray<string>;
   readonly provides: ReadonlyArray<string>;
   readonly lifetime?: SnapshotView<LifetimeSnapshot>;
@@ -20,7 +20,7 @@ export interface PluginSnapshot {
 export interface GroupSnapshot {
   readonly id: string;
   readonly name: string;
-  readonly parent?: string;
+  readonly parentId?: string;
 }
 
 export interface ApplicationSnapshot {
@@ -49,41 +49,40 @@ export class ApplicationDiagnostics {
 
   publish(
     status: ApplicationStatus,
-    instances: Iterable<PluginInstance>,
+    installations: Iterable<PluginInstallation>,
     groups: Iterable<GroupNode>,
   ) {
     this.#revision++;
-    this.#nextSnapshot = this.#snapshot(status, instances, groups);
+    this.#nextSnapshot = this.#snapshot(status, installations, groups);
     this.#source.invalidate();
   }
 
   #snapshot(
     status: ApplicationStatus,
-    instances: Iterable<PluginInstance>,
+    installations: Iterable<PluginInstallation>,
     groupNodes: Iterable<GroupNode>,
   ) {
     const plugins = new Map<string, PluginSnapshot>();
-    for (const instance of instances) {
+    for (const installation of installations) {
       const base = {
-        id: instance.id,
-        name: instance.spec.plugin.name,
-        group: instance.group.id,
-        status: instance.status,
+        id: installation.id,
+        name: installation.spec.plugin.name,
+        groupId: installation.groupId,
+        status: installation.status,
         requires: Object.freeze(
-          Object.values(instance.spec.plugin.requires ?? {}).map((requirement) => {
+          Object.values(installation.spec.plugin.requires ?? {}).map((requirement) => {
             return requirement.kind === "optional" ? requirement.service.id : requirement.id;
           }),
         ),
         provides: Object.freeze(
-          Object.values(instance.spec.plugin.provides ?? {}).map((token) => token.id),
+          Object.values(installation.spec.plugin.provides ?? {}).map((token) => token.id),
         ),
-        ...(instance.runtime ? { lifetime: instance.runtime.lifetime.diagnostics } : {}),
+        ...(installation.runtime ? { lifetime: installation.runtime.lifetime.diagnostics } : {}),
       };
+      const error = installation.error;
       plugins.set(
-        instance.id,
-        Object.freeze(
-          instance.error === undefined ? base : { ...base, error: instance.error },
-        ) as PluginSnapshot,
+        installation.id,
+        Object.freeze(error === undefined ? base : { ...base, error }) as PluginSnapshot,
       );
     }
 
@@ -92,7 +91,7 @@ export class ApplicationDiagnostics {
       const base = { id: group.id, name: group.name };
       groups.set(
         group.id,
-        Object.freeze(group.parent ? { ...base, parent: group.parent.id } : base),
+        Object.freeze(group.parent ? { ...base, parentId: group.parent.id } : base),
       );
     }
 

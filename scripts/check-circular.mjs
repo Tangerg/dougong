@@ -15,7 +15,7 @@ import { execFileSync } from "node:child_process";
 // Empty today: the core modules form a strict order (see check-layers.mjs), and
 // `contracts.ts` / `errors.ts` import nothing at all. If a type-only cycle
 // becomes genuinely worthwhile, add it here with a comment saying why breaking
-// it would cost more than the cycle does — madge cannot tell `import type` from
+// it would cost more than the cycle does. madge cannot tell `import type` from
 // a value import, so type-only cycles are the only defensible entries.
 const ALLOWED = [];
 
@@ -24,8 +24,9 @@ const allowedKeys = new Set(ALLOWED.map((cycle) => [...cycle].sort().join("|")))
 let raw;
 try {
   raw = execFileSync(
-    "npx",
+    "pnpm",
     [
+      "exec",
       "madge",
       "--circular",
       "--extensions",
@@ -68,4 +69,4 @@ if (unexpected.length > 0) {
   process.exit(1);
 }
 
-console.log(`[check-circular] OK — ${cycles.length} cycle(s) found, all on the allowlist.`);
+console.log(`[check-circular] OK: ${cycles.length} cycle(s) found, all on the allowlist.`);

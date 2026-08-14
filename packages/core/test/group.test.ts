@@ -129,6 +129,59 @@ describe("plugin groups", () => {
     expect(rootStops).toBe(1);
   });
 
+  it("classifies non-Error live failures without publishing a healthy Group state", async () => {
+    const failure: unknown = undefined;
+    const app = createApp();
+    await app.start();
+    const group = app.group("non-error", (plugins) => {
+      plugins.install(
+        definePlugin({
+          name: "group.non-error",
+          setup() {
+            throw failure;
+          },
+        }),
+      );
+    });
+
+    await expect(group.ready()).rejects.toMatchObject({
+      name: "DougongError",
+      code: "GROUP_UNAVAILABLE",
+      message: "Group '/non-error' operation failed with a non-Error value",
+    });
+    expect(group.status).toBe("failed");
+
+    await group.remove();
+    await app.stop();
+  });
+
+  it("fails a complete nested configuration after any swallowed child failure", () => {
+    const failure: unknown = undefined;
+    const app = createApp();
+    const plugin = definePlugin({ name: "group.must-not-stage", setup() {} });
+
+    expect(() =>
+      app.group("outer", (outer) => {
+        try {
+          outer.group("inner", () => {
+            throw failure;
+          });
+        } catch {
+          // A nested failure poisons the shared configuration transaction.
+        }
+        outer.install(plugin);
+      }),
+    ).toThrowError(
+      expect.objectContaining({
+        name: "DougongError",
+        code: "GROUP_UNAVAILABLE",
+        message: "Group '/outer' configuration failed with a non-Error value",
+      }),
+    );
+    expect(app.diagnostics.get().groups.has("/outer")).toBe(false);
+    expect(app.diagnostics.get().plugins.size).toBe(0);
+  });
+
   it("enforces synchronous configuration, identity and ChangeSet authority", async () => {
     const app = createApp();
     const plugin = definePlugin({ name: "group.authority", setup() {} });
@@ -142,7 +195,7 @@ describe("plugin groups", () => {
     expect(() => left.change().remove(handle)).toThrow("outside ChangeSet group");
     expect(() => app.group("left", () => {})).toThrow("already exists");
     expect(() => app.group("bad/name", () => {})).toThrow("cannot contain '/'");
-    expect(handle.group).toBe("/");
+    expect(handle.groupId).toBe("/");
     expect(() => app.group("async", (async () => undefined) as unknown as () => void)).toThrow(
       "must be synchronous",
     );
@@ -153,5 +206,56 @@ describe("plugin groups", () => {
     ).toThrow("while it is being configured");
 
     await right.remove();
+  });
+
+  it("replaces a failed creation barrier after a successful recovery", async () => {
+    const app = createApp();
+    await app.start();
+    const group = app.group("recover", (plugins) => {
+      plugins.install(
+        definePlugin({
+          name: "group.initial-failure",
+          setup() {
+            throw new Error("initial group failure");
+          },
+        }),
+      );
+    });
+
+    await expect(group.ready()).rejects.toThrow("initial group failure");
+    expect(group.status).toBe("failed");
+
+    const recovered = group.install(definePlugin({ name: "group.recovered", setup() {} }));
+    await recovered.ready();
+
+    expect(group.status).toBe("active");
+    await expect(group.ready()).resolves.toBeUndefined();
+    await group.remove();
+    await app.stop();
+  });
+
+  it("keeps an established Group healthy after a failed mutation rolls back", async () => {
+    const app = createApp();
+    await app.start();
+    const group = app.group("stable", (plugins) => {
+      plugins.install(definePlugin({ name: "group.stable", setup() {} }));
+    });
+    await group.ready();
+
+    const change = group.change();
+    change.install(
+      definePlugin({
+        name: "group.failed-change",
+        setup() {
+          throw new Error("change failed");
+        },
+      }),
+    );
+    await expect(change.commit()).rejects.toThrow("change failed");
+
+    expect(group.status).toBe("active");
+    await expect(group.ready()).resolves.toBeUndefined();
+    await group.remove();
+    await app.stop();
   });
 });

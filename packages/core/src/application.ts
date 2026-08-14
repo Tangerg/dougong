@@ -7,32 +7,43 @@ import type {
   PluginHandle,
   PluginUpdate,
 } from "./application-api";
-import { cancelPluginChangeSet, PluginChangeSetDraft, type ChangeOperation } from "./change-set";
-import type { ContractKind, Event, Extension, Service } from "./contracts";
+import {
+  discardPluginChangeSetDraft,
+  PluginChangeSetDraft,
+  type PluginChangeOperation,
+} from "./change-set";
+import { ContractRegistry, type ContractRegistryDraft } from "./contract-registry";
+import { assertContract, type Event, type Extension, type Service } from "./contracts";
 import {
   ApplicationDiagnostics,
   type ApplicationSnapshot,
   type ApplicationStatus,
 } from "./diagnostics";
-import { ConfigValidationError, DougongError, type ValidationIssue } from "./errors";
+import {
+  ConfigValidationError,
+  DougongError,
+  normalizeFailure,
+  type ValidationIssue,
+} from "./errors";
 import { EventHub, type EventListener } from "./event-hub";
 import { ExtensionRegistry, type ExtensionView } from "./extension-store";
-import { GroupNode } from "./group";
+import { GroupConfigurationSession, GroupNode } from "./group";
+import { groupRemovedError, GroupLifecycle } from "./group-lifecycle";
 import { Lifetime, type LifetimeHost, type Logger, type PluginMeta } from "./lifetime";
 import { PluginGraph } from "./plugin-graph";
 import {
   type AnyPlugin,
-  installation,
+  createInstallationSpec,
   type InstallationSpec,
-  PluginInstance as PluginRecord,
+  PluginInstallation,
   type PluginRuntime,
-  type PluginStatus,
-} from "./plugin-instance";
+  type InstallationStatus,
+} from "./plugin-installation";
 import type { PluginContext, PluginDefinition, Provisions, Requirements } from "./plugin";
 import type { Publication } from "./resource";
 import type { SnapshotView } from "./snapshot-view";
 
-export type { PluginStatus } from "./plugin-instance";
+export type { InstallationStatus } from "./plugin-installation";
 export type {
   ApplicationSnapshot,
   ApplicationStatus,
@@ -42,7 +53,7 @@ export type {
 export type {
   Application,
   CreateAppOptions,
-  InstallHandle,
+  InstallationHandle,
   PluginChangeSet,
   PluginContainer,
   PluginGroup,
@@ -50,31 +61,25 @@ export type {
   PluginUpdate,
 } from "./application-api";
 
-interface RecordSnapshot {
+interface InstallationSnapshot {
   readonly id: string;
-  readonly record: PluginRecord;
+  readonly installation: PluginInstallation;
   readonly spec: InstallationSpec;
   readonly resolvedConfig: unknown;
 }
 
 type TransactionOutcome =
-  | { readonly kind: "committed"; readonly records: ReadonlySet<PluginRecord> }
+  | { readonly kind: "committed"; readonly affected: ReadonlySet<PluginInstallation> }
   | {
       readonly kind: "rolled-back";
-      readonly records: ReadonlySet<PluginRecord>;
+      readonly affected: ReadonlySet<PluginInstallation>;
       readonly error: unknown;
     };
 
-interface PreparedPluginRuntime {
-  readonly record: PluginRecord;
+interface PreparedActivation {
+  readonly installation: PluginInstallation;
   readonly runtime: PluginRuntime;
   readonly services: ReadonlyMap<string, unknown>;
-}
-
-interface GroupConfiguration {
-  readonly draft: PluginChangeSetDraft;
-  active: boolean;
-  error: unknown;
 }
 
 interface GroupHost {
@@ -84,10 +89,10 @@ interface GroupHost {
     parent: GroupNode,
     name: string,
     configure: (group: PluginGroup) => void,
-    inherited?: GroupConfiguration,
+    inherited?: GroupConfigurationSession<PluginChangeSetDraft>,
   ): PluginGroup;
   ready(group: GroupNode): Promise<void>;
-  status(group: GroupNode): PluginStatus;
+  status(group: GroupNode): InstallationStatus;
   remove(group: GroupNode): Promise<void>;
 }
 
@@ -97,6 +102,15 @@ interface GroupHandleControl {
 }
 
 const groupHandleControls = new WeakMap<object, GroupHandleControl>();
+
+type PluginGroupState =
+  | {
+      readonly phase: "configuring";
+      readonly host: GroupHost;
+      readonly configuration: GroupConfigurationSession<PluginChangeSetDraft>;
+    }
+  | { readonly phase: "attached"; readonly host: GroupHost }
+  | { readonly phase: "revoked" };
 
 class IncompletePluginCleanupError extends AggregateError {}
 
@@ -109,6 +123,22 @@ interface PluginHandleControl {
   revoke(): void;
 }
 
+type PluginHandleState<
+  Config,
+  Requires extends Requirements,
+  Provides extends Provisions,
+  ConfigInput,
+> =
+  | { readonly phase: "draft" }
+  | {
+      readonly phase: "attached";
+      readonly update: (
+        change: PluginUpdate<Config, Requires, Provides, ConfigInput>,
+      ) => Promise<void>;
+      readonly remove: () => Promise<void>;
+    }
+  | { readonly phase: "revoked" };
+
 const pluginHandleControls = new WeakMap<object, PluginHandleControl>();
 
 class PluginHandleImpl<
@@ -117,92 +147,95 @@ class PluginHandleImpl<
   Provides extends Provisions,
   ConfigInput,
 > implements PluginHandle<Config, Requires, Provides, ConfigInput> {
-  readonly #record: PluginRecord;
-  #updateRecord:
-    ((update: PluginUpdate<Config, Requires, Provides, ConfigInput>) => Promise<void>) | undefined;
-  #removeRecord: (() => Promise<void>) | undefined;
-  #state: "draft" | "attached" | "revoked" = "draft";
+  readonly #installation: PluginInstallation;
+  #state: PluginHandleState<Config, Requires, Provides, ConfigInput> = { phase: "draft" };
 
-  constructor(record: PluginRecord) {
-    this.#record = record;
+  constructor(installation: PluginInstallation) {
+    this.#installation = installation;
     pluginHandleControls.set(this, {
       attach: (updateRecord, removeRecord) => {
-        if (this.#state !== "draft") {
-          throw new TypeError(`Plugin '${this.#record.id}' control is already sealed`);
+        if (this.#state.phase !== "draft") {
+          throw new TypeError(`Plugin '${this.#installation.id}' control is already sealed`);
         }
-        this.#state = "attached";
-        this.#updateRecord = updateRecord as (
-          update: PluginUpdate<Config, Requires, Provides, ConfigInput>,
-        ) => Promise<void>;
-        this.#removeRecord = removeRecord;
+        this.#state = {
+          phase: "attached",
+          update: updateRecord as (
+            update: PluginUpdate<Config, Requires, Provides, ConfigInput>,
+          ) => Promise<void>,
+          remove: removeRecord,
+        };
       },
       revoke: () => {
-        this.#state = "revoked";
-        this.#updateRecord = undefined;
-        this.#removeRecord = undefined;
+        this.#state = { phase: "revoked" };
       },
     });
     Object.freeze(this);
   }
 
   get id() {
-    return this.#record.id;
+    return this.#installation.id;
   }
 
-  get group() {
-    return this.#record.group.id;
+  get groupId() {
+    return this.#installation.groupId;
   }
 
   get status() {
-    return this.#record.status;
+    return this.#installation.status;
   }
 
   ready() {
-    return this.#record.ready();
+    return this.#installation.ready();
   }
 
   async update(update: PluginUpdate<Config, Requires, Provides, ConfigInput>) {
-    if (this.#state === "draft") throw this.#notCommitted();
-    const updateRecord = this.#updateRecord;
-    if (!updateRecord) {
+    const state = this.#state;
+    if (state.phase === "draft") throw this.#notCommitted();
+    if (state.phase === "revoked") {
       throw (
-        this.#record.error ??
-        new DougongError("PLUGIN_REMOVED", `Plugin '${this.#record.id}' has been removed`)
+        this.#installation.error ??
+        new DougongError("PLUGIN_REMOVED", `Plugin '${this.#installation.id}' has been removed`)
       );
     }
-    await updateRecord(update);
+    await state.update(update);
   }
 
   async remove() {
-    if (this.#state === "draft") throw this.#notCommitted();
-    const removeRecord = this.#removeRecord;
-    if (removeRecord) await removeRecord();
+    const state = this.#state;
+    if (state.phase === "draft") throw this.#notCommitted();
+    if (state.phase === "attached") await state.remove();
   }
 
   #notCommitted() {
     return new DougongError(
       "PLUGIN_UNAVAILABLE",
-      `Plugin '${this.#record.id}' installation has not been committed`,
+      `Plugin '${this.#installation.id}' installation has not been committed`,
     );
   }
 }
 
 class PluginGroupImpl implements PluginGroup {
-  #host: GroupHost | undefined;
   readonly #node: GroupNode;
-  #configuration: GroupConfiguration | undefined;
+  #state: PluginGroupState;
 
-  constructor(host: GroupHost, node: GroupNode, configuration?: GroupConfiguration) {
-    this.#host = host;
+  constructor(
+    host: GroupHost,
+    node: GroupNode,
+    configuration?: GroupConfigurationSession<PluginChangeSetDraft>,
+  ) {
     this.#node = node;
-    this.#configuration = configuration;
+    this.#state = configuration
+      ? { phase: "configuring", host, configuration }
+      : { phase: "attached", host };
     groupHandleControls.set(this, {
       finishConfiguration: () => {
-        if (!this.#configuration?.active) this.#configuration = undefined;
+        const state = this.#state;
+        if (state.phase === "configuring") {
+          this.#state = { phase: "attached", host: state.host };
+        }
       },
       revoke: () => {
-        this.#host = undefined;
-        this.#configuration = undefined;
+        this.#state = { phase: "revoked" };
       },
     });
     Object.freeze(this);
@@ -217,22 +250,24 @@ class PluginGroupImpl implements PluginGroup {
   }
 
   get status() {
-    return this.#host?.status(this.#node) ?? "removed";
+    const state = this.#state;
+    return state.phase === "revoked" ? "removed" : state.host.status(this.#node);
   }
 
   ready() {
-    const host = this.#host;
-    return host
-      ? host.ready(this.#node)
-      : Promise.reject(new TypeError(`Group '${this.#node.id}' has been removed`));
+    const state = this.#state;
+    return state.phase === "revoked"
+      ? Promise.reject(groupRemovedError(this.#node))
+      : state.host.ready(this.#node);
   }
 
   install<Config, Requires extends Requirements, Provides extends Provisions, ConfigInput>(
     plugin: PluginDefinition<Config, Requires, Provides, ConfigInput>,
     ...config: [ConfigInput] extends [void] ? [config?: ConfigInput] : [config: ConfigInput]
   ) {
-    if (this.#configuration?.active) {
-      return this.#configuration.draft.install(plugin, ...config);
+    const state = this.#state;
+    if (state.phase === "configuring") {
+      return state.configuration.requireDraft().install(plugin, ...config);
     }
     return this.#requireHost().install(
       this.#node,
@@ -242,27 +277,37 @@ class PluginGroupImpl implements PluginGroup {
   }
 
   change() {
-    if (this.#configuration?.active) {
+    if (this.#state.phase === "configuring") {
       throw new TypeError("Cannot create a ChangeSet while a Group is being configured");
     }
     return this.#requireHost().change(this.#node);
   }
 
   group(name: string, configure: (group: PluginGroup) => void) {
-    return this.#requireHost().create(this.#node, name, configure, this.#configuration);
+    const state = this.#state;
+    if (state.phase === "configuring") state.configuration.assertOpen();
+    return this.#requireHost().create(
+      this.#node,
+      name,
+      configure,
+      state.phase === "configuring" ? state.configuration : undefined,
+    );
   }
 
   remove() {
-    if (this.#configuration?.active) {
+    const state = this.#state;
+    if (state.phase === "configuring") {
       throw new TypeError("Cannot remove a Group while it is being configured");
     }
-    return this.#host?.remove(this.#node) ?? Promise.resolve();
+    return state.phase === "attached" ? state.host.remove(this.#node) : Promise.resolve();
   }
 
   #requireHost() {
-    const host = this.#host;
-    if (!host) throw new TypeError(`Group '${this.#node.id}' has been removed`);
-    return host;
+    const state = this.#state;
+    if (state.phase === "revoked") {
+      throw groupRemovedError(this.#node);
+    }
+    return state.host;
   }
 }
 
@@ -270,15 +315,14 @@ class ApplicationImpl implements Application {
   readonly name: string;
   readonly diagnostics: SnapshotView<ApplicationSnapshot>;
 
-  readonly #records = new Map<string, PluginRecord>();
-  readonly #services = new Map<PluginRecord, ReadonlyMap<string, unknown>>();
-  readonly #contractKinds = new Map<string, ContractKind>();
-  readonly #events = new EventHub();
-  readonly #extensions: ExtensionRegistry;
-  readonly #host: LifetimeHost;
-  readonly #handles = new WeakMap<object, PluginRecord>();
-  readonly #controls = new WeakMap<
-    PluginRecord,
+  readonly #installations = new Map<string, PluginInstallation>();
+  readonly #servicesByInstallation = new Map<PluginInstallation, ReadonlyMap<string, unknown>>();
+  readonly #contractRegistry = new ContractRegistry();
+  readonly #eventHub = new EventHub();
+  readonly #extensionRegistry: ExtensionRegistry;
+  readonly #ownedPluginHandles = new WeakMap<object, PluginInstallation>();
+  readonly #pluginControlHandles = new WeakMap<
+    PluginInstallation,
     PluginHandleImpl<unknown, Requirements, Provisions, unknown>
   >();
   readonly #diagnosticModel: ApplicationDiagnostics;
@@ -286,14 +330,14 @@ class ApplicationImpl implements Application {
   readonly #rootGroup: GroupNode;
   readonly #groupHost: GroupHost;
   readonly #groupHandles = new WeakMap<GroupNode, PluginGroupImpl>();
-  readonly #groupOperations = new WeakMap<GroupNode, Promise<void>>();
+  readonly #groupLifecycles = new WeakMap<GroupNode, GroupLifecycle>();
   readonly #onError: (error: unknown) => void;
 
-  #counter = 0;
+  #installationSequence = 0;
   #status: ApplicationStatus = "idle";
-  #activePlan: PluginGraph | undefined;
-  #startOrder: PluginRecord[] = [];
-  #queue: Promise<void> = Promise.resolve();
+  #activeGraph: PluginGraph | undefined;
+  #activationOrder: PluginInstallation[] = [];
+  #commandQueue: Promise<void> = Promise.resolve();
 
   constructor(options: CreateAppOptions = {}) {
     if (!options || typeof options !== "object") {
@@ -317,21 +361,15 @@ class ApplicationImpl implements Application {
     this.#logger = options.logger ?? defaultLogger;
     this.#onError = options.onError ?? ((error) => this.#logger.error(error));
     this.#rootGroup = GroupNode.root(name);
-    this.#extensions = new ExtensionRegistry((error) => this.#report(error));
+    this.#extensionRegistry = new ExtensionRegistry((error) => this.#report(error));
     this.#diagnosticModel = new ApplicationDiagnostics(name, this.#rootGroup.walk(), (error) =>
       this.#report(error),
     );
+    this.#groupLifecycles.set(
+      this.#rootGroup,
+      new GroupLifecycle(this.#rootGroup, true, () => this.#publishDiagnostics()),
+    );
     this.diagnostics = this.#diagnosticModel.view;
-    this.#host = {
-      stageOn: (ownerId, token, listener, release) => {
-        return this.#stageOn(ownerId, token, listener, release);
-      },
-      emit: (ownerId, token, payload) => this.#emit(ownerId, token, payload),
-      stageContribution: (ownerId, token, key, value, release) => {
-        return this.#stageContribution(ownerId, token, key, value, release);
-      },
-      report: (error) => this.#report(error),
-    };
     this.#groupHost = {
       install: (group, plugin, config) => this.#installInGroup(group, plugin, config),
       change: (group) => this.#changeInGroup(group),
@@ -350,13 +388,13 @@ class ApplicationImpl implements Application {
   }
 
   get<T>(token: Service<T>): T {
-    this.#assertContract(token, "service");
-    this.#rememberContract(token);
+    assertContract(token, "service");
+    this.#contractRegistry.assertCompatible(token);
     if (this.#status !== "active") {
       throw new DougongError("SERVICE_UNAVAILABLE", "Application services are not active");
     }
-    const provider = this.#requireActivePlan().provider(token.id);
-    const services = provider ? this.#services.get(provider.instance) : undefined;
+    const provider = this.#requireActiveGraph().provider(token.id);
+    const services = provider ? this.#servicesByInstallation.get(provider) : undefined;
     if (!provider || !services?.has(token.id)) {
       throw new DougongError("SERVICE_UNAVAILABLE", `Service '${token.id}' is not active`);
     }
@@ -386,22 +424,27 @@ class ApplicationImpl implements Application {
     return this.#changeInGroup(this.#rootGroup);
   }
 
-  #changeInGroup(group: GroupNode): PluginChangeSetDraft {
+  #changeInGroup(group: GroupNode, trackChanges = true): PluginChangeSetDraft {
     group.assertAttached();
     return new PluginChangeSetDraft({
       create: (plugin, config) => this.#createDraft(group, plugin, config),
       resolve: (handle) => {
-        const record = this.#resolveHandle(handle);
-        if (!group.contains(record.group)) {
-          throw new TypeError(`Plugin '${record.id}' is outside ChangeSet group '${group.id}'`);
+        const installation = this.#resolveHandle(handle);
+        if (!group.containsId(installation.groupId)) {
+          throw new TypeError(
+            `Plugin '${installation.id}' is outside ChangeSet group '${group.id}'`,
+          );
         }
-        return record;
+        return installation;
       },
       execute: (operations) => {
-        return this.#executeChanges(operations);
+        const operation = this.#executeChanges(operations);
+        for (const change of operations) change.installation.trackReadiness(operation);
+        if (trackChanges) this.#trackGroup(group, operation);
+        return operation;
       },
-      attach: (record) => this.#attachRecord(record),
-      discard: (record, error) => this.#discardRecord(record, error),
+      attach: (installation) => this.#attachInstallation(installation),
+      discard: (installation, error) => this.#discardInstallation(installation, error),
     });
   }
 
@@ -413,41 +456,50 @@ class ApplicationImpl implements Application {
     parent: GroupNode,
     name: string,
     configure: (group: PluginGroup) => void,
-    inherited?: GroupConfiguration,
+    inherited?: GroupConfigurationSession<PluginChangeSetDraft>,
   ) {
     if (typeof configure !== "function") throw new TypeError("Group configure must be a function");
     const node = parent.create(name);
-    const ownConfiguration = !inherited?.active;
-    const configuration: GroupConfiguration =
-      ownConfiguration || !inherited
-        ? { draft: this.#changeInGroup(node), active: true, error: undefined }
-        : inherited;
+    this.#groupLifecycles.set(
+      node,
+      new GroupLifecycle(node, false, () => this.#publishDiagnostics()),
+    );
+    const ownConfiguration = inherited === undefined;
+    const configuration =
+      inherited ??
+      new GroupConfigurationSession(
+        this.#changeInGroup(node, false),
+        discardPluginChangeSetDraft,
+        (error) =>
+          normalizeFailure(
+            error,
+            "GROUP_UNAVAILABLE",
+            `Group '${node.id}' configuration failed with a non-Error value`,
+          ),
+      );
     const group = new PluginGroupImpl(this.#groupHost, node, configuration);
     this.#groupHandles.set(node, group);
 
     try {
-      const result = configure(group) as unknown;
+      const result: unknown = configure(group);
       if (isThenable(result)) {
         void Promise.resolve(result).catch(() => undefined);
         throw new TypeError("Group configure must be synchronous");
       }
-      if (configuration.error !== undefined) throw configuration.error;
+      const failure = configuration.failure;
+      if (failure) throw failure;
     } catch (error) {
-      configuration.error = error;
+      const failure = configuration.fail(error);
       const removedGroups = node.walk();
       node.detach();
       this.#revokeGroups(removedGroups);
-      if (ownConfiguration) {
-        configuration.active = false;
-        cancelPluginChangeSet(configuration.draft, error);
-      }
+      if (ownConfiguration) configuration.discard(failure);
       this.#publishDiagnostics();
-      throw error;
+      throw failure;
     }
 
     if (ownConfiguration) {
-      configuration.active = false;
-      const operation = configuration.draft.commit();
+      const operation = configuration.seal().commit();
       for (const child of node.walk()) {
         const childHandle = this.#groupHandles.get(child);
         if (childHandle) groupHandleControls.get(childHandle)?.finishConfiguration();
@@ -460,20 +512,34 @@ class ApplicationImpl implements Application {
   }
 
   async #readyGroup(group: GroupNode) {
-    group.assertAttached();
-    await this.#groupOperations.get(group);
-    const records = [...this.#records.values()].filter((record) => group.contains(record.group));
-    await Promise.all(records.map((record) => record.ready()));
+    await this.#requireGroupLifecycle(group).ready(async () => {
+      const installations = this.#installationsInGroup(group);
+      await Promise.all(installations.map((installation) => installation.ready()));
+    });
   }
 
-  #groupStatus(group: GroupNode): PluginStatus {
+  #groupStatus(group: GroupNode): InstallationStatus {
     if (!group.attached) return "removed";
-    const records = [...this.#records.values()].filter((record) => group.contains(record.group));
-    if (records.some((record) => record.status === "failed")) return "failed";
-    if (records.some((record) => record.status === "stopping")) return "stopping";
-    if (records.length && records.every((record) => record.status === "active")) return "active";
-    if (group.error !== undefined) return "failed";
-    return records.length ? "pending" : "active";
+    return this.#requireGroupLifecycle(group).status(this.#installationStatusInGroup(group));
+  }
+
+  #installationsInGroup(group: GroupNode) {
+    return [...this.#installations.values()].filter((installation) =>
+      group.containsId(installation.groupId),
+    );
+  }
+
+  #installationStatusInGroup(group: GroupNode): InstallationStatus {
+    const installations = this.#installationsInGroup(group);
+    if (installations.some((installation) => installation.status === "failed")) return "failed";
+    if (installations.some((installation) => installation.status === "stopping")) return "stopping";
+    if (
+      installations.length &&
+      installations.every((installation) => installation.status === "active")
+    ) {
+      return "active";
+    }
+    return installations.length ? "pending" : "active";
   }
 
   #removeGroup(group: GroupNode) {
@@ -488,9 +554,10 @@ class ApplicationImpl implements Application {
         return;
       }
       const removedGroups = group.walk();
-      const operations: ChangeOperation[] = [];
-      for (const record of this.#records.values()) {
-        if (group.contains(record.group)) operations.push({ kind: "remove", record });
+      const operations: PluginChangeOperation[] = [];
+      for (const installation of this.#installations.values()) {
+        if (group.containsId(installation.groupId))
+          operations.push({ kind: "remove", installation });
       }
       if (operations.length && this.#status === "active") {
         await this.#transact(operations);
@@ -508,19 +575,23 @@ class ApplicationImpl implements Application {
     return this.#enqueue(async () => {
       if (this.#status === "active") return;
       this.#setStatus("starting");
+      let contracts: ContractRegistryDraft | undefined;
       try {
-        const plan = this.#buildPlan();
-        await this.#withExtensionBatch(() => this.#startPlan(plan));
-        this.#activePlan = plan;
+        const plan = this.#buildGraph();
+        const contractDraft = this.#contractRegistry.draft(plan.contractKinds);
+        contracts = contractDraft;
+        await this.#withExtensionBatch(() => this.#activateGraph(plan, contractDraft));
+        this.#activeGraph = plan;
         this.#setStatus("active");
-        this.#settleRecords(this.#startOrder);
+        this.#settleInstallations(this.#activationOrder);
       } catch (error) {
-        this.#activePlan = undefined;
+        contracts?.discard();
+        this.#activeGraph = undefined;
         this.#setStatus("idle");
-        for (const record of this.#records.values()) {
-          if (record.status !== "active") record.fail(error);
+        for (const installation of this.#installations.values()) {
+          if (installation.status !== "active") installation.fail(error);
         }
-        this.#settleRecords(this.#records.values());
+        this.#settleInstallations(this.#installations.values());
         throw error;
       }
     });
@@ -531,9 +602,9 @@ class ApplicationImpl implements Application {
       if (this.#status === "idle") return;
       this.#setStatus("stopping");
       const errors = await this.#withExtensionBatch(() =>
-        this.#stopRecords(new Set(this.#startOrder)),
+        this.#deactivateInstallations(new Set(this.#activationOrder)),
       );
-      this.#activePlan = undefined;
+      this.#activeGraph = undefined;
       this.#setStatus("idle");
       if (errors.length === 1) throw errors[0];
       if (errors.length > 1) throw new AggregateError(errors, "Application shutdown failed");
@@ -542,27 +613,32 @@ class ApplicationImpl implements Application {
 
   #createDraft(group: GroupNode, plugin: AnyPlugin, config: unknown) {
     group.assertAttached();
-    const index = ++this.#counter;
+    const index = ++this.#installationSequence;
     const id = `${plugin.name}:${index}`;
-    const record = new PluginRecord(id, index, group, installation(plugin, config));
-    const handle = new PluginHandleImpl<unknown, Requirements, Provisions, unknown>(record);
-    this.#handles.set(handle, record);
-    this.#controls.set(record, handle);
-    return { record, handle };
+    const installation = new PluginInstallation(
+      id,
+      index,
+      group,
+      createInstallationSpec(plugin, config),
+    );
+    const handle = new PluginHandleImpl<unknown, Requirements, Provisions, unknown>(installation);
+    this.#ownedPluginHandles.set(handle, installation);
+    this.#pluginControlHandles.set(installation, handle);
+    return { installation, handle };
   }
 
   #resolveHandle(handle: object) {
-    const record = this.#handles.get(handle);
-    if (!record) throw new TypeError("PluginHandle belongs to a different Application");
-    return record;
+    const installation = this.#ownedPluginHandles.get(handle);
+    if (!installation) throw new TypeError("PluginHandle belongs to a different Application");
+    return installation;
   }
 
-  #executeChanges(operations: ReadonlyArray<ChangeOperation>, afterCommit?: () => void) {
+  #executeChanges(operations: ReadonlyArray<PluginChangeOperation>) {
     const installed = operations
-      .filter((operation): operation is Extract<ChangeOperation, { kind: "install" }> => {
+      .filter((operation): operation is Extract<PluginChangeOperation, { kind: "install" }> => {
         return operation.kind === "install";
       })
-      .map((operation) => operation.record);
+      .map((operation) => operation.installation);
 
     return this.#enqueue(async () => {
       try {
@@ -572,11 +648,11 @@ class ApplicationImpl implements Application {
           this.#applyChanges(operations);
           this.#settleChanges(operations);
         }
-        afterCommit?.();
         this.#publishDiagnostics();
       } catch (error) {
-        for (const record of installed) {
-          if (this.#records.get(record.id) !== record) this.#discardRecord(record, error);
+        for (const installation of installed) {
+          if (this.#installations.get(installation.id) !== installation)
+            this.#discardInstallation(installation, error);
         }
         throw error;
       }
@@ -584,8 +660,8 @@ class ApplicationImpl implements Application {
   }
 
   #enqueue<T>(operation: () => Promise<T>): Promise<T> {
-    const result = this.#queue.then(operation, operation);
-    this.#queue = result.then(
+    const result = this.#commandQueue.then(operation, operation);
+    this.#commandQueue = result.then(
       () => undefined,
       () => undefined,
     );
@@ -593,51 +669,56 @@ class ApplicationImpl implements Application {
   }
 
   async #withExtensionBatch<T>(operation: () => Promise<T>) {
-    this.#extensions.beginBatch();
+    this.#extensionRegistry.beginBatch();
     try {
       return await operation();
     } finally {
-      this.#extensions.endBatch();
+      this.#extensionRegistry.endBatch();
     }
   }
 
-  async #transact(operations: ReadonlyArray<ChangeOperation>) {
+  async #transact(operations: ReadonlyArray<PluginChangeOperation>) {
     const outcome = await this.#withExtensionBatch(() => this.#runTransaction(operations));
-    this.#settleRecords(outcome.records);
+    this.#settleInstallations(outcome.affected);
     if (outcome.kind === "rolled-back") throw outcome.error;
     this.#settleChanges(operations);
   }
 
-  async #runTransaction(operations: ReadonlyArray<ChangeOperation>): Promise<TransactionOutcome> {
-    const snapshot = this.#snapshot();
-    const previousPlan = this.#requireActivePlan();
-    const changed = new Set(operations.map((operation) => operation.record));
+  async #runTransaction(
+    operations: ReadonlyArray<PluginChangeOperation>,
+  ): Promise<TransactionOutcome> {
+    const snapshot = this.#captureInstallations();
+    const previousPlan = this.#requireActiveGraph();
+    const changed = new Set(operations.map((operation) => operation.installation));
     this.#setStatus("changing");
 
     let nextPlan: PluginGraph;
-    let affected: ReadonlySet<PluginRecord>;
-    let nextConfigs: ReadonlyMap<PluginRecord, unknown>;
+    let affected: ReadonlySet<PluginInstallation>;
+    let nextConfigs: ReadonlyMap<PluginInstallation, unknown>;
+    let contracts: ContractRegistryDraft;
     try {
       this.#applyChanges(operations);
-      nextPlan = this.#buildPlan();
-      affected = previousPlan.affectedWith(nextPlan, changed);
+      nextPlan = this.#buildGraph();
+      affected = previousPlan.affectedByTransitionTo(nextPlan, changed);
       nextConfigs = await this.#resolveConfigs(
-        nextPlan.order.filter((record) => affected.has(record)),
+        nextPlan.order.filter((installation) => affected.has(installation)),
       );
-      this.#commitContractKinds(nextPlan.contractKinds);
+      contracts = this.#contractRegistry.draft(nextPlan.contractKinds);
     } catch (error) {
-      this.#restore(snapshot);
+      this.#restoreInstallations(snapshot);
       this.#setStatus("active");
       throw error;
     }
 
-    const previousConfigs = new Map<PluginRecord, unknown>();
+    const previousConfigs = new Map<PluginInstallation, unknown>();
     for (const item of snapshot) {
-      if (affected.has(item.record)) previousConfigs.set(item.record, item.resolvedConfig);
+      if (affected.has(item.installation))
+        previousConfigs.set(item.installation, item.resolvedConfig);
     }
 
-    const stopErrors = await this.#stopRecords(affected);
+    const stopErrors = await this.#deactivateInstallations(affected);
     if (stopErrors.length) {
+      contracts.discard();
       return this.#failClosed(
         snapshot,
         stopErrors,
@@ -646,13 +727,15 @@ class ApplicationImpl implements Application {
     }
 
     try {
-      await this.#startRecords(nextPlan, affected, nextConfigs);
-      this.#startOrder = nextPlan.order.slice();
-      this.#activePlan = nextPlan;
+      await this.#activateInstallations(nextPlan, affected, nextConfigs, contracts);
+      contracts.commit();
+      this.#activationOrder = nextPlan.order.slice();
+      this.#activeGraph = nextPlan;
       this.#setStatus("active");
-      return Object.freeze({ kind: "committed", records: affected });
+      return Object.freeze({ kind: "committed", affected });
     } catch (changeError) {
-      const nextStopErrors = await this.#stopRecords(affected);
+      const nextStopErrors = await this.#deactivateInstallations(affected);
+      contracts.discard();
       if (changeError instanceof IncompletePluginCleanupError || nextStopErrors.length) {
         return this.#failClosed(
           snapshot,
@@ -667,90 +750,97 @@ class ApplicationImpl implements Application {
     }
   }
 
-  #applyChanges(operations: ReadonlyArray<ChangeOperation>) {
+  #applyChanges(operations: ReadonlyArray<PluginChangeOperation>) {
     for (const operation of operations) {
       if (operation.kind === "install") {
-        operation.record.group.assertAttached();
-        if (this.#records.has(operation.record.id)) {
-          throw new TypeError(`Plugin '${operation.record.id}' is already installed`);
+        operation.installation.group.assertAttached();
+        if (this.#installations.has(operation.installation.id)) {
+          throw new TypeError(`Plugin '${operation.installation.id}' is already installed`);
         }
         continue;
       }
 
-      const installed = this.#records.get(operation.record.id) === operation.record;
-      if (operation.kind === "remove" && !installed && operation.record.status === "removed") {
+      const installed =
+        this.#installations.get(operation.installation.id) === operation.installation;
+      if (
+        operation.kind === "remove" &&
+        !installed &&
+        operation.installation.status === "removed"
+      ) {
         continue;
       }
       if (!installed) {
         throw new DougongError(
           "PLUGIN_REMOVED",
-          `Plugin '${operation.record.id}' has been removed`,
+          `Plugin '${operation.installation.id}' has been removed`,
         );
       }
       if (
         operation.kind === "update" &&
         operation.plugin &&
-        operation.plugin.name !== operation.record.spec.plugin.name
+        operation.plugin.name !== operation.installation.spec.plugin.name
       ) {
         throw new DougongError(
           "PLUGIN_IDENTITY",
-          `Plugin '${operation.record.id}' cannot change name from ` +
-            `'${operation.record.spec.plugin.name}' to '${operation.plugin.name}'`,
+          `Plugin '${operation.installation.id}' cannot change name from ` +
+            `'${operation.installation.spec.plugin.name}' to '${operation.plugin.name}'`,
         );
       }
     }
 
     for (const operation of operations) {
       if (operation.kind === "install") {
-        this.#records.set(operation.record.id, operation.record);
+        this.#installations.set(operation.installation.id, operation.installation);
       } else if (operation.kind === "update") {
-        const plugin = operation.plugin ?? operation.record.spec.plugin;
-        const config = operation.hasConfig ? operation.config : operation.record.spec.config;
-        operation.record.reconfigure(installation(plugin, config));
-      } else if (this.#records.get(operation.record.id) === operation.record) {
-        this.#records.delete(operation.record.id);
+        const plugin = operation.plugin ?? operation.installation.spec.plugin;
+        const config = operation.hasConfig ? operation.config : operation.installation.spec.config;
+        operation.installation.reconfigure(createInstallationSpec(plugin, config));
+      } else if (this.#installations.get(operation.installation.id) === operation.installation) {
+        this.#installations.delete(operation.installation.id);
       }
     }
   }
 
-  #settleChanges(operations: ReadonlyArray<ChangeOperation>) {
+  #settleChanges(operations: ReadonlyArray<PluginChangeOperation>) {
     for (const operation of operations) {
       if (operation.kind === "remove") {
-        operation.record.remove();
-        operation.record.settle();
-        this.#revokeControl(operation.record);
-      } else if (this.#status !== "active") operation.record.pending();
+        operation.installation.remove();
+        operation.installation.settleReady();
+        this.#revokeControl(operation.installation);
+      } else if (this.#status !== "active") operation.installation.deactivate();
     }
   }
 
-  #discardRecord(record: PluginRecord, error: unknown) {
-    record.abandon(error);
-    this.#revokeControl(record);
+  #discardInstallation(installation: PluginInstallation, error: unknown) {
+    installation.discard(error);
+    this.#revokeControl(installation);
   }
 
-  #attachRecord(record: PluginRecord) {
-    const handle = this.#controls.get(record);
-    if (!handle) throw new TypeError(`Plugin '${record.id}' has no control handle`);
+  #attachInstallation(installation: PluginInstallation) {
+    const handle = this.#pluginControlHandles.get(installation);
+    if (!handle) throw new TypeError(`Plugin '${installation.id}' has no control handle`);
     const control = pluginHandleControls.get(handle);
-    if (!control) throw new TypeError(`Plugin '${record.id}' has no draft control`);
-    record.attach(() => this.#publishDiagnostics());
+    if (!control) throw new TypeError(`Plugin '${installation.id}' has no draft control`);
+    installation.attach(() => this.#publishDiagnostics());
     control.attach(
-      (update) => this.#changeInGroup(record.group).update(handle, update).commit(),
-      () => this.#changeInGroup(record.group).remove(handle).commit(),
+      (update) => this.#changeInGroup(installation.group).update(handle, update).commit(),
+      () => this.#changeInGroup(installation.group).remove(handle).commit(),
     );
   }
 
-  #revokeControl(record: PluginRecord) {
-    const handle = this.#controls.get(record);
+  #revokeControl(installation: PluginInstallation) {
+    const handle = this.#pluginControlHandles.get(installation);
     if (handle) {
       pluginHandleControls.get(handle)?.revoke();
       pluginHandleControls.delete(handle);
     }
-    this.#controls.delete(record);
+    this.#pluginControlHandles.delete(installation);
   }
 
   #revokeGroups(groups: Iterable<GroupNode>) {
     for (const group of groups) {
+      this.#groupLifecycles.get(group)?.release();
+      this.#groupLifecycles.delete(group);
       const handle = this.#groupHandles.get(group);
       if (handle) {
         groupHandleControls.get(handle)?.revoke();
@@ -760,38 +850,41 @@ class ApplicationImpl implements Application {
     }
   }
 
-  #settleRecords(records: Iterable<PluginRecord>) {
-    for (const record of records) record.settle();
+  #settleInstallations(installations: Iterable<PluginInstallation>) {
+    for (const installation of installations) installation.settleReady();
   }
 
   async #failClosed(
-    snapshot: ReadonlyArray<RecordSnapshot>,
+    snapshot: ReadonlyArray<InstallationSnapshot>,
     causes: ReadonlyArray<unknown>,
     message: string,
   ): Promise<never> {
-    this.#restore(snapshot);
-    const shutdownErrors = await this.#stopRecords(new Set(this.#startOrder));
-    this.#activePlan = undefined;
+    this.#restoreInstallations(snapshot);
+    const shutdownErrors = await this.#deactivateInstallations(new Set(this.#activationOrder));
+    this.#activeGraph = undefined;
     this.#setStatus("idle");
     throw new AggregateError([...causes, ...shutdownErrors], message);
   }
 
   async #rollback(
-    snapshot: ReadonlyArray<RecordSnapshot>,
+    snapshot: ReadonlyArray<InstallationSnapshot>,
     previousPlan: PluginGraph,
-    affected: ReadonlySet<PluginRecord>,
-    previousConfigs: ReadonlyMap<PluginRecord, unknown>,
+    affected: ReadonlySet<PluginInstallation>,
+    previousConfigs: ReadonlyMap<PluginInstallation, unknown>,
     causes: ReadonlyArray<unknown>,
   ): Promise<TransactionOutcome> {
-    this.#restore(snapshot);
+    this.#restoreInstallations(snapshot);
+    const contracts = this.#contractRegistry.draft(previousPlan.contractKinds);
     try {
-      await this.#startRecords(previousPlan, affected, previousConfigs);
-      this.#startOrder = previousPlan.order.slice();
-      this.#activePlan = previousPlan;
+      await this.#activateInstallations(previousPlan, affected, previousConfigs, contracts);
+      contracts.commit();
+      this.#activationOrder = previousPlan.order.slice();
+      this.#activeGraph = previousPlan;
       this.#setStatus("active");
     } catch (rollbackError) {
-      const shutdownErrors = await this.#stopRecords(new Set(this.#startOrder));
-      this.#activePlan = undefined;
+      const shutdownErrors = await this.#deactivateInstallations(new Set(this.#activationOrder));
+      contracts.discard();
+      this.#activeGraph = undefined;
       this.#setStatus("idle");
       throw new AggregateError(
         [...causes, rollbackError, ...shutdownErrors],
@@ -800,48 +893,48 @@ class ApplicationImpl implements Application {
     }
     const error =
       causes.length === 1 ? causes[0] : new AggregateError(causes, "Plugin change failed");
-    return Object.freeze({ kind: "rolled-back", records: affected, error });
+    return Object.freeze({ kind: "rolled-back", affected, error });
   }
 
-  #snapshot(): RecordSnapshot[] {
-    return [...this.#records].map(([id, record]) => ({
+  #captureInstallations(): InstallationSnapshot[] {
+    return [...this.#installations].map(([id, installation]) => ({
       id,
-      record,
-      spec: record.spec,
-      resolvedConfig: record.runtime?.config,
+      installation,
+      spec: installation.spec,
+      resolvedConfig: installation.runtime?.config,
     }));
   }
 
-  #restore(snapshot: ReadonlyArray<RecordSnapshot>) {
-    this.#records.clear();
+  #restoreInstallations(snapshot: ReadonlyArray<InstallationSnapshot>) {
+    this.#installations.clear();
     for (const item of snapshot) {
-      item.record.reconfigure(item.spec);
-      this.#records.set(item.id, item.record);
+      item.installation.reconfigure(item.spec);
+      this.#installations.set(item.id, item.installation);
     }
   }
 
-  #buildPlan() {
-    return PluginGraph.build(this.#records.values(), this.#contractKinds);
+  #buildGraph() {
+    return PluginGraph.build(this.#installations.values(), this.#contractRegistry.kinds);
   }
 
-  #requireActivePlan() {
-    if (!this.#activePlan) {
+  #requireActiveGraph() {
+    if (!this.#activeGraph) {
       throw new DougongError("SERVICE_UNAVAILABLE", "Application services are not active");
     }
-    return this.#activePlan;
+    return this.#activeGraph;
   }
 
-  async #startPlan(plan: PluginGraph) {
-    const records = new Set(plan.order);
+  async #activateGraph(plan: PluginGraph, contracts: ContractRegistryDraft) {
+    const installations = new Set(plan.order);
     const configs = await this.#resolveConfigs(plan.order);
-    this.#commitContractKinds(plan.contractKinds);
-    this.#services.clear();
-    this.#startOrder = [];
+    this.#servicesByInstallation.clear();
+    this.#activationOrder = [];
     try {
-      await this.#startRecords(plan, records, configs);
-      this.#startOrder = plan.order.slice();
+      await this.#activateInstallations(plan, installations, configs, contracts);
+      contracts.commit();
+      this.#activationOrder = plan.order.slice();
     } catch (error) {
-      const cleanupErrors = await this.#stopRecords(records);
+      const cleanupErrors = await this.#deactivateInstallations(installations);
       if (cleanupErrors.length) {
         throw new AggregateError([error, ...cleanupErrors], "Application startup failed");
       }
@@ -849,23 +942,36 @@ class ApplicationImpl implements Application {
     }
   }
 
-  async #startRecords(
+  async #activateInstallations(
     plan: PluginGraph,
-    records: ReadonlySet<PluginRecord>,
-    configs: ReadonlyMap<PluginRecord, unknown>,
+    installations: ReadonlySet<PluginInstallation>,
+    configs: ReadonlyMap<PluginInstallation, unknown>,
+    contracts: ContractRegistryDraft,
   ) {
+    const host = this.#createLifetimeHost(contracts);
     for (const layer of plan.layers) {
-      const candidates = layer.filter((record) => records.has(record) && !record.runtime);
+      const candidates = layer.filter(
+        (installation) => installations.has(installation) && !installation.runtime,
+      );
       if (!candidates.length) continue;
 
       const controller = new AbortController();
       const results = await Promise.allSettled(
-        candidates.map(async (record) => {
+        candidates.map(async (installation) => {
           try {
-            const config = configs.has(record)
-              ? configs.get(record)
-              : await this.#resolveConfig(record.spec.plugin.config, record.spec.config);
-            return await this.#prepareRecord(plan, record, config, controller.signal);
+            const config = configs.has(installation)
+              ? configs.get(installation)
+              : await this.#resolveConfig(
+                  installation.spec.plugin.config,
+                  installation.spec.config,
+                );
+            return await this.#prepareActivation(
+              plan,
+              installation,
+              config,
+              controller.signal,
+              host,
+            );
           } catch (error) {
             controller.abort(error);
             throw error;
@@ -878,13 +984,13 @@ class ApplicationImpl implements Application {
         .map((result) => result.reason);
       const prepared = results
         .filter(
-          (result): result is PromiseFulfilledResult<PreparedPluginRuntime> =>
+          (result): result is PromiseFulfilledResult<PreparedActivation> =>
             result.status === "fulfilled",
         )
         .map((result) => result.value);
 
       if (errors.length) {
-        const cleanupErrors = await this.#disposePrepared(prepared);
+        const cleanupErrors = await this.#disposePreparedActivations(prepared);
         const startupError =
           errors.length === 1
             ? errors[0]
@@ -898,27 +1004,28 @@ class ApplicationImpl implements Application {
         throw startupError;
       }
 
-      for (const candidate of prepared) this.#commitPrepared(candidate);
+      for (const candidate of prepared) this.#commitActivation(candidate);
     }
   }
 
-  async #prepareRecord(
+  async #prepareActivation(
     plan: PluginGraph,
-    record: PluginRecord,
+    installation: PluginInstallation,
     config: unknown,
     startupSignal: AbortSignal,
-  ): Promise<PreparedPluginRuntime> {
-    record.pending();
-    const plugin = record.spec.plugin;
-    const lifetime = new Lifetime(this.#host, record.id, startupSignal);
+    host: LifetimeHost,
+  ): Promise<PreparedActivation> {
+    installation.deactivate();
+    const plugin = installation.spec.plugin;
+    const lifetime = new Lifetime(host, installation.id, { parentSignal: startupSignal });
 
     try {
-      const requirements = this.#resolveRequirements(plan, record, plugin, lifetime);
+      const requirements = this.#resolveRequirements(plan, installation, plugin, lifetime);
       const meta: PluginMeta = {
-        app: this.name,
-        name: plugin.name,
-        instance: record.id,
-        group: record.group.id,
+        applicationName: this.name,
+        pluginName: plugin.name,
+        installationId: installation.id,
+        groupId: installation.groupId,
       };
       const context = this.#createContext(lifetime, meta, requirements);
       const output = await plugin.setup(context, config);
@@ -927,41 +1034,41 @@ class ApplicationImpl implements Application {
         if (typeof output !== "object" || output === null || !Object.hasOwn(output, alias)) {
           throw new DougongError(
             "SERVICE_NOT_RETURNED",
-            `Plugin '${record.id}' did not return provided service '${alias}'`,
+            `Plugin '${installation.id}' did not return provided service '${alias}'`,
           );
         }
         services.set(token.id, (output as Record<string, unknown>)[alias]);
       }
 
       return Object.freeze({
-        record,
+        installation,
         runtime: Object.freeze({ plugin, config, lifetime }),
         services,
       });
     } catch (error) {
-      record.fail(error);
+      installation.fail(error);
       try {
         await lifetime.dispose();
       } catch (cleanupError) {
         throw new IncompletePluginCleanupError(
           [error, cleanupError],
-          `Plugin '${record.id}' failed to start and could not be cleanly disposed`,
+          `Plugin '${installation.id}' failed to start and could not be cleanly disposed`,
         );
       }
       throw error;
     }
   }
 
-  #commitPrepared(candidate: PreparedPluginRuntime) {
-    const { record, runtime, services } = candidate;
-    this.#services.set(record, services);
+  #commitActivation(candidate: PreparedActivation) {
+    const { installation, runtime, services } = candidate;
+    this.#servicesByInstallation.set(installation, services);
     runtime.lifetime.publish();
-    runtime.lifetime.detachParentSignal();
-    record.activate(runtime);
-    this.#startOrder.push(record);
+    runtime.lifetime.detachStartupSignal();
+    installation.activate(runtime);
+    this.#activationOrder.push(installation);
   }
 
-  async #disposePrepared(candidates: ReadonlyArray<PreparedPluginRuntime>) {
+  async #disposePreparedActivations(candidates: ReadonlyArray<PreparedActivation>) {
     const errors: unknown[] = [];
     for (const candidate of [...candidates].reverse()) {
       try {
@@ -973,54 +1080,70 @@ class ApplicationImpl implements Application {
     return errors;
   }
 
-  async #stopRecords(records: ReadonlySet<PluginRecord>) {
+  async #deactivateInstallations(installations: ReadonlySet<PluginInstallation>) {
     const errors: unknown[] = [];
-    const order = this.#startOrder.filter((record) => records.has(record)).reverse();
-    this.#startOrder = this.#startOrder.filter((record) => !records.has(record));
-    for (const record of order) {
-      const runtime = record.runtime;
+    const order = this.#activationOrder
+      .filter((installation) => installations.has(installation))
+      .reverse();
+    this.#activationOrder = this.#activationOrder.filter(
+      (installation) => !installations.has(installation),
+    );
+    for (const installation of order) {
+      const runtime = installation.runtime;
       if (!runtime) continue;
-      record.beginStopping();
-      this.#services.delete(record);
+      installation.beginStopping();
+      this.#servicesByInstallation.delete(installation);
       try {
         await runtime.lifetime.dispose();
       } catch (error) {
         errors.push(error);
       } finally {
-        record.pending();
+        installation.deactivate();
       }
     }
     return errors;
   }
 
-  async #resolveConfigs(records: ReadonlyArray<PluginRecord>) {
-    const configs = new Map<PluginRecord, unknown>();
-    for (const record of records) {
-      configs.set(record, await this.#resolveConfig(record.spec.plugin.config, record.spec.config));
+  async #resolveConfigs(installations: ReadonlyArray<PluginInstallation>) {
+    const configs = new Map<PluginInstallation, unknown>();
+    for (const installation of installations) {
+      configs.set(
+        installation,
+        await this.#resolveConfig(installation.spec.plugin.config, installation.spec.config),
+      );
     }
     return configs;
   }
 
   #resolveRequirements(
     plan: PluginGraph,
-    record: PluginRecord,
+    installation: PluginInstallation,
     plugin: AnyPlugin,
     lifetime: Lifetime,
   ): Record<string, unknown> {
     const values: Record<string, unknown> = Object.create(null);
     for (const [alias, requirement] of Object.entries(plugin.requires ?? {})) {
       if (requirement.kind === "optional") {
-        const provider = plan.providerFor(record, requirement.service.id);
-        values[alias] = provider
-          ? this.#services.get(provider.instance)?.get(requirement.service.id)
-          : undefined;
+        const provider = plan.providerFor(installation, requirement.service.id);
+        if (!provider) {
+          values[alias] = undefined;
+          continue;
+        }
+        const services = this.#servicesByInstallation.get(provider);
+        if (!services?.has(requirement.service.id)) {
+          throw new DougongError(
+            "SERVICE_UNAVAILABLE",
+            `Optional service '${requirement.service.id}' is not active for plugin '${installation.id}'`,
+          );
+        }
+        values[alias] = services.get(requirement.service.id);
       } else if (requirement.kind === "service") {
-        const provider = plan.providerFor(record, requirement.id);
-        const services = provider ? this.#services.get(provider.instance) : undefined;
+        const provider = plan.providerFor(installation, requirement.id);
+        const services = provider ? this.#servicesByInstallation.get(provider) : undefined;
         if (!provider || !services?.has(requirement.id)) {
           throw new DougongError(
             "SERVICE_UNAVAILABLE",
-            `Service '${requirement.id}' is not active for plugin '${record.id}'`,
+            `Service '${requirement.id}' is not active for plugin '${installation.id}'`,
           );
         }
         values[alias] = services.get(requirement.id);
@@ -1064,21 +1187,37 @@ class ApplicationImpl implements Application {
     return result.value;
   }
 
+  #createLifetimeHost(contracts: ContractRegistryDraft): LifetimeHost {
+    return {
+      stageOn: (ownerId, token, listener, release) => {
+        return this.#stageOn(ownerId, token, listener, release, contracts);
+      },
+      emit: (ownerId, token, payload) => this.#emit(ownerId, token, payload, contracts),
+      stageContribution: (ownerId, token, key, value, release) => {
+        return this.#stageContribution(ownerId, token, key, value, release, contracts);
+      },
+      report: (error) => this.#report(error),
+    };
+  }
+
   #stageOn<T>(
     ownerId: string,
     token: Event<T>,
     listener: EventListener<T>,
     release: (publication: Publication) => void,
+    contracts: ContractRegistryDraft,
   ) {
     this.#assertOwner(ownerId);
-    this.#rememberContract(token);
-    return this.#events.stage(token.id, listener, release);
+    assertContract(token, "event");
+    contracts.remember(token);
+    return this.#eventHub.stage(token.id, listener, release);
   }
 
-  #emit<T>(ownerId: string, token: Event<T>, payload: T) {
+  #emit<T>(ownerId: string, token: Event<T>, payload: T, contracts: ContractRegistryDraft) {
     this.#assertOwner(ownerId);
-    this.#rememberContract(token);
-    return this.#events.emit(token.id, payload);
+    assertContract(token, "event");
+    contracts.remember(token);
+    return this.#eventHub.emit(token.id, payload);
   }
 
   #stageContribution<T>(
@@ -1087,66 +1226,33 @@ class ApplicationImpl implements Application {
     key: string,
     value: T,
     release: (publication: Publication) => void,
+    contracts: ContractRegistryDraft,
   ) {
     this.#assertOwner(ownerId);
-    this.#rememberContract(token);
-    return this.#extensions.get(token).stage(ownerId, key, value, release);
+    assertContract(token, "extension");
+    contracts.remember(token);
+    return this.#extensionRegistry.get(token).stage(ownerId, key, value, release);
   }
 
   #extensionView<T>(token: Extension<T>, lifetime: Lifetime): ExtensionView<T> {
-    return this.#extensions.get(token).view((resource, kind) => lifetime.ownLease(resource, kind));
+    return this.#extensionRegistry
+      .get(token)
+      .view((resource, kind) => lifetime.ownLease(resource, kind));
   }
 
   #assertOwner(ownerId: string) {
-    if (!this.#records.has(ownerId)) throw new TypeError(`Plugin '${ownerId}' is not installed`);
-  }
-
-  #rememberContract(token: { readonly id: string; readonly kind: ContractKind }) {
-    this.#assertContract(token);
-    const previous = this.#contractKinds.get(token.id);
-    if (previous && previous !== token.kind) {
-      throw new DougongError(
-        "CONTRACT_CONFLICT",
-        `Contract '${token.id}' is used as both '${previous}' and '${token.kind}'`,
-      );
-    }
-    this.#contractKinds.set(token.id, token.kind);
-  }
-
-  #assertContract(
-    token: { readonly id?: unknown; readonly kind?: unknown },
-    expected?: ContractKind,
-  ): asserts token is { readonly id: string; readonly kind: ContractKind } {
-    if (
-      !token ||
-      typeof token !== "object" ||
-      typeof token.id !== "string" ||
-      !token.id.trim() ||
-      token.id !== token.id.trim() ||
-      !["service", "extension", "event"].includes(token.kind as string) ||
-      (expected !== undefined && token.kind !== expected)
-    ) {
-      throw new TypeError(expected ? `Expected a ${expected} contract` : "Invalid contract");
-    }
-  }
-
-  #commitContractKinds(kinds: ReadonlyMap<string, ContractKind>) {
-    for (const [id, kind] of kinds) this.#contractKinds.set(id, kind);
+    if (!this.#installations.has(ownerId))
+      throw new TypeError(`Plugin '${ownerId}' is not installed`);
   }
 
   #trackGroup(group: GroupNode, operation: Promise<void>) {
-    const tracked = operation.then(
-      () => {
-        group.recover();
-      },
-      (error) => {
-        group.fail(error);
-        this.#publishDiagnostics();
-        throw error;
-      },
-    );
-    this.#groupOperations.set(group, tracked);
-    void tracked.catch(() => undefined);
+    this.#requireGroupLifecycle(group).track(operation);
+  }
+
+  #requireGroupLifecycle(group: GroupNode) {
+    const lifecycle = this.#groupLifecycles.get(group);
+    if (!lifecycle) throw groupRemovedError(group);
+    return lifecycle;
   }
 
   #report(error: unknown) {
@@ -1169,7 +1275,11 @@ class ApplicationImpl implements Application {
   }
 
   #publishDiagnostics() {
-    this.#diagnosticModel.publish(this.#status, this.#records.values(), this.#rootGroup.walk());
+    this.#diagnosticModel.publish(
+      this.#status,
+      this.#installations.values(),
+      this.#rootGroup.walk(),
+    );
   }
 }
 

@@ -2,7 +2,7 @@
 
 [文档站](https://tangerg.github.io/dougong/) · [API 设计](docs/api-design.zh-CN.md) · [整体架构](docs/architecture.zh-CN.md) · [可执行示例](packages/examples/README.md)
 
-Dougong（斗拱）是一个面向 JavaScript/TypeScript 的**能力组合与结构化生命周期内核**，以及建立在它之上的插件分发层。
+Dougong（斗拱）是一个面向 JavaScript/TypeScript 的能力组合与结构化生命周期内核，以及建立在它之上的插件分发层。
 
 它只用普通对象、普通函数、Promise、AbortSignal 和 Disposable，解决六件事：
 
@@ -27,7 +27,7 @@ Signal 不是第五种插件能力。`@dougong/reactive` 提供 `signal()`、`co
 | 贡献 Extension | `contribute()` |
 | 监听 / 发送 Event | `on()` / `emit()` |
 | 注册资源 | `cleanup()` |
-| 创建子生命周期 / 任务 | `lifetime()` / `spawn()` |
+| 创建子生命周期 / 任务 | `lifetime(label)` / `spawn()` |
 | 读取 / 订阅实时值 | `get()` / `subscribe()` |
 | 更新 / 删除安装 | `update()` / `remove()` |
 | 提前释放资源 | `dispose()` |
@@ -89,12 +89,12 @@ await app.start()
 
 - 插件拿到的是整个实例期不变的 Service 快照；提供者变化会重建消费者，不使用 live Proxy。
 - Extension 只保存原始贡献。排序、领域 key、覆盖和 pipeline 是公开 API 上的高层组合策略，不进入 Core。
-- setup 期间的监听与贡献先暂存；输出校验通过后才与 Service 一起发布。
+- setup 期间的 Contract kind、监听与贡献先暂存；成功提交后才进入正式注册表或对外发布。
 - 多插件变更只走一份 ChangeSet；失败时恢复旧图，无法可靠恢复时 fail closed。
 - Group 只负责组合、批量提交和子树所有权，不改变 Service、Extension 或 Event 的可见性。
 - 同型多实例使用显式 Contract family；Group 不参与 Service shadow 或作用域查找。
-- 插件诊断包含独立的实时 Lifetime 资源计数视图，高频资源变化不重建整张 Application 快照。
-- 所有公共 Handle 都是冻结的窄对象；不会在 JavaScript 运行时泄露内部 record、registry、host 或事务发布方法。
+- 插件诊断包含独立的实时 Lifetime 所有权树；子 Lifetime 的显式 label 与逐节点资源计数让结构可解释，高频资源变化不重建整张 Application 快照。
+- 所有公共 Handle 都是冻结的窄对象；不会在 JavaScript 运行时泄露内部安装状态、registry、host 或事务发布方法。
 - Core 不理解 Node、DOM、React、HTTP、文件系统、Loader 或权限。
 
 完整规范见 [API 设计](docs/api-design.zh-CN.md)、[架构说明](docs/architecture.zh-CN.md) 与 [Platform 设计](docs/platform-design.zh-CN.md)。

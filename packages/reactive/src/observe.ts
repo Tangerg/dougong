@@ -6,13 +6,13 @@ export interface ObservationTask<T = void> extends Disposable {
 
 export interface ObservationLifetime extends Disposable {
   cleanup(dispose: () => unknown): Disposable;
-  lifetime(): ObservationLifetime;
+  lifetime(label: string): ObservationLifetime;
   spawn<T>(task: (signal: AbortSignal) => T | PromiseLike<T>): ObservationTask<T>;
 }
 
 export interface ObservationOwner<Child extends ObservationLifetime = ObservationLifetime> {
   cleanup(dispose: () => unknown): Disposable;
-  lifetime(): Child;
+  lifetime(label: string): Child;
   spawn<T>(task: (signal: AbortSignal) => T | PromiseLike<T>): ObservationTask<T>;
 }
 
@@ -26,11 +26,10 @@ class Observation<T, Child extends ObservationLifetime> implements Disposable {
   #current: Child | undefined;
   #value!: T;
   #hasValue = false;
-  #scheduled = false;
   #dirty = false;
-  #retry = false;
   #phase: "active" | "stopped" | "disposed" = "active";
-  #runner: Promise<void> | undefined;
+  #drainTask: ObservationTask | undefined;
+  #wakeDrain: (() => void) | undefined;
   #disposePromise: Promise<void> | undefined;
 
   constructor(owner: ObservationOwner<Child>, source: Readable<T>, observer: Observer<T, Child>) {
@@ -41,26 +40,35 @@ class Observation<T, Child extends ObservationLifetime> implements Disposable {
 
   start() {
     const value = this.#source.get();
-    const current = this.#owner.lifetime();
+    const current = this.#owner.lifetime("observation");
     assertObservationLifetime(current);
     this.#current = current;
 
-    const subscription = this.#source.subscribe(() => this.#schedule());
+    const subscription = this.#source.subscribe(() => this.#invalidate());
     assertDisposable(subscription, "Readable.subscribe()");
     this.#subscription = subscription;
 
-    this.#run(value, current);
+    this.#invokeObserver(value, current);
     this.#value = value;
     this.#hasValue = true;
+
+    const runner = this.#owner.spawn((signal) => this.#drain(signal));
+    assertObservationTask(runner);
+    this.#drainTask = runner;
+    void runner.result.then(
+      () => this.#releaseDrainTask(runner),
+      () => this.#releaseDrainTask(runner),
+    );
   }
 
   dispose() {
     if (this.#disposePromise) return this.#disposePromise;
     this.#phase = "disposed";
+    this.#wakeDrain?.();
     this.#disposePromise = (async () => {
       const errors: unknown[] = [];
       await collect(this.#takeSubscription(), errors);
-      await this.#runner;
+      await collect(this.#takeDrainTask(), errors);
       await collect(this.#takeCurrent(), errors);
       if (errors.length === 1) throw errors[0];
       if (errors.length > 1) throw new AggregateError(errors, "Observation cleanup failed");
@@ -68,58 +76,65 @@ class Observation<T, Child extends ObservationLifetime> implements Disposable {
     return this.#disposePromise;
   }
 
-  #schedule() {
+  #invalidate() {
     if (this.#phase !== "active") return;
     this.#dirty = true;
-    if (this.#scheduled || this.#runner) return;
-    this.#scheduled = true;
-    queueMicrotask(() => {
-      this.#scheduled = false;
-      if (this.#phase !== "active" || !this.#dirty || this.#runner) return;
-      try {
-        const task = this.#owner.spawn(() => this.#drain());
-        const runner = task.result.catch(() => undefined);
-        this.#runner = runner;
-        void runner.finally(() => {
-          if (this.#runner !== runner) return;
-          this.#runner = undefined;
-          if (this.#dirty) this.#schedule();
-        });
-      } catch {
-        // The owner is already disposing; its registered cleanup owns us.
-      }
-    });
+    this.#wakeDrain?.();
   }
 
-  async #drain() {
-    while (this.#phase === "active" && this.#dirty) {
-      this.#dirty = false;
-      await this.#replace();
+  async #drain(signal: AbortSignal) {
+    try {
+      while (this.#phase === "active" && !signal.aborted) {
+        await this.#waitForInvalidation(signal);
+        while (this.#phase === "active" && !signal.aborted && this.#dirty) {
+          this.#dirty = false;
+          await this.#replaceCurrent();
+        }
+      }
+    } catch (error) {
+      if (this.#phase === "stopped") throw error;
+      await this.#stop([error], "Observation stopped after a replacement failed");
     }
   }
 
-  async #replace() {
+  #waitForInvalidation(signal: AbortSignal) {
+    if (this.#dirty || this.#phase !== "active" || signal.aborted) return Promise.resolve();
+    return new Promise<void>((resolve) => {
+      const wake = () => {
+        signal.removeEventListener("abort", wake);
+        if (this.#wakeDrain === wake) this.#wakeDrain = undefined;
+        resolve();
+      };
+      this.#wakeDrain = wake;
+      signal.addEventListener("abort", wake, { once: true });
+      if (this.#dirty || this.#phase !== "active" || signal.aborted) wake();
+    });
+  }
+
+  async #replaceCurrent() {
     if (this.#phase !== "active") return;
     const value = this.#source.get();
-    if (!this.#retry && this.#hasValue && Object.is(value, this.#value)) return;
+    if (this.#hasValue && Object.is(value, this.#value)) return;
 
     const previous = this.#takeCurrent();
     if (previous) {
       try {
         await previous.dispose();
       } catch (error) {
-        return this.#stop([error], "Observation stopped and could not unsubscribe");
+        return this.#stop(
+          [error],
+          "Observation stopped because the previous lifetime could not be disposed",
+        );
       }
     }
     this.#hasValue = false;
     if (this.#phase !== "active") return;
 
-    const current = this.#owner.lifetime();
+    const current = this.#owner.lifetime("observation");
     assertObservationLifetime(current);
     try {
-      this.#run(value, current);
+      this.#invokeObserver(value, current);
     } catch (error) {
-      this.#retry = true;
       try {
         await current.dispose();
       } catch (cleanupError) {
@@ -134,11 +149,10 @@ class Observation<T, Child extends ObservationLifetime> implements Disposable {
     this.#current = current;
     this.#value = value;
     this.#hasValue = true;
-    this.#retry = false;
   }
 
-  #run(value: T, lifetime: Child) {
-    const result = this.#observer(value, lifetime) as unknown;
+  #invokeObserver(value: T, lifetime: Child) {
+    const result: unknown = this.#observer(value, lifetime);
     if (!isThenable(result)) return;
     Promise.resolve(result).catch(() => undefined);
     throw new TypeError("Observers must be synchronous; use lifetime.spawn() for async work");
@@ -156,17 +170,21 @@ class Observation<T, Child extends ObservationLifetime> implements Disposable {
     return current;
   }
 
+  #takeDrainTask() {
+    const runner = this.#drainTask;
+    this.#drainTask = undefined;
+    return runner;
+  }
+
+  #releaseDrainTask(runner: ObservationTask) {
+    if (this.#drainTask === runner) this.#drainTask = undefined;
+  }
+
   async #stop(errors: unknown[], message: string): Promise<never> {
     this.#phase = "stopped";
-    const subscription = this.#subscription;
-    if (subscription) {
-      try {
-        await subscription.dispose();
-        this.#subscription = undefined;
-      } catch (error) {
-        errors.push(error);
-      }
-    }
+    this.#wakeDrain?.();
+    await collect(this.#takeSubscription(), errors);
+    await collect(this.#takeCurrent(), errors);
     if (errors.length === 1) throw errors[0];
     throw new AggregateError(errors, message);
   }
@@ -223,6 +241,16 @@ function assertObservationLifetime(value: unknown): asserts value is Observation
     typeof (value as ObservationLifetime).spawn !== "function"
   ) {
     throw new TypeError("ObservationOwner.lifetime() must return an ObservationLifetime");
+  }
+}
+
+function assertObservationTask(value: unknown): asserts value is ObservationTask {
+  if (
+    !value ||
+    typeof (value as ObservationTask).dispose !== "function" ||
+    !isThenable((value as ObservationTask).result)
+  ) {
+    throw new TypeError("ObservationOwner.spawn() must return an ObservationTask");
   }
 }
 

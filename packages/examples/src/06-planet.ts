@@ -78,14 +78,14 @@ export async function planetScenario(): Promise<ExampleResult> {
     setup(ctx) {
       playerStarts++;
       const current = signal<Track | undefined>(undefined);
-      let playback = ctx.lifetime();
+      let playback = ctx.lifetime("playback");
 
       return {
         player: {
           current,
           async play(query: string) {
             await playback.dispose();
-            playback = ctx.lifetime();
+            playback = ctx.lifetime("playback");
             const source = [...ctx.sources.get().values()].reduce<MediaSource | undefined>(
               (selected, candidate) =>
                 !selected || candidate.score(query) > selected.score(query) ? candidate : selected,
@@ -178,7 +178,7 @@ export async function planetScenario(): Promise<ExampleResult> {
       `Selected sources in order: ${history.map((track) => track.source).join(" → ")}.`,
       `Audio output received ${audioUris.join(", ")}.`,
       `The player started ${playerStarts} time while providers changed live.`,
-      `The shell observed ${shellTracks.join(", ")}; player child Lifetimes = ${lifetime?.childLifetimes}.`,
+      `The shell observed ${shellTracks.join(", ")}; player child Lifetimes = ${lifetime?.children.length}.`,
     ]),
   });
 }

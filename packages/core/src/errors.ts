@@ -10,6 +10,11 @@ export class DougongError extends Error {
   }
 }
 
+/** Preserves Error values and classifies non-Error rejection reasons. */
+export function normalizeFailure(error: unknown, code: string, message: string): Error {
+  return error instanceof Error ? error : new DougongError(code, message, { cause: error });
+}
+
 export interface ValidationIssue {
   readonly message: string;
   readonly path?: ReadonlyArray<PropertyKey | { readonly key: PropertyKey }>;

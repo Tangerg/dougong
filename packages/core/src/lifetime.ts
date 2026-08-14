@@ -1,8 +1,15 @@
 import type { Event, Extension } from "./contracts";
 import type { Contribution, ExtensionLeaseKind } from "./extension-store";
 import type { EventListener } from "./event-hub";
+import {
+  LifetimeDiagnostics,
+  type LifetimeDiagnosticNode,
+  type LifetimePhase,
+  type LifetimeResourceKind,
+} from "./lifetime-diagnostics";
 import type { Disposable, Publication, StagedResource } from "./resource";
-import { SnapshotPublisher, type SnapshotView } from "./snapshot-view";
+
+export type { LifetimePhase, LifetimeSnapshot } from "./lifetime-diagnostics";
 
 export interface Logger {
   debug(message: unknown, ...details: unknown[]): void;
@@ -12,37 +19,25 @@ export interface Logger {
 }
 
 export interface PluginMeta {
-  readonly app: string;
-  readonly name: string;
-  readonly instance: string;
-  readonly group: string;
+  readonly applicationName: string;
+  readonly pluginName: string;
+  readonly installationId: string;
+  readonly groupId: string;
 }
 
 export interface Task<T = void> extends Disposable {
   readonly result: Promise<T>;
 }
 
-export type LifetimePhase = "active" | "disposing" | "disposed";
-
-/** Live aggregate over one plugin's complete Lifetime tree. */
-export interface LifetimeSnapshot {
-  readonly phase: LifetimePhase;
-  readonly cleanups: number;
-  readonly tasks: number;
-  readonly listeners: number;
-  readonly contributions: number;
-  readonly extensionViews: number;
-  readonly subscriptions: number;
-  readonly childLifetimes: number;
-}
-
 export type Cleanup = () => unknown;
 export type BackgroundTask<T> = (signal: AbortSignal) => T | PromiseLike<T>;
+
+const disposalReason = Object.freeze(new DOMException("Resource disposed", "AbortError"));
 
 export interface LifetimeOperations {
   readonly signal: AbortSignal;
   cleanup(dispose: Cleanup): Disposable;
-  lifetime(): LifetimeContext;
+  lifetime(label: string): LifetimeContext;
   spawn<T>(task: BackgroundTask<T>): Task<T>;
   on<T>(token: Event<T>, listener: EventListener<T>): Disposable;
   emit<T>(token: Event<T>, payload: T): Promise<void>;
@@ -69,57 +64,67 @@ export interface LifetimeHost {
   report(error: unknown): void;
 }
 
-type ResourceKind = Exclude<keyof LifetimeSnapshot, "phase">;
+interface LifetimeOptions {
+  readonly parentSignal?: AbortSignal;
+  readonly published?: boolean;
+  readonly detachFromParent?: (lifetime: Lifetime) => void;
+  readonly diagnostics?: LifetimeDiagnostics;
+  readonly diagnosticNode?: LifetimeDiagnosticNode;
+}
 
-class LifetimeDiagnostics {
-  readonly #counts: Record<ResourceKind, number> = {
-    cleanups: 0,
-    tasks: 0,
-    listeners: 0,
-    contributions: 0,
-    extensionViews: 0,
-    subscriptions: 0,
-    childLifetimes: 0,
+/** One canonical owner for O(1) terminal detachment and diagnostic accounting. */
+class LifetimeResources<T extends Disposable> implements Iterable<T> {
+  readonly #resources = new Set<T>();
+  #accounting: LifetimeResourceAccounting | undefined;
+
+  constructor(accounting?: LifetimeResourceAccounting) {
+    this.#accounting = accounting;
+  }
+
+  add(resource: T) {
+    if (this.#resources.has(resource)) throw new TypeError("Lifetime already owns this resource");
+    this.#resources.add(resource);
+    const accounting = this.#accounting;
+    if (accounting) accounting.diagnostics.change(accounting.node, accounting.kind, 1);
+  }
+
+  own(resource: T) {
+    this.add(resource);
+    return () => this.release(resource);
+  }
+
+  readonly release = (resource: T) => {
+    if (!this.#resources.delete(resource)) return false;
+    const accounting = this.#accounting;
+    if (accounting) accounting.diagnostics.change(accounting.node, accounting.kind, -1);
+    return true;
   };
-  readonly #reporter: { report: ((error: unknown) => void) | undefined };
-  readonly #source: SnapshotPublisher<LifetimeSnapshot>;
-  #phase: LifetimePhase = "active";
 
-  readonly view: SnapshotView<LifetimeSnapshot>;
-
-  constructor(report: (error: unknown) => void) {
-    this.#reporter = { report };
-    this.#source = new SnapshotPublisher(
-      () => this.#snapshot(),
-      (error) => {
-        this.#reporter.report?.(error);
-      },
-    );
-    this.view = this.#source.view;
+  async dispose(errors: unknown[]) {
+    try {
+      for (const resource of [...this.#resources].reverse()) {
+        try {
+          await resource.dispose();
+        } catch (error) {
+          errors.push(error);
+        } finally {
+          this.release(resource);
+        }
+      }
+    } finally {
+      this.#accounting = undefined;
+    }
   }
 
-  change(kind: ResourceKind, delta: 1 | -1) {
-    this.#counts[kind] += delta;
-    this.#source.invalidate();
+  [Symbol.iterator]() {
+    return this.#resources[Symbol.iterator]();
   }
+}
 
-  beginDisposing() {
-    if (this.#phase !== "active") return;
-    this.#phase = "disposing";
-    this.#source.invalidate();
-  }
-
-  finish() {
-    if (this.#phase === "disposed") return;
-    this.#phase = "disposed";
-    this.#source.invalidate();
-    // A retained historical diagnostic view must not retain the Application.
-    this.#reporter.report = undefined;
-  }
-
-  #snapshot(): LifetimeSnapshot {
-    return Object.freeze({ phase: this.#phase, ...this.#counts });
-  }
+interface LifetimeResourceAccounting {
+  readonly diagnostics: LifetimeDiagnostics;
+  readonly node: LifetimeDiagnosticNode;
+  readonly kind: LifetimeResourceKind;
 }
 
 class CleanupRecord implements Disposable {
@@ -156,7 +161,7 @@ class CleanupRecord implements Disposable {
 
 class TaskRecord<T> implements Task<T> {
   readonly #controller = new AbortController();
-  #removeParentListener: (() => void) | undefined;
+  #detachParentAbortListener: (() => void) | undefined;
   #detachFromParent: ((task: Disposable) => void) | undefined;
   #settled = false;
   #disposePromise: Promise<void> | undefined;
@@ -170,7 +175,7 @@ class TaskRecord<T> implements Task<T> {
   ) {
     const abort = () => this.#controller.abort(parentSignal.reason);
     parentSignal.addEventListener("abort", abort, { once: true });
-    this.#removeParentListener = () => parentSignal.removeEventListener("abort", abort);
+    this.#detachParentAbortListener = () => parentSignal.removeEventListener("abort", abort);
     this.#detachFromParent = detachFromParent;
     if (parentSignal.aborted) abort();
 
@@ -196,8 +201,8 @@ class TaskRecord<T> implements Task<T> {
       this.#disposePromise = Promise.resolve();
       return this.#disposePromise;
     }
-    this.#controller.abort();
-    this.#removeParent();
+    this.#controller.abort(disposalReason);
+    this.#removeParentAbortListener();
     this.#disposePromise = this.result.then(
       () => undefined,
       () => undefined,
@@ -212,15 +217,15 @@ class TaskRecord<T> implements Task<T> {
   #settle() {
     if (this.#settled) return;
     this.#settled = true;
-    this.#removeParent();
+    this.#removeParentAbortListener();
     const detach = this.#detachFromParent;
     this.#detachFromParent = undefined;
     detach?.(this);
   }
 
-  #removeParent() {
-    const remove = this.#removeParentListener;
-    this.#removeParentListener = undefined;
+  #removeParentAbortListener() {
+    const remove = this.#detachParentAbortListener;
+    this.#detachParentAbortListener = undefined;
     remove?.();
   }
 }
@@ -229,43 +234,53 @@ export class Lifetime implements LifetimeContext {
   #host: LifetimeHost | undefined;
   readonly #ownerId: string;
   readonly #controller = new AbortController();
-  readonly #listeners = new Set<Publication>();
-  readonly #contributions = new Set<Publication>();
-  readonly #extensionViews = new Set<Disposable>();
-  readonly #subscriptions = new Set<Disposable>();
-  readonly #tasks = new Set<Disposable>();
-  readonly #children = new Set<Lifetime>();
-  readonly #resources = new Set<Disposable>();
-  readonly #diagnosticModel: LifetimeDiagnostics;
-  readonly #ownsDiagnostics: boolean;
-  #removeParentListener: (() => void) | undefined;
+  readonly #listeners: LifetimeResources<Publication>;
+  readonly #contributions: LifetimeResources<Publication>;
+  readonly #extensionViews: LifetimeResources<Disposable>;
+  readonly #subscriptions: LifetimeResources<Disposable>;
+  readonly #tasks: LifetimeResources<Disposable>;
+  readonly #children: LifetimeResources<Lifetime>;
+  readonly #cleanups: LifetimeResources<Disposable>;
+  #diagnostics: LifetimeDiagnostics | undefined;
+  #diagnosticNode: LifetimeDiagnosticNode | undefined;
+  readonly #isRoot: boolean;
+  #detachParentAbortListener: (() => void) | undefined;
   #detachFromParent: ((lifetime: Lifetime) => void) | undefined;
   readonly handle: LifetimeContext;
   #phase: LifetimePhase = "active";
   #published: boolean;
   #disposePromise: Promise<void> | undefined;
 
-  constructor(
-    host: LifetimeHost,
-    ownerId: string,
-    parentSignal?: AbortSignal,
-    published = false,
-    detachFromParent?: (lifetime: Lifetime) => void,
-    diagnosticModel?: LifetimeDiagnostics,
-  ) {
+  constructor(host: LifetimeHost, ownerId: string, options: LifetimeOptions = {}) {
     this.#host = host;
     this.#ownerId = ownerId;
     this.handle = new LifetimeHandle(this);
-    this.#published = published;
-    this.#detachFromParent = detachFromParent;
-    this.#ownsDiagnostics = diagnosticModel === undefined;
-    this.#diagnosticModel =
-      diagnosticModel ?? new LifetimeDiagnostics((error) => host.report(error));
+    this.#published = options.published ?? false;
+    this.#detachFromParent = options.detachFromParent;
+    this.#isRoot = options.diagnostics === undefined;
+    const diagnostics =
+      options.diagnostics ?? new LifetimeDiagnostics(ownerId, (error) => host.report(error));
+    const diagnosticNode = options.diagnosticNode ?? diagnostics.root;
+    this.#diagnostics = diagnostics;
+    this.#diagnosticNode = diagnosticNode;
+    const account = (kind: LifetimeResourceKind): LifetimeResourceAccounting => ({
+      diagnostics,
+      node: diagnosticNode,
+      kind,
+    });
+    this.#listeners = new LifetimeResources(account("listeners"));
+    this.#contributions = new LifetimeResources(account("contributions"));
+    this.#extensionViews = new LifetimeResources(account("extensionViews"));
+    this.#subscriptions = new LifetimeResources(account("subscriptions"));
+    this.#tasks = new LifetimeResources(account("tasks"));
+    this.#children = new LifetimeResources();
+    this.#cleanups = new LifetimeResources(account("cleanups"));
+    const parentSignal = options.parentSignal;
     if (!parentSignal) return;
 
     const abort = () => this.#controller.abort(parentSignal.reason);
     parentSignal.addEventListener("abort", abort, { once: true });
-    this.#removeParentListener = () => parentSignal.removeEventListener("abort", abort);
+    this.#detachParentAbortListener = () => parentSignal.removeEventListener("abort", abort);
     if (parentSignal.aborted) abort();
   }
 
@@ -274,82 +289,81 @@ export class Lifetime implements LifetimeContext {
   }
 
   get diagnostics() {
-    return this.#diagnosticModel.view;
+    return this.#requireDiagnostics().view;
   }
 
   cleanup(dispose: Cleanup) {
     this.#assertActive();
     if (typeof dispose !== "function") throw new TypeError("Cleanup must be a function");
-    const resource = new CleanupRecord(dispose, (item) => {
-      this.#resources.delete(item);
-      this.#diagnosticModel.change("cleanups", -1);
-    });
-    this.#resources.add(resource);
-    this.#diagnosticModel.change("cleanups", 1);
+    const resource = new CleanupRecord(dispose, this.#cleanups.release);
+    this.#cleanups.add(resource);
     return resource;
   }
 
-  lifetime() {
+  lifetime(label: string) {
     this.#assertActive();
-    const child = new Lifetime(
-      this.#host!,
-      this.#ownerId,
-      this.signal,
-      this.#published,
-      (item) => {
-        this.#children.delete(item);
-        this.#diagnosticModel.change("childLifetimes", -1);
+    validateLifetimeLabel(label);
+    const host = this.#requireHost();
+    const diagnostics = this.#requireDiagnostics();
+    const parentNode = this.#requireDiagnosticNode();
+    const diagnosticNode = diagnostics.createNode(label);
+    const child = new Lifetime(host, this.#ownerId, {
+      parentSignal: this.signal,
+      published: this.#published,
+      diagnostics,
+      diagnosticNode,
+      detachFromParent: (lifetime) => {
+        if (!this.#children.release(lifetime)) return;
+        diagnostics.detach(parentNode, diagnosticNode);
       },
-      this.#diagnosticModel,
-    );
+    });
     this.#children.add(child);
-    this.#diagnosticModel.change("childLifetimes", 1);
+    diagnostics.attach(parentNode, diagnosticNode);
     return child.handle;
   }
 
   spawn<T>(task: BackgroundTask<T>): Task<T> {
     this.#assertActive();
     if (typeof task !== "function") throw new TypeError("Background task must be a function");
-    let record!: TaskRecord<T>;
-    record = new TaskRecord(
+    const host = this.#requireHost();
+    const taskRecord = new TaskRecord(
       this.signal,
       task,
-      (error) => this.#host!.report(error),
-      (item) => {
-        this.#tasks.delete(item);
-        this.#diagnosticModel.change("tasks", -1);
-      },
+      (error) => host.report(error),
+      this.#tasks.release,
     );
-    this.#tasks.add(record);
-    this.#diagnosticModel.change("tasks", 1);
-    return record;
+    this.#tasks.add(taskRecord);
+    return taskRecord;
   }
 
   on<T>(token: Event<T>, listener: EventListener<T>) {
     this.#assertActive();
-    const publication = this.#host!.stageOn(this.#ownerId, token, listener, (item) => {
-      this.#listeners.delete(item);
-      this.#diagnosticModel.change("listeners", -1);
-    });
+    const publication = this.#requireHost().stageOn(
+      this.#ownerId,
+      token,
+      listener,
+      this.#listeners.release,
+    );
     this.#listeners.add(publication);
-    this.#diagnosticModel.change("listeners", 1);
     if (this.#published) publication.publish();
     return publication.handle;
   }
 
   emit<T>(token: Event<T>, payload: T) {
     this.#assertActive();
-    return this.#host!.emit(this.#ownerId, token, payload);
+    return this.#requireHost().emit(this.#ownerId, token, payload);
   }
 
   contribute<T>(token: Extension<T>, key: string, value: T) {
     this.#assertActive();
-    const publication = this.#host!.stageContribution(this.#ownerId, token, key, value, (item) => {
-      this.#contributions.delete(item);
-      this.#diagnosticModel.change("contributions", -1);
-    });
+    const publication = this.#requireHost().stageContribution(
+      this.#ownerId,
+      token,
+      key,
+      value,
+      this.#contributions.release,
+    );
     this.#contributions.add(publication);
-    this.#diagnosticModel.change("contributions", 1);
     if (this.#published) publication.publish();
     return publication.handle;
   }
@@ -358,22 +372,13 @@ export class Lifetime implements LifetimeContext {
   ownLease(resource: Disposable, kind: ExtensionLeaseKind) {
     this.#assertActive();
     const resources = kind === "view" ? this.#extensionViews : this.#subscriptions;
-    const diagnosticKind = kind === "view" ? "extensionViews" : "subscriptions";
-    resources.add(resource);
-    this.#diagnosticModel.change(diagnosticKind, 1);
-    let owned = true;
-    return () => {
-      if (!owned) return;
-      owned = false;
-      resources.delete(resource);
-      this.#diagnosticModel.change(diagnosticKind, -1);
-    };
+    return resources.own(resource);
   }
 
   /** Releases a temporary startup cancellation edge after its layer commits. */
-  detachParentSignal() {
-    const remove = this.#removeParentListener;
-    this.#removeParentListener = undefined;
+  detachStartupSignal() {
+    const remove = this.#detachParentAbortListener;
+    this.#detachParentAbortListener = undefined;
     remove?.();
   }
 
@@ -390,23 +395,24 @@ export class Lifetime implements LifetimeContext {
   dispose() {
     if (this.#disposePromise) return this.#disposePromise;
     this.#phase = "disposing";
-    if (this.#ownsDiagnostics) this.#diagnosticModel.beginDisposing();
+    const diagnostics = this.#requireDiagnostics();
+    diagnostics.beginDisposing(this.#requireDiagnosticNode());
 
     // Reject new work and withdraw public capabilities before cancellation or
     // user cleanup. This ordering is invariant, not registration-order luck.
     this.#disposePromise = (async () => {
       const errors: unknown[] = [];
-      await disposeOwned(this.#listeners, errors);
-      await disposeOwned(this.#contributions, errors);
-      await disposeOwned(this.#subscriptions, errors);
-      await disposeOwned(this.#extensionViews, errors);
+      await this.#listeners.dispose(errors);
+      await this.#contributions.dispose(errors);
+      await this.#subscriptions.dispose(errors);
+      await this.#extensionViews.dispose(errors);
 
-      this.#controller.abort();
-      this.detachParentSignal();
+      this.#controller.abort(disposalReason);
+      this.detachStartupSignal();
 
-      await disposeOwned(this.#tasks, errors);
-      await disposeOwned(this.#children, errors);
-      await disposeOwned(this.#resources, errors);
+      await this.#tasks.dispose(errors);
+      await this.#children.dispose(errors);
+      await this.#cleanups.dispose(errors);
 
       if (errors.length === 1) throw errors[0];
       if (errors.length > 1) throw new AggregateError(errors, "Lifetime cleanup failed");
@@ -415,10 +421,14 @@ export class Lifetime implements LifetimeContext {
       this.#host = undefined;
       const detach = this.#detachFromParent;
       this.#detachFromParent = undefined;
-      detach?.(this);
-      if (this.#ownsDiagnostics) this.#diagnosticModel.finish();
+      try {
+        detach?.(this);
+        if (this.#isRoot) diagnostics.finishRoot();
+      } finally {
+        this.#diagnostics = undefined;
+        this.#diagnosticNode = undefined;
+      }
     });
-
     return this.#disposePromise;
   }
 
@@ -430,6 +440,24 @@ export class Lifetime implements LifetimeContext {
     if (this.#phase !== "active" || this.signal.aborted) {
       throw new TypeError("Lifetime is disposing or has been disposed");
     }
+  }
+
+  #requireHost() {
+    const host = this.#host;
+    if (!host) throw new TypeError("Lifetime is disposing or has been disposed");
+    return host;
+  }
+
+  #requireDiagnostics() {
+    const diagnostics = this.#diagnostics;
+    if (!diagnostics) throw new TypeError("Lifetime is disposing or has been disposed");
+    return diagnostics;
+  }
+
+  #requireDiagnosticNode() {
+    const node = this.#diagnosticNode;
+    if (!node) throw new TypeError("Lifetime is disposing or has been disposed");
+    return node;
   }
 }
 
@@ -449,8 +477,8 @@ class LifetimeHandle implements LifetimeContext {
     return this.#lifetime.cleanup(dispose);
   }
 
-  lifetime() {
-    return this.#lifetime.lifetime();
+  lifetime(label: string) {
+    return this.#lifetime.lifetime(label);
   }
 
   spawn<T>(task: BackgroundTask<T>) {
@@ -478,18 +506,11 @@ class LifetimeHandle implements LifetimeContext {
   }
 }
 
-async function disposeAll<T extends Disposable>(resources: ReadonlyArray<T>, errors: unknown[]) {
-  for (const resource of resources) {
-    try {
-      await resource.dispose();
-    } catch (error) {
-      errors.push(error);
-    }
+function validateLifetimeLabel(label: string) {
+  if (typeof label !== "string" || !label.trim()) {
+    throw new TypeError("Lifetime label must be a non-empty string");
   }
-}
-
-async function disposeOwned<T extends Disposable>(resources: Set<T>, errors: unknown[]) {
-  const owned = [...resources].reverse();
-  resources.clear();
-  await disposeAll(owned, errors);
+  if (label !== label.trim()) {
+    throw new TypeError("Lifetime label cannot start or end with whitespace");
+  }
 }

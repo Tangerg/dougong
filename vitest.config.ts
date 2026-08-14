@@ -44,19 +44,17 @@ export default defineConfig({
       enabled: true,
       provider: "istanbul",
       include: ["packages/*/src/**"],
-      // Thresholds are pinned to the suite's measured coverage, per package, so
-      // a regression fails rather than quietly averaging out against the other
-      // package. Raise them when coverage improves; lowering one is a decision
-      // that should show up in review.
+      // Thresholds follow the measured package floors. A package cannot hide a
+      // regression behind stronger coverage elsewhere in the workspace.
       thresholds: {
-        "packages/core/src/**": { statements: 84, functions: 85, branches: 72, lines: 88 },
+        "packages/core/src/**": { statements: 89, functions: 91, branches: 77, lines: 93 },
         "packages/platform/src/**": {
-          statements: 89,
-          functions: 94,
-          branches: 78,
-          lines: 90,
+          statements: 91,
+          functions: 97,
+          branches: 81,
+          lines: 93,
         },
-        "packages/reactive/src/**": { statements: 92, functions: 100, branches: 75, lines: 96 },
+        "packages/reactive/src/**": { statements: 94, functions: 100, branches: 85, lines: 97 },
       },
     },
   },

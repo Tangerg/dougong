@@ -104,11 +104,11 @@ export interface CreatePlatformOptions<Reference> {
   readonly logger?: Logger;
 }
 
-export type AnyDefinition = PluginDefinition<unknown, Requirements, Provisions, unknown>;
+export type AnyPluginDefinition = PluginDefinition<unknown, Requirements, Provisions, unknown>;
 
 export interface NormalizedArtifact<Reference> {
   readonly manifest: PluginManifest;
   readonly reference: Reference;
   readonly config: unknown;
-  readonly placeholder?: AnyDefinition;
+  readonly placeholder?: AnyPluginDefinition;
 }

@@ -1,40 +1,111 @@
+type GroupConfigurationState<Draft> =
+  | {
+      readonly phase: "open";
+      readonly draft: Draft;
+      readonly discard: (draft: Draft, error: unknown) => void;
+      readonly normalize: (error: unknown) => Error;
+    }
+  | {
+      readonly phase: "failed";
+      readonly draft: Draft;
+      readonly discard: (draft: Draft, error: unknown) => void;
+      readonly error: Error;
+    }
+  | { readonly phase: "sealed" };
+
+/** One explicit transaction shared by every nested Group configure callback. */
+export class GroupConfigurationSession<Draft> {
+  #state: GroupConfigurationState<Draft>;
+
+  constructor(
+    draft: Draft,
+    discard: (draft: Draft, error: unknown) => void,
+    normalize: (error: unknown) => Error,
+  ) {
+    this.#state = { phase: "open", draft, discard, normalize };
+  }
+
+  get failure() {
+    return this.#state.phase === "failed" ? this.#state.error : undefined;
+  }
+
+  requireDraft() {
+    const state = this.#state;
+    if (state.phase === "failed") throw state.error;
+    if (state.phase === "sealed") throw new TypeError("Group configuration has been sealed");
+    return state.draft;
+  }
+
+  assertOpen() {
+    void this.requireDraft();
+  }
+
+  fail(error: unknown) {
+    const state = this.#state;
+    if (state.phase === "failed") return state.error;
+    if (state.phase === "sealed") throw new TypeError("Group configuration has been sealed");
+    const failure = state.normalize(error);
+    this.#state = {
+      phase: "failed",
+      draft: state.draft,
+      discard: state.discard,
+      error: failure,
+    };
+    return failure;
+  }
+
+  seal() {
+    const state = this.#state;
+    if (state.phase === "failed") throw state.error;
+    if (state.phase === "sealed") throw new TypeError("Group configuration has been sealed");
+    this.#state = { phase: "sealed" };
+    return state.draft;
+  }
+
+  discard(error: unknown) {
+    const state = this.#state;
+    if (state.phase === "sealed") return;
+    const failure = state.phase === "failed" ? state.error : state.normalize(error);
+    this.#state = { phase: "sealed" };
+    state.discard(state.draft, failure);
+  }
+}
+
+type GroupNodeState =
+  | { readonly phase: "attached"; readonly parent: GroupNode | undefined }
+  | { readonly phase: "detached" };
+
 /**
  * A Group is an ownership tree over installations, never a capability scope.
  * Service resolution and Extension/Event visibility remain application-wide.
  */
 export class GroupNode {
   readonly #children = new Map<string, GroupNode>();
-  #attached = true;
-  #error: unknown;
+  #state: GroupNodeState;
 
   private constructor(
     readonly id: string,
     readonly name: string,
-    readonly parent: GroupNode | undefined,
-  ) {}
+    parent: GroupNode | undefined,
+  ) {
+    this.#state = { phase: "attached", parent };
+  }
 
   static root(name: string) {
     return new GroupNode("/", name, undefined);
   }
 
   get attached() {
-    return this.#attached;
+    return this.#state.phase !== "detached";
   }
 
   get children(): ReadonlyArray<GroupNode> {
     return [...this.#children.values()];
   }
 
-  get error() {
-    return this.#error;
-  }
-
-  fail(error: unknown) {
-    this.#error = error;
-  }
-
-  recover() {
-    this.#error = undefined;
+  get parent(): GroupNode | undefined {
+    const state = this.#state;
+    return state.phase === "detached" ? undefined : state.parent;
   }
 
   create(name: string) {
@@ -48,31 +119,32 @@ export class GroupNode {
     return child;
   }
 
-  contains(candidate: GroupNode) {
-    let current: GroupNode | undefined = candidate;
-    while (current) {
-      if (current === this) return true;
-      current = current.parent;
-    }
-    return false;
+  containsId(candidateId: string) {
+    return this.id === "/"
+      ? candidateId.startsWith("/")
+      : candidateId === this.id || candidateId.startsWith(`${this.id}/`);
   }
 
   assertAttached() {
-    if (!this.#attached) throw new TypeError(`Group '${this.id}' has been removed`);
+    if (this.#state.phase === "detached") {
+      throw new TypeError(`Group '${this.id}' has been removed`);
+    }
   }
 
   detach() {
-    if (!this.#attached) return;
+    const state = this.#state;
+    if (state.phase === "detached") return;
     for (const child of this.#children.values()) child.detach();
     this.#children.clear();
-    this.#attached = false;
-    if (this.parent) this.parent.#children.delete(this.name);
+    this.#state = { phase: "detached" };
+    if (state.parent) state.parent.#children.delete(this.name);
   }
 
   walk() {
     const groups: GroupNode[] = [this];
     for (let index = 0; index < groups.length; index++) {
-      groups.push(...groups[index]!.children);
+      const group = groups[index];
+      if (group) groups.push(...group.children);
     }
     return groups;
   }

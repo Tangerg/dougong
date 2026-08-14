@@ -1,6 +1,6 @@
 import type { Provisions, Requirements } from "@dougong/core";
 import { PlatformError } from "./errors";
-import type { ManagedPluginRecord } from "./managed-plugin";
+import type { ManagedPluginRegistration } from "./managed-plugin";
 import type {
   ManagedPlugin,
   NormalizedArtifact,
@@ -8,21 +8,21 @@ import type {
   PluginArtifact,
 } from "./platform-api";
 
-export type PlatformChange<Reference> =
+export type PlatformChangeOperation<Reference> =
   | {
       readonly kind: "register";
-      readonly record: ManagedPluginRecord<Reference>;
+      readonly registration: ManagedPluginRegistration<Reference>;
       readonly artifact: NormalizedArtifact<Reference>;
     }
   | {
       readonly kind: "update";
-      readonly record: ManagedPluginRecord<Reference>;
+      readonly registration: ManagedPluginRegistration<Reference>;
       readonly artifact: NormalizedArtifact<Reference>;
     }
-  | { readonly kind: "remove"; readonly record: ManagedPluginRecord<Reference> };
+  | { readonly kind: "remove"; readonly registration: ManagedPluginRegistration<Reference> };
 
-export interface CandidatePlugin<Reference> {
-  readonly record: ManagedPluginRecord<Reference>;
+export interface CandidateRegistration<Reference> {
+  readonly registration: ManagedPluginRegistration<Reference>;
   readonly artifact: NormalizedArtifact<Reference>;
 }
 
@@ -35,21 +35,27 @@ export interface PlatformChangeHost<Reference> {
   >(
     artifact: PluginArtifact<Reference, Config, Requires, Provides, ConfigInput>,
   ): NormalizedArtifact<Reference>;
-  createRecord(artifact: NormalizedArtifact<Reference>): ManagedPluginRecord<Reference>;
-  attachRecord(record: ManagedPluginRecord<Reference>): void;
-  resolve(plugin: ManagedPlugin<Reference>): ManagedPluginRecord<Reference>;
-  execute(operations: ReadonlyArray<PlatformChange<Reference>>): Promise<void>;
+  createRegistration(artifact: NormalizedArtifact<Reference>): ManagedPluginRegistration<Reference>;
+  attachRegistration(registration: ManagedPluginRegistration<Reference>): void;
+  resolve(plugin: ManagedPlugin<Reference>): ManagedPluginRegistration<Reference>;
+  execute(operations: ReadonlyArray<PlatformChangeOperation<Reference>>): Promise<void>;
 }
 
-/** One-shot owner of platform candidate-graph and target-uniqueness rules. */
+type PlatformChangeSetState<Reference> =
+  | { readonly phase: "open"; readonly host: PlatformChangeHost<Reference> }
+  | { readonly phase: "committing" }
+  | { readonly phase: "submitted"; readonly promise: Promise<void> };
+
+/** One-shot draft that owns target uniqueness and delegates candidate validation. */
 export class PlatformChangeSetDraft<Reference> implements PlatformChangeSet<Reference> {
-  #host: PlatformChangeHost<Reference> | undefined;
-  readonly #operations = new Map<ManagedPluginRecord<Reference>, PlatformChange<Reference>>();
-  #open = true;
-  #commitPromise: Promise<void> | undefined;
+  readonly #operations = new Map<
+    ManagedPluginRegistration<Reference>,
+    PlatformChangeOperation<Reference>
+  >();
+  #state: PlatformChangeSetState<Reference>;
 
   constructor(host: PlatformChangeHost<Reference>) {
-    this.#host = host;
+    this.#state = { phase: "open", host };
     Object.freeze(this);
   }
 
@@ -59,11 +65,11 @@ export class PlatformChangeSetDraft<Reference> implements PlatformChangeSet<Refe
     Provides extends Provisions = {},
     ConfigInput = Config,
   >(artifact: PluginArtifact<Reference, Config, Requires, Provides, ConfigInput>) {
-    this.#assertOpen();
-    const normalized = this.#host!.normalize(artifact);
-    const record = this.#host!.createRecord(normalized);
-    this.#stage({ kind: "register", record, artifact: normalized });
-    return record.handle;
+    const host = this.#requireOpen();
+    const normalized = host.normalize(artifact);
+    const registration = host.createRegistration(normalized);
+    this.#stage({ kind: "register", registration, artifact: normalized });
+    return registration.handle;
   }
 
   update<
@@ -75,67 +81,76 @@ export class PlatformChangeSetDraft<Reference> implements PlatformChangeSet<Refe
     plugin: ManagedPlugin<Reference>,
     artifact: PluginArtifact<Reference, Config, Requires, Provides, ConfigInput>,
   ) {
-    this.#assertOpen();
-    const record = this.#host!.resolve(plugin);
-    const normalized = this.#host!.normalize(artifact);
-    if (normalized.manifest.name !== record.name) {
+    const host = this.#requireOpen();
+    const registration = host.resolve(plugin);
+    const normalized = host.normalize(artifact);
+    if (normalized.manifest.name !== registration.name) {
       throw new PlatformError(
         "PLUGIN_IDENTITY",
-        `Managed plugin '${record.name}' cannot change name to '${normalized.manifest.name}'`,
+        `Managed plugin '${registration.name}' cannot change name to '${normalized.manifest.name}'`,
       );
     }
-    this.#stage({ kind: "update", record, artifact: normalized });
+    this.#stage({ kind: "update", registration, artifact: normalized });
     return this;
   }
 
   remove(plugin: ManagedPlugin<Reference>) {
-    this.#assertOpen();
-    this.#stage({ kind: "remove", record: this.#host!.resolve(plugin) });
+    const host = this.#requireOpen();
+    this.#stage({ kind: "remove", registration: host.resolve(plugin) });
     return this;
   }
 
   commit() {
-    if (this.#commitPromise) return this.#commitPromise;
-    this.#open = false;
-    const host = this.#host!;
+    const state = this.#state;
+    if (state.phase === "submitted") return state.promise;
+    if (state.phase === "committing") {
+      throw new TypeError("ChangeSet commit is already being prepared");
+    }
+    this.#state = { phase: "committing" };
+    const host = state.host;
     const operations = Object.freeze([...this.#operations.values()]);
     try {
       for (const operation of operations) {
-        if (operation.kind === "register") host.attachRecord(operation.record);
+        if (operation.kind === "register") host.attachRegistration(operation.registration);
       }
     } catch (error) {
       for (const operation of operations) {
-        if (operation.kind === "register") operation.record.abandon(error);
+        if (operation.kind === "register") operation.registration.discard(error);
       }
-      this.#host = undefined;
-      this.#operations.clear();
-      this.#commitPromise = Promise.reject(error);
-      return this.#commitPromise;
+      return this.#submit(Promise.reject(error));
     }
-    this.#host = undefined;
-    this.#operations.clear();
     if (!operations.length) {
-      this.#commitPromise = Promise.resolve();
-      return this.#commitPromise;
+      return this.#submit(Promise.resolve());
     }
+    let promise: Promise<void>;
     try {
-      this.#commitPromise = host.execute(operations);
+      promise = host.execute(operations);
     } catch (error) {
-      this.#commitPromise = Promise.reject(error);
+      promise = Promise.reject(error);
     }
-    return this.#commitPromise;
+    return this.#submit(promise);
   }
 
-  #stage(operation: PlatformChange<Reference>) {
-    if (this.#operations.has(operation.record)) {
+  #stage(operation: PlatformChangeOperation<Reference>) {
+    if (this.#operations.has(operation.registration)) {
       throw new TypeError(
-        `Plugin '${operation.record.name}' can only appear once in the same ChangeSet`,
+        `Plugin '${operation.registration.name}' can only appear once in the same ChangeSet`,
       );
     }
-    this.#operations.set(operation.record, Object.freeze(operation));
+    this.#operations.set(operation.registration, Object.freeze(operation));
   }
 
-  #assertOpen() {
-    if (!this.#open) throw new TypeError("Cannot modify a committed ChangeSet");
+  #requireOpen() {
+    const state = this.#state;
+    if (state.phase !== "open") {
+      throw new TypeError(`Cannot modify a ${state.phase} ChangeSet`);
+    }
+    return state.host;
+  }
+
+  #submit(promise: Promise<void>) {
+    this.#state = { phase: "submitted", promise };
+    this.#operations.clear();
+    return promise;
   }
 }

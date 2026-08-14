@@ -1,5 +1,11 @@
 import type { StandardSchemaV1 } from "@standard-schema/spec";
-import type { Extension, OptionalService, Requirement, Service } from "./contracts";
+import {
+  isContract,
+  type Extension,
+  type OptionalService,
+  type Requirement,
+  type Service,
+} from "./contracts";
 import type { ExtensionRequirementView } from "./extension-store";
 import type { LifetimeOperations, Logger, PluginMeta } from "./lifetime";
 import type { Awaitable } from "./resource";
@@ -63,17 +69,6 @@ const reservedContextKeys = new Set([
   "emit",
   "contribute",
 ]);
-
-function isContract(value: unknown, kind: "service" | "extension") {
-  if (!value || typeof value !== "object") return false;
-  const token = value as { readonly id?: unknown; readonly kind?: unknown };
-  return (
-    token.kind === kind &&
-    typeof token.id === "string" &&
-    token.id.length > 0 &&
-    token.id === token.id.trim()
-  );
-}
 
 export function definePlugin<
   Config = void,

@@ -3,7 +3,7 @@ import type { PluginManifest } from "./manifest";
 
 export type PluginPlatformStatus = "active" | "disposing" | "disposed";
 export type ManagedPluginStatus =
-  "pending" | "registered" | "loading" | "active" | "failed" | "removed";
+  "pending" | "registered" | "loading" | "activated" | "failed" | "removed";
 
 export interface ManagedPluginSnapshot {
   readonly name: string;
@@ -28,12 +28,15 @@ export interface DiagnosablePlugin {
   readonly error: unknown;
 }
 
-interface PlatformSubscriptionState {
-  owner: PlatformDiagnostics | undefined;
-  listener: (() => void) | undefined;
+interface PlatformSubscriptionBinding {
+  readonly owner: PlatformDiagnostics;
+  readonly listener: () => void;
 }
 
-const platformSubscriptionStates = new WeakMap<PlatformSubscription, PlatformSubscriptionState>();
+const platformSubscriptionBindings = new WeakMap<
+  PlatformSubscription,
+  PlatformSubscriptionBinding
+>();
 
 /** Immutable operational read model with the same get/subscribe protocol as Core. */
 export class PlatformDiagnostics {
@@ -99,10 +102,11 @@ export class PlatformDiagnostics {
         permissions: manifest.permissions,
         dependencies: manifest.dependencies,
       };
+      const error = plugin.error;
       snapshots.set(
         manifest.name,
         Object.freeze(
-          plugin.error === undefined ? snapshot : { ...snapshot, error: plugin.error },
+          error === undefined ? snapshot : { ...snapshot, error },
         ) as ManagedPluginSnapshot,
       );
     }
@@ -118,16 +122,15 @@ export class PlatformDiagnostics {
 
 class PlatformSubscription implements Disposable {
   constructor(owner: PlatformDiagnostics, listener: () => void) {
-    platformSubscriptionStates.set(this, { owner, listener });
+    platformSubscriptionBindings.set(this, { owner, listener });
     Object.freeze(this);
   }
 
   dispose() {
-    const state = platformSubscriptionStates.get(this);
-    if (!state?.owner) return;
-    const owner = state.owner;
+    const binding = platformSubscriptionBindings.get(this);
+    if (!binding) return;
     closePlatformSubscription(this);
-    owner.remove(this);
+    binding.owner.remove(this);
   }
 
   [Symbol.dispose]() {
@@ -136,15 +139,11 @@ class PlatformSubscription implements Disposable {
 }
 
 function notifyPlatformSubscription(subscription: PlatformSubscription) {
-  platformSubscriptionStates.get(subscription)?.listener?.();
+  platformSubscriptionBindings.get(subscription)?.listener();
 }
 
 function closePlatformSubscription(subscription: PlatformSubscription) {
-  const state = platformSubscriptionStates.get(subscription);
-  if (!state) return;
-  state.owner = undefined;
-  state.listener = undefined;
-  platformSubscriptionStates.delete(subscription);
+  platformSubscriptionBindings.delete(subscription);
 }
 
 class ReadonlyMapSnapshot<Key, Value> implements ReadonlyMap<Key, Value> {

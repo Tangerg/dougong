@@ -56,22 +56,23 @@ export class SnapshotPublisher<T> implements SnapshotView<T> {
 }
 
 class SnapshotSubscription<T> implements Disposable {
-  #publisher: SnapshotPublisher<T> | undefined;
-  #listener: (() => void) | undefined;
+  #binding:
+    | {
+        readonly publisher: SnapshotPublisher<T>;
+        readonly listener: () => void;
+      }
+    | undefined;
 
   constructor(publisher: SnapshotPublisher<T>, listener: () => void) {
-    this.#publisher = publisher;
-    this.#listener = listener;
+    this.#binding = { publisher, listener };
     Object.freeze(this);
   }
 
   dispose() {
-    const publisher = this.#publisher;
-    if (!publisher) return;
-    const listener = this.#listener!;
-    this.#publisher = undefined;
-    this.#listener = undefined;
-    publisher.remove(listener);
+    const binding = this.#binding;
+    if (!binding) return;
+    this.#binding = undefined;
+    binding.publisher.remove(binding.listener);
   }
 
   [Symbol.dispose]() {
