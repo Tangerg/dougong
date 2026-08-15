@@ -9,7 +9,7 @@ import {
   type PluginArtifact,
   type PluginPlatform,
 } from "dougong";
-import type { ExampleResult } from "./example";
+import { exampleResult, type ExampleResult } from "./example";
 
 interface Greeter {
   greet(): string;
@@ -105,7 +105,12 @@ function entry(name: string, revision: string, reference: string, version: strin
   return Object.freeze({ revision, artifact: artifact(name, version, reference) });
 }
 
-/** Plain JS desired state reconciled through Platform, with no configuration runtime in Core. */
+/**
+ * The last two chapters build what mature plugin frameworks ship as built-in
+ * subsystems — a config loader and a hot-reload engine — in about 200 lines
+ * each, using only the public API and adding no new primitive. That is the
+ * test of whether Core's abstractions are open enough to be composed on.
+ */
 export async function declarativePlan(): Promise<ExampleResult> {
   let legacyDisposals = 0;
   let toolStarts = 0;
@@ -178,15 +183,18 @@ export async function declarativePlan(): Promise<ExampleResult> {
   await platform.dispose();
   await app.stop();
 
-  return Object.freeze({
-    id: "08",
-    title: "Declarative desired state compiled into one Platform ChangeSet",
-    facts: Object.freeze([
+  return exampleResult({
+    id: "11",
+    stage: "hosts",
+    title: "A desired-state controller compiled into one Platform ChangeSet",
+    introduces: ["desired-state", "content-revision", "platform-change-set"],
+    facts: [
       `The initial plan published '${before}'.`,
       `The invalid plan was rejected = ${rejected}; the running service remained '${afterFailure}'.`,
-      `Rollback kept the removed candidate alive, so its disposal count stayed ${legacyAfterFailure}.`,
+      `Rollback restored the whole plan, not just the failing entry: the removal candidate's disposal count stayed ${legacyAfterFailure}.`,
       `The valid plan atomically published '${afterCommit}' and disposed the legacy plugin ${legacyDisposals} time.`,
       `The final plan contains ${deployed}; the newly declared tool started ${toolStarts} time.`,
-    ]),
+      "Identity came from the manifest name and change detection from an explicit revision — never guessed from paths or object contents.",
+    ],
   });
 }

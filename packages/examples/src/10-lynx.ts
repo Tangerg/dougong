@@ -8,7 +8,7 @@ import {
   service,
   type ExtensionView,
 } from "dougong";
-import type { ExampleResult } from "./example";
+import { exampleResult, type ExampleResult } from "./example";
 
 interface Filesystem {
   read(path: string): Promise<string>;
@@ -64,7 +64,11 @@ function explorerPlugin(title: string, relativePath: string) {
   });
 }
 
-/** A desktop workbench: domain catalogs, workspace ownership, permissions, lazy load and HMR. */
+/**
+ * A workbench. Two rules that hosts usually get wrong are made explicit here:
+ * command uniqueness is a domain policy, not a Core Extension mode; and a
+ * Group owns installations, so it is not a capability scope.
+ */
 export async function lynxScenario(): Promise<ExampleResult> {
   let rootCatalog!: CommandCatalog;
   let workspacePanels!: ExtensionView<Panel>;
@@ -184,15 +188,18 @@ export async function lynxScenario(): Promise<ExampleResult> {
   }
   await app.stop();
 
-  return Object.freeze({
-    id: "07",
-    title: "Lynx-style workbench plugins, workspace ownership and HMR",
-    facts: Object.freeze([
-      `The global catalog saw the Group contribution; placeholder executable = ${placeholderExecutable}.`,
+  return exampleResult({
+    id: "10",
+    stage: "hosts",
+    title: "Lynx: a domain catalog, workspace ownership and updates in place",
+    introduces: ["domain-catalog", "workspace-ownership", "plugin-update"],
+    facts: [
+      "Command uniqueness is a CommandCatalog Service policy, not a special Core Extension mode.",
       `The workspace shell bound to '${workspaceRoot}' with ${initialWorkspaceCommands} initial commands.`,
-      `Lazy activation read '${firstOutput}', then HMR read '${secondOutput}'.`,
-      `The updated panel title was '${panelTitle}'.`,
-      `Workspace removal left ${remainingCommands} commands and disposed its view = ${workspaceViewDisposed}.`,
-    ]),
+      `The catalog listed the command before activation, but it was executable = ${placeholderExecutable}.`,
+      `An update kept the plugin's identity while replacing its implementation: '${firstOutput}' → '${secondOutput}', panel now '${panelTitle}'.`,
+      "A root-level consumer saw the Group's contribution — a Group is ownership, not a capability scope.",
+      `Removing the workspace released the whole subtree: ${remainingCommands} commands left, its view disposed = ${workspaceViewDisposed}.`,
+    ],
   });
 }

@@ -206,7 +206,7 @@ await plugin.update({
 })
 ```
 
-Underneath it is Core's `handle.update({ plugin })`, so only the affected dependency closure restarts. A host wanting real HMR (watch files, compute invalidation, reload in batches) composes on top — [example 09](../examples.md) demonstrates a complete module-graph HMR in roughly 200 lines.
+Underneath it is Core's `handle.update({ plugin })`, so only the affected dependency closure restarts. A host wanting real HMR (watch files, compute invalidation, reload in batches) composes on top — [example 12](../examples.md#stage-3) demonstrates a complete module-graph HMR in roughly 200 lines.
 
 ## Diagnostics
 
@@ -233,4 +233,4 @@ Disposal cancels in-flight activations, removes every installed handle from Core
 
 - [Platform specification](../reference/platform.md) — exact semantics and edge cases
 - [Error codes](../reference/errors.md) — all 25 stable codes
-- [Runnable examples 05 / 09](../examples.md) — lazy activation and module-graph HMR end to end
+- [Runnable examples 08 / 12](../examples.md) — lazy activation and module-graph HMR end to end

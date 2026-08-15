@@ -83,7 +83,11 @@ A pure re-export convenience entry point: no logic, no state, no second path. Li
 
 ### `@dougongjs/examples`
 
-The outermost executable learning and host-reference package, depending only on the public `dougong` facade. It walks from a minimal Service example through Extension, Event, Lifetime, signals, ChangeSet, Group and Platform, and includes the Planet / Lynx, declarative-plan and module-graph HMR scenarios. Host strategies face real usage and regression tests here first; only after several hosts converge on a stable boundary is one extracted into its own package. No foundation package may depend on examples in reverse; if an example needs access to an internal module, that means the public composition surface is not yet closed.
+The outermost executable learning and host-reference package, depending only on the public `dougong` facade. Twelve chapters climb three stages: atoms (Service, Extension/Event, Lifetime, signals), composition (config and failure, Contract families and Groups, diagnostics, Platform) and real hosts (Planet, Lynx, declarative plan, module-graph HMR).
+
+The progression itself is under test: each chapter declares the concepts it is first to use, and the test concatenates all twelve declarations and compares them to the syllabus in `example.ts` for exact equality — a repeated concept, an inverted order or a chapter that adds nothing all fail.
+
+Host strategies face real usage and regression tests here first; only after several hosts converge on a stable boundary is one extracted into its own package. No foundation package may depend on examples in reverse; if an example needs access to an internal module, that means the public composition surface is not yet closed.
 
 ## 3. Why four capabilities
 

@@ -1,20 +1,30 @@
-import { serviceBasics } from "./01-service-basics";
+import { serviceBasics } from "./01-service";
 import { extensionAndEvent } from "./02-extension-event";
-import { reactiveLifetime } from "./03-reactive-lifetime";
-import { transactionsAndGroups } from "./04-transactions-groups";
-import { lazyPlatform } from "./05-lazy-platform";
-import { planetScenario } from "./06-planet";
-import { lynxScenario } from "./07-lynx";
-import { declarativePlan } from "./08-declarative-plan";
-import { hmrModuleGraph } from "./09-hmr-module-graph";
+import { lifetimeOwnership } from "./03-lifetime";
+import { reactiveLifetime } from "./04-reactive";
+import { configAndFailure } from "./05-config-failure";
+import { contractsAndGroups } from "./06-contracts-groups";
+import { diagnostics } from "./07-diagnostics";
+import { lazyPlatform } from "./08-platform";
+import { planetScenario } from "./09-planet";
+import { lynxScenario } from "./10-lynx";
+import { declarativePlan } from "./11-declarative-plan";
+import { hmrModuleGraph } from "./12-hmr-module-graph";
 import type { Example, ExampleResult } from "./example";
 
+/** The reading order. Chapters run in sequence and each owns its Application. */
 const examples: ReadonlyArray<Example> = [
+  // Atoms.
   serviceBasics,
   extensionAndEvent,
+  lifetimeOwnership,
   reactiveLifetime,
-  transactionsAndGroups,
+  // Composition.
+  configAndFailure,
+  contractsAndGroups,
+  diagnostics,
   lazyPlatform,
+  // Real host shapes.
   planetScenario,
   lynxScenario,
   declarativePlan,

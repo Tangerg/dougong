@@ -117,13 +117,15 @@ Three layers, from first run to specification:
 
 ## Examples
 
-[Nine runnable examples](./packages/examples) go from a minimal Service to the Planet / Lynx host scenarios, declarative plans and module-graph HMR — all in CI:
+[Twelve runnable chapters](./packages/examples) climb three stages — atoms, composition, real hosts — from a minimal Service to the Planet / Lynx scenarios, declarative plans and module-graph HMR, all in CI:
 
 ```sh
 pnpm examples
 ```
 
-Examples 08 and 09 are roughly 200 lines each and implement, using only the public API, what mature frameworks spend thousands of lines on: a declarative config loader and a hot-reload engine. That is a test of whether Core's abstractions are genuinely expandable.
+"Each chapter adds exactly one rung" is a test rather than a claim: all twelve declare the concepts they are first to use, and the test concatenates those declarations and compares them to the syllabus for exact equality — a repeat, an inverted order or a chapter that stands still turns CI red.
+
+Chapters 11 and 12 are roughly 200 lines each and implement, using only the public API, what mature frameworks spend thousands of lines on: a declarative config loader and a hot-reload engine. That is a test of whether Core's abstractions are genuinely expandable.
 
 ## Requirements
 

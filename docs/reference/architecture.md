@@ -83,7 +83,11 @@ Platform 把结果编译成普通 Core PluginDefinition 和一份 Core ChangeSet
 
 ### `@dougongjs/examples`
 
-最外层的可执行学习与宿主参考包，只依赖公开 `dougong` facade。它从最小 Service 示例逐层覆盖 Extension、Event、Lifetime、Signal、ChangeSet、Group 和 Platform，并提供 Planet / Lynx、声明式计划与模块图 HMR 场景。宿主策略先在这里接受真实使用与回归测试；只有多个宿主复用出稳定边界后才提炼成独立包。任何基础包都禁止反向依赖 examples；示例若必须访问内部模块，说明公共组合能力尚未闭合。
+最外层的可执行学习与宿主参考包，只依赖公开 `dougong` facade。十二章分三段递进：原子（Service、Extension/Event、Lifetime、Signal）、组合（配置与失败、Contract family 与 Group、诊断、Platform）、真实宿主（Planet、Lynx、声明式计划、模块图 HMR）。
+
+递进关系本身是受测的：每章声明自己首次引入的概念，测试把十二章的声明首尾相接，与 `example.ts` 中的教学大纲做全等比较——概念重复、顺序倒置或某章无新增都会失败。
+
+宿主策略先在这里接受真实使用与回归测试；只有多个宿主复用出稳定边界后才提炼成独立包。任何基础包都禁止反向依赖 examples；示例若必须访问内部模块，说明公共组合能力尚未闭合。
 
 ## 三、为什么是四种能力
 

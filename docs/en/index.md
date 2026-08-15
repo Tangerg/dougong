@@ -108,7 +108,7 @@ Three layers, best read in order:
 
 </div>
 
-If you would rather read code, the [runnable examples](./examples.md) walk from a minimal Service to Planet / Lynx / HMR across nine scenarios, all of which run in CI.
+If you would rather read code, the [runnable examples](./examples.md) are a twelve-chapter path from a minimal Service to Planet / Lynx / HMR — all of it runs in CI, and "each chapter adds exactly one rung" is itself a test.
 
 ## Status
 

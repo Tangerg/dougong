@@ -155,7 +155,7 @@ pnpm check           # 完整验证门禁
 pnpm docs:dev        # 本地启动这个文档站
 ```
 
-九个示例从最小 Service 一路走到 Planet / Lynx 真实场景、声明式计划和模块图 HMR，全部进 CI。详见[可执行示例](../examples.md)。
+十二章示例分三段递进——原子、组合、真实宿主——从最小 Service 一路走到 Planet / Lynx 场景、声明式计划和模块图 HMR，全部进 CI。详见[可执行示例](../examples.md)。
 
 ## 接下来
 

@@ -108,7 +108,7 @@ await app.start()                    // 从 Service 声明推导拓扑，同层�
 
 </div>
 
-如果你更喜欢读代码，[可执行示例](./examples.md)是从最小 Service 一路走到 Planet / Lynx / HMR 的九个场景，全部进 CI。
+如果你更喜欢读代码，[可执行示例](./examples.md)是十二章由浅入深的路径——从最小 Service 一路走到 Planet / Lynx / HMR，全部进 CI，而且「每章只增加一个新台阶」本身是一条测试。
 
 ## 状态
 

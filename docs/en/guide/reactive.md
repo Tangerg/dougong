@@ -210,4 +210,4 @@ The `get` / `subscribe` protocol is exactly the shape `useSyncExternalStore` wan
 
 - [External plugin delivery](./platform.md) — manifests, permissions, lazy activation, HMR
 - [Core API specification](../reference/core-api.md) — the unified observation protocol in full
-- [Runnable example 03](../examples.md) — signals, observe and explicit resource rebuild end to end
+- [Runnable example 04](../examples.md#stage-1) — signals, observe and explicit resource rebuild end to end

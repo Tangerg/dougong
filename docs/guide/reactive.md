@@ -210,4 +210,4 @@ const routes = useSyncExternalStore(
 
 - [外部插件分发](./platform.md) —— Manifest、权限、懒激活、HMR
 - [Core API 规范](../reference/core-api.md) —— 统一观察协议的精确定义
-- [可执行示例 03](../examples.md) —— Signal、observe 与显式资源重建的完整场景
+- [可执行示例 04](../examples.md#stage-1) —— Signal、observe 与显式资源重建的完整场景

@@ -1,6 +1,27 @@
-import { defineConfig, type DefaultTheme } from "vitepress";
+import { defineConfig, type DefaultTheme, type HeadConfig } from "vitepress";
 
 const repository = "https://github.com/Tangerg/dougong";
+const site = "https://tangerg.github.io/dougong/";
+
+const summary = {
+  zh: "纯 JavaScript/TypeScript 的能力组合与结构化生命周期内核。",
+  en: "A capability composition and structured lifetime kernel for JavaScript/TypeScript.",
+};
+
+/** Open Graph and Twitter cards, per locale so shares carry the right language. */
+function social(lang: string, description: string, url: string): HeadConfig[] {
+  return [
+    ["meta", { property: "og:type", content: "website" }],
+    ["meta", { property: "og:site_name", content: "Dougong" }],
+    ["meta", { property: "og:title", content: "Dougong" }],
+    ["meta", { property: "og:description", content: description }],
+    ["meta", { property: "og:locale", content: lang }],
+    ["meta", { property: "og:url", content: url }],
+    ["meta", { name: "twitter:card", content: "summary" }],
+    ["meta", { name: "twitter:title", content: "Dougong" }],
+    ["meta", { name: "twitter:description", content: description }],
+  ];
+}
 
 function sidebarZh(): DefaultTheme.SidebarItem[] {
   return [
@@ -30,7 +51,12 @@ function sidebarZh(): DefaultTheme.SidebarItem[] {
     {
       text: "示例",
       collapsed: false,
-      items: [{ text: "可执行示例", link: "/examples" }],
+      items: [
+        { text: "可执行示例", link: "/examples" },
+        { text: "第一段 · 原子", link: "/examples#stage-1" },
+        { text: "第二段 · 组合", link: "/examples#stage-2" },
+        { text: "第三段 · 真实宿主", link: "/examples#stage-3" },
+      ],
     },
   ];
 }
@@ -63,7 +89,12 @@ function sidebarEn(): DefaultTheme.SidebarItem[] {
     {
       text: "Examples",
       collapsed: false,
-      items: [{ text: "Runnable examples", link: "/en/examples" }],
+      items: [
+        { text: "Runnable examples", link: "/en/examples" },
+        { text: "Stage 1 · Atoms", link: "/en/examples#stage-1" },
+        { text: "Stage 2 · Composition", link: "/en/examples#stage-2" },
+        { text: "Stage 3 · Real hosts", link: "/en/examples#stage-3" },
+      ],
     },
   ];
 }
@@ -73,14 +104,15 @@ export default defineConfig({
   base: "/dougong/",
   cleanUrls: true,
   lastUpdated: true,
-  sitemap: { hostname: "https://tangerg.github.io/dougong/" },
+  sitemap: { hostname: site },
   head: [["meta", { name: "theme-color", content: "#9f3f2f" }]],
 
   locales: {
     root: {
       label: "简体中文",
       lang: "zh-CN",
-      description: "纯 JavaScript/TypeScript 的能力组合与结构化生命周期内核。",
+      description: summary.zh,
+      head: social("zh_CN", summary.zh, site),
       themeConfig: {
         nav: [
           { text: "指南", link: "/guide/getting-started", activeMatch: "/guide/" },
@@ -101,6 +133,13 @@ export default defineConfig({
         sidebarMenuLabel: "菜单",
         returnToTopLabel: "返回顶部",
         langMenuLabel: "切换语言",
+        skipToContentLabel: "跳转到内容",
+        notFound: {
+          title: "页面不存在",
+          quote: "这个地址下没有文档。可能是链接过期了，或者这一页还没有写。",
+          linkLabel: "回到首页",
+          linkText: "回到首页",
+        },
         footer: {
           message: "基于 MIT 许可证发布。",
           copyright: "Copyright © 2026-present Dougong contributors",
@@ -112,8 +151,8 @@ export default defineConfig({
       label: "English",
       lang: "en-US",
       link: "/en/",
-      description:
-        "A capability composition and structured lifetime kernel for JavaScript/TypeScript.",
+      description: summary.en,
+      head: social("en_US", summary.en, `${site}en/`),
       themeConfig: {
         nav: [
           { text: "Guide", link: "/en/guide/getting-started", activeMatch: "/en/guide/" },
@@ -125,6 +164,12 @@ export default defineConfig({
         editLink: {
           pattern: `${repository}/edit/main/docs/:path`,
           text: "Edit this page on GitHub",
+        },
+        notFound: {
+          title: "Page not found",
+          quote: "There is no document at this address — the link may be stale, or unwritten.",
+          linkLabel: "Back to home",
+          linkText: "Back to home",
         },
         footer: {
           message: "Released under the MIT License.",
@@ -139,6 +184,7 @@ export default defineConfig({
     search: {
       provider: "local",
       options: {
+        detailedView: true,
         locales: {
           root: {
             translations: {

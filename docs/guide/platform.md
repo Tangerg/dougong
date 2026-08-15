@@ -206,7 +206,7 @@ await plugin.update({
 })
 ```
 
-底层走的是 Core 的 `handle.update({ plugin })`，所以只有受影响的依赖闭包会重启。宿主想做真正的 HMR（监听文件变化、计算失效传播、批量重载），可以在这之上组合——[示例 09](../examples.md) 演示了一个约 200 行的完整模块图 HMR。
+底层走的是 Core 的 `handle.update({ plugin })`，所以只有受影响的依赖闭包会重启。宿主想做真正的 HMR（监听文件变化、计算失效传播、批量重载），可以在这之上组合——[示例 12](../examples.md#stage-3) 演示了一个约 200 行的完整模块图 HMR。
 
 ## 诊断
 
@@ -233,4 +233,4 @@ await using platform = createPlatform({ ... })
 
 - [Platform 规范](../reference/platform.md) —— 精确语义与边界情形
 - [错误码](../reference/errors.md) —— 全部 25 个稳定错误码
-- [可执行示例 05 / 09](../examples.md) —— 懒激活与模块图 HMR 的完整场景
+- [可执行示例 08 / 12](../examples.md) —— 懒激活与模块图 HMR 的完整场景

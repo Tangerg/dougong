@@ -1,0 +1,114 @@
+import {
+  createApp,
+  definePlugin,
+  extension,
+  service,
+  type LifetimeSnapshot,
+  type Task,
+} from "dougong";
+import { exampleResult, type ExampleResult } from "./example";
+
+interface Panel {
+  readonly id: string;
+}
+
+interface Workbench {
+  readonly title: string;
+}
+
+const PANELS = extension<Panel>("examples/diagnostics/panels");
+const WORKBENCH = service<Workbench>("examples/diagnostics/workbench");
+
+/** Renders one ownership tree the way a devtools panel would. */
+function describe(node: LifetimeSnapshot): string {
+  const own = `${node.label}[${node.phase} c${node.contributions} t${node.tasks} k${node.cleanups}]`;
+  if (!node.children.length) return own;
+  return `${own}(${node.children.map(describe).join(", ")})`;
+}
+
+/** An immutable read model: it reports what is running, and cannot steer it. */
+export async function diagnostics(): Promise<ExampleResult> {
+  let openGate!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    openGate = resolve;
+  });
+  let indexing!: Task<void>;
+
+  const workbenchPlugin = definePlugin({
+    name: "examples.diagnostics.workbench",
+    provides: { workbench: WORKBENCH },
+    setup(ctx) {
+      ctx.contribute(PANELS, "outline", { id: "outline" });
+      const session = ctx.lifetime("session");
+      session.cleanup(() => undefined);
+      session.contribute(PANELS, "problems", { id: "problems" });
+      indexing = ctx.spawn(() => gate);
+      return { workbench: { title: "Workbench" } };
+    },
+  });
+
+  const shellPlugin = definePlugin({
+    name: "examples.diagnostics.shell",
+    requires: { workbench: WORKBENCH, panels: PANELS },
+    setup: () => undefined,
+  });
+
+  const app = createApp({ name: "diagnostics" });
+  const handle = app.install(workbenchPlugin);
+  app.install(shellPlugin);
+
+  // The view is a `get()` + `subscribe()` pair — the same protocol an
+  // ExtensionView and a signal expose, so `observe()` accepts it unchanged.
+  const revisions: number[] = [];
+  const subscription = app.diagnostics.subscribe(() => {
+    revisions.push(app.diagnostics.get().revision);
+  });
+
+  await app.start();
+
+  const snapshot = app.diagnostics.get();
+  const workbench = snapshot.plugins.get(handle.id);
+  const shell = [...snapshot.plugins.values()].find((entry) => entry.id !== handle.id);
+  if (!workbench?.lifetime || !shell)
+    throw new TypeError("Diagnostics did not report both plugins");
+  const lifetime = workbench.lifetime;
+  const busy = lifetime.get();
+
+  // A finished task detaches itself from its owner. Nothing has to be swept.
+  openGate();
+  await indexing.result;
+  const settled = lifetime.get();
+
+  subscription.dispose();
+  await app.stop();
+
+  // The tree is gone, but a handle kept from before still reads its final
+  // state — as plain data, without holding the Application alive.
+  const final = lifetime.get();
+  let acceptsNewSubscribers = true;
+  try {
+    lifetime.subscribe(() => undefined).dispose();
+  } catch {
+    acceptsNewSubscribers = false;
+  }
+
+  return exampleResult({
+    id: "07",
+    stage: "composition",
+    title: "Reading the running system without being able to steer it",
+    introduces: [
+      "diagnostics-view",
+      "lifetime-snapshot",
+      "terminal-detachment",
+      "view-finalization",
+    ],
+    facts: [
+      `The Application snapshot named ${snapshot.plugins.size} plugins at status '${snapshot.status}', revision ${snapshot.revision}.`,
+      `Declarations are readable as data: the shell requires [${shell.requires.join(", ")}], the workbench provides [${workbench.provides.join(", ")}].`,
+      `Ownership is a labeled tree: ${describe(busy)}.`,
+      `The task finished and detached itself: tasks ${busy.tasks} → ${settled.tasks}, with the plugin still active.`,
+      `${revisions.length} committed revisions reached the subscriber; no uncommitted state was ever visible.`,
+      `After stop the view finalized to phase '${final.phase}' and accepts new subscribers = ${acceptsNewSubscribers}.`,
+    ],
+  });
+}

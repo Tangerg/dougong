@@ -1,11 +1,16 @@
 import { createApp, definePlugin, service, type PluginHandle, type Service } from "dougong";
-import type { ExampleResult } from "./example";
+import { exampleResult, type ExampleResult } from "./example";
 
 interface WorkspaceStore {
   readonly workspace: string;
   readonly version: number;
 }
 
+/**
+ * A Contract family: one shape, many identities, each spelled out. Two
+ * workspaces are two Services — not one Service resolved differently depending
+ * on who is asking.
+ */
 const workspaceStore = (workspace: string) =>
   service<WorkspaceStore>(`examples/workspaces/${encodeURIComponent(workspace)}/store`);
 
@@ -30,13 +35,15 @@ function readerPlugin(name: string, token: Service<WorkspaceStore>, trace: strin
   });
 }
 
-/** Contract families, Group ownership and ChangeSet remain three separate ideas. */
-export async function transactionsAndGroups(): Promise<ExampleResult> {
+/** Contract identity, installation ownership and atomic change stay three separate ideas. */
+export async function contractsAndGroups(): Promise<ExampleResult> {
   const trace: string[] = [];
-  const app = createApp({ name: "transactions-groups" });
+  const app = createApp({ name: "contracts-groups" });
   let alphaProvider!: PluginHandle<number>;
   let betaProvider!: PluginHandle<number>;
 
+  // A Group owns an installation subtree. It is not a capability scope, not a
+  // provider shadow tree and not a permission boundary.
   const alpha = app.group("alpha", (group) => {
     alphaProvider = group.install(
       storePlugin("examples.workspaces.alpha.store", ALPHA_STORE, "alpha"),
@@ -53,11 +60,16 @@ export async function transactionsAndGroups(): Promise<ExampleResult> {
   });
   await app.start();
 
+  const distinct = app.get(ALPHA_STORE).workspace !== app.get(BETA_STORE).workspace;
+  const atStartup = [...trace];
+
+  // One ChangeSet spanning two Groups: consumers see version 1 or version 2,
+  // never one workspace ahead of the other.
   const change = app.change();
   change.update(alphaProvider, { config: 2 });
   change.update(betaProvider, { config: 2 });
   await change.commit();
-  const betaVersion = app.get(BETA_STORE).version;
+  const versions = `alpha@${app.get(ALPHA_STORE).version}, beta@${app.get(BETA_STORE).version}`;
 
   await alpha.remove();
   let alphaAvailable = true;
@@ -66,15 +78,20 @@ export async function transactionsAndGroups(): Promise<ExampleResult> {
   } catch {
     alphaAvailable = false;
   }
+  const betaSurvived = app.get(BETA_STORE).version;
   await app.stop();
 
-  return Object.freeze({
-    id: "04",
-    title: "Explicit multi-instance Contracts, Group ownership and ChangeSet",
-    facts: Object.freeze([
-      `Consumers observed ${trace.join(", ")}.`,
-      `One ChangeSet moved both providers to version ${betaVersion}.`,
-      `Removing /alpha removed its installation subtree; alpha available = ${alphaAvailable}.`,
-    ]),
+  return exampleResult({
+    id: "06",
+    stage: "composition",
+    title: "One shape, many identities, and who owns which subtree",
+    introduces: ["contract-family", "group", "atomic-commit", "group-removal"],
+    facts: [
+      `Two identities from one factory resolve to different instances = ${distinct}.`,
+      `At startup the readers observed ${atStartup.join(", ")}.`,
+      `One ChangeSet moved both Groups together, rebuilding both readers: ${trace.slice(atStartup.length).join(", ")} → ${versions}.`,
+      `Removing /alpha removed its installation subtree; ALPHA_STORE available = ${alphaAvailable}.`,
+      `Ownership is structural, not transitive: /beta kept serving version ${betaSurvived}.`,
+    ],
   });
 }

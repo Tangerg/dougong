@@ -9,7 +9,7 @@ import {
   type ManagedPlugin,
   type PluginArtifact,
 } from "dougong";
-import type { ExampleResult } from "./example";
+import { exampleResult, type ExampleResult } from "./example";
 
 interface View {
   readonly id: string;
@@ -199,15 +199,18 @@ export async function hmrModuleGraph(): Promise<ExampleResult> {
   await platform.dispose();
   await app.stop();
 
-  return Object.freeze({
-    id: "09",
-    title: "Explicit module-graph invalidation compiled into Platform HMR",
-    facts: Object.freeze([
+  return exampleResult({
+    id: "12",
+    stage: "hosts",
+    title: "Module-graph invalidation compiled into atomic multi-plugin HMR",
+    introduces: ["module-graph", "invalidation-closure", "multi-plugin-hmr"],
+    facts: [
       `Before invalidation the host saw ${before}.`,
-      `Changing ${invalidation.changed.join(", ")} invalidated ${invalidation.modules.join(" → ")}.`,
-      `Affected plugin entries were ${invalidation.plugins.join(", ")}; the unrelated theme was excluded.`,
+      `Changing ${invalidation.changed.join(", ")} invalidated ${invalidation.modules.join(" → ")} by walking importers.`,
+      `Affected plugin entries were ${invalidation.plugins.join(", ")}; the unrelated theme was excluded rather than restarted.`,
       `One Platform ChangeSet published ${after}.`,
-      `The Extension observer saw ${publishedSnapshots.length} committed snapshot: ${publishedSnapshots.join(", ")}.`,
-    ]),
+      `The observer saw ${publishedSnapshots.length} committed snapshot for two plugin swaps: ${publishedSnapshots.join(", ")} — never a half-updated workbench.`,
+      "The graph came from a watcher/bundler adapter; this example owns neither file watching nor the module cache.",
+    ],
   });
 }

@@ -155,7 +155,7 @@ pnpm check           # the full verification gate
 pnpm docs:dev        # serve this documentation site locally
 ```
 
-The nine examples go from a minimal Service through the Planet / Lynx host scenarios to declarative plans and module-graph HMR, all in CI. See [runnable examples](../examples.md).
+Twelve chapters climb three stages — atoms, composition, real hosts — from a minimal Service through the Planet / Lynx scenarios to declarative plans and module-graph HMR, all in CI. See [runnable examples](../examples.md).
 
 ## Next
 

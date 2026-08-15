@@ -10,7 +10,7 @@ import {
   signal,
   type ReadonlySignal,
 } from "dougong";
-import type { ExampleResult } from "./example";
+import { exampleResult, type ExampleResult } from "./example";
 
 interface Track {
   readonly query: string;
@@ -38,7 +38,10 @@ const MEDIA_SOURCES = extension<MediaSource>("examples/planet/media-sources");
 const PLAYER = service<Player>("examples/planet/player");
 const TRACK_CHANGED = event<Track>("examples/planet/track-changed");
 
-/** A desktop media host: stable devices, live providers, playback ownership and lazy loading. */
+/**
+ * The first real host shape. Nothing new is imported: it is chapters 01–08
+ * arranged the way a desktop media application actually needs them.
+ */
 export async function planetScenario(): Promise<ExampleResult> {
   const audioUris: string[] = [];
   const history: Track[] = [];
@@ -171,14 +174,17 @@ export async function planetScenario(): Promise<ExampleResult> {
   await providers.remove();
   await app.stop();
 
-  return Object.freeze({
-    id: "06",
-    title: "Planet-style media providers and structured playback",
-    facts: Object.freeze([
-      `Selected sources in order: ${history.map((track) => track.source).join(" → ")}.`,
+  return exampleResult({
+    id: "09",
+    stage: "hosts",
+    title: "Planet: media providers, playback ownership and runtime selection",
+    introduces: ["runtime-selection", "live-provider-swap", "group-scoped-platform"],
+    facts: [
+      `The player picked the best available source each time: ${history.map((track) => track.source).join(" → ")}.`,
       `Audio output received ${audioUris.join(", ")}.`,
-      `The player started ${playerStarts} time while providers changed live.`,
-      `The shell observed ${shellTracks.join(", ")}; player child Lifetimes = ${lifetime?.children.length}.`,
-    ]),
+      `Providers were added and removed live, yet the player started ${playerStarts} time — an Extension is not a dependency edge.`,
+      `The shell observed ${shellTracks.join(", ")}; the player kept ${lifetime?.children.length} playback Lifetime, replaced per track.`,
+      "The Platform was scoped to the /providers Group, so removing that Group removed every downloaded provider with it.",
+    ],
   });
 }

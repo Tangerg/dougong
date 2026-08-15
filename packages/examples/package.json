@@ -20,5 +20,8 @@
   },
   "dependencies": {
     "dougong": "workspace:*"
+  },
+  "devDependencies": {
+    "@standard-schema/spec": "^1.1.0"
   }
 }
