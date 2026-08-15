@@ -1,6 +1,12 @@
-# Dougong Core API 设计规范
+# Dougong Core API 规范
 
-本文是 `@dougongjs/core` 的可观察行为规范。实现与本文冲突时，应治本式修改实现或规范，不增加兼容别名。
+::: tip 这是规范层
+本文是 `@dougongjs/core` 的**可观察行为规范**，按精确性而非可读性组织，用于确定边界情形和实现一致性。
+
+第一次接触 Dougong，请先读[核心概念](../guide/concepts.md)和[编写插件](../guide/writing-plugins.md)——那两页讲的是同样的模型，但按学习顺序展开。
+:::
+
+实现与本文冲突时，应治本式修改实现或规范，不增加兼容别名。
 
 Dougong Core 的定位是：
 

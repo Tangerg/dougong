@@ -2,7 +2,7 @@
 
 `@dougongjs/platform` 负责把外部插件的 manifest、加载、版本约束、激活策略和权限决策编译为 `@dougongjs/core` 的普通插件与 ChangeSet。它不是第二套插件运行时：Service 图、Lifetime、Group 所有权、回滚和实例状态的最终真相仍只有 Core 一份。
 
-本文描述 Platform 的可观察契约。Core 原语见 [api-design.zh-CN.md](./api-design.zh-CN.md)，整体分层理由见 [architecture.zh-CN.md](./architecture.zh-CN.md)。
+本文描述 Platform 的可观察契约。Core 原语见 [Core API 规范](./core-api.md)，整体分层理由见[整体架构](./architecture.md)；面向使用者的介绍见[外部插件分发](../guide/platform.md)。
 
 ## 一、心智模型
 

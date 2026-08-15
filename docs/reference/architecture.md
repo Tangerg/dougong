@@ -1,6 +1,6 @@
 # Dougong 架构说明
 
-本文解释 Dougong 为什么采用当前分层，以及能力如何向前端、后端和桌面插件系统组合。精确 API 行为见 [api-design.zh-CN.md](./api-design.zh-CN.md)。
+本文解释 Dougong 为什么采用当前分层，以及能力如何向前端、后端和桌面插件系统组合。精确 API 行为见 [Core API 规范](./core-api.md)；面向使用者的渐进式介绍见[核心概念](../guide/concepts.md)。
 
 ## 一、定位
 
