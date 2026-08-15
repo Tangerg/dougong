@@ -27,8 +27,8 @@ pnpm examples:benchmark   # 单独运行启动拓扑基准
 
 | # | 文件 | 新增概念 |
 | --- | --- | --- |
-| 01 | [`01-service.ts`](./src/01-service.ts) | `service` · `provides` · `requires` · `app.get` |
-| 02 | [`02-extension-event.ts`](./src/02-extension-event.ts) | `extension` · `contribute` · `extension-view` · `event` · `contribution-dispose` |
+| 01 | [`01-service.ts`](./src/01-service.ts) | `service` · `provides` · `requires` · `host.get` |
+| 02 | [`02-extension-event.ts`](./src/02-extension-event.ts) | `extension-point` · `contribute` · `contribution-view` · `event` · `contribution-dispose` |
 | 03 | [`03-lifetime.ts`](./src/03-lifetime.ts) | `cleanup` · `child-lifetime` · `spawn` · `abort-signal` |
 | 04 | [`04-reactive.ts`](./src/04-reactive.ts) | `signal` · `computed` · `batch` · `observe` |
 
@@ -72,7 +72,7 @@ return exampleResult({
 
 ### 每一章都是一个完整的应用
 
-每个导出函数创建并完整释放自己的 Application，返回结构化结果：
+每个导出函数创建并完整释放自己的 Host，返回结构化结果：
 
 ```ts
 import { diagnostics } from "@dougongjs/examples"
@@ -87,14 +87,14 @@ console.log(result.facts)
 
 **09 · Planet（媒体宿主）**
 
-- Audio output 与 Player 是稳定 Service；媒体 Provider 是实时 Extension 贡献。
-- 增删 Provider 不重启 Player——Extension 不是依赖边。
+- Audio output 与 Player 是稳定 Service；媒体 Provider 是实时 ExtensionPoint 贡献。
+- 增删 Provider 不重启 Player——ExtensionPoint 不是依赖边。
 - 每次播放拥有一个子 Lifetime，替换和取消边界完全显式。
 - Platform 挂在 `/providers` Group 上，移除该 Group 即移除全部下载来的 Provider。
 
 **10 · Lynx（工作台）**
 
-- 命令唯一性由领域 `CommandCatalog` Service 负责，而不是 Core Extension 的特殊模式。
+- 命令唯一性由领域 `CommandCatalog` Service 负责，而不是 Core ExtensionPoint 的特殊模式。
 - 工作区身份使用显式 Contract family；Group 只拥有工作区安装子树。
 - Explorer placeholder 在激活前贡献可展示元数据；更新保持插件身份，只换实现。
 - 根级消费者能看到工作区贡献，诚实展示 Group **不是**能力 Scope。
@@ -141,8 +141,8 @@ pnpm examples:benchmark   # run the startup-topology benchmark separately
 
 | # | File | New concepts |
 | --- | --- | --- |
-| 01 | [`01-service.ts`](./src/01-service.ts) | `service` · `provides` · `requires` · `app.get` |
-| 02 | [`02-extension-event.ts`](./src/02-extension-event.ts) | `extension` · `contribute` · `extension-view` · `event` · `contribution-dispose` |
+| 01 | [`01-service.ts`](./src/01-service.ts) | `service` · `provides` · `requires` · `host.get` |
+| 02 | [`02-extension-event.ts`](./src/02-extension-event.ts) | `extension-point` · `contribute` · `contribution-view` · `event` · `contribution-dispose` |
 | 03 | [`03-lifetime.ts`](./src/03-lifetime.ts) | `cleanup` · `child-lifetime` · `spawn` · `abort-signal` |
 | 04 | [`04-reactive.ts`](./src/04-reactive.ts) | `signal` · `computed` · `batch` · `observe` |
 
@@ -186,7 +186,7 @@ The test concatenates what all twelve chapters declare and compares it to `conce
 
 ### Every chapter is a complete application
 
-Each exported function creates and fully releases its own Application, and returns a structured result:
+Each exported function creates and fully releases its own Host, and returns a structured result:
 
 ```ts
 import { diagnostics } from "@dougongjs/examples"
@@ -201,14 +201,14 @@ console.log(result.facts)
 
 **09 · Planet (a media host)**
 
-- Audio output and the player are stable Services; media providers are live Extension contributions.
-- Adding or removing a provider never restarts the player — an Extension is not a dependency edge.
+- Audio output and the player are stable Services; media providers are live ExtensionPoint contributions.
+- Adding or removing a provider never restarts the player — an ExtensionPoint is not a dependency edge.
 - Each playback owns a child Lifetime, making replacement and cancellation boundaries fully explicit.
 - The Platform is scoped to the `/providers` Group, so removing that Group removes every downloaded provider with it.
 
 **10 · Lynx (a workbench)**
 
-- Command uniqueness belongs to a domain `CommandCatalog` Service, not to a special Core Extension mode.
+- Command uniqueness belongs to a domain `CommandCatalog` Service, not to a special Core ExtensionPoint mode.
 - Workspace identity uses an explicit Contract family; the Group owns only the workspace installation subtree.
 - The explorer placeholder contributes displayable metadata before activation; an update keeps the plugin's identity and swaps only the implementation.
 - A root-level consumer can see workspace contributions, honestly demonstrating that a Group is **not** a capability scope.

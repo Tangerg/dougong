@@ -1,6 +1,6 @@
 import { DougongError, normalizeFailure } from "./errors";
 import type { GroupNode } from "./group";
-import type { InstallationStatus } from "./plugin-installation";
+import type { InstallationStatus } from "./installation";
 
 /**
  * Owns the readiness barrier for one structural Group node. A failed mutation

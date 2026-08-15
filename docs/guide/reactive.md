@@ -6,11 +6,11 @@
 
 ## 为什么 Signal 不是第五种能力
 
-Core 有 Service、Extension、Event 三种 Contract kind。一个自然的问题是：为什么不加第四种 `signal<T>()`？
+Core 有 Service、ExtensionPoint、Event 三种 Contract kind。一个自然的问题是：为什么不加第四种 `signal<T>()`？
 
 因为 **Signal 是值的表示方式，不是能力的组织方式**。
 
-一个 Service 可以返回 Signal，一个 Extension 的值可以是 Signal：
+一个 Service 可以返回 Signal，一个 ExtensionPoint 的值可以是 Signal：
 
 ```ts
 const THEME = service<{ current: ReadonlySignal<Theme> }>("app/theme")
@@ -18,7 +18,7 @@ const THEME = service<{ current: ReadonlySignal<Theme> }>("app/theme")
 
 如果 Signal 也是一种 Contract kind，那么「主题这个能力应该是 Service 还是 Signal」就变成一个没有正确答案的问题——两种写法都能工作，团队里会同时出现两种，而它们的依赖语义、事务语义、诊断形态全都不同。
 
-**同一层、同一种语义只有一个正式入口。** 能力的组织入口是 Service / Extension / Event；至于这个能力返回的值是不是响应式的，是插件自己的实现细节。
+**同一层、同一种语义只有一个正式入口。** 能力的组织入口是 Service / ExtensionPoint / Event；至于这个能力返回的值是不是响应式的，是插件自己的实现细节。
 
 同理，Core 不提供隐式 effect。副作用的归属必须写在 Lifetime 上，不能靠「谁在读我」自动推断。
 
@@ -84,7 +84,7 @@ interface Readable<T> {
 }
 ```
 
-Core 的 `ExtensionView` 和 `diagnostics` 用的是**同一个协议**。这意味着任何观察源都可以被同样的方式消费——不需要适配器。
+Core 的 `ContributionView` 和 `diagnostics` 用的是**同一个协议**。这意味着任何观察源都可以被同样的方式消费——不需要适配器。
 
 ## observe：把值的变化编译成资源的重建
 
@@ -100,7 +100,7 @@ observe(source, owner, (value, lifetime) => {
 
 三个参数：
 
-- `source` —— 任何 `Readable<T>`：Signal、`ExtensionView`、`diagnostics`，甚至你自己写的对象
+- `source` —— 任何 `Readable<T>`：Signal、`ContributionView`、`diagnostics`，甚至你自己写的对象
 - `owner` —— 任何提供 `cleanup` / `lifetime` / `spawn` 的东西，插件的 `ctx` 正好符合
 - `observer` —— 拿到当前值和一个专属子 Lifetime
 
@@ -168,13 +168,13 @@ interface ObservationOwner {
 Core 里有两个地方产出 `Readable`：
 
 ```ts
-// Extension 视图 —— 集合变化
+// ExtensionPoint 视图 —— 集合变化
 ctx.routes.get()                    // ReadonlyMap<string, Route>
 ctx.routes.subscribe(() => ...)
 
 // 诊断 —— 运行状态
-app.diagnostics.get()
-app.diagnostics.subscribe(() => ...)
+host.diagnostics.get()
+host.diagnostics.subscribe(() => ...)
 
 // 插件的 Lifetime 所有权树
 snapshot.plugins.get(id)?.lifetime.get()
@@ -195,7 +195,7 @@ observe(ctx.routes, ctx, (routes, lifetime) => {
 
 Dougong 不绑定任何 UI 框架。React / Vue / Solid 各自有成熟的响应式方案，`@dougongjs/reactive` 不打算替代它们。
 
-它存在的理由是：**Core 需要一个不依赖 UI 框架的观察协议**，用来表达「集合变了」「诊断变了」这类事实。如果你的宿主是 React 应用，用 `useSyncExternalStore` 桥接即可：
+它存在的理由是：**Core 需要一个不依赖 UI 框架的观察协议**，用来表达「集合变了」「诊断变了」这类事实。如果你的应用是 React 应用，用 `useSyncExternalStore` 桥接即可：
 
 ```ts
 const routes = useSyncExternalStore(

@@ -1,19 +1,15 @@
 import type {
-  Application,
-  CreateAppOptions,
-  PluginChangeSet,
-  PluginGroup,
-  PluginHandle,
-  PluginUpdate,
-} from "./application-api";
-import { ApplicationRuntime, type RuntimeChangeOutcome } from "./application-runtime";
-import type { PluginChangeOperation } from "./change-set";
+  Host,
+  HostOptions,
+  ChangeSet,
+  Group,
+  Installation,
+  InstallationUpdate,
+} from "./host-api";
+import { Runtime, type RuntimeChangeOutcome } from "./runtime";
+import type { ChangeOperation } from "./change-set";
 import type { Service } from "./contracts";
-import {
-  ApplicationDiagnostics,
-  type ApplicationSnapshot,
-  type ApplicationStatus,
-} from "./diagnostics";
+import { HostDiagnostics, type HostSnapshot, type HostStatus } from "./diagnostics";
 import { DougongError } from "./errors";
 import { GroupCoordinator } from "./group-coordinator";
 import type { GroupNode } from "./group";
@@ -22,46 +18,43 @@ import {
   type AnyPlugin,
   createInstallationSpec,
   type InstallationSpec,
-  PluginInstallation,
-} from "./plugin-installation";
-import type { PluginDefinition, Provisions, Requirements } from "./plugin";
+  InstallationRecord,
+} from "./installation";
+import type { Plugin, Provisions, Requirements } from "./plugin";
 import { SerialQueue } from "./serial-queue";
 import type { SnapshotView } from "./snapshot-view";
 
-export type { InstallationStatus } from "./plugin-installation";
+export type { InstallationStatus } from "./installation";
+export type { HostSnapshot, HostStatus, GroupSnapshot, InstallationSnapshot } from "./diagnostics";
 export type {
-  ApplicationSnapshot,
-  ApplicationStatus,
-  GroupSnapshot,
-  PluginSnapshot,
-} from "./diagnostics";
-export type {
-  Application,
-  CreateAppOptions,
-  InstallationHandle,
-  PluginChangeSet,
-  PluginContainer,
-  PluginGroup,
-  PluginHandle,
-  PluginUpdate,
-} from "./application-api";
+  Host,
+  HostOptions,
+  ChangeSet,
+  Installer,
+  Group,
+  Installation,
+  InstallationUpdate,
+} from "./host-api";
 
-interface InstallationSnapshot {
+interface InstallationCapture {
   readonly id: string;
-  readonly installation: PluginInstallation;
+  readonly installation: InstallationRecord;
   readonly spec: InstallationSpec;
 }
 
 const defaultLogger: Logger = console;
 
-type UnknownPluginUpdate = PluginUpdate<unknown, Requirements, Provisions, unknown>;
+type UnknownInstallationUpdate = InstallationUpdate<unknown, Requirements, Provisions, unknown>;
 
-interface PluginHandleControl {
-  attach(update: (change: UnknownPluginUpdate) => Promise<void>, remove: () => Promise<void>): void;
+interface InstallationControl {
+  attach(
+    update: (change: UnknownInstallationUpdate) => Promise<void>,
+    remove: () => Promise<void>,
+  ): void;
   revoke(): void;
 }
 
-type PluginHandleState<
+type InstallationImplState<
   Config,
   Requires extends Requirements,
   Provides extends Provisions,
@@ -71,26 +64,26 @@ type PluginHandleState<
   | {
       readonly phase: "attached";
       readonly update: (
-        change: PluginUpdate<Config, Requires, Provides, ConfigInput>,
+        change: InstallationUpdate<Config, Requires, Provides, ConfigInput>,
       ) => Promise<void>;
       readonly remove: () => Promise<void>;
     }
   | { readonly phase: "revoked" };
 
-const pluginHandleControls = new WeakMap<object, PluginHandleControl>();
+const installationControls = new WeakMap<object, InstallationControl>();
 
-class PluginHandleImpl<
+class InstallationImpl<
   Config,
   Requires extends Requirements,
   Provides extends Provisions,
   ConfigInput,
-> implements PluginHandle<Config, Requires, Provides, ConfigInput> {
-  readonly #installation: PluginInstallation;
-  #state: PluginHandleState<Config, Requires, Provides, ConfigInput> = { phase: "draft" };
+> implements Installation<Config, Requires, Provides, ConfigInput> {
+  readonly #installation: InstallationRecord;
+  #state: InstallationImplState<Config, Requires, Provides, ConfigInput> = { phase: "draft" };
 
-  constructor(installation: PluginInstallation) {
+  constructor(installation: InstallationRecord) {
     this.#installation = installation;
-    pluginHandleControls.set(this, {
+    installationControls.set(this, {
       attach: (updateRecord, removeRecord) => {
         if (this.#state.phase !== "draft") {
           throw new TypeError(`Plugin '${this.#installation.id}' control is already sealed`);
@@ -98,7 +91,7 @@ class PluginHandleImpl<
         this.#state = {
           phase: "attached",
           update: updateRecord as (
-            update: PluginUpdate<Config, Requires, Provides, ConfigInput>,
+            update: InstallationUpdate<Config, Requires, Provides, ConfigInput>,
           ) => Promise<void>,
           remove: removeRecord,
         };
@@ -126,13 +119,16 @@ class PluginHandleImpl<
     return this.#installation.ready();
   }
 
-  async update(update: PluginUpdate<Config, Requires, Provides, ConfigInput>) {
+  async update(update: InstallationUpdate<Config, Requires, Provides, ConfigInput>) {
     const state = this.#state;
     if (state.phase === "draft") throw this.#notCommitted();
     if (state.phase === "revoked") {
       throw (
         this.#installation.error ??
-        new DougongError("PLUGIN_REMOVED", `Plugin '${this.#installation.id}' has been removed`)
+        new DougongError(
+          "INSTALLATION_REMOVED",
+          `Installation '${this.#installation.id}' has been removed`,
+        )
       );
     }
     await state.update(update);
@@ -146,55 +142,55 @@ class PluginHandleImpl<
 
   #notCommitted() {
     return new DougongError(
-      "PLUGIN_UNAVAILABLE",
-      `Plugin '${this.#installation.id}' installation has not been committed`,
+      "INSTALLATION_UNAVAILABLE",
+      `Installation '${this.#installation.id}' has not been committed`,
     );
   }
 }
 
-class ApplicationImpl implements Application {
+class HostImpl implements Host {
   readonly name: string;
-  readonly diagnostics: SnapshotView<ApplicationSnapshot>;
+  readonly diagnostics: SnapshotView<HostSnapshot>;
 
-  readonly #installations = new Map<string, PluginInstallation>();
-  readonly #ownedPluginHandles = new WeakMap<object, PluginInstallation>();
-  readonly #pluginControlHandles = new WeakMap<
-    PluginInstallation,
-    PluginHandleImpl<unknown, Requirements, Provisions, unknown>
+  readonly #installations = new Map<string, InstallationRecord>();
+  readonly #ownedInstallations = new WeakMap<object, InstallationRecord>();
+  readonly #installationImpls = new WeakMap<
+    InstallationRecord,
+    InstallationImpl<unknown, Requirements, Provisions, unknown>
   >();
-  readonly #diagnosticModel: ApplicationDiagnostics;
+  readonly #diagnosticModel: HostDiagnostics;
   readonly #logger: Logger;
   readonly #groups: GroupCoordinator;
   readonly #onError: (error: unknown) => void;
-  readonly #runtime: ApplicationRuntime;
+  readonly #runtime: Runtime;
 
   #installationSequence = 0;
-  #status: ApplicationStatus = "idle";
+  #status: HostStatus = "idle";
   readonly #commands = new SerialQueue();
 
-  constructor(options: CreateAppOptions = {}) {
+  constructor(options: HostOptions = {}) {
     if (!options || typeof options !== "object") {
-      throw new TypeError("Application options must be an object");
+      throw new TypeError("Host options must be an object");
     }
     const name = options.name ?? "app";
     if (typeof name !== "string" || !name.trim()) {
-      throw new TypeError("Application name must be a non-empty string");
+      throw new TypeError("Host name must be a non-empty string");
     }
     if (name !== name.trim()) {
-      throw new TypeError("Application name cannot start or end with whitespace");
+      throw new TypeError("Host name cannot start or end with whitespace");
     }
     if (options.onError !== undefined && typeof options.onError !== "function") {
-      throw new TypeError("Application onError must be a function");
+      throw new TypeError("Host onError must be a function");
     }
     if (options.logger !== undefined && !isLogger(options.logger)) {
-      throw new TypeError("Application logger must implement debug/info/warn/error");
+      throw new TypeError("Host logger must implement debug/info/warn/error");
     }
 
     this.name = name;
     this.#logger = options.logger ?? defaultLogger;
     this.#onError = options.onError ?? ((error) => this.#logger.error(error));
-    this.#runtime = new ApplicationRuntime({
-      applicationName: name,
+    this.#runtime = new Runtime({
+      hostName: name,
       logger: this.#logger,
       isInstalled: (installationId) => this.#installations.has(installationId),
       report: (error) => this.#report(error),
@@ -212,7 +208,7 @@ class ApplicationImpl implements Application {
       removeInstallations: (operations) => this.#removeInstallations(operations),
       notifyChanged: () => this.#publishDiagnostics(),
     });
-    this.#diagnosticModel = new ApplicationDiagnostics(name, this.#groups.nodes(), (error) =>
+    this.#diagnosticModel = new HostDiagnostics(name, this.#groups.nodes(), (error) =>
       this.#report(error),
     );
     this.diagnostics = this.#diagnosticModel.view;
@@ -229,17 +225,17 @@ class ApplicationImpl implements Application {
   }
 
   install<Config, Requires extends Requirements, Provides extends Provisions, ConfigInput>(
-    plugin: PluginDefinition<Config, Requires, Provides, ConfigInput>,
+    plugin: Plugin<Config, Requires, Provides, ConfigInput>,
     ...config: [ConfigInput] extends [void] ? [config?: ConfigInput] : [config: ConfigInput]
   ) {
     return this.#groups.install(this.#groups.root, plugin, ...config);
   }
 
-  change(): PluginChangeSet {
+  change(): ChangeSet {
     return this.#groups.change(this.#groups.root);
   }
 
-  group(name: string, configure: (group: PluginGroup) => void) {
+  group(name: string, configure: (group: Group) => void) {
     return this.#groups.create(this.#groups.root, name, configure);
   }
 
@@ -270,7 +266,7 @@ class ApplicationImpl implements Application {
       const errors = await this.#runtime.stop();
       this.#setStatus("idle");
       if (errors.length === 1) throw errors[0];
-      if (errors.length > 1) throw new AggregateError(errors, "Application shutdown failed");
+      if (errors.length > 1) throw new AggregateError(errors, "Host shutdown failed");
     });
   }
 
@@ -278,27 +274,27 @@ class ApplicationImpl implements Application {
     group.assertAttached();
     const index = ++this.#installationSequence;
     const id = `${plugin.name}:${index}`;
-    const installation = new PluginInstallation(
+    const installation = new InstallationRecord(
       id,
       index,
       group,
       createInstallationSpec(plugin, config),
     );
-    const handle = new PluginHandleImpl<unknown, Requirements, Provisions, unknown>(installation);
-    this.#ownedPluginHandles.set(handle, installation);
-    this.#pluginControlHandles.set(installation, handle);
+    const handle = new InstallationImpl<unknown, Requirements, Provisions, unknown>(installation);
+    this.#ownedInstallations.set(handle, installation);
+    this.#installationImpls.set(installation, handle);
     return { installation, handle };
   }
 
   #resolveHandle(handle: object) {
-    const installation = this.#ownedPluginHandles.get(handle);
-    if (!installation) throw new TypeError("PluginHandle belongs to a different Application");
+    const installation = this.#ownedInstallations.get(handle);
+    if (!installation) throw new TypeError("Installation belongs to a different Host");
     return installation;
   }
 
-  #executeChanges(operations: ReadonlyArray<PluginChangeOperation>) {
+  #executeChanges(operations: ReadonlyArray<ChangeOperation>) {
     const installed = operations
-      .filter((operation): operation is Extract<PluginChangeOperation, { kind: "install" }> => {
+      .filter((operation): operation is Extract<ChangeOperation, { kind: "install" }> => {
         return operation.kind === "install";
       })
       .map((operation) => operation.installation);
@@ -322,7 +318,7 @@ class ApplicationImpl implements Application {
     });
   }
 
-  async #removeInstallations(operations: ReadonlyArray<PluginChangeOperation>) {
+  async #removeInstallations(operations: ReadonlyArray<ChangeOperation>) {
     if (operations.length && this.#status === "active") {
       await this.#transact(operations);
     } else {
@@ -331,16 +327,14 @@ class ApplicationImpl implements Application {
     }
   }
 
-  async #transact(operations: ReadonlyArray<PluginChangeOperation>) {
+  async #transact(operations: ReadonlyArray<ChangeOperation>) {
     const outcome = await this.#runTransaction(operations);
     this.#settleInstallations(outcome.affected);
     if (outcome.kind === "rolled-back") throw outcome.error;
     this.#settleChanges(operations);
   }
 
-  async #runTransaction(
-    operations: ReadonlyArray<PluginChangeOperation>,
-  ): Promise<RuntimeChangeOutcome> {
+  async #runTransaction(operations: ReadonlyArray<ChangeOperation>): Promise<RuntimeChangeOutcome> {
     const snapshot = this.#captureInstallations();
     const changed = new Set(operations.map((operation) => operation.installation));
     this.#setStatus("changing");
@@ -367,7 +361,7 @@ class ApplicationImpl implements Application {
     }
   }
 
-  #applyChanges(operations: ReadonlyArray<PluginChangeOperation>) {
+  #applyChanges(operations: ReadonlyArray<ChangeOperation>) {
     for (const operation of operations) {
       if (operation.kind === "install") {
         operation.installation.group.assertAttached();
@@ -388,8 +382,8 @@ class ApplicationImpl implements Application {
       }
       if (!installed) {
         throw new DougongError(
-          "PLUGIN_REMOVED",
-          `Plugin '${operation.installation.id}' has been removed`,
+          "INSTALLATION_REMOVED",
+          `Installation '${operation.installation.id}' has been removed`,
         );
       }
       if (
@@ -398,8 +392,8 @@ class ApplicationImpl implements Application {
         operation.declaration.plugin.name !== operation.installation.spec.plugin.name
       ) {
         throw new DougongError(
-          "PLUGIN_IDENTITY",
-          `Plugin '${operation.installation.id}' cannot change name from ` +
+          "INSTALLATION_IDENTITY",
+          `Installation '${operation.installation.id}' cannot change name from ` +
             `'${operation.installation.spec.plugin.name}' to '${operation.declaration.plugin.name}'`,
         );
       }
@@ -421,7 +415,7 @@ class ApplicationImpl implements Application {
     }
   }
 
-  #settleChanges(operations: ReadonlyArray<PluginChangeOperation>) {
+  #settleChanges(operations: ReadonlyArray<ChangeOperation>) {
     for (const operation of operations) {
       if (operation.kind === "remove") {
         operation.installation.remove();
@@ -431,15 +425,15 @@ class ApplicationImpl implements Application {
     }
   }
 
-  #discardInstallation(installation: PluginInstallation, error: unknown) {
+  #discardInstallation(installation: InstallationRecord, error: unknown) {
     installation.discard(error);
     this.#revokeControl(installation);
   }
 
-  #attachInstallation(installation: PluginInstallation) {
-    const handle = this.#pluginControlHandles.get(installation);
+  #attachInstallation(installation: InstallationRecord) {
+    const handle = this.#installationImpls.get(installation);
     if (!handle) throw new TypeError(`Plugin '${installation.id}' has no control handle`);
-    const control = pluginHandleControls.get(handle);
+    const control = installationControls.get(handle);
     if (!control) throw new TypeError(`Plugin '${installation.id}' has no draft control`);
     installation.attach(() => this.#publishDiagnostics());
     control.attach(
@@ -448,20 +442,20 @@ class ApplicationImpl implements Application {
     );
   }
 
-  #revokeControl(installation: PluginInstallation) {
-    const handle = this.#pluginControlHandles.get(installation);
+  #revokeControl(installation: InstallationRecord) {
+    const handle = this.#installationImpls.get(installation);
     if (handle) {
-      pluginHandleControls.get(handle)?.revoke();
-      pluginHandleControls.delete(handle);
+      installationControls.get(handle)?.revoke();
+      installationControls.delete(handle);
     }
-    this.#pluginControlHandles.delete(installation);
+    this.#installationImpls.delete(installation);
   }
 
-  #settleInstallations(installations: Iterable<PluginInstallation>) {
+  #settleInstallations(installations: Iterable<InstallationRecord>) {
     for (const installation of installations) installation.settleReady();
   }
 
-  #captureInstallations(): InstallationSnapshot[] {
+  #captureInstallations(): InstallationCapture[] {
     return [...this.#installations].map(([id, installation]) => ({
       id,
       installation,
@@ -469,7 +463,7 @@ class ApplicationImpl implements Application {
     }));
   }
 
-  #restoreInstallations(snapshot: ReadonlyArray<InstallationSnapshot>) {
+  #restoreInstallations(snapshot: ReadonlyArray<InstallationCapture>) {
     this.#installations.clear();
     for (const item of snapshot) {
       item.installation.reconfigure(item.spec);
@@ -483,7 +477,7 @@ class ApplicationImpl implements Application {
     } catch (reporterError) {
       try {
         this.#logger.error(
-          new AggregateError([error, reporterError], "Application error reporter failed"),
+          new AggregateError([error, reporterError], "Host error reporter failed"),
         );
       } catch {
         // Error observation must never mutate the runtime command being observed.
@@ -491,7 +485,7 @@ class ApplicationImpl implements Application {
     }
   }
 
-  #setStatus(status: ApplicationStatus) {
+  #setStatus(status: HostStatus) {
     this.#status = status;
     this.#publishDiagnostics();
   }
@@ -509,6 +503,6 @@ function isLogger(value: unknown): value is Logger {
   );
 }
 
-export function createApp(options?: CreateAppOptions): Application {
-  return new ApplicationImpl(options);
+export function createHost(options?: HostOptions): Host {
+  return new HostImpl(options);
 }

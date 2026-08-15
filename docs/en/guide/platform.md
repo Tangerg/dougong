@@ -15,26 +15,26 @@ Platform compiles those four into Core operations. It **does not duplicate** Cor
 
 ```text
 Host
- └─ PluginPlatform            ← external concerns: manifest / loader / permissions / activation
-      └─ PluginContainer      ← this is Core's Application
+ └─ Platform            ← external concerns: manifest / loader / permissions / activation
+      └─ Installer      ← this is Core's Host
            └─ installed plugins
 ```
 
-Platform takes a `PluginContainer` (an Application or a Group) and compiles external plugins into `install` / `update` / `remove` against it.
+Platform takes a `Installer` (an Host or a Group) and compiles external plugins into `install` / `update` / `remove` against it.
 
 ## A minimal example
 
 ```ts
-import { createApp } from "dougong"
-import { createPlatform, ImportPluginLoader, defineManifest } from "dougong"
+import { createHost } from "dougong"
+import { createPlatform, ImportLoader, defineManifest } from "dougong"
 
-const app = createApp({ name: "editor" })
-await app.start()
+const host = createHost({ name: "editor" })
+await host.start()
 
 const platform = createPlatform({
-  container: app,                       // the compilation target
-  apiVersion: "1.0.0",                  // the host API version
-  loader: new ImportPluginLoader(),     // how modules are loaded
+  installer: app,                       // the compilation target
+  apiVersion: "1.0.0",                  // the application API version
+  loader: new ImportLoader(),     // how modules are loaded
 })
 
 const plugin = await platform.register({
@@ -56,7 +56,7 @@ await platform.trigger("onLanguage:markdown")   // activate
 A manifest is an external plugin's **declaration**, validated and frozen at the trust boundary:
 
 ```ts
-interface PluginManifest {
+interface Manifest {
   readonly name: string
   readonly version: string
   readonly apiVersion: string                        // what it requires of the host
@@ -73,18 +73,18 @@ A mismatched `apiVersion` throws `API_INCOMPATIBLE`. That is the only compatibil
 ## The loader is the execution boundary
 
 ```ts
-interface PluginLoader<Reference> {
+interface Loader<Reference> {
   load(reference: Reference, signal: AbortSignal): Promise<unknown>
 }
 ```
 
-`Reference` is generic — a URL, file path, module ID, blob, anything your host can resolve. Platform does not care.
+`Reference` is generic — a URL, file path, module ID, blob, anything your application can resolve. Platform does not care.
 
 Two implementations ship with it:
 
 ```ts
-new ImportPluginLoader()        // dynamic import(); Reference is string | URL
-new MemoryPluginLoader(map)     // from a Map, for tests
+new ImportLoader()        // dynamic import(); Reference is string | URL
+new MemoryLoader(map)     // from a Map, for tests
 ```
 
 The loader is the **only** place external code executes. A failed load throws `MODULE_LOAD_FAILED`; a module that does not export a valid plugin definition throws `MODULE_INVALID`.
@@ -97,9 +97,9 @@ The `signal` makes loading cancellable, so removing a plugin mid-load does not l
 import { PermissionSet } from "dougong"
 
 const platform = createPlatform({
-  container: app,
+  installer: app,
   apiVersion: "1.0.0",
-  loader: new ImportPluginLoader(),
+  loader: new ImportLoader(),
   permissions: new PermissionSet(["fs:read", "net:fetch"]),
 })
 ```
@@ -118,7 +118,7 @@ const permissions = {
 ::: danger This is not a sandbox
 The permission check happens **before** the module executes. It decides whether to run the code, not what the code may touch.
 
-Once a JavaScript module is imported it shares the host's realm and reaches the same globals. Real isolation needs a Worker, iframe, process or separate Application — Platform does not pretend otherwise.
+Once a JavaScript module is imported it shares the host's realm and reaches the same globals. Real isolation needs a Worker, iframe, process or separate Host — Platform does not pretend otherwise.
 
 Authorization is re-checked **immediately before** module execution, so revoking a permission takes effect at once for plugins that have not yet activated.
 :::
@@ -139,7 +139,7 @@ await plugin.activate()             // activate explicitly
 plugin.status      // "active"
 ```
 
-The `placeholder` is a **host-authored** plugin definition standing in until the real module activates. That is what makes "the command is already in the menu, but the implementation loads on click" possible — and the swap from placeholder to real implementation is **atomic**, through the same Core ChangeSet.
+The `placeholder` is a **application-authored** plugin definition standing in until the real module activates. That is what makes "the command is already in the menu, but the implementation loads on click" possible — and the swap from placeholder to real implementation is **atomic**, through the same Core ChangeSet.
 
 Activation can also be event-driven:
 
@@ -193,7 +193,7 @@ It then, in order: awaits in-flight operations on the affected plugins → autho
 
 If any step fails, Core has not moved at all.
 
-Updates check identity: the new artifact's manifest name must match the existing plugin's, otherwise `PLUGIN_IDENTITY`. That keeps "update" from quietly becoming "replace with a different plugin".
+Updates check identity: the new artifact's manifest name must match the existing plugin's, otherwise `REGISTRATION_IDENTITY`. That keeps "update" from quietly becoming "replace with a different plugin".
 
 ## Hot reload
 
@@ -212,7 +212,7 @@ Underneath it is Core's `handle.update({ plugin })`, so only the affected depend
 
 ```ts
 platform.diagnostics.get()
-// { apiVersion, status, plugins: ReadonlyMap<string, ManagedPluginSnapshot> }
+// { apiVersion, status, plugins: ReadonlyMap<string, RegistrationSnapshot> }
 
 platform.diagnostics.subscribe(() => render())
 ```
@@ -232,5 +232,5 @@ Disposal cancels in-flight activations, removes every installed handle from Core
 ## Next
 
 - [Platform specification](../reference/platform.md) — exact semantics and edge cases
-- [Error codes](../reference/errors.md) — all 25 stable codes
+- [Error codes](../reference/errors.md) — all 28 stable codes
 - [Runnable examples 08 / 12](../examples.md) — lazy activation and module-graph HMR end to end

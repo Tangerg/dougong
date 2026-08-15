@@ -7,17 +7,17 @@ describe("ExtensionStore invariants", () => {
     const claimed = store.stage("owner", "item", 1, () => undefined);
 
     expect(() => store.stage("owner", "item", 2, () => undefined)).toThrowError(
-      new TypeError("Duplicate extension contribution 'owner/item'"),
+      new TypeError("Duplicate contribution 'owner/item'"),
     );
 
     const foreign = createStore<number>().stage("owner", "item", 2, () => undefined);
     expect(() => store.insert("owner/item", foreign, 2)).toThrowError(
-      new Error("Extension contribution 'owner/item' is not the current claim"),
+      new Error("Contribution 'owner/item' is not the current claim"),
     );
 
     claimed.publish();
     expect(() => store.insert("owner/item", claimed, 1)).toThrowError(
-      new Error("Extension contribution 'owner/item' is already published"),
+      new Error("Contribution 'owner/item' is already published"),
     );
   });
 });

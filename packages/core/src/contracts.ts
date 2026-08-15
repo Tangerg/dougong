@@ -1,6 +1,6 @@
 const contractType: unique symbol = Symbol("dougong.contract.type");
 
-export type ContractKind = "service" | "extension" | "event";
+export type ContractKind = "service" | "extensionPoint" | "event";
 
 export interface ContractIdentity {
   readonly id: string;
@@ -13,7 +13,7 @@ interface Contract<T, K extends ContractKind> extends ContractIdentity {
 }
 
 export interface Service<T> extends Contract<T, "service"> {}
-export interface Extension<T> extends Contract<T, "extension"> {}
+export interface ExtensionPoint<T> extends Contract<T, "extensionPoint"> {}
 export interface Event<T> extends Contract<T, "event"> {}
 
 export interface OptionalService<T> {
@@ -21,7 +21,7 @@ export interface OptionalService<T> {
   readonly service: Service<T>;
 }
 
-export type Requirement<T = unknown> = Service<T> | Extension<T> | OptionalService<T>;
+export type Requirement<T = unknown> = Service<T> | ExtensionPoint<T> | OptionalService<T>;
 
 export type ContractValue<T> = T extends Contract<infer Value, ContractKind> ? Value : never;
 
@@ -47,7 +47,7 @@ export function isContract(value: unknown, expected?: ContractKind): value is Co
     candidate.id.length > 0 &&
     candidate.id === candidate.id.trim() &&
     (candidate.kind === "service" ||
-      candidate.kind === "extension" ||
+      candidate.kind === "extensionPoint" ||
       candidate.kind === "event") &&
     (expected === undefined || candidate.kind === expected)
   );
@@ -69,8 +69,8 @@ export function event<T>(id: string): Event<T> {
   return contract<T, "event">("event", id);
 }
 
-export function extension<T>(id: string): Extension<T> {
-  return contract<T, "extension">("extension", id);
+export function extensionPoint<T>(id: string): ExtensionPoint<T> {
+  return contract<T, "extensionPoint">("extensionPoint", id);
 }
 
 export function optional<T>(token: Service<T>): OptionalService<T> {

@@ -1,28 +1,28 @@
 import type { ContractKind } from "./contracts";
 import { rememberContractKind } from "./contract-registry";
 import { DougongError } from "./errors";
-import type { PluginInstallation } from "./plugin-installation";
+import type { InstallationRecord } from "./installation";
 
 /** Immutable validated dependency plan over one application-wide capability graph. */
 export class PluginGraph {
   readonly #resolvedProviders: ReadonlyMap<
-    PluginInstallation,
-    ReadonlyMap<string, PluginInstallation>
+    InstallationRecord,
+    ReadonlyMap<string, InstallationRecord>
   >;
 
   private constructor(
-    readonly order: ReadonlyArray<PluginInstallation>,
-    readonly layers: ReadonlyArray<ReadonlyArray<PluginInstallation>>,
-    readonly providers: ReadonlyMap<string, PluginInstallation>,
-    readonly dependents: ReadonlyMap<PluginInstallation, ReadonlySet<PluginInstallation>>,
+    readonly order: ReadonlyArray<InstallationRecord>,
+    readonly layers: ReadonlyArray<ReadonlyArray<InstallationRecord>>,
+    readonly providers: ReadonlyMap<string, InstallationRecord>,
+    readonly dependents: ReadonlyMap<InstallationRecord, ReadonlySet<InstallationRecord>>,
     readonly contractKinds: ReadonlyMap<string, ContractKind>,
-    resolvedProviders: ReadonlyMap<PluginInstallation, ReadonlyMap<string, PluginInstallation>>,
+    resolvedProviders: ReadonlyMap<InstallationRecord, ReadonlyMap<string, InstallationRecord>>,
   ) {
     this.#resolvedProviders = resolvedProviders;
   }
 
   static build(
-    source: Iterable<PluginInstallation>,
+    source: Iterable<InstallationRecord>,
     committedKinds: ReadonlyMap<string, ContractKind>,
   ) {
     const installations = [...source].sort((left, right) => left.index - right.index);
@@ -45,7 +45,7 @@ export class PluginGraph {
     );
   }
 
-  providerFor(installation: PluginInstallation, serviceId: string) {
+  providerFor(installation: InstallationRecord, serviceId: string) {
     return this.#resolvedProviders.get(installation)?.get(serviceId);
   }
 
@@ -53,16 +53,16 @@ export class PluginGraph {
     return this.providers.get(serviceId);
   }
 
-  affectedByTransitionTo(other: PluginGraph, changed: ReadonlySet<PluginInstallation>) {
-    const affected = new Set<PluginInstallation>();
+  affectedByTransitionTo(other: PluginGraph, changed: ReadonlySet<InstallationRecord>) {
+    const affected = new Set<InstallationRecord>();
     this.#expand(changed, affected);
     other.#expand(changed, affected);
     return affected;
   }
 
-  #expand(changed: ReadonlySet<PluginInstallation>, affected: Set<PluginInstallation>) {
+  #expand(changed: ReadonlySet<InstallationRecord>, affected: Set<InstallationRecord>) {
     const queue = [...changed];
-    const visited = new Set<PluginInstallation>();
+    const visited = new Set<InstallationRecord>();
     for (let index = 0; index < queue.length; index++) {
       const installation = queue[index];
       if (!installation) continue;
@@ -75,10 +75,10 @@ export class PluginGraph {
 }
 
 function collectProviders(
-  installations: ReadonlyArray<PluginInstallation>,
+  installations: ReadonlyArray<InstallationRecord>,
   contractKinds: Map<string, ContractKind>,
 ) {
-  const providers = new Map<string, PluginInstallation>();
+  const providers = new Map<string, InstallationRecord>();
   for (const installation of installations) {
     for (const token of Object.values(installation.spec.plugin.provides ?? {})) {
       rememberContractKind(contractKinds, token);
@@ -96,19 +96,19 @@ function collectProviders(
 }
 
 function connectRequirements(
-  installations: ReadonlyArray<PluginInstallation>,
-  providers: ReadonlyMap<string, PluginInstallation>,
+  installations: ReadonlyArray<InstallationRecord>,
+  providers: ReadonlyMap<string, InstallationRecord>,
   contractKinds: Map<string, ContractKind>,
 ) {
-  const resolvedProviders = new Map<PluginInstallation, Map<string, PluginInstallation>>();
-  const dependents = new Map<PluginInstallation, Set<PluginInstallation>>();
+  const resolvedProviders = new Map<InstallationRecord, Map<string, InstallationRecord>>();
+  const dependents = new Map<InstallationRecord, Set<InstallationRecord>>();
   const indegree = new Map(installations.map((installation) => [installation, 0]));
 
   for (const installation of installations) {
     for (const requirement of Object.values(installation.spec.plugin.requires ?? {})) {
       const token = requirement.kind === "optional" ? requirement.service : requirement;
       rememberContractKind(contractKinds, token);
-      if (token.kind === "extension") continue;
+      if (token.kind === "extensionPoint") continue;
 
       const provider = providers.get(token.id);
       if (!provider) {
@@ -140,13 +140,13 @@ function connectRequirements(
 }
 
 function sortDependencies(
-  installations: ReadonlyArray<PluginInstallation>,
-  dependents: ReadonlyMap<PluginInstallation, ReadonlySet<PluginInstallation>>,
-  indegree: Map<PluginInstallation, number>,
+  installations: ReadonlyArray<InstallationRecord>,
+  dependents: ReadonlyMap<InstallationRecord, ReadonlySet<InstallationRecord>>,
+  indegree: Map<InstallationRecord, number>,
 ) {
   let frontier = installations.filter((installation) => indegree.get(installation) === 0);
-  const order: PluginInstallation[] = [];
-  const layers: PluginInstallation[][] = [];
+  const order: InstallationRecord[] = [];
+  const layers: InstallationRecord[][] = [];
   while (frontier.length) {
     frontier.sort((left, right) => left.index - right.index);
     const layer = frontier;
@@ -173,14 +173,14 @@ function sortDependencies(
 }
 
 function findDependencyCycle(
-  installations: ReadonlyArray<PluginInstallation>,
-  dependents: ReadonlyMap<PluginInstallation, ReadonlySet<PluginInstallation>>,
+  installations: ReadonlyArray<InstallationRecord>,
+  dependents: ReadonlyMap<InstallationRecord, ReadonlySet<InstallationRecord>>,
 ) {
-  const visited = new Set<PluginInstallation>();
-  const visiting = new Set<PluginInstallation>();
-  const path: PluginInstallation[] = [];
+  const visited = new Set<InstallationRecord>();
+  const visiting = new Set<InstallationRecord>();
+  const path: InstallationRecord[] = [];
 
-  const visit = (installation: PluginInstallation): PluginInstallation[] | undefined => {
+  const visit = (installation: InstallationRecord): InstallationRecord[] | undefined => {
     visiting.add(installation);
     path.push(installation);
 

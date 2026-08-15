@@ -1,12 +1,12 @@
 import type { StandardSchemaV1 } from "@standard-schema/spec";
 import {
   isContract,
-  type Extension,
+  type ExtensionPoint,
   type OptionalService,
   type Requirement,
   type Service,
 } from "./contracts";
-import type { ExtensionRequirementView } from "./extension-store";
+import type { ContributionView } from "./extension-store";
 import type { LifetimeOperations, Logger, PluginMeta } from "./lifetime";
 import type { Awaitable } from "./resource";
 
@@ -22,8 +22,8 @@ export type ResolvedRequirement<T> =
     ? Value | undefined
     : T extends Service<infer Value>
       ? Value
-      : T extends Extension<unknown>
-        ? ExtensionRequirementView<T>
+      : T extends ExtensionPoint<infer Value>
+        ? ContributionView<Value>
         : never;
 
 export type ResolvedRequirements<T extends Requirements> = {
@@ -42,7 +42,7 @@ export type PluginContext<T extends Requirements = Requirements> = LifetimeOpera
     readonly log: Logger;
   };
 
-export interface PluginDefinition<
+export interface Plugin<
   Config = void,
   Requires extends Requirements = {},
   Provides extends Provisions = {},
@@ -76,8 +76,8 @@ export function definePlugin<
   Provides extends Provisions = {},
   ConfigInput = Config,
 >(
-  definition: PluginDefinition<Config, Requires, Provides, ConfigInput>,
-): PluginDefinition<Config, Requires, Provides, ConfigInput> {
+  definition: Plugin<Config, Requires, Provides, ConfigInput>,
+): Plugin<Config, Requires, Provides, ConfigInput> {
   if (typeof definition?.name !== "string" || !definition.name.trim()) {
     throw new TypeError("Plugin name must be a non-empty string");
   }
@@ -110,8 +110,10 @@ export function definePlugin<
       if (!isContract(requirement.service, "service")) {
         throw new TypeError(`Optional requirement '${key}' must wrap a service contract`);
       }
-    } else if (!isContract(requirement, "service") && !isContract(requirement, "extension")) {
-      throw new TypeError(`Plugin requirement '${key}' must be a service or extension contract`);
+    } else if (!isContract(requirement, "service") && !isContract(requirement, "extensionPoint")) {
+      throw new TypeError(
+        `Plugin requirement '${key}' must be a service or extension-point contract`,
+      );
     }
   }
 

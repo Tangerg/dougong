@@ -74,7 +74,7 @@ describe("the learning path", () => {
     expect(facts.get("07")).toContain("accepts new subscribers = false");
 
     // 08 · The placeholder swap is one committed step, never a duplicate key.
-    expect(facts.get("08")).toContain("Extension held 1 throughout");
+    expect(facts.get("08")).toContain("ExtensionPoint held 1 throughout");
 
     // 11 · A failed plan restores the whole plan, not just the failing entry.
     expect(facts.get("11")).toContain("invalid plan was rejected = true");

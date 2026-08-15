@@ -1,7 +1,7 @@
 import type { ContractIdentity, ContractKind } from "./contracts";
 import { DougongError } from "./errors";
 
-/** Application-wide identity registry with an explicit draft commit boundary. */
+/** Host-wide identity registry with an explicit draft commit boundary. */
 export class ContractRegistry {
   readonly #kinds = new Map<string, ContractKind>();
 

@@ -1,12 +1,12 @@
 import {
-  createApp,
+  createHost,
   createPlatform,
   definePlugin,
-  extension,
-  MemoryPluginLoader,
+  extensionPoint,
+  MemoryLoader,
   PermissionSet,
   service,
-  type ExtensionView,
+  type ContributionView,
 } from "dougong";
 import { exampleResult, type ExampleResult } from "./example";
 
@@ -37,13 +37,13 @@ interface CommandCatalog {
 
 const FILESYSTEM = service<Filesystem>("examples/lynx/filesystem");
 const COMMAND_CATALOG = service<CommandCatalog>("examples/lynx/command-catalog");
-const COMMANDS = extension<Command>("examples/lynx/commands");
-const PANELS = extension<Panel>("examples/lynx/panels");
+const COMMANDS = extensionPoint<Command>("examples/lynx/commands");
+const PANELS = extensionPoint<Panel>("examples/lynx/panels");
 const workspaceState = (workspace: string) =>
   service<WorkspaceState>(`examples/lynx/workspaces/${encodeURIComponent(workspace)}/state`);
 const MAIN_WORKSPACE = workspaceState("main");
 
-function selectCommand(commands: ExtensionView<Command>, id: string) {
+function selectCommand(commands: ContributionView<Command>, id: string) {
   const matches = [...commands.get().values()].filter((command) => command.id === id);
   if (matches.length > 1) throw new TypeError(`Duplicate command '${id}'`);
   return matches[0];
@@ -66,12 +66,12 @@ function explorerPlugin(title: string, relativePath: string) {
 
 /**
  * A workbench. Two rules that hosts usually get wrong are made explicit here:
- * command uniqueness is a domain policy, not a Core Extension mode; and a
+ * command uniqueness is a domain policy, not a Core ExtensionPoint mode; and a
  * Group owns installations, so it is not a capability scope.
  */
 export async function lynxScenario(): Promise<ExampleResult> {
   let rootCatalog!: CommandCatalog;
-  let workspacePanels!: ExtensionView<Panel>;
+  let workspacePanels!: ContributionView<Panel>;
   let workspaceRoot = "";
   let initialWorkspaceCommands = 0;
   const filesystemAdapter = definePlugin({
@@ -129,21 +129,21 @@ export async function lynxScenario(): Promise<ExampleResult> {
   const explorerV1 = explorerPlugin("Explorer", "README.md");
   const explorerV2 = explorerPlugin("Files", "GUIDE.md");
 
-  const app = createApp({ name: "lynx-example" });
-  app.install(filesystemAdapter);
-  app.install(catalogPlugin);
-  app.install(rootShell);
-  const workspace = app.group("workspace-main", (group) => {
+  const host = createHost({ name: "lynx-example" });
+  host.install(filesystemAdapter);
+  host.install(catalogPlugin);
+  host.install(rootShell);
+  const workspace = host.group("workspace-main", (group) => {
     group.install(workspaceStatePlugin);
     group.install(workspaceShell);
   });
-  await app.start();
+  await host.start();
 
   const platform = createPlatform({
-    container: workspace,
+    installer: workspace,
     apiVersion: "1.0.0",
     permissions: new PermissionSet(["filesystem:read"]),
-    loader: new MemoryPluginLoader(
+    loader: new MemoryLoader(
       new Map([
         ["explorer-v1", { default: explorerV1 }],
         ["explorer-v2", { default: explorerV2 }],
@@ -186,7 +186,7 @@ export async function lynxScenario(): Promise<ExampleResult> {
   } catch {
     workspaceViewDisposed = true;
   }
-  await app.stop();
+  await host.stop();
 
   return exampleResult({
     id: "10",
@@ -194,7 +194,7 @@ export async function lynxScenario(): Promise<ExampleResult> {
     title: "Lynx: a domain catalog, workspace ownership and updates in place",
     introduces: ["domain-catalog", "workspace-ownership", "plugin-update"],
     facts: [
-      "Command uniqueness is a CommandCatalog Service policy, not a special Core Extension mode.",
+      "Command uniqueness is a CommandCatalog Service policy, not a special Core ExtensionPoint mode.",
       `The workspace shell bound to '${workspaceRoot}' with ${initialWorkspaceCommands} initial commands.`,
       `The catalog listed the command before activation, but it was executable = ${placeholderExecutable}.`,
       `An update kept the plugin's identity while replacing its implementation: '${firstOutput}' → '${secondOutput}', panel now '${panelTitle}'.`,

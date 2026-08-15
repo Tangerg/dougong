@@ -28,8 +28,8 @@ setup(ctx) {
 | `cleanups` | `ctx.cleanup(fn)` | 逆序执行 `fn` |
 | `tasks` | `ctx.spawn(fn)` | abort signal，等待任务结束 |
 | `listeners` | `ctx.on(EVENT, fn)` | 从 EventHub 注销 |
-| `contributions` | `ctx.contribute(EXT, key, v)` | 从 Extension Store 撤回 |
-| `extensionViews` | `requires` 里的 Extension | 视图关闭，再读抛错 |
+| `contributions` | `ctx.contribute(EXT, key, v)` | 从 ExtensionPoint Store 撤回 |
+| `extensionViews` | `requires` 里的 ExtensionPoint | 视图关闭，再读抛错 |
 | `subscriptions` | `view.subscribe(fn)` | 从 Store 摘除监听 |
 | `children` | `ctx.lifetime(label)` | 递归释放整棵子树 |
 
@@ -89,7 +89,7 @@ task.dispose()   // abort 并等待结束
 
 这个区分很重要：一个跑了十万次的轮询插件，不会在停止时去 abort 十万个已完成的任务。
 
-任务抛出的异常不会静默消失，会通过 Application 的错误上报通道（`createApp({ onError })` 或 logger）报出来。
+任务抛出的异常不会静默消失，会通过 Host 的错误上报通道（`createHost({ onError })` 或 logger）报出来。
 
 ## 子生命周期
 
@@ -136,7 +136,7 @@ setup(ctx) {
 诊断里有一份实时的 Lifetime 所有权树：
 
 ```ts
-const snapshot = app.diagnostics.get()
+const snapshot = host.diagnostics.get()
 const lifetime = snapshot.plugins.get(handle.id)?.lifetime
 
 lifetime.get()
@@ -155,23 +155,23 @@ lifetime.subscribe(() => render())   // 资源变化时通知
 
 这份快照是**递归冻结的纯数据**——只有标签、阶段和计数，不暴露 Lifetime 对象、资源、回调或 Store。节点计数只描述该 Lifetime **直接**拥有的资源，子树合计由 `children` 递归推导，快照里不保存第二份聚合状态。
 
-它和 Application 快照是两个独立的订阅源：高频的资源变化不会重建整张 Application 快照。
+它和 Host 快照是两个独立的订阅源：高频的资源变化不会重建整张 Host 快照。
 
 ## 不会反向保活
 
 这是一条容易被忽略但影响很大的性质：
 
-> 保留一个已释放的 Handle，不会保活 Application、Store、回调或 payload。
+> 保留一个已释放的 Handle，不会保活 Host、Store、回调或 payload。
 
 具体做法：
 
 - 终态资源清空自己对 owner、Store、回调和 payload 的引用
-- 终态 `PluginInstallation` 只保留不可变的 group ID，不持有 GroupNode
+- 终态 `InstallationRecord` 只保留不可变的 group ID，不持有 GroupNode
 - 已分离的 Group 清空 parent 引用，历史 Handle 不能经所有权树保活兄弟子树
 - **终态失败只保留 `name` / `message` / `code` 纯数据摘要**——JavaScript 的 `Error.stack` 可能携带创建错误时的整个编排调用帧，不能成为一条隐形的所有权边
 - 历史诊断视图在关闭时切断上报回调
 
-仍属于活动 Application 的失败实例继续保留原始错误，供诊断和重试使用。等待 `ready()` 的调用方也总是收到原始 `Error`——摘要只影响实例**脱离 Application 之后**的事后读取。
+仍属于活动 Host 的失败实例继续保留原始错误，供诊断和重试使用。等待 `ready()` 的调用方也总是收到原始 `Error`——摘要只影响实例**脱离 Host 之后**的事后读取。
 
 ## 常见错误
 

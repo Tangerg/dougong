@@ -1,17 +1,17 @@
 import { PlatformError } from "./errors";
-import type { ManagedPluginRegistration } from "./managed-plugin";
+import type { RegistrationRecord } from "./registration";
 import { matchesVersion } from "./manifest";
 import type { NormalizedArtifact } from "./platform-api";
 import type { PlatformChangeOperation } from "./platform-change-set";
 
-interface CandidateRegistration<Reference> {
-  readonly registration: ManagedPluginRegistration<Reference>;
+interface Candidate<Reference> {
+  readonly registration: RegistrationRecord<Reference>;
   readonly artifact: NormalizedArtifact<Reference>;
 }
 
 /** Validates the complete registration graph that would exist after a change. */
 export function validateCandidateGraph<Reference>(
-  current: Iterable<ManagedPluginRegistration<Reference>>,
+  current: Iterable<RegistrationRecord<Reference>>,
   operations: ReadonlyArray<PlatformChangeOperation<Reference>>,
 ) {
   const candidate = buildCandidateGraph(current, operations);
@@ -20,10 +20,10 @@ export function validateCandidateGraph<Reference>(
 }
 
 function buildCandidateGraph<Reference>(
-  current: Iterable<ManagedPluginRegistration<Reference>>,
+  current: Iterable<RegistrationRecord<Reference>>,
   operations: ReadonlyArray<PlatformChangeOperation<Reference>>,
 ) {
-  const candidate = new Map<string, CandidateRegistration<Reference>>(
+  const candidate = new Map<string, Candidate<Reference>>(
     [...current].map((registration) => [
       registration.name,
       { registration, artifact: registration.artifact },
@@ -54,9 +54,7 @@ function buildCandidateGraph<Reference>(
   return candidate;
 }
 
-function assertAcyclic<Reference>(
-  candidate: ReadonlyMap<string, CandidateRegistration<Reference>>,
-) {
+function assertAcyclic<Reference>(candidate: ReadonlyMap<string, Candidate<Reference>>) {
   const visiting = new Set<string>();
   const visited = new Set<string>();
 
@@ -83,7 +81,7 @@ function assertAcyclic<Reference>(
 }
 
 function assertActivatedDependencies<Reference>(
-  candidate: ReadonlyMap<string, CandidateRegistration<Reference>>,
+  candidate: ReadonlyMap<string, Candidate<Reference>>,
 ) {
   for (const { registration, artifact } of candidate.values()) {
     if (registration.status !== "activated") continue;

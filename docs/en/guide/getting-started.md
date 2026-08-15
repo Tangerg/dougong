@@ -7,7 +7,7 @@ This page takes about ten minutes: install Dougong, write your first capability 
 | Item | Requirement |
 | --- | --- |
 | Node.js | ≥ 22 |
-| JavaScript host | Must provide ES2024 standard capabilities, including `Promise.withResolvers()` |
+| JavaScript runtime | Must provide ES2024 standard capabilities, including `Promise.withResolvers()` |
 | TypeScript | ≥ 5.5 (if you use TypeScript) |
 
 ::: warning Browser and WebView hosts
@@ -60,7 +60,7 @@ Adding `DOM` and `ESNext.Disposable` fixes it.
 A complete, runnable example. The provider publishes a stable Service; the consumer declares its dependency through `requires`.
 
 ```ts
-import { createApp, definePlugin, service } from "dougong"
+import { createHost, definePlugin, service } from "dougong"
 
 interface Clock {
   now(): Date
@@ -93,13 +93,13 @@ const greeter = definePlugin({
   }),
 })
 
-const app = createApp({ name: "hello" })
-app.install(greeter)   // note: the consumer goes first
-app.install(clock)     // the provider second — order does not matter
+const host = createHost({ name: "hello" })
+host.install(greeter)   // note: the consumer goes first
+host.install(clock)     // the provider second — order does not matter
 
-await app.start()
-console.log(app.get(GREETER).greet("Dougong"))
-await app.stop()
+await host.start()
+console.log(host.get(GREETER).greet("Dougong"))
+await host.stop()
 ```
 
 Output:
@@ -112,7 +112,7 @@ Output:
 
 ### Install order is not start order
 
-`greeter` is installed first but depends on `clock`. During `app.start()`, Dougong builds a dependency graph from the `requires` / `provides` declarations, topologically sorts it, **starts each topological layer concurrently**, and stops in reverse dependency order.
+`greeter` is installed first but depends on `clock`. During `host.start()`, Dougong builds a dependency graph from the `requires` / `provides` declarations, topologically sorts it, **starts each topological layer concurrently**, and stops in reverse dependency order.
 
 You never sort by hand, and there is no `dependsOn: ["example.clock"]` string array — the dependency is already in the types.
 
@@ -131,16 +131,16 @@ The type of `ctx` is derived from `requires`. Undeclared means the property does
 
 This is the most practical difference from most plugin frameworks. Where dependencies resolve through strings or an ambient context, a forgotten declaration usually shows up as "works sometimes, undefined other times", depending on load order.
 
-### `app.get()` is for the host, not for plugins
+### `host.get()` is for the host, not for plugins
 
 ```ts
-app.get(GREETER)     // ✓ the host crossing the runtime boundary
+host.get(GREETER)     // ✓ the host crossing the runtime boundary
 ctx.get(GREETER)     // ✗ no such method
 ```
 
 Plugins relate to each other through `requires` so that the dependency graph is complete. If a plugin could pull any capability from a service locator at will, the graph would stop reflecting real dependencies, and both topological ordering and transactional rollback would lose their meaning.
 
-`app.get()` only works while `status === "active"`; otherwise it throws `SERVICE_UNAVAILABLE`.
+`host.get()` only works while `status === "active"`; otherwise it throws `SERVICE_UNAVAILABLE`.
 
 ## Run the repository examples
 
@@ -159,7 +159,7 @@ Twelve chapters climb three stages — atoms, composition, real hosts — from a
 
 ## Next
 
-- **Understand the model** → [Core concepts](./concepts.md): what each atom solves, and why an Extension is not a Service
+- **Understand the model** → [Core concepts](./concepts.md): what each atom solves, and why an ExtensionPoint is not a Service
 - **Start writing code** → [Writing plugins](./writing-plugins.md): config validation, optional dependencies, failure handling
 - **Worried about leaks** → [Lifetime and resources](./lifetime.md)
 - **Need exact semantics** → [Core API specification](../reference/core-api.md)

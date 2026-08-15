@@ -30,8 +30,8 @@ One primitive at a time. After these four chapters you know what four of the six
 
 | # | Scenario | New concepts | The point |
 | --- | --- | --- | --- |
-| **01** | Service | `service` `provides` `requires` `app.get` | Installation order is not startup order; the declared dependency edge is |
-| **02** | Extension + Event | `extension` `contribute` `extension-view` `event` `contribution-dispose` | An Extension holds current contributions; an Event keeps nothing — it is not a query API |
+| **01** | Service | `service` `provides` `requires` `host.get` | Installation order is not startup order; the declared dependency edge is |
+| **02** | ExtensionPoint + Event | `extension` `contribute` `extension-view` `event` `contribution-dispose` | An ExtensionPoint holds current contributions; an Event keeps nothing — it is not a query API |
 | **03** | Lifetime | `cleanup` `child-lifetime` `spawn` `abort-signal` | Everything hangs off one tree, released in **reverse registration order**; a subtree can be released on its own |
 | **04** | Reactive | `signal` `computed` `batch` `observe` | `computed` derives purely and owns nothing; `observe()` is the single seam between "a value changed" and "a resource is rebuilt" |
 
@@ -52,7 +52,7 @@ The primitives start meshing. These four chapters cover exactly what a small pro
 | --- | --- | --- | --- |
 | **05** | Config and failure | `config-schema` `config-validation` `change-set` `setup-failure` `rollback` | Validation happens **before** anything is stopped; rollback is work undone, not work skipped |
 | **06** | Contract families and Groups | `contract-family` `group` `atomic-commit` `group-removal` | Many instances of one shape use an explicit Contract family; a Group expresses installation ownership only |
-| **07** | Diagnostics | `diagnostics-view` `lifetime-snapshot` `terminal-detachment` `view-finalization` | Terminal resources detach from their owner; after shutdown the view finalizes into data instead of retaining the Application |
+| **07** | Diagnostics | `diagnostics-view` `lifetime-snapshot` `terminal-detachment` `view-finalization` | Terminal resources detach from their owner; after shutdown the view finalizes into data instead of retaining the Host |
 | **08** | Platform | `manifest` `permissions` `placeholder` `activation` | Registration ≠ activation; the placeholder-to-implementation swap is one committed step |
 
 ::: warning Chapter 05 is the turning point of the path
@@ -69,7 +69,7 @@ No new API is introduced. These four chapters arrange the previous ones into sha
 
 | # | Scenario | New concepts | What it proves |
 | --- | --- | --- | --- |
-| **09** | Planet | `runtime-selection` `live-provider-swap` `group-scoped-platform` | Adding and removing providers never restarts the player — an Extension is not a dependency edge |
+| **09** | Planet | `runtime-selection` `live-provider-swap` `group-scoped-platform` | Adding and removing providers never restarts the player — an ExtensionPoint is not a dependency edge |
 | **10** | Lynx | `domain-catalog` `workspace-ownership` `plugin-update` | Command uniqueness is domain policy; a root consumer sees the Group's contribution, so a Group is not a scope |
 | **11** | Declarative plan | `desired-state` `content-revision` `platform-change-set` | Desired state diffed into one ChangeSet; identity from the manifest name, change from an explicit revision |
 | **12** | HMR module graph | `module-graph` `invalidation-closure` `multi-plugin-hmr` | Invalidation propagates along importers; two plugins change version and the observer sees exactly 1 commit |
@@ -82,7 +82,7 @@ Here each is roughly 200 lines, uses **only the public API**, and introduces no 
 
 ## The shape of a chapter
 
-Each chapter is an exported async function that creates and fully releases its own Application:
+Each chapter is an exported async function that creates and fully releases its own Host:
 
 ```ts
 import { diagnostics } from "@dougongjs/examples"

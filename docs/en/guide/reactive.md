@@ -6,11 +6,11 @@ It and Core are **mutually independent**. This page explains what that decision 
 
 ## Why a signal is not a fifth capability
 
-Core has three Contract kinds: Service, Extension and Event. The natural question is why there is no fourth, `signal<T>()`.
+Core has three Contract kinds: Service, ExtensionPoint and Event. The natural question is why there is no fourth, `signal<T>()`.
 
 Because **a signal is a way of representing a value, not a way of organising a capability**.
 
-A Service can return a signal; an Extension's values can be signals:
+A Service can return a signal; an ExtensionPoint's values can be signals:
 
 ```ts
 const THEME = service<{ current: ReadonlySignal<Theme> }>("app/theme")
@@ -18,7 +18,7 @@ const THEME = service<{ current: ReadonlySignal<Theme> }>("app/theme")
 
 If "signal" were also a Contract kind, then "should the theme capability be a Service or a Signal?" would be a question with no correct answer — both would work, both would appear in the same codebase, and their dependency, transaction and diagnostic semantics would all differ.
 
-**One semantic has one canonical entry point.** Capabilities are organised through Service / Extension / Event; whether the value one returns happens to be reactive is the plugin's own implementation detail.
+**One semantic has one canonical entry point.** Capabilities are organised through Service / ExtensionPoint / Event; whether the value one returns happens to be reactive is the plugin's own implementation detail.
 
 For the same reason Core offers no implicit effects. Where a side effect belongs must be written on a Lifetime, never inferred from "who is currently reading me".
 
@@ -84,7 +84,7 @@ interface Readable<T> {
 }
 ```
 
-Core's `ExtensionView` and `diagnostics` use the **same protocol**, so any observation source can be consumed the same way — no adapters.
+Core's `ContributionView` and `diagnostics` use the **same protocol**, so any observation source can be consumed the same way — no adapters.
 
 ## observe: compiling value change into resource rebuild
 
@@ -100,7 +100,7 @@ observe(source, owner, (value, lifetime) => {
 
 Three parameters:
 
-- `source` — any `Readable<T>`: a signal, an `ExtensionView`, `diagnostics`, or your own object
+- `source` — any `Readable<T>`: a signal, an `ContributionView`, `diagnostics`, or your own object
 - `owner` — anything providing `cleanup` / `lifetime` / `spawn`; a plugin's `ctx` fits exactly
 - `observer` — receives the current value and a dedicated child Lifetime
 
@@ -168,13 +168,13 @@ The result is a dependency direction that stays one-way: `reactive` does not dep
 Core produces `Readable` in two places:
 
 ```ts
-// Extension view — collection change
+// ExtensionPoint view — collection change
 ctx.routes.get()                    // ReadonlyMap<string, Route>
 ctx.routes.subscribe(() => ...)
 
 // Diagnostics — runtime state
-app.diagnostics.get()
-app.diagnostics.subscribe(() => ...)
+host.diagnostics.get()
+host.diagnostics.subscribe(() => ...)
 
 // A plugin's Lifetime ownership tree
 snapshot.plugins.get(id)?.lifetime.get()
@@ -195,7 +195,7 @@ The router is rebuilt whenever the route set changes, and the old one closes aut
 
 Dougong binds to no UI framework. React, Vue and Solid all have mature reactivity, and `@dougongjs/reactive` does not try to replace them.
 
-It exists because **Core needs an observation protocol that does not depend on a UI framework**, to express facts like "the collection changed" or "diagnostics changed". If your host is a React app, bridge with `useSyncExternalStore`:
+It exists because **Core needs an observation protocol that does not depend on a UI framework**, to express facts like "the collection changed" or "diagnostics changed". If your application is a React app, bridge with `useSyncExternalStore`:
 
 ```ts
 const routes = useSyncExternalStore(

@@ -11,7 +11,7 @@ Platform adds exactly four concepts:
 ```text
 Manifest       static identity, compatibility range, activation conditions, permission requests
 Artifact       manifest + module reference + config + optional placeholder definition
-ManagedPlugin  the stable managed identity of one external plugin
+Registration  the stable managed identity of one external plugin
 Platform       owner of the registry, load policy, permission policy and atomic change
 ```
 
@@ -19,9 +19,9 @@ Typical use:
 
 ```ts
 const platform = createPlatform({
-  container: app,
+  installer: app,
   apiVersion: "1.0.0",
-  loader: new ImportPluginLoader(),
+  loader: new ImportLoader(),
   permissions: new PermissionSet(["network"]),
 });
 
@@ -40,12 +40,12 @@ await platform.trigger("command:music.search");
 await plugin.ready();
 ```
 
-`register()` only admits the Artifact into the platform; `activate()` selects and loads its external implementation; `ready()` waits for the corresponding Core installation to actually cross the Application / ChangeSet ready barrier. These three are not synonyms.
+`register()` only admits the Artifact into the platform; `activate()` selects and loads its external implementation; `ready()` waits for the corresponding Core installation to actually cross the Host / ChangeSet ready barrier. These three are not synonyms.
 
 ## 2. Manifest
 
 ```ts
-interface PluginManifest {
+interface Manifest {
   readonly name: string;
   readonly version: string;
   readonly apiVersion: string;
@@ -73,34 +73,34 @@ Rules:
 - A manifest is a strict object: unknown fields are rejected rather than silently dropping a misspelled option.
 - No activation condition or permission may repeat.
 - The returned object, arrays and dependency map are frozen. A manifest is a value; it holds no runtime state.
-- The plugin `name` is the Platform identity and must match the `PluginDefinition.name` of both the placeholder and the loaded module exactly.
+- The plugin `name` is the Platform identity and must match the `Plugin.name` of both the placeholder and the loaded module exactly.
 
-`apiVersion` constrains the Dougong/domain API the host exposes to plugins; it is not the plugin's own version. `dependencies` constrains other manifests' versions. Real runtime capability dependencies must still be written into Core `requires` — manifest dependencies are not a bypass around the Service graph.
+`apiVersion` constrains the Dougong/domain API the application exposes to plugins; it is not the plugin's own version. `dependencies` constrains other manifests' versions. Real runtime capability dependencies must still be written into Core `requires` — manifest dependencies are not a bypass around the Service graph.
 
 ## 3. The loader is the execution boundary
 
 ```ts
-interface PluginLoader<Reference> {
+interface Loader<Reference> {
   load(reference: Reference, signal: AbortSignal): unknown | Promise<unknown>;
 }
 ```
 
-A loaded module must expose exactly one `PluginDefinition` as its `default` export. Platform re-runs `definePlugin()`'s structural validation after loading and verifies the name. Loader failures are wrapped as `PlatformError` with `MODULE_LOAD_FAILED`; a bad module shape or default export uses `MODULE_INVALID`.
+A loaded module must expose exactly one `Plugin` as its `default` export. Platform re-runs `definePlugin()`'s structural validation after loading and verifies the name. Loader failures are wrapped as `PlatformError` with `MODULE_LOAD_FAILED`; a bad module shape or default export uses `MODULE_INVALID`.
 
 Built-in implementations:
 
-- `ImportPluginLoader` — dynamic `import()`, for trusted same-realm ESM. Explicitly **not a sandbox**.
-- `MemoryPluginLoader` — reads modules from a host-supplied read-only Map, for embedded bundles, deterministic tests and host built-in plugins.
+- `ImportLoader` — dynamic `import()`, for trusted same-realm ESM. Explicitly **not a sandbox**.
+- `MemoryLoader` — reads modules from an application-supplied read-only Map, for embedded bundles, deterministic tests and application built-in plugins.
 
 A loader must check its `AbortSignal` during expensive phases. Platform also re-checks after the loader returns, so an uncooperative loader cannot commit a module into Core after cancellation — but the I/O and module top-level side effects it already performed cannot be undone.
 
-Untrusted plugins belong in a Worker, iframe, separate process or restricted realm. The corresponding loader can return a **host-authored RPC proxy `PluginDefinition`** that maps granted capabilities onto ordinary Services. What you cannot do is `import()` arbitrary code into the host realm first and then expect context permissions to make it safe.
+Untrusted plugins belong in a Worker, iframe, separate process or restricted realm. The corresponding loader can return a **application-authored RPC proxy `Plugin`** that maps granted capabilities onto ordinary Services. What you cannot do is `import()` arbitrary code into the host realm first and then expect context permissions to make it safe.
 
 ## 4. Permissions are a policy port, not a pseudo-sandbox
 
 ```ts
-interface PermissionAuthorizer {
-  authorize(manifest: PluginManifest, signal: AbortSignal): void | Promise<void>;
+interface Authorizer {
+  authorize(manifest: Manifest, signal: AbortSignal): void | Promise<void>;
 }
 ```
 
@@ -118,28 +118,28 @@ An authorizer decides "may this proceed". It does not rewrite the context and pr
 The Artifact:
 
 ```ts
-interface PluginArtifact<Reference> {
-  readonly manifest: PluginManifestInput | PluginManifest;
+interface Artifact<Reference> {
+  readonly manifest: ManifestInput | Manifest;
   readonly reference: Reference;
   readonly config?: unknown; // required by type when ConfigInput is not void
-  readonly placeholder?: PluginDefinition;
+  readonly placeholder?: Plugin;
 }
 ```
 
-A `placeholder` must be created by host-trusted code. It suits contributing command titles, menu metadata or a stand-in panel before lazy loading. Platform installs it as an ordinary Core plugin at registration; on activation it atomically updates the **same Core handle** to the loaded definition, so the installation ID, Group membership and downstream observation identity stay stable.
+A `placeholder` must be created by application-trusted code. It suits contributing command titles, menu metadata or a stand-in panel before lazy loading. Platform installs it as an ordinary Core plugin at registration; on activation it atomically updates the **same Core handle** to the loaded definition, so the installation ID, Group membership and downstream observation identity stay stable.
 
-`ManagedPlugin.status`:
+`Registration.status`:
 
 | status | Meaning |
 | --- | --- |
 | `pending` | still owned by an uncommitted Platform ChangeSet, not yet in the registry |
 | `registered` | the Artifact is recorded; no external implementation selected. A placeholder may already be in Core |
 | `loading` | authorizing, activating dependencies or loading the module |
-| `activated` | the external definition is committed to Core; this does not imply the Application is currently `active` |
+| `activated` | the external definition is committed to Core; this does not imply the Host is currently `active` |
 | `failed` | the last activation failed; the error is retained for diagnostics and an explicit `activate()` may retry |
 | `removed` | removed from both Platform and the Core installation plan; not revivable |
 
-`activate()` can complete while the Application is `idle`: it commits the definition into the installation plan and does not secretly start the Application. `status` becomes `"activated"`, but a `ready()` called before or after still waits for `app.start()`. This deliberately separates "the module is activated" from "the running instance is ready".
+`activate()` can complete while the Host is `idle`: it commits the definition into the installation plan and does not secretly start the Host. `status` becomes `"activated"`, but a `ready()` called before or after still waits for `host.start()`. This deliberately separates "the module is activated" from "the running instance is ready".
 
 `ready()` waits for the first activation and the Core ready barrier while `pending` / `registered` / `loading`; delegates to the current Core handle while `activated`; and rejects immediately while `failed` / `removed`. A failed wait is not revived by a later retry — call `ready()` again after a successful retry.
 
@@ -155,7 +155,7 @@ Before activating a plugin, Platform activates its manifest-declared dependencie
 
 Registration order need not match dependency order: a not-yet-activated plugin may temporarily reference an unregistered dependency, which lets a host collect a batch of manifests first. But once every node is present, any closed loop is rejected immediately at the candidate-graph stage of registration or change — plugins are never left silently pending forever.
 
-Activation of one ManagedPlugin is serialized. When several consumers concurrently require the same dependency, that dependency completes exactly one effective load. Update, removal and Platform disposal cancel and await the relevant activations, so a load result can never "revive" an old Artifact across a change boundary.
+Activation of one Registration is serialized. When several consumers concurrently require the same dependency, that dependency completes exactly one effective load. Update, removal and Platform disposal cancel and await the relevant activations, so a load result can never "revive" an old Artifact across a change boundary.
 
 ## 7. Platform ChangeSet
 
@@ -174,7 +174,7 @@ await change.commit();
 
 An empty Platform ChangeSet commits as a side-effect-free no-op: no candidate graph, no Core ChangeSet, no diagnostics revision.
 
-A ManagedPlugin created by `change.register()` is only that ChangeSet's draft until commit. It holds no Platform owner and cannot separately `activate` / `update` / `remove`. Control authority is granted at commit and revoked again if registration fails. This keeps drafts from bypassing the candidate graph, and keeps a forgotten uncommitted handle from keeping the Platform alive.
+A Registration created by `change.register()` is only that ChangeSet's draft until commit. It holds no Platform owner and cannot separately `activate` / `update` / `remove`. Control authority is granted at commit and revoked again if registration fails. This keeps drafts from bypassing the candidate graph, and keeps a forgotten uncommitted handle from keeping the Platform alive.
 
 Commit order:
 
@@ -190,20 +190,20 @@ The internal implementation is split along the same boundary: the Artifact compi
 
 This is what lets a provider go `1.x → 2.x` while a consumer's dependency range goes `^1 → ^2` in a single change; done as two separate `update()` calls, the first illegal candidate graph is rejected. Top-level module import side effects are not transactional, but the installation plan, Core runtime instances and Platform records never end up half-committed.
 
-If Core rejects an already-prepared update because of config, the service graph, setup or cleanup failure, the ManagedPlugin still points at the old Artifact and old manifest. Core's own rollback / fail-closed semantics decide whether running instances return to `active` or the whole Application falls back to `idle`; Platform does not fabricate a second recovery state.
+If Core rejects an already-prepared update because of config, the service graph, setup or cleanup failure, the Registration still points at the old Artifact and old manifest. Core's own rollback / fail-closed semantics decide whether running instances return to `active` or the whole Host falls back to `idle`; Platform does not fabricate a second recovery state.
 
-## 8. Groups and host adapters
+## 8. Groups and application adapters
 
-`createPlatform()` accepts a `PluginContainer`, so it can bind either a whole Application or a single Group:
+`createPlatform()` accepts a `Installer`, so it can bind either a whole Host or a single Group:
 
 ```ts
-const workspace = app.group("workspace", () => {});
-const platform = createPlatform({ container: workspace, ...options });
+const workspace = host.group("workspace", () => {});
+const platform = createPlatform({ installer: workspace, ...options });
 ```
 
-Placeholders and active definitions installed by Platform belong to that Group; removing the Group removes the whole installation subtree in one Core transaction. A Group is not a capability scope: Services, Extensions and Events stay globally consistent within one Application. Workspace data separation belongs in domain Services and contributions; security isolation belongs in a separate Application, Worker, iframe or process.
+Placeholders and active definitions installed by Platform belong to that Group; removing the Group removes the whole installation subtree in one Core transaction. A Group is not a capability scope: Services, ExtensionPoints and Events stay globally consistent within one Host. Workspace data separation belongs in domain Services and contributions; security isolation belongs in a separate Host, Worker, iframe or process.
 
-Dougong also defines no universal `Host` base class. A host adapter is an ordinary capability-providing plugin:
+Dougong also defines no universal adapter base class. An application adapter is an ordinary capability-providing plugin:
 
 ```ts
 const filesystemAdapter = definePlugin({
@@ -212,10 +212,10 @@ const filesystemAdapter = definePlugin({
   setup: () => ({ filesystem: createRestrictedFilesystem() }),
 });
 
-app.install(filesystemAdapter);
+host.install(filesystemAdapter);
 ```
 
-Planet-style media sources and Lynx Desktop-style commands, menus and panels are Extensions. Players, filesystems, windows and storage are Services. Workspace and theme changes are Events or signals inside a Service. A domain package may offer modelling helpers closer to the business, but they must expand mechanically onto these primitives.
+Planet-style media sources and Lynx Desktop-style commands, menus and panels are ExtensionPoints. Players, filesystems, windows and storage are Services. Workspace and theme changes are Events or signals inside a Service. A domain package may offer modelling helpers closer to the business, but they must expand mechanically onto these primitives.
 
 ## 9. Diagnostics, encapsulation and disposal
 
@@ -228,20 +228,20 @@ The snapshot, entries and arrays are frozen, and the Map exposes no mutating met
 
 Platform implements no second observer. It submits an immutable PlatformSnapshot to Core's `SnapshotPublisher`. After Platform disposes successfully, an already-obtained historical view stops at the terminal `disposed` state, existing subscriptions detach, and the reader, logger and Platform owner are all severed.
 
-`ManagedPlugin` and `PlatformChangeSet` are frozen opaque handles. Even at the JavaScript runtime they leak no internal Artifact, Core handle, Platform owner or candidate graph; Platform verifies handle authority through a private WeakMap.
+`Registration` and `PlatformChangeSet` are frozen opaque handles. Even at the JavaScript runtime they leak no internal Artifact, Core handle, Platform owner or candidate graph; Platform verifies handle authority through a private WeakMap.
 
-Once a handle reaches `removed`, its control authority is revoked and the Artifact reference, config and Platform owner are released — holding a terminal handle never keeps the whole Platform alive. `remove()` then still succeeds idempotently while `activate` / `update` reject with `PLUGIN_REMOVED`, matching Core's terminal `PluginHandle` semantics.
+Once a handle reaches `removed`, its control authority is revoked and the Artifact reference, config and Platform owner are released — holding a terminal handle never keeps the whole Platform alive. `remove()` then still succeeds idempotently while `activate` / `update` reject with `REGISTRATION_REMOVED`, matching Core's terminal `Installation` semantics.
 
-Platform owns every ManagedPlugin:
+Platform owns every Registration:
 
 ```ts
 await platform.dispose();
 // await using / Symbol.asyncDispose are supported too
 ```
 
-Disposal first forbids new operations and cancels in-flight loads, then removes every Core handle atomically through one Core ChangeSet. On success Platform enters `disposed` and every ManagedPlugin enters `removed`; repeated disposal is idempotent. If Core cleanup fails, Platform returns to `active` and throws the error to the caller rather than falsely reporting that it was released.
+Disposal first forbids new operations and cancels in-flight loads, then removes every Core handle atomically through one Core ChangeSet. On success Platform enters `disposed` and every Registration enters `removed`; repeated disposal is idempotent. If Core cleanup fails, Platform returns to `active` and throws the error to the caller rather than falsely reporting that it was released.
 
-Successful disposal also severs the container, loader, permission, logger ports and the shared draft authority. A ChangeSet created earlier but never committed will thereafter reject with `PLATFORM_UNAVAILABLE`, its draft handles enter `failed` and release their Artifacts — they cannot keep the host Application alive by being retained.
+Successful disposal also severs the installer, loader, permission, logger ports and the shared draft authority. A ChangeSet created earlier but never committed will thereafter reject with `PLATFORM_UNAVAILABLE`, its draft handles enter `failed` and release their Artifacts — they cannot keep the host Host alive by being retained.
 
 The recommended ownership order is to dispose the Platform first and then remove its bound Group. If the host removed the Group first, Platform recognises handles that Core has already removed and still completes its own disposal idempotently, without trying to create another empty change through a dead Group.
 
@@ -255,16 +255,16 @@ Platform's decidable errors use `PlatformError.code`. `PlatformError extends Dou
 | `API_INCOMPATIBLE` | The host API range the plugin requires does not match |
 | `PERMISSION_DENIED` | The permission policy refused; the concrete type is `PermissionDeniedError` |
 | `PLUGIN_DUPLICATE` | A duplicate name appeared in the candidate registry |
-| `PLUGIN_IDENTITY` | Manifest, placeholder or loaded definition names disagree |
+| `REGISTRATION_IDENTITY` | Manifest, placeholder or loaded definition names disagree |
 | `PLUGIN_DEPENDENCY_MISSING` | An activated or activating plugin lacks a manifest dependency |
 | `PLUGIN_DEPENDENCY_INCOMPATIBLE` | A manifest dependency version is not satisfied |
 | `PLUGIN_DEPENDENCY_INACTIVE` | An activated candidate depends on a plugin that is not activated |
 | `PLUGIN_CYCLE` | The manifest dependency graph contains a closed loop |
-| `PLUGIN_BUSY` | Activation raced a declaration change on the same target |
+| `REGISTRATION_BUSY` | Activation raced a declaration change on the same target |
 | `MODULE_LOAD_FAILED` | The loader itself failed |
 | `MODULE_INVALID` | The module or its default export is not a valid plugin definition |
-| `PLUGIN_REMOVED` | An operation on a removed ManagedPlugin |
-| `PLUGIN_UNAVAILABLE` | The fallback state in which `ready()` cannot wait |
+| `REGISTRATION_REMOVED` | An operation on a removed Registration |
+| `REGISTRATION_UNAVAILABLE` | The fallback state in which `ready()` cannot wait |
 | `PLATFORM_UNAVAILABLE` | The Platform is disposing or already disposed |
 
 Error messages are for humans; they are not a stable parsing protocol. Programming-shape errors, cross-Platform handles, duplicate ChangeSet targets and modification after submission use `TypeError`.

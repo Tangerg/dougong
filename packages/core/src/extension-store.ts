@@ -1,4 +1,4 @@
-import type { Extension } from "./contracts";
+import type { ExtensionPoint } from "./contracts";
 import { ReadonlyMapSnapshot } from "./readonly-map";
 import type { Disposable, Publication, StagedResource } from "./resource";
 import type { SnapshotView } from "./snapshot-view";
@@ -7,25 +7,25 @@ export interface Contribution<T> extends Disposable {
   update(value: T): void;
 }
 
-export type ExtensionView<T> = SnapshotView<ReadonlyMap<string, T>>;
+export type ContributionView<T> = SnapshotView<ReadonlyMap<string, T>>;
 
 export type ExtensionLeaseKind = "view" | "subscription";
 
-interface ExtensionViewBinding<T> {
+interface ContributionViewBinding<T> {
   readonly store: ExtensionStore<T>;
   readonly own: (resource: Disposable, kind: ExtensionLeaseKind) => () => void;
 }
 
-interface ExtensionViewState<T> {
-  binding: ExtensionViewBinding<T> | undefined;
+interface ContributionViewState<T> {
+  binding: ContributionViewBinding<T> | undefined;
 }
 
-class ExtensionViewHandle<T> implements ExtensionView<T> {
-  readonly #state: ExtensionViewState<T>;
+class ContributionViewHandle<T> implements ContributionView<T> {
+  readonly #state: ContributionViewState<T>;
   readonly get: () => ReadonlyMap<string, T>;
   readonly subscribe: (listener: () => void) => Disposable;
 
-  constructor(state: ExtensionViewState<T>) {
+  constructor(state: ContributionViewState<T>) {
     this.#state = state;
     this.get = () => this.#read();
     this.subscribe = (listener) => this.#subscribe(listener);
@@ -46,7 +46,7 @@ class ExtensionViewHandle<T> implements ExtensionView<T> {
 
   #requireBinding() {
     const binding = this.#state.binding;
-    if (!binding) throw new TypeError("Extension view has been disposed");
+    if (!binding) throw new TypeError("Contribution view has been disposed");
     return binding;
   }
 }
@@ -159,18 +159,18 @@ export class ExtensionStore<T> {
     validateKey(key);
     const id = contributionId(ownerId, key);
     if (this.#claims.has(id)) {
-      throw new TypeError(`Duplicate extension contribution '${id}'`);
+      throw new TypeError(`Duplicate contribution '${id}'`);
     }
     const contribution = new ContributionRecord(this, id, value, release);
     this.#claims.set(id, contribution);
     return contribution;
   }
 
-  view(own: (resource: Disposable, kind: ExtensionLeaseKind) => () => void): ExtensionView<T> {
+  view(own: (resource: Disposable, kind: ExtensionLeaseKind) => () => void): ContributionView<T> {
     this.#views++;
-    const state: ExtensionViewState<T> = { binding: { store: this, own } };
+    const state: ContributionViewState<T> = { binding: { store: this, own } };
     let releaseView: (() => void) | undefined;
-    const lease = new ExtensionViewLease(state, () => {
+    const lease = new ContributionViewLease(state, () => {
       const release = releaseView;
       releaseView = undefined;
       try {
@@ -188,7 +188,7 @@ export class ExtensionStore<T> {
       this.#notifyIfUnused();
       throw error;
     }
-    return new ExtensionViewHandle(state);
+    return new ContributionViewHandle(state);
   }
 
   snapshot() {
@@ -200,10 +200,10 @@ export class ExtensionStore<T> {
     own: (resource: Disposable, kind: ExtensionLeaseKind) => () => void,
   ) {
     if (typeof listener !== "function") {
-      throw new TypeError("Extension subscriber must be a function");
+      throw new TypeError("Contribution subscriber must be a function");
     }
     let releaseFromOwner: (() => void) | undefined;
-    const subscription = new ExtensionSubscription(this, listener, () => {
+    const subscription = new ContributionSubscription(this, listener, () => {
       const release = releaseFromOwner;
       releaseFromOwner = undefined;
       release?.();
@@ -215,10 +215,10 @@ export class ExtensionStore<T> {
 
   insert(id: string, contribution: ContributionRecord<T>, value: T) {
     if (this.#claims.get(id) !== contribution) {
-      throw new Error(`Extension contribution '${id}' is not the current claim`);
+      throw new Error(`Contribution '${id}' is not the current claim`);
     }
     if (this.#entries.has(id)) {
-      throw new Error(`Extension contribution '${id}' is already published`);
+      throw new Error(`Contribution '${id}' is already published`);
     }
     this.#entries.set(id, { contribution, value });
     this.#invalidate(this as ExtensionStore<unknown>);
@@ -272,15 +272,15 @@ export class ExtensionStore<T> {
   }
 }
 
-class ExtensionViewLease<T> implements Disposable {
+class ContributionViewLease<T> implements Disposable {
   #binding:
     | {
-        readonly state: ExtensionViewState<T>;
+        readonly state: ContributionViewState<T>;
         readonly release: () => void;
       }
     | undefined;
 
-  constructor(state: ExtensionViewState<T>, release: () => void) {
+  constructor(state: ContributionViewState<T>, release: () => void) {
     this.#binding = { state, release };
     Object.freeze(this);
   }
@@ -298,7 +298,7 @@ class ExtensionViewLease<T> implements Disposable {
   }
 }
 
-class ExtensionSubscription<T> implements Disposable {
+class ContributionSubscription<T> implements Disposable {
   #binding:
     | {
         readonly store: ExtensionStore<T>;
@@ -338,7 +338,7 @@ export class ExtensionRegistry {
     this.#report = report;
   }
 
-  get<T>(token: Extension<T>): ExtensionStore<T> {
+  get<T>(token: ExtensionPoint<T>): ExtensionStore<T> {
     const current = this.#stores.get(token.id);
     if (current) return current as ExtensionStore<T>;
     const store = new ExtensionStore<T>(
@@ -359,7 +359,7 @@ export class ExtensionRegistry {
   }
 
   endBatch() {
-    if (!this.#batchDepth) throw new TypeError("Extension batch is not active");
+    if (!this.#batchDepth) throw new TypeError("Contribution batch is not active");
     this.#batchDepth--;
     if (this.#batchDepth) return;
     const stores = [...this.#invalidated];
@@ -391,6 +391,3 @@ function contributionId(ownerId: string, key: string) {
 function escapeKeyPart(value: string) {
   return value.replaceAll("%", "%25").replaceAll("/", "%2F");
 }
-
-export type ExtensionRequirementView<T> =
-  T extends Extension<infer Value> ? ExtensionView<Value> : never;

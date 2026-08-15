@@ -1,10 +1,10 @@
 import {
-  createApp,
+  createHost,
   definePlugin,
   event,
-  extension,
+  extensionPoint,
   type Contribution,
-  type ExtensionView,
+  type ContributionView,
 } from "dougong";
 import { exampleResult, type ExampleResult } from "./example";
 
@@ -17,15 +17,15 @@ interface CommandExecuted {
   readonly id: string;
 }
 
-// One Service has one provider. One Extension has any number of contributors.
-const COMMANDS = extension<Command>("examples/commands");
+// One Service has one provider. One ExtensionPoint has any number of contributors.
+const COMMANDS = extensionPoint<Command>("examples/commands");
 // An Event is a fact that already happened. It stores nothing.
 const COMMAND_EXECUTED = event<CommandExecuted>("examples/command-executed");
 
 /** Why an open set and a transient fact cannot stand in for each other. */
 export async function extensionAndEvent(): Promise<ExampleResult> {
   const executed: string[] = [];
-  let commands!: ExtensionView<Command>;
+  let commands!: ContributionView<Command>;
   let contribution!: Contribution<Command>;
 
   const shellPlugin = definePlugin({
@@ -49,26 +49,32 @@ export async function extensionAndEvent(): Promise<ExampleResult> {
     },
   });
 
-  const app = createApp({ name: "extension-event" });
-  app.install(shellPlugin);
-  app.install(helloPlugin);
-  await app.start();
+  const host = createHost({ name: "extension-event" });
+  host.install(shellPlugin);
+  host.install(helloPlugin);
+  await host.start();
 
   const published = commands.get().size;
   const command = [...commands.get().values()][0];
   if (!command) throw new TypeError("The command contribution was not published");
   await command.run();
 
-  // Withdrawing early is ordinary: the Extension is a set, not a registration log.
+  // Withdrawing early is ordinary: the ExtensionPoint is a set, not a registration log.
   contribution.dispose();
   const remaining = commands.get().size;
-  await app.stop();
+  await host.stop();
 
   return exampleResult({
     id: "02",
     stage: "atoms",
     title: "An open contribution set and a transient fact",
-    introduces: ["extension", "contribute", "extension-view", "event", "contribution-dispose"],
+    introduces: [
+      "extension-point",
+      "contribute",
+      "contribution-view",
+      "event",
+      "contribution-dispose",
+    ],
     facts: [
       `The shell read a live, immutable Map holding ${published} contribution.`,
       `The Event delivered ${executed.join(", ")} and then kept nothing — it is not a query API.`,

@@ -7,10 +7,10 @@
 | 项目 | 要求 |
 | --- | --- |
 | Node.js | ≥ 22 |
-| JavaScript 宿主 | 需提供 ES2024 标准能力，包括 `Promise.withResolvers()` |
+| JavaScript 运行时 | 需提供 ES2024 标准能力，包括 `Promise.withResolvers()` |
 | TypeScript | ≥ 5.5（如果使用 TypeScript） |
 
-::: warning 浏览器 / WebView 宿主
+::: warning 浏览器 / WebView 运行时
 `Promise.withResolvers()` 需要 Safari 17.4+（macOS 14.4+）、Chrome 119+、Firefox 121+。
 如果你在 Electron、Tauri 或 Wails 里使用系统 WebView，请先确认目标系统版本。
 :::
@@ -60,7 +60,7 @@ Cannot find name 'AbortSignal'
 下面是一个完整可运行的例子。provider 发布一个稳定 Service，consumer 通过 `requires` 声明依赖。
 
 ```ts
-import { createApp, definePlugin, service } from "dougong"
+import { createHost, definePlugin, service } from "dougong"
 
 interface Clock {
   now(): Date
@@ -93,13 +93,13 @@ const greeter = definePlugin({
   }),
 })
 
-const app = createApp({ name: "hello" })
-app.install(greeter)   // 注意：先装 consumer
-app.install(clock)     // 后装 provider —— 顺序无所谓
+const host = createHost({ name: "hello" })
+host.install(greeter)   // 注意：先装 consumer
+host.install(clock)     // 后装 provider —— 顺序无所谓
 
-await app.start()
-console.log(app.get(GREETER).greet("Dougong"))
-await app.stop()
+await host.start()
+console.log(host.get(GREETER).greet("Dougong"))
+await host.stop()
 ```
 
 运行输出：
@@ -112,7 +112,7 @@ await app.stop()
 
 ### 安装顺序不是启动顺序
 
-`greeter` 先安装，但它依赖 `clock`。`app.start()` 时 Dougong 从 `requires` / `provides` 的声明构建依赖图，做拓扑排序，**同一拓扑层内并发启动**，然后按逆依赖顺序停止。
+`greeter` 先安装，但它依赖 `clock`。`host.start()` 时 Dougong 从 `requires` / `provides` 的声明构建依赖图，做拓扑排序，**同一拓扑层内并发启动**，然后按逆依赖顺序停止。
 
 你不需要手工排序，也不需要 `dependsOn: ["example.clock"]` 这种字符串数组——依赖关系已经在类型里了。
 
@@ -131,16 +131,16 @@ definePlugin({
 
 这条是 Dougong 和大多数插件框架最实际的区别。在依赖靠字符串或环境上下文解析的系统里，忘记声明依赖通常表现为「有时候能跑、有时候拿到 undefined」，取决于加载顺序。
 
-### `app.get()` 是给宿主用的，不是给插件用的
+### `host.get()` 是给应用代码用的，不是给插件用的
 
 ```ts
-app.get(GREETER)     // ✓ 宿主跨越运行时边界读取能力
+host.get(GREETER)     // ✓ 应用代码跨越 Host 边界读取能力
 ctx.get(GREETER)     // ✗ 不存在这个方法
 ```
 
 插件之间通过 `requires` 建立关系，这样依赖图才是完整的。如果插件能随时用 Service Locator 拿任意能力，依赖图就不再反映真实依赖，拓扑排序和事务回滚都会失去意义。
 
-`app.get()` 只在 `status === "active"` 时可用，否则抛 `SERVICE_UNAVAILABLE`。
+`host.get()` 只在 `status === "active"` 时可用，否则抛 `SERVICE_UNAVAILABLE`。
 
 ## 运行仓库示例
 
@@ -159,7 +159,7 @@ pnpm docs:dev        # 本地启动这个文档站
 
 ## 接下来
 
-- **想理解模型** → [核心概念](./concepts.md)：六个原子各自解决什么，为什么 Extension 不能用 Service 替代
+- **想理解模型** → [核心概念](./concepts.md)：六个原子各自解决什么，为什么 ExtensionPoint 不能用 Service 替代
 - **想直接写代码** → [编写插件](./writing-plugins.md)：配置校验、可选依赖、失败处理
 - **关心资源泄漏** → [生命周期与资源](./lifetime.md)
 - **需要精确语义** → [Core API 规范](../reference/core-api.md)

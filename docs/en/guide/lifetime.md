@@ -30,7 +30,7 @@ setup(ctx) {
 | `tasks` | `ctx.spawn(fn)` | aborts the signal and awaits completion |
 | `listeners` | `ctx.on(EVENT, fn)` | deregisters from the event hub |
 | `contributions` | `ctx.contribute(EXT, key, v)` | withdraws from the extension store |
-| `extensionViews` | Extensions in `requires` | closes the view; later reads throw |
+| `extensionViews` | ExtensionPoints in `requires` | closes the view; later reads throw |
 | `subscriptions` | `view.subscribe(fn)` | detaches the listener from the store |
 | `children` | `ctx.lifetime(label)` | recursively releases the subtree |
 
@@ -90,7 +90,7 @@ task.dispose()   // abort and await completion
 
 That distinction matters: a polling plugin that ran a hundred thousand iterations does not abort a hundred thousand completed tasks on shutdown.
 
-Exceptions thrown by tasks are never swallowed; they surface through the Application's error reporting channel (`createApp({ onError })` or the logger).
+Exceptions thrown by tasks are never swallowed; they surface through the Host's error reporting channel (`createHost({ onError })` or the logger).
 
 ## Child lifetimes
 
@@ -137,7 +137,7 @@ setup(ctx) {
 Diagnostics carry a live Lifetime ownership tree:
 
 ```ts
-const snapshot = app.diagnostics.get()
+const snapshot = host.diagnostics.get()
 const lifetime = snapshot.plugins.get(handle.id)?.lifetime
 
 lifetime.get()
@@ -156,23 +156,23 @@ lifetime.subscribe(() => render())   // notified when resources change
 
 The snapshot is **recursively frozen plain data** — labels, phases and counts only. It never exposes Lifetime objects, resources, callbacks or stores. Each node counts only what that Lifetime owns **directly**; subtree totals are derived by walking `children`, because the snapshot deliberately keeps no second aggregate state.
 
-It is also a separate subscription source from the Application snapshot, so high-frequency resource churn never rebuilds the whole Application view.
+It is also a separate subscription source from the Host snapshot, so high-frequency resource churn never rebuilds the whole Host view.
 
 ## Nothing is kept alive backwards
 
 An easily overlooked but high-impact property:
 
-> Holding a released handle never keeps an Application, store, callback or payload alive.
+> Holding a released handle never keeps an Host, store, callback or payload alive.
 
 Concretely:
 
 - terminal resources clear their references to owner, store, callback and payload
-- a terminal `PluginInstallation` keeps only an immutable group ID, not the GroupNode
+- a terminal `InstallationRecord` keeps only an immutable group ID, not the GroupNode
 - a detached Group clears its parent link, so a historical handle cannot reach sibling subtrees through the ownership tree
 - **terminal failures keep only a `name` / `message` / `code` data summary** — a JavaScript `Error.stack` can carry the entire orchestration frame that created it, and must not become an invisible ownership edge
 - a historical diagnostic view severs its reporting callback when it closes
 
-Failed instances that still belong to a live Application keep the original error for diagnostics and retry. Callers awaiting `ready()` always receive the original `Error` too — the summary only affects reads made **after** the instance has detached from the Application.
+Failed instances that still belong to a live Host keep the original error for diagnostics and retry. Callers awaiting `ready()` always receive the original `Error` too — the summary only affects reads made **after** the instance has detached from the Host.
 
 ## Common mistakes
 

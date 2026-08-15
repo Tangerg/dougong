@@ -1,4 +1,4 @@
-import { createApp, definePlugin, service, type Service } from "dougong";
+import { createHost, definePlugin, service, type Service } from "dougong";
 
 export interface StartupBenchmark {
   readonly plugins: number;
@@ -18,9 +18,9 @@ async function measure(operation: () => Promise<void>) {
 }
 
 async function measureIndependent(plugins: number, delayMilliseconds: number) {
-  const app = createApp({ name: "benchmark-independent" });
+  const host = createHost({ name: "benchmark-independent" });
   for (let index = 0; index < plugins; index++) {
-    app.install(
+    host.install(
       definePlugin({
         name: `examples.benchmark.independent-${index}`,
         async setup() {
@@ -29,8 +29,8 @@ async function measureIndependent(plugins: number, delayMilliseconds: number) {
       }),
     );
   }
-  const elapsed = await measure(() => app.start());
-  await app.stop();
+  const elapsed = await measure(() => host.start());
+  await host.stop();
   return elapsed;
 }
 
@@ -39,8 +39,8 @@ function link(index: number): Service<number> {
 }
 
 async function measureChained(plugins: number, delayMilliseconds: number) {
-  const app = createApp({ name: "benchmark-chained" });
-  app.install(
+  const host = createHost({ name: "benchmark-chained" });
+  host.install(
     definePlugin({
       name: "examples.benchmark.link-0",
       provides: { value: link(0) },
@@ -53,7 +53,7 @@ async function measureChained(plugins: number, delayMilliseconds: number) {
   for (let index = 1; index < plugins; index++) {
     const previous = link(index - 1);
     const current = link(index);
-    app.install(
+    host.install(
       definePlugin({
         name: `examples.benchmark.link-${index}`,
         requires: { previous },
@@ -65,8 +65,8 @@ async function measureChained(plugins: number, delayMilliseconds: number) {
       }),
     );
   }
-  const elapsed = await measure(() => app.start());
-  await app.stop();
+  const elapsed = await measure(() => host.start());
+  await host.stop();
   return elapsed;
 }
 

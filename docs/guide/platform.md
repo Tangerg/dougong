@@ -1,6 +1,6 @@
 # 外部插件分发
 
-到目前为止的插件都是**宿主自己写的**——你 `import` 它，然后 `install`。
+到目前为止的插件都是**应用代码自己写的**——你 `import` 它，然后 `install`。
 
 `@dougongjs/platform` 处理另一种情况：插件来自**外部**——第三方目录、用户安装的扩展、动态下载的模块。这带来 Core 不该关心的四个问题：
 
@@ -14,27 +14,27 @@ Platform 把这四件事编译成 Core 的操作。它**不复制** Core 的注�
 ## 心智模型
 
 ```text
-宿主
- └─ PluginPlatform            ← 外部关注点：manifest / loader / 权限 / 激活
-      └─ PluginContainer      ← 就是 Core 的 Application
+应用代码
+ └─ Platform            ← 外部关注点：manifest / loader / 权限 / 激活
+      └─ Installer      ← 就是 Core 的 Host
            └─ 已安装的插件
 ```
 
-Platform 拿一个 `PluginContainer`（Application 或 Group），把外部插件编译成对它的 `install` / `update` / `remove`。
+Platform 拿一个 `Installer`（Host 或 Group），把外部插件编译成对它的 `install` / `update` / `remove`。
 
 ## 最小例子
 
 ```ts
-import { createApp } from "dougong"
-import { createPlatform, ImportPluginLoader, defineManifest } from "dougong"
+import { createHost } from "dougong"
+import { createPlatform, ImportLoader, defineManifest } from "dougong"
 
-const app = createApp({ name: "editor" })
-await app.start()
+const host = createHost({ name: "editor" })
+await host.start()
 
 const platform = createPlatform({
-  container: app,                       // 编译目标
-  apiVersion: "1.0.0",                  // 宿主 API 版本
-  loader: new ImportPluginLoader(),     // 怎么加载模块
+  installer: app,                       // 编译目标
+  apiVersion: "1.0.0",                  // 应用 API 版本
+  loader: new ImportLoader(),     // 怎么加载模块
 })
 
 const plugin = await platform.register({
@@ -56,10 +56,10 @@ await platform.trigger("onLanguage:markdown")   // 触发激活
 Manifest 是外部插件的**声明**，在信任边界上被校验和冻结：
 
 ```ts
-interface PluginManifest {
+interface Manifest {
   readonly name: string
   readonly version: string
-  readonly apiVersion: string                        // 对宿主 API 的要求
+  readonly apiVersion: string                        // 对应用 API 的要求
   readonly activation: ReadonlyArray<string>         // 激活事件
   readonly permissions: ReadonlyArray<string>
   readonly dependencies: Readonly<Record<string, string>>
@@ -68,23 +68,23 @@ interface PluginManifest {
 
 `defineManifest()` 会补齐可选字段、校验形状并冻结结果。非法 manifest 抛 `MANIFEST_INVALID`——**在加载任何模块代码之前**。
 
-`apiVersion` 不匹配抛 `API_INCOMPATIBLE`。这是宿主和外部插件之间唯一的兼容性契约。
+`apiVersion` 不匹配抛 `API_INCOMPATIBLE`。这是应用代码和外部插件之间唯一的兼容性契约。
 
 ## Loader 是执行边界
 
 ```ts
-interface PluginLoader<Reference> {
+interface Loader<Reference> {
   load(reference: Reference, signal: AbortSignal): Promise<unknown>
 }
 ```
 
-`Reference` 是泛型——它可以是 URL、文件路径、模块 ID、blob，任何你的宿主能解析的东西。Platform 不关心。
+`Reference` 是泛型——它可以是 URL、文件路径、模块 ID、blob，任何你的应用代码能解析的东西。Platform 不关心。
 
 内置两个实现：
 
 ```ts
-new ImportPluginLoader()        // 动态 import()，Reference 是 string | URL
-new MemoryPluginLoader(map)     // 从 Map 取，测试用
+new ImportLoader()        // 动态 import()，Reference 是 string | URL
+new MemoryLoader(map)     // 从 Map 取，测试用
 ```
 
 Loader 是**唯一**执行外部代码的地方。加载失败抛 `MODULE_LOAD_FAILED`，模块形状不对（没有导出合法的插件定义）抛 `MODULE_INVALID`。
@@ -97,9 +97,9 @@ Loader 是**唯一**执行外部代码的地方。加载失败抛 `MODULE_LOAD_F
 import { PermissionSet } from "dougong"
 
 const platform = createPlatform({
-  container: app,
+  installer: app,
   apiVersion: "1.0.0",
-  loader: new ImportPluginLoader(),
+  loader: new ImportLoader(),
   permissions: new PermissionSet(["fs:read", "net:fetch"]),
 })
 ```
@@ -118,7 +118,7 @@ const permissions = {
 ::: danger 它不是沙箱
 权限检查发生在**执行模块之前**，它决定的是「要不要运行这段代码」，不是「这段代码能碰什么」。
 
-JavaScript 模块一旦被 `import` 就和宿主在同一个 realm 里，能访问同样的全局对象。真正的隔离需要 Worker、iframe、进程或独立 Application——Platform 不假装提供它。
+JavaScript 模块一旦被 `import` 就和应用代码在同一个 realm 里，能访问同样的全局对象。真正的隔离需要 Worker、iframe、进程或独立 Host——Platform 不假装提供它。
 
 授权会在模块执行**紧邻之前**重新检查一次，所以撤销权限对尚未激活的插件立即生效。
 :::
@@ -131,7 +131,7 @@ JavaScript 模块一旦被 `import` 就和宿主在同一个 realm 里，能访�
 const plugin = await platform.register({
   manifest,
   reference: "./heavy-plugin.js",
-  placeholder: lightweightStub,     // 可选：激活前对外提供的宿主定义
+  placeholder: lightweightStub,     // 可选：激活前对外提供的应用侧定义
 })
 
 plugin.status      // "registered" → 尚未加载
@@ -139,7 +139,7 @@ await plugin.activate()             // 显式激活
 plugin.status      // "active"
 ```
 
-`placeholder` 是一个**宿主编写**的插件定义，在真实模块激活之前占位。它让「命令已经在菜单里，但点击时才加载实现」这类体验成为可能——而且占位到真实实现的替换是**原子**的，走同一笔 Core ChangeSet。
+`placeholder` 是一个**应用代码编写**的插件定义，在真实模块激活之前占位。它让「命令已经在菜单里，但点击时才加载实现」这类体验成为可能——而且占位到真实实现的替换是**原子**的，走同一笔 Core ChangeSet。
 
 激活也可以由事件触发：
 
@@ -193,7 +193,7 @@ await changes.commit()
 
 任何一步失败，Core 那边一动没动。
 
-更新时会检查身份：新 artifact 的 manifest 名字必须和原插件一致，否则 `PLUGIN_IDENTITY`。这保证「更新」不会偷偷变成「换成另一个插件」。
+更新时会检查身份：新 artifact 的 manifest 名字必须和原插件一致，否则 `REGISTRATION_IDENTITY`。这保证「更新」不会偷偷变成「换成另一个插件」。
 
 ## 热更新
 
@@ -206,13 +206,13 @@ await plugin.update({
 })
 ```
 
-底层走的是 Core 的 `handle.update({ plugin })`，所以只有受影响的依赖闭包会重启。宿主想做真正的 HMR（监听文件变化、计算失效传播、批量重载），可以在这之上组合——[示例 12](../examples.md#stage-3) 演示了一个约 200 行的完整模块图 HMR。
+底层走的是 Core 的 `handle.update({ plugin })`，所以只有受影响的依赖闭包会重启。应用代码想做真正的 HMR（监听文件变化、计算失效传播、批量重载），可以在这之上组合——[示例 12](../examples.md#stage-3) 演示了一个约 200 行的完整模块图 HMR。
 
 ## 诊断
 
 ```ts
 platform.diagnostics.get()
-// { apiVersion, status, plugins: ReadonlyMap<string, ManagedPluginSnapshot> }
+// { apiVersion, status, plugins: ReadonlyMap<string, RegistrationSnapshot> }
 
 platform.diagnostics.subscribe(() => render())
 ```
@@ -232,5 +232,5 @@ await using platform = createPlatform({ ... })
 ## 接下来
 
 - [Platform 规范](../reference/platform.md) —— 精确语义与边界情形
-- [错误码](../reference/errors.md) —— 全部 25 个稳定错误码
+- [错误码](../reference/errors.md) —— 全部 28 个稳定错误码
 - [可执行示例 08 / 12](../examples.md) —— 懒激活与模块图 HMR 的完整场景

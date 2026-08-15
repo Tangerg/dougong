@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { createApp, definePlugin, extension, service, type ExtensionView } from "@dougongjs/core";
-import { createPlatform, MemoryPluginLoader, PermissionSet } from "../src/index";
+import {
+  createHost,
+  definePlugin,
+  extensionPoint,
+  service,
+  type ContributionView,
+} from "@dougongjs/core";
+import { createPlatform, MemoryLoader, PermissionSet } from "../src/index";
 
 describe("host composition scenarios", () => {
   it("supports Planet-style lazy media providers without restarting the player", async () => {
@@ -15,7 +21,7 @@ describe("host composition scenarios", () => {
     }
 
     const AUDIO = service<AudioOutput>("planet/audio-output");
-    const SOURCES = extension<MediaSource>("planet/media-sources");
+    const SOURCES = extensionPoint<MediaSource>("planet/media-sources");
     const PLAYER = service<Player>("planet/player");
     const output: string[] = [];
     let playerStarts = 0;
@@ -67,17 +73,17 @@ describe("host composition scenarios", () => {
       },
     });
 
-    const app = createApp({ name: "planet" });
-    app.install(audioAdapter);
-    app.install(playerPlugin);
-    app.install(shell);
-    await app.start();
+    const host = createHost({ name: "planet" });
+    host.install(audioAdapter);
+    host.install(playerPlugin);
+    host.install(shell);
+    await host.start();
 
     const platform = createPlatform({
-      container: app,
+      installer: host,
       apiVersion: "1.0.0",
       permissions: new PermissionSet(["network"]),
-      loader: new MemoryPluginLoader(new Map([["remote-provider", { default: remoteProvider }]])),
+      loader: new MemoryLoader(new Map([["remote-provider", { default: remoteProvider }]])),
     });
     const provider = await platform.register({
       manifest: {
@@ -99,7 +105,7 @@ describe("host composition scenarios", () => {
     await expect(player.play("after")).rejects.toThrow("No media source");
     expect(playerStarts).toBe(1);
     await platform.dispose();
-    await app.stop();
+    await host.stop();
   });
 
   it("supports Lynx-style grouped commands, panels and host permissions", async () => {
@@ -116,11 +122,11 @@ describe("host composition scenarios", () => {
     }
 
     const FILESYSTEM = service<Filesystem>("lynx/filesystem");
-    const COMMANDS = extension<Command>("lynx/commands");
-    const PANELS = extension<Panel>("lynx/panels");
-    let rootCommands!: ExtensionView<Command>;
-    let workspaceCommands!: ExtensionView<Command>;
-    let workspacePanels!: ExtensionView<Panel>;
+    const COMMANDS = extensionPoint<Command>("lynx/commands");
+    const PANELS = extensionPoint<Panel>("lynx/panels");
+    let rootCommands!: ContributionView<Command>;
+    let workspaceCommands!: ContributionView<Command>;
+    let workspacePanels!: ContributionView<Panel>;
 
     const filesystemAdapter = definePlugin({
       name: "lynx.host.filesystem",
@@ -165,19 +171,19 @@ describe("host composition scenarios", () => {
       },
     });
 
-    const app = createApp({ name: "lynx" });
-    app.install(filesystemAdapter);
-    app.install(rootShell);
-    const workspace = app.group("workspace", (plugins) => {
+    const host = createHost({ name: "lynx" });
+    host.install(filesystemAdapter);
+    host.install(rootShell);
+    const workspace = host.group("workspace", (plugins) => {
       plugins.install(workspaceShell);
     });
-    await app.start();
+    await host.start();
 
     const platform = createPlatform({
-      container: workspace,
+      installer: workspace,
       apiVersion: "1.0.0",
       permissions: new PermissionSet(["filesystem:read"]),
-      loader: new MemoryPluginLoader(new Map([["explorer", { default: explorer }]])),
+      loader: new MemoryLoader(new Map([["explorer", { default: explorer }]])),
     });
     await platform.register({
       manifest: {
@@ -204,10 +210,10 @@ describe("host composition scenarios", () => {
 
     await workspace.remove();
     expect(rootCommands.get().size).toBe(0);
-    expect(() => workspaceCommands.get()).toThrow("Extension view has been disposed");
-    expect(() => workspacePanels.get()).toThrow("Extension view has been disposed");
+    expect(() => workspaceCommands.get()).toThrow("Contribution view has been disposed");
+    expect(() => workspacePanels.get()).toThrow("Contribution view has been disposed");
     await platform.dispose();
     expect(platform.status).toBe("disposed");
-    await app.stop();
+    await host.stop();
   });
 });

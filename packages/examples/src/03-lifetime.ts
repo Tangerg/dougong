@@ -1,4 +1,4 @@
-import { createApp, definePlugin, type LifetimeContext } from "dougong";
+import { createHost, definePlugin, type LifetimeContext } from "dougong";
 import { exampleResult, whenAborted, type ExampleResult } from "./example";
 
 /**
@@ -37,15 +37,15 @@ export async function lifetimeOwnership(): Promise<ExampleResult> {
     },
   });
 
-  const app = createApp({ name: "lifetime" });
-  app.install(editorPlugin);
-  await app.start();
+  const host = createHost({ name: "lifetime" });
+  host.install(editorPlugin);
+  await host.start();
   const acquired = [...trace];
 
   await session.dispose();
   const afterSession = trace.slice(acquired.length);
 
-  await app.stop();
+  await host.stop();
   const afterStop = trace.slice(acquired.length + afterSession.length);
 
   return exampleResult({

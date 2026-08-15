@@ -25,9 +25,9 @@ features:
   - title: Transactions expose only committed state
     details: Declarations made during setup stay staged until the whole layer validates. A failed change rolls back, and fails closed when it cannot roll back reliably — never a half-built runtime.
   - title: Structured resource ownership
-    details: Listeners, contributions, tasks and child lifetimes all belong to a Lifetime. Terminal resources detach from their owner, so holding a released handle never keeps an Application alive.
+    details: Listeners, contributions, tasks and child lifetimes all belong to a Lifetime. Terminal resources detach from their owner, so holding a released handle never keeps an Host alive.
   - title: Types are the constraint
-    details: Using an undeclared dependency, reading an Extension as a Service, declaring provides without returning it — all compile errors, not runtime surprises.
+    details: Using an undeclared dependency, reading an ExtensionPoint as a Service, declaring provides without returning it — all compile errors, not runtime surprises.
   - title: No host lock-in
     details: Core knows nothing about Node, the DOM, React, HTTP, the filesystem or bundlers. Plain objects, functions, Promise, AbortSignal and Disposable.
 ---
@@ -38,13 +38,13 @@ Dougong (斗拱, the interlocking bracket set of Chinese timber architecture) so
 
 It has two layers:
 
-- **Core** — the capability composition and structured lifetime kernel. Six atoms: Service, Extension, Event, Lifetime, Plugin, Application.
+- **Core** — the capability composition and structured lifetime kernel. Six atoms: Service, ExtensionPoint, Event, Lifetime, Plugin, Host.
 - **Platform** — external plugin delivery on top of Core. Manifest validation, permissions, module loading, lazy activation, hot reload.
 
 Plus an **independent** `reactive` package providing a signal value layer and an `observe()` combinator.
 
 ```ts
-import { createApp, definePlugin, service } from "dougong"
+import { createHost, definePlugin, service } from "dougong"
 
 const CLOCK = service<Clock>("app/clock")
 
@@ -62,10 +62,10 @@ const greeter = definePlugin({
   },
 })
 
-const app = createApp({ name: "hello" })
-app.install(greeter)                 // install order does not decide start order
-app.install(clock)
-await app.start()                    // topology derived from declarations, layers start concurrently
+const host = createHost({ name: "hello" })
+host.install(greeter)                 // install order does not decide start order
+host.install(clock)
+await host.start()                    // topology derived from declarations, layers start concurrently
 ```
 
 ## When it fits
@@ -104,7 +104,7 @@ Three layers, best read in order:
 8. [Core API specification](./reference/core-api.md) — exact semantics and edge cases
 9. [Architecture](./reference/architecture.md) — layering, dependency direction and rationale
 10. [Platform specification](./reference/platform.md) — the external plugin boundary
-11. [Error codes](./reference/errors.md) — all 25 stable codes and what triggers them
+11. [Error codes](./reference/errors.md) — all 28 stable codes and what triggers them
 
 </div>
 
@@ -114,4 +114,4 @@ If you would rather read code, the [runnable examples](./examples.md) are a twel
 
 Dougong is in early development (`0.0.x`) and **makes no backward-compatibility promises yet**. The current priority is a correct model, a consistent API and complete executable evidence.
 
-Runtime baseline: Node.js ≥ 22, or an equivalent ES2024 host.
+Runtime baseline: Node.js ≥ 22, or an equivalent ES2024 runtime.

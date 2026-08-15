@@ -1,13 +1,13 @@
 import {
-  createApp,
+  createHost,
   createPlatform,
   definePlugin,
-  MemoryPluginLoader,
+  MemoryLoader,
   PermissionSet,
   service,
-  type ManagedPlugin,
-  type PluginArtifact,
-  type PluginPlatform,
+  type Registration,
+  type Artifact,
+  type Platform,
 } from "dougong";
 import { exampleResult, type ExampleResult } from "./example";
 
@@ -18,12 +18,12 @@ interface Greeter {
 interface PlanEntry {
   /** Explicit content identity; the Manifest name remains the only plugin identity. */
   readonly revision: string;
-  readonly artifact: PluginArtifact<string>;
+  readonly artifact: Artifact<string>;
 }
 
 interface DeploymentRecord {
   readonly revision: string;
-  readonly plugin: ManagedPlugin<string>;
+  readonly plugin: Registration<string>;
 }
 
 const GREETER = service<Greeter>("examples/declarative-plan/greeter");
@@ -37,10 +37,10 @@ const TOOL_NAME = "examples.declarative-plan.tool";
  * canonical Platform ChangeSet.
  */
 class PlanDeployment {
-  readonly #platform: PluginPlatform<string>;
+  readonly #platform: Platform<string>;
   #records = new Map<string, DeploymentRecord>();
 
-  constructor(platform: PluginPlatform<string>) {
+  constructor(platform: Platform<string>) {
     this.#platform = platform;
   }
 
@@ -94,7 +94,7 @@ function indexPlan(plan: ReadonlyArray<PlanEntry>) {
   return entries;
 }
 
-function artifact(name: string, version: string, reference: string): PluginArtifact<string> {
+function artifact(name: string, version: string, reference: string): Artifact<string> {
   return Object.freeze({
     manifest: { name, version, activation: ["startup"] },
     reference,
@@ -143,13 +143,13 @@ export async function declarativePlan(): Promise<ExampleResult> {
     ["legacy", { default: legacy }],
     ["tool", { default: tool }],
   ]);
-  const app = createApp({ name: "declarative-plan-example" });
-  await app.start();
+  const host = createHost({ name: "declarative-plan-example" });
+  await host.start();
   const platform = createPlatform({
-    container: app,
+    installer: host,
     apiVersion: "1.0.0",
     permissions: new PermissionSet(),
-    loader: new MemoryPluginLoader<string>(modules),
+    loader: new MemoryLoader<string>(modules),
   });
   const deployment = new PlanDeployment(platform);
 
@@ -158,7 +158,7 @@ export async function declarativePlan(): Promise<ExampleResult> {
     entry(LEGACY_NAME, "legacy-content-1", "legacy", "1.0.0"),
   ]);
   await platform.trigger("startup");
-  const before = app.get(GREETER).greet();
+  const before = host.get(GREETER).greet();
 
   let rejected = false;
   try {
@@ -169,7 +169,7 @@ export async function declarativePlan(): Promise<ExampleResult> {
   } catch {
     rejected = true;
   }
-  const afterFailure = app.get(GREETER).greet();
+  const afterFailure = host.get(GREETER).greet();
   const legacyAfterFailure = legacyDisposals;
 
   await deployment.apply([
@@ -177,11 +177,11 @@ export async function declarativePlan(): Promise<ExampleResult> {
     entry(TOOL_NAME, "tool-content-1", "tool", "1.0.0"),
   ]);
   await platform.trigger("startup");
-  const afterCommit = app.get(GREETER).greet();
-  const deployed = [...platform.diagnostics.get().plugins.keys()].sort().join(", ");
+  const afterCommit = host.get(GREETER).greet();
+  const deployed = [...platform.diagnostics.get().registrations.keys()].sort().join(", ");
 
   await platform.dispose();
-  await app.stop();
+  await host.stop();
 
   return exampleResult({
     id: "11",

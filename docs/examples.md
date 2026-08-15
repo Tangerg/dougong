@@ -30,8 +30,8 @@ pnpm examples
 
 | # | 场景 | 新增概念 | 关键结论 |
 | --- | --- | --- | --- |
-| **01** | Service | `service` `provides` `requires` `app.get` | 安装顺序不是启动顺序，声明的依赖边才是 |
-| **02** | Extension + Event | `extension` `contribute` `extension-view` `event` `contribution-dispose` | Extension 保存当前贡献，Event 什么都不留——它不是查询 API |
+| **01** | Service | `service` `provides` `requires` `host.get` | 安装顺序不是启动顺序，声明的依赖边才是 |
+| **02** | ExtensionPoint + Event | `extension` `contribute` `extension-view` `event` `contribution-dispose` | ExtensionPoint 保存当前贡献，Event 什么都不留——它不是查询 API |
 | **03** | Lifetime | `cleanup` `child-lifetime` `spawn` `abort-signal` | 一切归属于一棵树，释放按**注册的逆序**；子树可以独立释放 |
 | **04** | Reactive | `signal` `computed` `batch` `observe` | `computed` 做纯推导不持有资源；`observe()` 是「值变化」到「资源重建」之间唯一的接缝 |
 
@@ -52,7 +52,7 @@ window 建立在 index 之上，所以先关 window 再关 index。测试断言�
 | --- | --- | --- | --- |
 | **05** | 配置与失败 | `config-schema` `config-validation` `change-set` `setup-failure` `rollback` | 校验**先于**停机；回滚是「做过又撤销」，不是「没做」 |
 | **06** | Contract family 与 Group | `contract-family` `group` `atomic-commit` `group-removal` | 同型多实例用显式 Contract family；Group 只表达安装所有权 |
-| **07** | 诊断 | `diagnostics-view` `lifetime-snapshot` `terminal-detachment` `view-finalization` | 终态资源自动脱离父级；停机后视图定格成数据，不反向保活 Application |
+| **07** | 诊断 | `diagnostics-view` `lifetime-snapshot` `terminal-detachment` `view-finalization` | 终态资源自动脱离父级；停机后视图定格成数据，不反向保活 Host |
 | **08** | Platform | `manifest` `permissions` `placeholder` `activation` | 注册 ≠ 激活；placeholder 到真实实现的替换是一次提交 |
 
 ::: warning 05 是这条路径的转折点
@@ -69,7 +69,7 @@ window 建立在 index 之上，所以先关 window 再关 index。测试断言�
 
 | # | 场景 | 新增概念 | 它证明了什么 |
 | --- | --- | --- | --- |
-| **09** | Planet | `runtime-selection` `live-provider-swap` `group-scoped-platform` | Provider 增删不重启 Player——Extension 不是依赖边 |
+| **09** | Planet | `runtime-selection` `live-provider-swap` `group-scoped-platform` | Provider 增删不重启 Player——ExtensionPoint 不是依赖边 |
 | **10** | Lynx | `domain-catalog` `workspace-ownership` `plugin-update` | 命令唯一性是领域策略；根级消费者能看到 Group 的贡献，Group 不是 Scope |
 | **11** | 声明式计划 | `desired-state` `content-revision` `platform-change-set` | 期望状态 diff 成一份 ChangeSet；身份来自 Manifest name，变化来自显式 revision |
 | **12** | HMR 模块图 | `module-graph` `invalidation-closure` `multi-plugin-hmr` | 沿 importer 方向传播失效；两个插件换版本，观察者只看到 1 次提交 |
@@ -82,7 +82,7 @@ window 建立在 index 之上，所以先关 window 再关 index。测试断言�
 
 ## 每一章的形状
 
-每章是一个导出的 async 函数，创建并完整释放自己的 Application：
+每章是一个导出的 async 函数，创建并完整释放自己的 Host：
 
 ```ts
 import { diagnostics } from "@dougongjs/examples"

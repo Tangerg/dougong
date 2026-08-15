@@ -18,13 +18,14 @@
     "knip": "knip",
     "check:circular": "node scripts/check-circular.mjs",
     "check:layers": "node scripts/check-layers.mjs",
+    "check:api": "node scripts/check-api-surface.mjs",
     "examples": "pnpm --filter @dougongjs/examples example",
     "examples:benchmark": "pnpm --filter @dougongjs/examples benchmark",
     "docs:dev": "vitepress dev docs",
     "docs:build": "vitepress build docs",
     "docs:preview": "vitepress preview docs",
     "docs:check": "pnpm docs:build",
-    "check": "pnpm typecheck && pnpm lint && pnpm format:check && pnpm test && pnpm knip && pnpm check:circular && pnpm check:layers && pnpm build && pnpm docs:check",
+    "check": "pnpm typecheck && pnpm lint && pnpm format:check && pnpm test && pnpm knip && pnpm check:circular && pnpm check:layers && pnpm build && pnpm check:api && pnpm docs:check",
     "prepare": "husky"
   },
   "lint-staged": {

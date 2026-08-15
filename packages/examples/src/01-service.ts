@@ -1,4 +1,4 @@
-import { createApp, definePlugin, service } from "dougong";
+import { createHost, definePlugin, service } from "dougong";
 import { exampleResult, type ExampleResult } from "./example";
 
 interface Clock {
@@ -28,24 +28,24 @@ export async function serviceBasics(): Promise<ExampleResult> {
     },
   });
 
-  const app = createApp({ name: "service-basics" });
+  const host = createHost({ name: "service-basics" });
   // Installation order is not startup order. The declared Service edge is.
-  app.install(greeterPlugin);
-  app.install(clockPlugin);
-  await app.start();
+  host.install(greeterPlugin);
+  host.install(clockPlugin);
+  await host.start();
 
-  trace.push(`host:${app.get(CLOCK).now()}`);
-  await app.stop();
+  trace.push(`host:${host.get(CLOCK).now()}`);
+  await host.stop();
 
   return exampleResult({
     id: "01",
     stage: "atoms",
     title: "A stable Service and the declaration that reaches it",
-    introduces: ["service", "provides", "requires", "app.get"],
+    introduces: ["service", "provides", "requires", "host.get"],
     facts: [
       "The provider started before its consumer even though it was installed second.",
       `Observed ${trace.join(" → ")}.`,
-      "Plugins read declared aliases; app.get() exists only for the host boundary.",
+      "Plugins read declared aliases; host.get() exists only for the host boundary.",
     ],
   });
 }

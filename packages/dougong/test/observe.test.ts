@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { Disposable } from "@dougongjs/core";
 import {
-  createApp,
+  createHost,
   definePlugin,
   observe,
   type Logger,
@@ -239,10 +239,10 @@ describe("observe composition", () => {
         observe(ctx, source, (() => thenable) as () => void);
       },
     });
-    const app = createApp();
-    app.install(plugin);
+    const host = createHost();
+    host.install(plugin);
 
-    await expect(app.start()).rejects.toThrow(
+    await expect(host.start()).rejects.toThrow(
       "Observers must be synchronous; use lifetime.spawn() for async work",
     );
     expect(source.subscriptionsDisposed).toBe(1);
@@ -258,10 +258,10 @@ describe("observe composition", () => {
         observe(ctx, source, callback);
       },
     });
-    const app = createApp();
-    app.install(plugin);
+    const host = createHost();
+    host.install(plugin);
 
-    await expect(app.start()).rejects.toThrow("subscribe failed");
+    await expect(host.start()).rejects.toThrow("subscribe failed");
     expect(callback).not.toHaveBeenCalled();
   });
 
@@ -278,9 +278,9 @@ describe("observe composition", () => {
         });
       },
     });
-    const app = createApp({ logger: log });
-    app.install(plugin);
-    await app.start();
+    const host = createHost({ logger: log });
+    host.install(plugin);
+    await host.start();
 
     source.value = 2;
     source.getError = new Error("read failed");
@@ -294,7 +294,7 @@ describe("observe composition", () => {
     source.notify();
     await tick();
     expect(trace).toEqual(["start:1", "stop:1"]);
-    await app.stop();
+    await host.stop();
   });
 
   it("surfaces a synchronous failure while creating the owned drain task", async () => {
@@ -390,9 +390,9 @@ describe("observe composition", () => {
         });
       },
     });
-    const app = createApp({ logger: log });
-    app.install(plugin);
-    await app.start();
+    const host = createHost({ logger: log });
+    host.install(plugin);
+    await host.start();
 
     source.value = 2;
     source.notify();
@@ -405,7 +405,7 @@ describe("observe composition", () => {
     expect(trace).toEqual(["start:1", "stop:1"]);
     expect(source.subscriptionsDisposed).toBe(1);
     expect(log.error).toHaveBeenCalledWith(expect.objectContaining({ message: "cleanup:1" }));
-    await app.stop();
+    await host.stop();
   });
 
   it("cleans a failed replacement and stops the observation", async () => {
@@ -426,9 +426,9 @@ describe("observe composition", () => {
         });
       },
     });
-    const app = createApp({ logger: log });
-    app.install(plugin);
-    await app.start();
+    const host = createHost({ logger: log });
+    host.install(plugin);
+    await host.start();
 
     source.value = 2;
     source.notify();
@@ -440,7 +440,7 @@ describe("observe composition", () => {
     source.notify();
     await tick();
     expect(trace).toEqual(["start:1", "stop:1", "start:2", "stop:2"]);
-    await app.stop();
+    await host.stop();
   });
 
   it("stops when a failed replacement cannot clean its partial resources", async () => {
@@ -460,9 +460,9 @@ describe("observe composition", () => {
         });
       },
     });
-    const app = createApp({ logger: log });
-    app.install(plugin);
-    await app.start();
+    const host = createHost({ logger: log });
+    host.install(plugin);
+    await host.start();
 
     source.value = 2;
     source.notify();
@@ -476,6 +476,6 @@ describe("observe composition", () => {
         message: "Observation callback failed and its resources could not be cleaned up",
       }),
     );
-    await app.stop();
+    await host.stop();
   });
 });

@@ -7,7 +7,7 @@
 ## 单个变更
 
 ```ts
-const handle = app.install(plugin, config)   // 立刻返回 Handle
+const handle = host.install(plugin, config)   // 立刻返回 Handle
 await handle.ready()                         // 等待这次安装真正就绪
 
 await handle.update({ config: nextConfig })
@@ -21,7 +21,7 @@ await handle.remove()
 需要**一起成功或一起失败**的多个操作，用 `change()`：
 
 ```ts
-const changes = app.change()
+const changes = host.change()
 changes.install(newProvider)
 changes.update(oldHandle, { plugin: nextVersion })
 changes.remove(deprecatedHandle)
@@ -42,21 +42,21 @@ Dougong 有三级失败处理，按严重程度递增：
 
 ### 1. 回滚（rollback）
 
-新的运行图起不来 → 恢复变更前的运行图，`app.status` 回到 `active`。
+新的运行图起不来 → 恢复变更前的运行图，`host.status` 回到 `active`。
 
 ```ts
-const changes = app.change()
+const changes = host.change()
 changes.install(brokenPlugin)
 await expect(changes.commit()).rejects.toThrow("setup failed")
 
-expect(app.status).toBe("active")     // 其他插件完全不受影响
+expect(host.status).toBe("active")     // 其他插件完全不受影响
 ```
 
 ### 2. Fail closed
 
-旧图**也**恢复不了（比如某个插件的 cleanup 抛了异常，无法确认它是否真的释放了资源）→ 不假装健康，把 Application 停到 `idle`，并抛出聚合了全部原因的错误。
+旧图**也**恢复不了（比如某个插件的 cleanup 抛了异常，无法确认它是否真的释放了资源）→ 不假装健康，把 Host 停到 `idle`，并抛出聚合了全部原因的错误。
 
-宁可让宿主看到「我停了，原因是这些」，也不呈现一个可能已经损坏的运行时。
+宁可让应用代码看到「我停了，原因是这些」，也不呈现一个可能已经损坏的运行时。
 
 ### 3. 聚合上报
 
@@ -67,7 +67,7 @@ expect(app.status).toBe("active")     // 其他插件完全不受影响
 **所有受影响插件的配置会在停止任何运行中实例之前全部校验完毕。**
 
 ```ts
-const changes = app.change()
+const changes = host.change()
 changes.update(a, { config: validConfig })
 changes.update(b, { config: invalidConfig })   // 这个会校验失败
 await expect(changes.commit()).rejects.toMatchObject({ code: "CONFIG_INVALID" })
@@ -92,7 +92,7 @@ D ← E            E 与 B 无关
 
 ## 启动模型
 
-`app.start()` 分四步：
+`host.start()` 分四步：
 
 1. **构图** —— 从 `requires` / `provides` 推导依赖图，检测环和重复提供者
 2. **校验** —— 全部配置通过 Standard Schema
@@ -133,7 +133,7 @@ Plugin dependency cycle: app.a:1 -> app.b:2 -> app.a:1
 Group 用来把一组插件当作一个单元管理：
 
 ```ts
-const feature = app.group("editor", (plugins) => {
+const feature = host.group("editor", (plugins) => {
   plugins.install(syntax)
   plugins.install(formatter)
 
@@ -162,7 +162,7 @@ await changes.commit()
 ::: warning 这是最容易误解的一点
 Group **只表达安装所有权**。它不是能力作用域、不是 provider 影子树、不是权限边界、不是安全沙箱。
 
-Service 解析、Extension 和 Event 的可见范围**始终是整个 Application**。把插件放进 Group 不会让它「只看到」Group 内的能力。
+Service 解析、ExtensionPoint 和 Event 的可见范围**始终是整个 Host**。把插件放进 Group 不会让它「只看到」Group 内的能力。
 :::
 
 那么这些需求怎么办：
@@ -171,12 +171,12 @@ Service 解析、Extension 和 Event 的可见范围**始终是整个 Applicatio
 | --- | --- |
 | 同型多实例（多个 workspace 各有一份 store） | 显式 Contract family：`service<Store>(\`app/ws/${id}/store\`)` |
 | 运行期选择租户 | 普通方法参数：`store.forTenant(id)` |
-| 安全隔离 | 独立 Application、Worker、iframe 或进程——真正的隔离边界 |
+| 安全隔离 | 独立 Host、Worker、iframe 或进程——真正的隔离边界 |
 
 ### 已建立的 Group 不会被失败污染
 
 ```ts
-const group = app.group("stable", (p) => p.install(good))
+const group = host.group("stable", (p) => p.install(good))
 await group.ready()
 
 const changes = group.change()
@@ -192,16 +192,16 @@ await expect(group.ready()).resolves.toBeUndefined()
 ## 观察状态
 
 ```ts
-app.status
+host.status
 // "idle" | "starting" | "active" | "changing" | "stopping"
 
-app.diagnostics.get()
-// { name, status, plugins: ReadonlyMap<string, PluginSnapshot>, groups, ... }
+host.diagnostics.get()
+// { name, status, plugins: ReadonlyMap<string, InstallationSnapshot>, groups, ... }
 
-app.diagnostics.subscribe(() => render())
+host.diagnostics.subscribe(() => render())
 ```
 
-`changing` 状态存在的意义：运行期事务进行中时，宿主的读窗口是关闭的——`app.get()` 会抛 `SERVICE_UNAVAILABLE`，而不是让你读到一个正在被替换的中间状态。
+`changing` 状态存在的意义：运行期事务进行中时，应用代码的读窗口是关闭的——`host.get()` 会抛 `SERVICE_UNAVAILABLE`，而不是让你读到一个正在被替换的中间状态。
 
 ## 接下来
 

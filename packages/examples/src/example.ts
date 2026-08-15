@@ -11,12 +11,12 @@ export const concepts = [
   "service",
   "provides",
   "requires",
-  "app.get",
+  "host.get",
 
   // 02 · An open contribution set, and a fact that keeps no state.
-  "extension",
+  "extension-point",
   "contribute",
-  "extension-view",
+  "contribution-view",
   "event",
   "contribution-dispose",
 

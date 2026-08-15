@@ -13,16 +13,16 @@ npm install @dougongjs/platform
 ```
 
 ```ts
-import { createApp } from "@dougongjs/core"
-import { createPlatform, ImportPluginLoader, defineManifest } from "@dougongjs/platform"
+import { createHost } from "@dougongjs/core"
+import { createPlatform, ImportLoader, defineManifest } from "@dougongjs/platform"
 
-const app = createApp({ name: "editor" })
-await app.start()
+const host = createHost({ name: "editor" })
+await host.start()
 
 const platform = createPlatform({
-  container: app,                     // 编译目标：Application 或 Group
+  installer: app,                     // 编译目标：Host 或 Group
   apiVersion: "1.0.0",
-  loader: new ImportPluginLoader(),
+  loader: new ImportLoader(),
 })
 
 await platform.register({
@@ -43,7 +43,7 @@ await platform.trigger("onLanguage:markdown")
 
 **注册 ≠ 激活。** `register()` 只让 Artifact 进入平台，`activate()` 才加载外部实现。可选的 `placeholder`（宿主编写的占位定义）让「命令已在菜单里，点击时才加载」成为可能，且占位到真实实现的替换是原子的。
 
-> ⚠️ 权限是**策略端口，不是沙箱**。它决定「要不要运行这段代码」，不决定「这段代码能碰什么」。真正的隔离需要 Worker、iframe、进程或独立 Application。
+> ⚠️ 权限是**策略端口，不是沙箱**。它决定「要不要运行这段代码」，不决定「这段代码能碰什么」。真正的隔离需要 Worker、iframe、进程或独立 Host。
 
 ---
 
@@ -56,16 +56,16 @@ npm install @dougongjs/platform
 ```
 
 ```ts
-import { createApp } from "@dougongjs/core"
-import { createPlatform, ImportPluginLoader, defineManifest } from "@dougongjs/platform"
+import { createHost } from "@dougongjs/core"
+import { createPlatform, ImportLoader, defineManifest } from "@dougongjs/platform"
 
-const app = createApp({ name: "editor" })
-await app.start()
+const host = createHost({ name: "editor" })
+await host.start()
 
 const platform = createPlatform({
-  container: app,                     // compilation target: an Application or a Group
+  installer: app,                     // compilation target: an Host or a Group
   apiVersion: "1.0.0",
-  loader: new ImportPluginLoader(),
+  loader: new ImportLoader(),
 })
 
 await platform.register({
@@ -86,7 +86,7 @@ It compiles four external concerns — **declaration** (manifest), **loading** (
 
 **Registration ≠ activation.** `register()` only admits the artifact; `activate()` loads the external implementation. An optional host-authored `placeholder` makes "the command is already in the menu but loads on click" possible, and the swap from placeholder to real implementation is atomic.
 
-> ⚠️ Permissions are a **policy port, not a sandbox**. They decide whether to run the code, not what the code may touch. Real isolation needs a Worker, iframe, process or separate Application.
+> ⚠️ Permissions are a **policy port, not a sandbox**. They decide whether to run the code, not what the code may touch. Real isolation needs a Worker, iframe, process or separate Host.
 
 ---
 

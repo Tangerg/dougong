@@ -1,48 +1,44 @@
 import type {
   Logger,
-  PluginContainer,
-  PluginDefinition,
+  Installer,
+  Plugin,
   Provisions,
   Requirements,
   SnapshotView,
 } from "@dougongjs/core";
-import type {
-  ManagedPluginStatus,
-  PluginPlatformSnapshot,
-  PluginPlatformStatus,
-} from "./diagnostics";
-import type { PluginLoader } from "./loader";
-import type { PluginManifest, PluginManifestInput } from "./manifest";
-import type { PermissionAuthorizer } from "./permissions";
+import type { RegistrationStatus, PlatformSnapshot, PlatformStatus } from "./diagnostics";
+import type { Loader } from "./loader";
+import type { Manifest, ManifestInput } from "./manifest";
+import type { Authorizer } from "./permissions";
 
-interface PluginArtifactDeclaration<
+interface ArtifactDeclaration<
   Reference,
   Config,
   Requires extends Requirements,
   Provides extends Provisions,
   ConfigInput,
 > {
-  readonly manifest: PluginManifest | PluginManifestInput;
+  readonly manifest: Manifest | ManifestInput;
   readonly reference: Reference;
   /** Host-authored definition exposed until the external module is activated. */
-  readonly placeholder?: PluginDefinition<Config, Requires, Provides, ConfigInput>;
+  readonly placeholder?: Plugin<Config, Requires, Provides, ConfigInput>;
 }
 
-export type PluginArtifact<
+export type Artifact<
   Reference,
   Config = void,
   Requires extends Requirements = {},
   Provides extends Provisions = {},
   ConfigInput = Config,
-> = PluginArtifactDeclaration<Reference, Config, Requires, Provides, ConfigInput> &
+> = ArtifactDeclaration<Reference, Config, Requires, Provides, ConfigInput> &
   ([ConfigInput] extends [void]
     ? { readonly config?: ConfigInput }
     : { readonly config: ConfigInput });
 
-export interface ManagedPlugin<Reference> {
+export interface Registration<Reference> {
   readonly name: string;
-  readonly manifest: PluginManifest;
-  readonly status: ManagedPluginStatus;
+  readonly manifest: Manifest;
+  readonly status: RegistrationStatus;
   ready(): Promise<void>;
   activate(): Promise<void>;
   update<
@@ -51,7 +47,7 @@ export interface ManagedPlugin<Reference> {
     Provides extends Provisions = {},
     ConfigInput = Config,
   >(
-    artifact: PluginArtifact<Reference, Config, Requires, Provides, ConfigInput>,
+    artifact: Artifact<Reference, Config, Requires, Provides, ConfigInput>,
   ): Promise<void>;
   remove(): Promise<void>;
 }
@@ -63,52 +59,52 @@ export interface PlatformChangeSet<Reference> {
     Provides extends Provisions = {},
     ConfigInput = Config,
   >(
-    artifact: PluginArtifact<Reference, Config, Requires, Provides, ConfigInput>,
-  ): ManagedPlugin<Reference>;
+    artifact: Artifact<Reference, Config, Requires, Provides, ConfigInput>,
+  ): Registration<Reference>;
   update<
     Config = void,
     Requires extends Requirements = {},
     Provides extends Provisions = {},
     ConfigInput = Config,
   >(
-    plugin: ManagedPlugin<Reference>,
-    artifact: PluginArtifact<Reference, Config, Requires, Provides, ConfigInput>,
+    plugin: Registration<Reference>,
+    artifact: Artifact<Reference, Config, Requires, Provides, ConfigInput>,
   ): this;
-  remove(plugin: ManagedPlugin<Reference>): this;
+  remove(plugin: Registration<Reference>): this;
   commit(): Promise<void>;
 }
 
-export interface PluginPlatform<Reference> {
+export interface Platform<Reference> {
   readonly apiVersion: string;
-  readonly status: PluginPlatformStatus;
-  readonly diagnostics: SnapshotView<PluginPlatformSnapshot>;
+  readonly status: PlatformStatus;
+  readonly diagnostics: SnapshotView<PlatformSnapshot>;
   register<
     Config = void,
     Requires extends Requirements = {},
     Provides extends Provisions = {},
     ConfigInput = Config,
   >(
-    artifact: PluginArtifact<Reference, Config, Requires, Provides, ConfigInput>,
-  ): Promise<ManagedPlugin<Reference>>;
+    artifact: Artifact<Reference, Config, Requires, Provides, ConfigInput>,
+  ): Promise<Registration<Reference>>;
   change(): PlatformChangeSet<Reference>;
   trigger(event: string): Promise<void>;
   dispose(): Promise<void>;
   [Symbol.asyncDispose](): Promise<void>;
 }
 
-export interface CreatePlatformOptions<Reference> {
-  readonly container: PluginContainer;
+export interface PlatformOptions<Reference> {
+  readonly installer: Installer;
   readonly apiVersion: string;
-  readonly loader: PluginLoader<Reference>;
-  readonly permissions?: PermissionAuthorizer;
+  readonly loader: Loader<Reference>;
+  readonly permissions?: Authorizer;
   readonly logger?: Logger;
 }
 
-export type AnyPluginDefinition = PluginDefinition<unknown, Requirements, Provisions, unknown>;
+export type AnyPlugin = Plugin<unknown, Requirements, Provisions, unknown>;
 
 export interface NormalizedArtifact<Reference> {
-  readonly manifest: PluginManifest;
+  readonly manifest: Manifest;
   readonly reference: Reference;
   readonly config: unknown;
-  readonly placeholder?: AnyPluginDefinition;
+  readonly placeholder?: AnyPlugin;
 }

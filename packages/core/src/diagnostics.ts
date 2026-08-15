@@ -1,12 +1,12 @@
 import type { GroupNode } from "./group";
 import type { LifetimeSnapshot } from "./lifetime";
-import type { PluginInstallation, InstallationStatus } from "./plugin-installation";
+import type { InstallationRecord, InstallationStatus } from "./installation";
 import { ReadonlyMapSnapshot } from "./readonly-map";
 import { SnapshotPublisher, type SnapshotView } from "./snapshot-view";
 
-export type ApplicationStatus = "idle" | "starting" | "active" | "changing" | "stopping";
+export type HostStatus = "idle" | "starting" | "active" | "changing" | "stopping";
 
-export interface PluginSnapshot {
+export interface InstallationSnapshot {
   readonly id: string;
   readonly name: string;
   readonly groupId: string;
@@ -23,22 +23,22 @@ export interface GroupSnapshot {
   readonly parentId?: string;
 }
 
-export interface ApplicationSnapshot {
+export interface HostSnapshot {
   readonly name: string;
-  readonly status: ApplicationStatus;
+  readonly status: HostStatus;
   readonly revision: number;
-  readonly plugins: ReadonlyMap<string, PluginSnapshot>;
+  readonly installations: ReadonlyMap<string, InstallationSnapshot>;
   readonly groups: ReadonlyMap<string, GroupSnapshot>;
 }
 
 /** Immutable operational read model; never a service locator or control plane. */
-export class ApplicationDiagnostics {
+export class HostDiagnostics {
   readonly #name: string;
-  readonly #source: SnapshotPublisher<ApplicationSnapshot>;
-  #nextSnapshot: ApplicationSnapshot;
+  readonly #source: SnapshotPublisher<HostSnapshot>;
+  #nextSnapshot: HostSnapshot;
   #revision = 0;
 
-  readonly view: SnapshotView<ApplicationSnapshot>;
+  readonly view: SnapshotView<HostSnapshot>;
 
   constructor(name: string, groups: Iterable<GroupNode>, report: (error: unknown) => void) {
     this.#name = name;
@@ -48,8 +48,8 @@ export class ApplicationDiagnostics {
   }
 
   publish(
-    status: ApplicationStatus,
-    installations: Iterable<PluginInstallation>,
+    status: HostStatus,
+    installations: Iterable<InstallationRecord>,
     groups: Iterable<GroupNode>,
   ) {
     this.#revision++;
@@ -58,12 +58,12 @@ export class ApplicationDiagnostics {
   }
 
   #snapshot(
-    status: ApplicationStatus,
-    installations: Iterable<PluginInstallation>,
+    status: HostStatus,
+    records: Iterable<InstallationRecord>,
     groupNodes: Iterable<GroupNode>,
   ) {
-    const plugins = new Map<string, PluginSnapshot>();
-    for (const installation of installations) {
+    const installations = new Map<string, InstallationSnapshot>();
+    for (const installation of records) {
       const base = {
         id: installation.id,
         name: installation.spec.plugin.name,
@@ -80,9 +80,9 @@ export class ApplicationDiagnostics {
         ...(installation.runtime ? { lifetime: installation.runtime.lifetime.diagnostics } : {}),
       };
       const error = installation.error;
-      plugins.set(
+      installations.set(
         installation.id,
-        Object.freeze(error === undefined ? base : { ...base, error }) as PluginSnapshot,
+        Object.freeze(error === undefined ? base : { ...base, error }) as InstallationSnapshot,
       );
     }
 
@@ -99,7 +99,7 @@ export class ApplicationDiagnostics {
       name: this.#name,
       status,
       revision: this.#revision,
-      plugins: new ReadonlyMapSnapshot(plugins),
+      installations: new ReadonlyMapSnapshot(installations),
       groups: new ReadonlyMapSnapshot(groups),
     });
   }

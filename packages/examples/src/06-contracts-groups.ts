@@ -1,4 +1,4 @@
-import { createApp, definePlugin, service, type PluginHandle, type Service } from "dougong";
+import { createHost, definePlugin, service, type Installation, type Service } from "dougong";
 import { exampleResult, type ExampleResult } from "./example";
 
 interface WorkspaceStore {
@@ -38,48 +38,48 @@ function readerPlugin(name: string, token: Service<WorkspaceStore>, trace: strin
 /** Contract identity, installation ownership and atomic change stay three separate ideas. */
 export async function contractsAndGroups(): Promise<ExampleResult> {
   const trace: string[] = [];
-  const app = createApp({ name: "contracts-groups" });
-  let alphaProvider!: PluginHandle<number>;
-  let betaProvider!: PluginHandle<number>;
+  const host = createHost({ name: "contracts-groups" });
+  let alphaProvider!: Installation<number>;
+  let betaProvider!: Installation<number>;
 
   // A Group owns an installation subtree. It is not a capability scope, not a
   // provider shadow tree and not a permission boundary.
-  const alpha = app.group("alpha", (group) => {
+  const alpha = host.group("alpha", (group) => {
     alphaProvider = group.install(
       storePlugin("examples.workspaces.alpha.store", ALPHA_STORE, "alpha"),
       1,
     );
     group.install(readerPlugin("examples.workspaces.alpha.reader", ALPHA_STORE, trace));
   });
-  app.group("beta", (group) => {
+  host.group("beta", (group) => {
     betaProvider = group.install(
       storePlugin("examples.workspaces.beta.store", BETA_STORE, "beta"),
       1,
     );
     group.install(readerPlugin("examples.workspaces.beta.reader", BETA_STORE, trace));
   });
-  await app.start();
+  await host.start();
 
-  const distinct = app.get(ALPHA_STORE).workspace !== app.get(BETA_STORE).workspace;
+  const distinct = host.get(ALPHA_STORE).workspace !== host.get(BETA_STORE).workspace;
   const atStartup = [...trace];
 
   // One ChangeSet spanning two Groups: consumers see version 1 or version 2,
   // never one workspace ahead of the other.
-  const change = app.change();
+  const change = host.change();
   change.update(alphaProvider, { config: 2 });
   change.update(betaProvider, { config: 2 });
   await change.commit();
-  const versions = `alpha@${app.get(ALPHA_STORE).version}, beta@${app.get(BETA_STORE).version}`;
+  const versions = `alpha@${host.get(ALPHA_STORE).version}, beta@${host.get(BETA_STORE).version}`;
 
   await alpha.remove();
   let alphaAvailable = true;
   try {
-    app.get(ALPHA_STORE);
+    host.get(ALPHA_STORE);
   } catch {
     alphaAvailable = false;
   }
-  const betaSurvived = app.get(BETA_STORE).version;
-  await app.stop();
+  const betaSurvived = host.get(BETA_STORE).version;
+  await host.stop();
 
   return exampleResult({
     id: "06",

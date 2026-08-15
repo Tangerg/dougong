@@ -1,16 +1,16 @@
 import { describe, expect, it, vi } from "vitest";
-import { createApp, definePlugin, event, extension, service, type PluginGroup } from "../src/index";
+import { createHost, definePlugin, event, extensionPoint, service, type Group } from "../src/index";
 
 describe("plugin groups", () => {
   it("groups ownership without creating a second capability namespace", async () => {
     const FILES = service<{ read(): string }>("group/files");
-    const ITEMS = extension<string>("group/items");
+    const ITEMS = extensionPoint<string>("group/items");
     const NOTICE = event<string>("group/notice");
     const notices = vi.fn<(value: string) => void>();
     let items: ReadonlyMap<string, string> = new Map();
 
-    const host = definePlugin({
-      name: "group.host",
+    const filesPlugin = definePlugin({
+      name: "group.files",
       provides: { files: FILES },
       setup: () => ({ files: { read: () => "shared" } }),
     });
@@ -35,12 +35,12 @@ describe("plugin groups", () => {
       },
     });
 
-    const app = createApp();
-    app.install(host);
-    app.install(shell);
-    await app.start();
+    const host = createHost();
+    host.install(filesPlugin);
+    host.install(shell);
+    await host.start();
 
-    const group = app.group("workspace", (workspace) => {
+    const group = host.group("workspace", (workspace) => {
       workspace.install(feature);
     });
     await group.ready();
@@ -50,7 +50,7 @@ describe("plugin groups", () => {
 
     await group.remove();
     expect(items.size).toBe(0);
-    await app.stop();
+    await host.stop();
   });
 
   it("composes nested groups and removes the subtree in one operation", async () => {
@@ -64,23 +64,23 @@ describe("plugin groups", () => {
         },
       });
 
-    const app = createApp();
-    const root = app.install(owned("root"));
-    let session!: PluginGroup;
-    const workspace = app.group("workspace", (group) => {
+    const host = createHost();
+    const root = host.install(owned("root"));
+    let session!: Group;
+    const workspace = host.group("workspace", (group) => {
       group.install(owned("workspace"));
       session = group.group("session", (current) => {
         current.install(owned("session"));
       });
     });
-    await app.start();
+    await host.start();
 
     await workspace.remove();
     expect(root.status).toBe("active");
     expect(workspace.status).toBe("removed");
     expect(session.status).toBe("removed");
     expect(() => session.change()).toThrow("has been removed");
-    expect(app.diagnostics.get().groups.has("/workspace")).toBe(false);
+    expect(host.diagnostics.get().groups.has("/workspace")).toBe(false);
     expect(trace).toEqual([
       "start:root",
       "start:workspace",
@@ -91,7 +91,7 @@ describe("plugin groups", () => {
     await expect(workspace.remove()).resolves.toBeUndefined();
     await expect(session.remove()).resolves.toBeUndefined();
 
-    await app.stop();
+    await host.stop();
     expect(trace.at(-1)).toBe("stop:root");
   });
 
@@ -112,28 +112,28 @@ describe("plugin groups", () => {
       },
     });
 
-    const app = createApp();
-    app.install(root);
-    await app.start();
-    const group = app.group("broken", (plugins) => {
+    const host = createHost();
+    host.install(root);
+    await host.start();
+    const group = host.group("broken", (plugins) => {
       plugins.install(broken);
     });
 
     await expect(group.ready()).rejects.toThrow("group failed");
     expect(group.status).toBe("failed");
-    expect(app.status).toBe("active");
+    expect(host.status).toBe("active");
     expect({ rootStarts, rootStops }).toEqual({ rootStarts: 1, rootStops: 0 });
 
     await group.remove();
-    await app.stop();
+    await host.stop();
     expect(rootStops).toBe(1);
   });
 
   it("classifies non-Error live failures without publishing a healthy Group state", async () => {
     const failure: unknown = undefined;
-    const app = createApp();
-    await app.start();
-    const group = app.group("non-error", (plugins) => {
+    const host = createHost();
+    await host.start();
+    const group = host.group("non-error", (plugins) => {
       plugins.install(
         definePlugin({
           name: "group.non-error",
@@ -152,16 +152,16 @@ describe("plugin groups", () => {
     expect(group.status).toBe("failed");
 
     await group.remove();
-    await app.stop();
+    await host.stop();
   });
 
   it("fails a complete nested configuration after any swallowed child failure", () => {
     const failure: unknown = undefined;
-    const app = createApp();
+    const host = createHost();
     const plugin = definePlugin({ name: "group.must-not-stage", setup() {} });
 
     expect(() =>
-      app.group("outer", (outer) => {
+      host.group("outer", (outer) => {
         try {
           outer.group("inner", () => {
             throw failure;
@@ -178,35 +178,35 @@ describe("plugin groups", () => {
         message: "Group '/outer' configuration failed with a non-Error value",
       }),
     );
-    expect(app.diagnostics.get().groups.has("/outer")).toBe(false);
-    expect(app.diagnostics.get().plugins.size).toBe(0);
+    expect(host.diagnostics.get().groups.has("/outer")).toBe(false);
+    expect(host.diagnostics.get().installations.size).toBe(0);
   });
 
   it("enforces synchronous configuration, identity and ChangeSet authority", async () => {
-    const app = createApp();
+    const host = createHost();
     const plugin = definePlugin({ name: "group.authority", setup() {} });
-    const left = app.group("left", () => {});
-    const right = app.group("right", (group) => {
+    const left = host.group("left", () => {});
+    const right = host.group("right", (group) => {
       group.install(plugin);
     });
     await Promise.resolve();
-    const handle = app.install(plugin);
+    const handle = host.install(plugin);
 
     expect(() => left.change().remove(handle)).toThrow("outside ChangeSet group");
-    expect(() => app.group("left", () => {})).toThrow("already exists");
-    expect(() => app.group("bad/name", () => {})).toThrow("cannot contain '/'");
+    expect(() => host.group("left", () => {})).toThrow("already exists");
+    expect(() => host.group("bad/name", () => {})).toThrow("cannot contain '/'");
     expect(handle.groupId).toBe("/");
-    expect(() => app.group("async", (async () => undefined) as unknown as () => void)).toThrow(
+    expect(() => host.group("async", (async () => undefined) as unknown as () => void)).toThrow(
       "must be synchronous",
     );
     // oxlint-disable-next-line unicorn/no-thenable -- Deliberately verify that a non-callable field is ordinary data.
     const ordinaryConfigurationResult = Object.fromEntries([["then", true]]);
-    const ordinaryResult = app.group(
+    const ordinaryResult = host.group(
       "ordinary-result",
       (() => ordinaryConfigurationResult) as unknown as () => void,
     );
     expect(() =>
-      app.group("self-removing", (group) => {
+      host.group("self-removing", (group) => {
         void group.remove();
       }),
     ).toThrow("while it is being configured");
@@ -216,9 +216,9 @@ describe("plugin groups", () => {
   });
 
   it("replaces a failed creation barrier after a successful recovery", async () => {
-    const app = createApp();
-    await app.start();
-    const group = app.group("recover", (plugins) => {
+    const host = createHost();
+    await host.start();
+    const group = host.group("recover", (plugins) => {
       plugins.install(
         definePlugin({
           name: "group.initial-failure",
@@ -238,13 +238,13 @@ describe("plugin groups", () => {
     expect(group.status).toBe("active");
     await expect(group.ready()).resolves.toBeUndefined();
     await group.remove();
-    await app.stop();
+    await host.stop();
   });
 
   it("keeps an established Group healthy after a failed mutation rolls back", async () => {
-    const app = createApp();
-    await app.start();
-    const group = app.group("stable", (plugins) => {
+    const host = createHost();
+    await host.start();
+    const group = host.group("stable", (plugins) => {
       plugins.install(definePlugin({ name: "group.stable", setup() {} }));
     });
     await group.ready();
@@ -263,7 +263,7 @@ describe("plugin groups", () => {
     expect(group.status).toBe("active");
     await expect(group.ready()).resolves.toBeUndefined();
     await group.remove();
-    await app.stop();
+    await host.stop();
   });
 
   it("preserves established readiness across overlapping queued changes", async () => {
@@ -289,9 +289,9 @@ describe("plugin groups", () => {
       },
     });
 
-    const app = createApp();
-    await app.start();
-    const group = app.group("queued", () => {});
+    const host = createHost();
+    await host.start();
+    const group = host.group("queued", () => {});
     await group.ready();
 
     const first = group.change();
@@ -310,6 +310,6 @@ describe("plugin groups", () => {
     await expect(group.ready()).resolves.toBeUndefined();
 
     await group.remove();
-    await app.stop();
+    await host.stop();
   });
 });

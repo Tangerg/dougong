@@ -37,7 +37,7 @@ observe(source, owner, (value, lifetime) => {
 
 `observe()` 与 `@dougongjs/core` **互不依赖**——它是一个作用在结构化 `ObservationOwner`（提供 `cleanup` / `lifetime` / `spawn`）上的自由函数，所以能驱动 Core 的 Lifetime，而 Core 不需要知道它存在。插件的 `ctx` 恰好满足这个形状。
 
-`source` 只需满足结构化的 `Readable<T>`（`get()` + `subscribe()`）——Signal、Core 的 `ExtensionView`、诊断视图，甚至你自己写的对象都可以。
+`source` 只需满足结构化的 `Readable<T>`（`get()` + `subscribe()`）——Signal、Core 的 `ContributionView`、诊断视图，甚至你自己写的对象都可以。
 
 ---
 
@@ -74,7 +74,7 @@ On each change to `source`: release the previous `lifetime`, then build a new on
 
 `observe()` and `@dougongjs/core` are **mutually independent** — it is a free function over a structural `ObservationOwner` (anything providing `cleanup` / `lifetime` / `spawn`), so it can drive Core Lifetimes without Core knowing it exists. A plugin's `ctx` happens to satisfy that shape.
 
-`source` need only satisfy the structural `Readable<T>` (`get()` + `subscribe()`) — a signal, Core's `ExtensionView`, a diagnostics view, or your own object.
+`source` need only satisfy the structural `Readable<T>` (`get()` + `subscribe()`) — a signal, Core's `ContributionView`, a diagnostics view, or your own object.
 
 ---
 

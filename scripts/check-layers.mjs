@@ -70,20 +70,20 @@ const CORE_MODULE_LAYERS = {
   "core/src/lifetime.ts": 3,
   // Plugin shape, declared in terms of lifetime operations.
   "core/src/plugin.ts": 4,
-  // Stable installation identity and runtime state machine.
-  "core/src/plugin-installation.ts": 5,
+  // Stable installation identity and its runtime state machine.
+  "core/src/installation.ts": 5,
   // Derived graphs and immutable operational read models.
   "core/src/diagnostics.ts": 6,
   "core/src/group-lifecycle.ts": 6,
   "core/src/plugin-graph.ts": 6,
   // Public protocols, then the canonical ChangeSet implementation.
-  "core/src/application-api.ts": 7,
+  "core/src/host-api.ts": 7,
   "core/src/change-set.ts": 8,
   // Structural Group orchestration and the committed runtime are orthogonal.
-  "core/src/application-runtime.ts": 9,
+  "core/src/runtime.ts": 9,
   "core/src/group-coordinator.ts": 9,
-  // The Application serializes public commands over both collaborators.
-  "core/src/application.ts": 10,
+  // The Host serializes public commands over both collaborators.
+  "core/src/host.ts": 10,
   // Public barrel.
   "core/src/index.ts": 11,
 };
@@ -97,7 +97,7 @@ const PLATFORM_MODULE_LAYERS = {
   "platform/src/platform-api.ts": 3,
   // Artifact declarations compile into validated Core plugin definitions.
   "platform/src/artifact.ts": 4,
-  "platform/src/managed-plugin.ts": 4,
+  "platform/src/registration.ts": 4,
   "platform/src/platform-change-set.ts": 5,
   // Candidate and Core graphs are independent projections of one sealed change.
   "platform/src/candidate-graph.ts": 6,
@@ -167,22 +167,22 @@ const FILE_RULES = [
   },
   {
     matches: (file) => file === "core/src/index.ts",
-    // `Application` is deliberately an interface; `createApp()` is the only
-    // constructor. Exporting the class would re-expose `LifetimeHost` and the
+    // `Host` is deliberately an interface; `createHost()` is the only
+    // constructor. Exporting the class would re-expose `LifetimePort` and the
     // private command queue as public surface.
-    test: (source) => /\bApplicationImpl\b/.test(source),
-    message: "the Application implementation class must not be exported",
+    test: (source) => /\bHostImpl\b/.test(source),
+    message: "the Host implementation class must not be exported",
   },
   {
-    matches: (file) => file === "core/src/application.ts",
+    matches: (file) => file === "core/src/host.ts",
     test: (source) =>
       !/new\s+SerialQueue\s*\(/.test(source) ||
       /\.then\(\s*operation\s*,\s*operation\s*\)/.test(source),
-    message: "Application command serialization must use Core SerialQueue",
+    message: "Host command serialization must use Core SerialQueue",
   },
   {
     matches: (file) =>
-      file === "platform/src/platform.ts" || file === "platform/src/managed-plugin.ts",
+      file === "platform/src/platform.ts" || file === "platform/src/registration.ts",
     test: (source) => !/new\s+SerialQueue\s*\(/.test(source),
     message: "Platform command serialization must use Core SerialQueue",
   },
@@ -277,7 +277,7 @@ for (const [file, deps] of Object.entries(graph)) {
 // `new Lifetime(...)` is ownership creation. Only the orchestrator (one root
 // lifetime per plugin installation) and Lifetime itself (children) may do it;
 // anywhere else produces a resource tree nobody disposes.
-const LIFETIME_CONSTRUCTORS = new Set(["core/src/application-runtime.ts", "core/src/lifetime.ts"]);
+const LIFETIME_CONSTRUCTORS = new Set(["core/src/runtime.ts", "core/src/lifetime.ts"]);
 for (const file of Object.keys(graph)) {
   if (!SOURCE_RE.test(file) || TEST_RE.test(file)) continue;
   if (LIFETIME_CONSTRUCTORS.has(file)) continue;

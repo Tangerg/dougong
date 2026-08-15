@@ -1,4 +1,4 @@
-import type { Event, Extension } from "./contracts";
+import type { Event, ExtensionPoint } from "./contracts";
 import type { Contribution, ExtensionLeaseKind } from "./extension-store";
 import type { EventListener } from "./event-hub";
 import {
@@ -18,7 +18,7 @@ export interface Logger {
 }
 
 export interface PluginMeta {
-  readonly applicationName: string;
+  readonly hostName: string;
   readonly pluginName: string;
   readonly installationId: string;
   readonly groupId: string;
@@ -40,12 +40,12 @@ export interface LifetimeOperations {
   spawn<T>(task: BackgroundTask<T>): Task<T>;
   on<T>(token: Event<T>, listener: EventListener<T>): Disposable;
   emit<T>(token: Event<T>, payload: T): Promise<void>;
-  contribute<T>(token: Extension<T>, key: string, value: T): Contribution<T>;
+  contribute<T>(token: ExtensionPoint<T>, key: string, value: T): Contribution<T>;
 }
 
 export interface LifetimeContext extends LifetimeOperations, Disposable {}
 
-export interface LifetimeHost {
+export interface LifetimePort {
   stageOn<T>(
     ownerId: string,
     token: Event<T>,
@@ -55,7 +55,7 @@ export interface LifetimeHost {
   emit<T>(ownerId: string, token: Event<T>, payload: T): Promise<void>;
   stageContribution<T>(
     ownerId: string,
-    token: Extension<T>,
+    token: ExtensionPoint<T>,
     key: string,
     value: T,
     release: (publication: Publication) => void,
@@ -74,7 +74,7 @@ interface LifetimeOptions {
 }
 
 interface LifetimeBinding {
-  readonly host: LifetimeHost;
+  readonly host: LifetimePort;
   readonly diagnostics: LifetimeDiagnostics;
   readonly diagnosticNode: LifetimeDiagnosticNode;
 }
@@ -268,7 +268,7 @@ export class Lifetime implements LifetimeContext {
   readonly handle: LifetimeContext;
   #state: LifetimeState;
 
-  constructor(host: LifetimeHost, ownerId: string, options: LifetimeOptions = {}) {
+  constructor(host: LifetimePort, ownerId: string, options: LifetimeOptions = {}) {
     this.#ownerId = ownerId;
     this.handle = new LifetimeHandle(this);
     const controller = new AbortController();
@@ -368,7 +368,7 @@ export class Lifetime implements LifetimeContext {
     return this.#requireActive().host.emit(this.#ownerId, token, payload);
   }
 
-  contribute<T>(token: Extension<T>, key: string, value: T) {
+  contribute<T>(token: ExtensionPoint<T>, key: string, value: T) {
     const { host } = this.#requireActive();
     const publication = host.stageContribution(
       this.#ownerId,
@@ -520,7 +520,7 @@ class LifetimeHandle implements LifetimeContext {
     return this.#lifetime.emit(token, payload);
   }
 
-  contribute<T>(token: Extension<T>, key: string, value: T) {
+  contribute<T>(token: ExtensionPoint<T>, key: string, value: T) {
     return this.#lifetime.contribute(token, key, value);
   }
 

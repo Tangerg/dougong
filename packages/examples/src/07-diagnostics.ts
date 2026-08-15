@@ -1,7 +1,7 @@
 import {
-  createApp,
+  createHost,
   definePlugin,
-  extension,
+  extensionPoint,
   service,
   type LifetimeSnapshot,
   type Task,
@@ -16,7 +16,7 @@ interface Workbench {
   readonly title: string;
 }
 
-const PANELS = extension<Panel>("examples/diagnostics/panels");
+const PANELS = extensionPoint<Panel>("examples/diagnostics/panels");
 const WORKBENCH = service<Workbench>("examples/diagnostics/workbench");
 
 /** Renders one ownership tree the way a devtools panel would. */
@@ -53,22 +53,22 @@ export async function diagnostics(): Promise<ExampleResult> {
     setup: () => undefined,
   });
 
-  const app = createApp({ name: "diagnostics" });
-  const handle = app.install(workbenchPlugin);
-  app.install(shellPlugin);
+  const host = createHost({ name: "diagnostics" });
+  const handle = host.install(workbenchPlugin);
+  host.install(shellPlugin);
 
   // The view is a `get()` + `subscribe()` pair — the same protocol an
-  // ExtensionView and a signal expose, so `observe()` accepts it unchanged.
+  // ContributionView and a signal expose, so `observe()` accepts it unchanged.
   const revisions: number[] = [];
-  const subscription = app.diagnostics.subscribe(() => {
-    revisions.push(app.diagnostics.get().revision);
+  const subscription = host.diagnostics.subscribe(() => {
+    revisions.push(host.diagnostics.get().revision);
   });
 
-  await app.start();
+  await host.start();
 
-  const snapshot = app.diagnostics.get();
-  const workbench = snapshot.plugins.get(handle.id);
-  const shell = [...snapshot.plugins.values()].find((entry) => entry.id !== handle.id);
+  const snapshot = host.diagnostics.get();
+  const workbench = snapshot.installations.get(handle.id);
+  const shell = [...snapshot.installations.values()].find((entry) => entry.id !== handle.id);
   if (!workbench?.lifetime || !shell)
     throw new TypeError("Diagnostics did not report both plugins");
   const lifetime = workbench.lifetime;
@@ -80,10 +80,10 @@ export async function diagnostics(): Promise<ExampleResult> {
   const settled = lifetime.get();
 
   subscription.dispose();
-  await app.stop();
+  await host.stop();
 
   // The tree is gone, but a handle kept from before still reads its final
-  // state — as plain data, without holding the Application alive.
+  // state — as plain data, without holding the Host alive.
   const final = lifetime.get();
   let acceptsNewSubscribers = true;
   try {
@@ -103,7 +103,7 @@ export async function diagnostics(): Promise<ExampleResult> {
       "view-finalization",
     ],
     facts: [
-      `The Application snapshot named ${snapshot.plugins.size} plugins at status '${snapshot.status}', revision ${snapshot.revision}.`,
+      `The Host snapshot named ${snapshot.installations.size} plugins at status '${snapshot.status}', revision ${snapshot.revision}.`,
       `Declarations are readable as data: the shell requires [${shell.requires.join(", ")}], the workbench provides [${workbench.provides.join(", ")}].`,
       `Ownership is a labeled tree: ${describe(busy)}.`,
       `The task finished and detached itself: tasks ${busy.tasks} → ${settled.tasks}, with the plugin still active.`,

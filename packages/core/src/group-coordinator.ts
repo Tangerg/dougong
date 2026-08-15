@@ -1,28 +1,24 @@
-import type { PluginGroup, PluginHandle } from "./application-api";
-import {
-  discardPluginChangeSetDraft,
-  PluginChangeSetDraft,
-  type PluginChangeOperation,
-} from "./change-set";
+import type { Group, Installation } from "./host-api";
+import { discardPluginChangeSetDraft, ChangeSetDraft, type ChangeOperation } from "./change-set";
 import { normalizeFailure } from "./errors";
 import { GroupConfigurationSession, GroupNode } from "./group";
 import { groupRemovedError, GroupLifecycle } from "./group-lifecycle";
-import type { AnyPlugin, InstallationStatus, PluginInstallation } from "./plugin-installation";
-import type { PluginDefinition, Provisions, Requirements } from "./plugin";
+import type { AnyPlugin, InstallationStatus, InstallationRecord } from "./installation";
+import type { Plugin, Provisions, Requirements } from "./plugin";
 
-export interface GroupCoordinatorHost {
-  installations(): Iterable<PluginInstallation>;
+export interface GroupCoordinatorPort {
+  installations(): Iterable<InstallationRecord>;
   createDraft(
     group: GroupNode,
     plugin: AnyPlugin,
     config: unknown,
-  ): { readonly installation: PluginInstallation; readonly handle: object };
-  resolveHandle(handle: object): PluginInstallation;
-  executeChanges(operations: ReadonlyArray<PluginChangeOperation>): Promise<void>;
-  attachInstallation(installation: PluginInstallation): void;
-  discardInstallation(installation: PluginInstallation, error: unknown): void;
+  ): { readonly installation: InstallationRecord; readonly handle: object };
+  resolveHandle(handle: object): InstallationRecord;
+  executeChanges(operations: ReadonlyArray<ChangeOperation>): Promise<void>;
+  attachInstallation(installation: InstallationRecord): void;
+  discardInstallation(installation: InstallationRecord, error: unknown): void;
   runExclusive(operation: () => Promise<void>): Promise<void>;
-  removeInstallations(operations: ReadonlyArray<PluginChangeOperation>): Promise<void>;
+  removeInstallations(operations: ReadonlyArray<ChangeOperation>): Promise<void>;
   notifyChanged(): void;
 }
 
@@ -37,19 +33,19 @@ type PluginGroupState =
   | {
       readonly phase: "configuring";
       readonly coordinator: GroupCoordinator;
-      readonly configuration: GroupConfigurationSession<PluginChangeSetDraft>;
+      readonly configuration: GroupConfigurationSession<ChangeSetDraft>;
     }
   | { readonly phase: "attached"; readonly coordinator: GroupCoordinator }
   | { readonly phase: "revoked" };
 
-class PluginGroupImpl implements PluginGroup {
+class PluginGroupImpl implements Group {
   readonly #node: GroupNode;
   #state: PluginGroupState;
 
   constructor(
     coordinator: GroupCoordinator,
     node: GroupNode,
-    configuration?: GroupConfigurationSession<PluginChangeSetDraft>,
+    configuration?: GroupConfigurationSession<ChangeSetDraft>,
   ) {
     this.#node = node;
     this.#state = configuration
@@ -90,7 +86,7 @@ class PluginGroupImpl implements PluginGroup {
   }
 
   install<Config, Requires extends Requirements, Provides extends Provisions, ConfigInput>(
-    plugin: PluginDefinition<Config, Requires, Provides, ConfigInput>,
+    plugin: Plugin<Config, Requires, Provides, ConfigInput>,
     ...config: [ConfigInput] extends [void] ? [config?: ConfigInput] : [config: ConfigInput]
   ) {
     const state = this.#state;
@@ -101,7 +97,7 @@ class PluginGroupImpl implements PluginGroup {
       this.#node,
       plugin as unknown as AnyPlugin,
       config[0],
-    ) as PluginHandle<Config, Requires, Provides, ConfigInput>;
+    ) as Installation<Config, Requires, Provides, ConfigInput>;
   }
 
   change() {
@@ -111,7 +107,7 @@ class PluginGroupImpl implements PluginGroup {
     return this.#requireCoordinator().change(this.#node);
   }
 
-  group(name: string, configure: (group: PluginGroup) => void) {
+  group(name: string, configure: (group: Group) => void) {
     const state = this.#state;
     if (state.phase === "configuring") state.configuration.assertOpen();
     return this.#requireCoordinator().create(
@@ -140,11 +136,11 @@ class PluginGroupImpl implements PluginGroup {
 /** Owns the complete structural Group model and compiles it to plugin changes. */
 export class GroupCoordinator {
   readonly root: GroupNode;
-  readonly #host: GroupCoordinatorHost;
+  readonly #host: GroupCoordinatorPort;
   readonly #handles = new WeakMap<GroupNode, PluginGroupImpl>();
   readonly #lifecycles = new WeakMap<GroupNode, GroupLifecycle>();
 
-  constructor(rootName: string, host: GroupCoordinatorHost) {
+  constructor(rootName: string, host: GroupCoordinatorPort) {
     this.root = GroupNode.root(rootName);
     this.#host = host;
     this.#lifecycles.set(
@@ -159,9 +155,9 @@ export class GroupCoordinator {
 
   install<Config, Requires extends Requirements, Provides extends Provisions, ConfigInput>(
     group: GroupNode,
-    plugin: PluginDefinition<Config, Requires, Provides, ConfigInput>,
+    plugin: Plugin<Config, Requires, Provides, ConfigInput>,
     ...config: [ConfigInput] extends [void] ? [config?: ConfigInput] : [config: ConfigInput]
-  ): PluginHandle<Config, Requires, Provides, ConfigInput> {
+  ): Installation<Config, Requires, Provides, ConfigInput> {
     const changes = this.change(group);
     const handle = changes.install(plugin, ...config);
     observeReadinessOperation(changes.commit());
@@ -170,7 +166,7 @@ export class GroupCoordinator {
 
   change(group: GroupNode, tracking: "immediate" | "deferred" = "immediate") {
     group.assertAttached();
-    return new PluginChangeSetDraft({
+    return new ChangeSetDraft({
       create: (plugin, config) => this.#host.createDraft(group, plugin, config),
       resolve: (handle) => {
         const installation = this.#host.resolveHandle(handle);
@@ -195,8 +191,8 @@ export class GroupCoordinator {
   create(
     parent: GroupNode,
     name: string,
-    configure: (group: PluginGroup) => void,
-    inherited?: GroupConfigurationSession<PluginChangeSetDraft>,
+    configure: (group: Group) => void,
+    inherited?: GroupConfigurationSession<ChangeSetDraft>,
   ) {
     if (typeof configure !== "function") throw new TypeError("Group configure must be a function");
     const node = parent.create(name);
@@ -270,9 +266,10 @@ export class GroupCoordinator {
         return;
       }
       const removedGroups = group.walk();
-      const operations = this.#installationsIn(group).map(
-        (installation): PluginChangeOperation => ({ kind: "remove", installation }),
-      );
+      const operations = this.#installationsIn(group).map((installation): ChangeOperation => ({
+        kind: "remove",
+        installation,
+      }));
       await this.#host.removeInstallations(operations);
       group.detach();
       this.#revoke(removedGroups);

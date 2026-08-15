@@ -1,4 +1,4 @@
-import { batch, computed, createApp, definePlugin, observe, signal } from "dougong";
+import { batch, computed, createHost, definePlugin, observe, signal } from "dougong";
 import { exampleResult, nextTurn, type ExampleResult } from "./example";
 
 /**
@@ -24,9 +24,9 @@ export async function reactiveLifetime(): Promise<ExampleResult> {
     },
   });
 
-  const app = createApp({ name: "reactive-lifetime" });
-  app.install(connectionPlugin);
-  await app.start();
+  const host = createHost({ name: "reactive-lifetime" });
+  host.install(connectionPlugin);
+  await host.start();
 
   // Two writes, one coherent value, one rebuild. Without the batch the
   // intermediate `edge.example/events/alice` would have opened a connection.
@@ -38,7 +38,7 @@ export async function reactiveLifetime(): Promise<ExampleResult> {
   await nextTurn();
 
   const connects = trace.filter((entry) => entry.startsWith("connect:")).length;
-  await app.stop();
+  await host.stop();
   const disconnects = trace.filter((entry) => entry.startsWith("disconnect:")).length;
 
   return exampleResult({

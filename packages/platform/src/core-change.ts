@@ -1,7 +1,7 @@
-import type { PluginChangeSet, PluginContainer, PluginHandle } from "@dougongjs/core";
-import type { ManagedPluginCoreState, ManagedPluginRegistration } from "./managed-plugin";
+import type { ChangeSet, Installer, Installation } from "@dougongjs/core";
+import type { RegistrationCoreState, RegistrationRecord } from "./registration";
 import type { PlatformChangeOperation } from "./platform-change-set";
-import type { AnyPluginDefinition } from "./platform-api";
+import type { AnyPlugin } from "./platform-api";
 
 export interface StagedCoreChange<Reference> {
   readonly artifactStates: ReadonlyArray<{
@@ -9,19 +9,19 @@ export interface StagedCoreChange<Reference> {
       PlatformChangeOperation<Reference>,
       { kind: "register" | "update" }
     >;
-    readonly state: ManagedPluginCoreState;
+    readonly state: RegistrationCoreState;
   }>;
   commit(): Promise<void>;
 }
 
 /** Compiles one validated Platform change into the canonical Core ChangeSet. */
 export function stageCoreChange<Reference>(
-  container: PluginContainer,
+  installer: Installer,
   operations: ReadonlyArray<PlatformChangeOperation<Reference>>,
-  definitions: ReadonlyMap<ManagedPluginRegistration<Reference>, AnyPluginDefinition>,
+  definitions: ReadonlyMap<RegistrationRecord<Reference>, AnyPlugin>,
 ): StagedCoreChange<Reference> {
-  let change: PluginChangeSet | undefined;
-  const requireChange = () => (change ??= container.change());
+  let change: ChangeSet | undefined;
+  const requireChange = () => (change ??= installer.change());
   const artifactStates: Array<StagedCoreChange<Reference>["artifactStates"][number]> = [];
 
   for (const operation of operations) {
@@ -64,10 +64,10 @@ export function stageCoreChange<Reference>(
 }
 
 function stageActivatedUpdate(
-  requireChange: () => PluginChangeSet,
-  current: PluginHandle | undefined,
+  requireChange: () => ChangeSet,
+  current: Installation | undefined,
   config: unknown,
-  definition: AnyPluginDefinition,
+  definition: AnyPlugin,
 ) {
   if (current) {
     requireChange().update(current, { plugin: definition, config });
@@ -77,8 +77,8 @@ function stageActivatedUpdate(
 }
 
 function stagePlaceholderUpdate<Reference>(
-  requireChange: () => PluginChangeSet,
-  current: PluginHandle | undefined,
+  requireChange: () => ChangeSet,
+  current: Installation | undefined,
   artifact: Extract<PlatformChangeOperation<Reference>, { kind: "update" }>["artifact"],
 ) {
   if (current && artifact.placeholder) {

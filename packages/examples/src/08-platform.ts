@@ -1,11 +1,11 @@
 import {
-  createApp,
+  createHost,
   createPlatform,
   definePlugin,
-  extension,
-  MemoryPluginLoader,
+  extensionPoint,
+  MemoryLoader,
   PermissionSet,
-  type ExtensionView,
+  type ContributionView,
 } from "dougong";
 import { exampleResult, type ExampleResult } from "./example";
 
@@ -14,7 +14,7 @@ interface Command {
   readonly run?: () => string;
 }
 
-const COMMANDS = extension<Command>("examples/platform/commands");
+const COMMANDS = extensionPoint<Command>("examples/platform/commands");
 
 /**
  * Everything so far was code the host compiled. Platform adds the four
@@ -23,7 +23,7 @@ const COMMANDS = extension<Command>("examples/platform/commands");
  * install / update / remove used in chapters 05 and 06.
  */
 export async function lazyPlatform(): Promise<ExampleResult> {
-  let commands!: ExtensionView<Command>;
+  let commands!: ContributionView<Command>;
 
   const shellPlugin = definePlugin({
     name: "examples.platform.shell",
@@ -53,15 +53,15 @@ export async function lazyPlatform(): Promise<ExampleResult> {
     },
   });
 
-  const app = createApp({ name: "lazy-platform" });
-  app.install(shellPlugin);
-  await app.start();
+  const host = createHost({ name: "lazy-platform" });
+  host.install(shellPlugin);
+  await host.start();
 
   const platform = createPlatform({
-    container: app,
+    installer: host,
     apiVersion: "1.0.0",
     permissions: new PermissionSet(["network"]),
-    loader: new MemoryPluginLoader(new Map([["remote", { default: active }]])),
+    loader: new MemoryLoader(new Map([["remote", { default: active }]])),
   });
 
   // Registration is admission, not execution. Nothing has been loaded yet.
@@ -84,7 +84,7 @@ export async function lazyPlatform(): Promise<ExampleResult> {
 
   await managed.remove();
   await platform.dispose();
-  await app.stop();
+  await host.stop();
 
   return exampleResult({
     id: "08",
@@ -94,7 +94,7 @@ export async function lazyPlatform(): Promise<ExampleResult> {
     facts: [
       `The placeholder made '${before?.id}' visible before any module was fetched.`,
       `The activation event swapped it for an executable one in a single committed step: '${output}'.`,
-      `Consumers never saw two entries for the same key — the Extension held ${stillOne} throughout.`,
+      `Consumers never saw two entries for the same key — the ExtensionPoint held ${stillOne} throughout.`,
       "Manifest, permission and loading policy stayed in Platform; capability semantics stayed in Core.",
     ],
   });

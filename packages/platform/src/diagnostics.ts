@@ -1,41 +1,41 @@
 import { ReadonlyMapSnapshot, SnapshotPublisher, type SnapshotView } from "@dougongjs/core";
-import type { PluginManifest } from "./manifest";
+import type { Manifest } from "./manifest";
 
-export type PluginPlatformStatus = "active" | "disposing" | "disposed";
-export type ManagedPluginStatus =
+export type PlatformStatus = "active" | "disposing" | "disposed";
+export type RegistrationStatus =
   "pending" | "registered" | "loading" | "activated" | "failed" | "removed";
 
-export interface ManagedPluginSnapshot {
+export interface RegistrationSnapshot {
   readonly name: string;
   readonly version: string;
-  readonly status: ManagedPluginStatus;
+  readonly status: RegistrationStatus;
   readonly activation: ReadonlyArray<string>;
   readonly permissions: ReadonlyArray<string>;
   readonly dependencies: Readonly<Record<string, string>>;
   readonly error?: unknown;
 }
 
-export interface PluginPlatformSnapshot {
+export interface PlatformSnapshot {
   readonly apiVersion: string;
-  readonly status: PluginPlatformStatus;
+  readonly status: PlatformStatus;
   readonly revision: number;
-  readonly plugins: ReadonlyMap<string, ManagedPluginSnapshot>;
+  readonly registrations: ReadonlyMap<string, RegistrationSnapshot>;
 }
 
-export interface DiagnosablePlugin {
-  readonly manifest: PluginManifest;
-  readonly status: ManagedPluginStatus;
+export interface DiagnosableRegistration {
+  readonly manifest: Manifest;
+  readonly status: RegistrationStatus;
   readonly error: unknown;
 }
 
 /** Immutable operational read model compiled to Core's snapshot protocol. */
 export class PlatformDiagnostics {
   readonly #apiVersion: string;
-  readonly #source: SnapshotPublisher<PluginPlatformSnapshot>;
+  readonly #source: SnapshotPublisher<PlatformSnapshot>;
   #revision = 0;
-  #snapshot: PluginPlatformSnapshot;
+  #snapshot: PlatformSnapshot;
 
-  readonly view: SnapshotView<PluginPlatformSnapshot>;
+  readonly view: SnapshotView<PlatformSnapshot>;
 
   constructor(apiVersion: string, report: (error: unknown) => void) {
     this.#apiVersion = apiVersion;
@@ -44,9 +44,9 @@ export class PlatformDiagnostics {
     this.view = this.#source.view;
   }
 
-  publish(status: PluginPlatformStatus, plugins: Iterable<DiagnosablePlugin>) {
+  publish(status: PlatformStatus, registrations: Iterable<DiagnosableRegistration>) {
     this.#revision++;
-    this.#snapshot = this.#createSnapshot(status, plugins);
+    this.#snapshot = this.#createSnapshot(status, registrations);
     this.#source.invalidate();
   }
 
@@ -54,24 +54,24 @@ export class PlatformDiagnostics {
     this.#source.dispose();
   }
 
-  #createSnapshot(status: PluginPlatformStatus, plugins: Iterable<DiagnosablePlugin>) {
-    const snapshots = new Map<string, ManagedPluginSnapshot>();
-    for (const plugin of plugins) {
-      const { manifest } = plugin;
+  #createSnapshot(status: PlatformStatus, registrations: Iterable<DiagnosableRegistration>) {
+    const snapshots = new Map<string, RegistrationSnapshot>();
+    for (const registration of registrations) {
+      const { manifest } = registration;
       const snapshot = {
         name: manifest.name,
         version: manifest.version,
-        status: plugin.status,
+        status: registration.status,
         activation: manifest.activation,
         permissions: manifest.permissions,
         dependencies: manifest.dependencies,
       };
-      const error = plugin.error;
+      const error = registration.error;
       snapshots.set(
         manifest.name,
         Object.freeze(
           error === undefined ? snapshot : { ...snapshot, error },
-        ) as ManagedPluginSnapshot,
+        ) as RegistrationSnapshot,
       );
     }
 
@@ -79,7 +79,7 @@ export class PlatformDiagnostics {
       apiVersion: this.#apiVersion,
       status,
       revision: this.#revision,
-      plugins: new ReadonlyMapSnapshot(snapshots),
+      registrations: new ReadonlyMapSnapshot(snapshots),
     });
   }
 }

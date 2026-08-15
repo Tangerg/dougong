@@ -1,5 +1,5 @@
 import type { StandardSchemaV1 } from "@standard-schema/spec";
-import { ConfigValidationError, createApp, definePlugin, service } from "dougong";
+import { ConfigValidationError, createHost, definePlugin, service } from "dougong";
 import { exampleResult, failureMessage, type ExampleResult } from "./example";
 
 interface Cache {
@@ -80,10 +80,10 @@ export async function configAndFailure(): Promise<ExampleResult> {
     },
   });
 
-  const app = createApp({ name: "config-failure" });
-  const cache = app.install(cachePlugin, { capacity: 128 });
-  await app.start();
-  const running = app.get(CACHE).capacity;
+  const host = createHost({ name: "config-failure" });
+  const cache = host.install(cachePlugin, { capacity: 128 });
+  await host.start();
+  const running = host.get(CACHE).capacity;
 
   // 1. An invalid declaration. Validation runs before anything is stopped.
   let issues: ReadonlyArray<string> = [];
@@ -93,10 +93,10 @@ export async function configAndFailure(): Promise<ExampleResult> {
     if (!(error instanceof ConfigValidationError)) throw error;
     issues = error.issues.map((issue) => issue.message);
   }
-  const afterInvalidConfig = app.get(CACHE).capacity;
+  const afterInvalidConfig = host.get(CACHE).capacity;
 
   // 2. A valid declaration whose setup fails, inside one ChangeSet.
-  const change = app.change();
+  const change = host.change();
   change.install(auditPlugin);
   change.install(exporterPlugin);
   let rejection = "";
@@ -106,15 +106,15 @@ export async function configAndFailure(): Promise<ExampleResult> {
     rejection = failureMessage(error);
   }
 
-  const afterRollback = app.get(CACHE).capacity;
-  const status = app.status;
+  const afterRollback = host.get(CACHE).capacity;
+  const status = host.status;
   let auditPublished = true;
   try {
-    app.get(AUDIT);
+    host.get(AUDIT);
   } catch {
     auditPublished = false;
   }
-  await app.stop();
+  await host.stop();
 
   return exampleResult({
     id: "05",

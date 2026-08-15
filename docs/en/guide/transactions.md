@@ -7,21 +7,21 @@ A running application needs to install plugins, remove them and swap configurati
 ## A single change
 
 ```ts
-const handle = app.install(plugin, config)   // returns immediately
+const handle = host.install(plugin, config)   // returns immediately
 await handle.ready()                         // await this installation becoming ready
 
 await handle.update({ config: nextConfig })
 await handle.remove()
 ```
 
-Before `app.start()`, `install()` only records a declaration. After it, the call runs a runtime transaction.
+Before `host.start()`, `install()` only records a declaration. After it, the call runs a runtime transaction.
 
 ## Atomic multi-plugin change: ChangeSet
 
 When several operations must **succeed or fail together**, use `change()`:
 
 ```ts
-const changes = app.change()
+const changes = host.change()
 changes.install(newProvider)
 changes.update(oldHandle, { plugin: nextVersion })
 changes.remove(deprecatedHandle)
@@ -42,21 +42,21 @@ Dougong has three levels of failure handling, in increasing severity.
 
 ### 1. Rollback
 
-The new graph cannot start → restore the previous graph; `app.status` returns to `active`.
+The new graph cannot start → restore the previous graph; `host.status` returns to `active`.
 
 ```ts
-const changes = app.change()
+const changes = host.change()
 changes.install(brokenPlugin)
 await expect(changes.commit()).rejects.toThrow("setup failed")
 
-expect(app.status).toBe("active")     // other plugins are entirely unaffected
+expect(host.status).toBe("active")     // other plugins are entirely unaffected
 ```
 
 ### 2. Fail closed
 
-The old graph **also** cannot be restored (say a plugin's cleanup threw, so whether its resources were released is unknown) → do not pretend to be healthy. Stop the Application at `idle` and throw an error aggregating every cause.
+The old graph **also** cannot be restored (say a plugin's cleanup threw, so whether its resources were released is unknown) → do not pretend to be healthy. Stop the Host at `idle` and throw an error aggregating every cause.
 
-Better for the host to see "I stopped, and here is why" than to be handed a runtime that may be damaged.
+Better for application code to see "I stopped, and here is why" than to be handed a runtime that may be damaged.
 
 ### 3. Aggregated reporting
 
@@ -67,7 +67,7 @@ Multiple failures during shutdown aggregate into an `AggregateError` with every 
 **Every affected plugin's config is validated before any running instance is stopped.**
 
 ```ts
-const changes = app.change()
+const changes = host.change()
 changes.update(a, { config: validConfig })
 changes.update(b, { config: invalidConfig })   // this one fails validation
 await expect(changes.commit()).rejects.toMatchObject({ code: "CONFIG_INVALID" })
@@ -92,7 +92,7 @@ Unrelated plugins are never stopped; their Service instances, Lifetimes and back
 
 ## The startup model
 
-`app.start()` has four steps:
+`host.start()` has four steps:
 
 1. **Build the graph** — derive dependencies from `requires` / `provides`, detect cycles and duplicate providers
 2. **Validate** — every config through its Standard Schema
@@ -133,7 +133,7 @@ Plugin dependency cycle: app.a:1 -> app.b:2 -> app.a:1
 A Group manages a set of plugins as one unit:
 
 ```ts
-const feature = app.group("editor", (plugins) => {
+const feature = host.group("editor", (plugins) => {
   plugins.install(syntax)
   plugins.install(formatter)
 
@@ -162,7 +162,7 @@ await changes.commit()
 ::: warning The most common misreading
 A Group expresses **installation ownership only**. It is not a capability scope, not a provider shadow tree, not a permission boundary and not a security sandbox.
 
-Service resolution and Extension/Event visibility are always **application-wide**. Putting a plugin inside a Group does not make it "see only" what is in that Group.
+Service resolution and ExtensionPoint/Event visibility are always **application-wide**. Putting a plugin inside a Group does not make it "see only" what is in that Group.
 :::
 
 So how do you get those things:
@@ -171,12 +171,12 @@ So how do you get those things:
 | --- | --- |
 | Several instances of the same shape (a store per workspace) | An explicit Contract family: ``service<Store>(`app/ws/${id}/store`)`` |
 | Runtime tenant selection | An ordinary method parameter: `store.forTenant(id)` |
-| Security isolation | A separate Application, Worker, iframe or process — a real boundary |
+| Security isolation | A separate Host, Worker, iframe or process — a real boundary |
 
 ### An established Group is not poisoned by failure
 
 ```ts
-const group = app.group("stable", (p) => p.install(good))
+const group = host.group("stable", (p) => p.install(good))
 await group.ready()
 
 const changes = group.change()
@@ -192,16 +192,16 @@ A Group that has been established at least once keeps presenting its last commit
 ## Observing state
 
 ```ts
-app.status
+host.status
 // "idle" | "starting" | "active" | "changing" | "stopping"
 
-app.diagnostics.get()
-// { name, status, plugins: ReadonlyMap<string, PluginSnapshot>, groups, ... }
+host.diagnostics.get()
+// { name, status, plugins: ReadonlyMap<string, InstallationSnapshot>, groups, ... }
 
-app.diagnostics.subscribe(() => render())
+host.diagnostics.subscribe(() => render())
 ```
 
-The `changing` status exists for a reason: while a runtime transaction is in flight the host's read window is closed — `app.get()` throws `SERVICE_UNAVAILABLE` rather than handing you an intermediate state that is being replaced.
+The `changing` status exists for a reason: while a runtime transaction is in flight the host's read window is closed — `host.get()` throws `SERVICE_UNAVAILABLE` rather than handing you an intermediate state that is being replaced.
 
 ## Next
 

@@ -15,7 +15,7 @@ npm install dougong
 ```
 
 ```ts
-import { createApp, definePlugin, service } from "dougong"
+import { createHost, definePlugin, service } from "dougong"
 
 const CLOCK = service<Clock>("app/clock")
 
@@ -33,13 +33,13 @@ const greeter = definePlugin({
   },
 })
 
-const app = createApp({ name: "hello" })
-app.install(greeter)                 // 安装顺序不决定启动顺序
-app.install(clock)
-await app.start()                    // 从声明推导拓扑，同层并发启动
+const host = createHost({ name: "hello" })
+host.install(greeter)                 // 安装顺序不决定启动顺序
+host.install(clock)
+await host.start()                    // 从声明推导拓扑，同层并发启动
 ```
 
-六个原子：**Service**（稳定的一对一能力）、**Extension**（开放贡献集合）、**Event**（瞬时事实）、**Lifetime**（结构化所有权）、**Plugin**、**Application**。
+六个原子：**Service**（稳定的一对一能力）、**ExtensionPoint**（开放贡献集合）、**Event**（瞬时事实）、**Lifetime**（结构化所有权）、**Plugin**、**Host**。
 
 三条核心保证：依赖与所有权**显式**写在声明里；每个语义只有**一条**正式路径；事务只暴露**已提交**状态。
 
@@ -64,7 +64,7 @@ npm install dougong
 ```
 
 ```ts
-import { createApp, definePlugin, service } from "dougong"
+import { createHost, definePlugin, service } from "dougong"
 
 const CLOCK = service<Clock>("app/clock")
 
@@ -82,13 +82,13 @@ const greeter = definePlugin({
   },
 })
 
-const app = createApp({ name: "hello" })
-app.install(greeter)                 // install order does not decide start order
-app.install(clock)
-await app.start()                    // topology derived from declarations, layers start concurrently
+const host = createHost({ name: "hello" })
+host.install(greeter)                 // install order does not decide start order
+host.install(clock)
+await host.start()                    // topology derived from declarations, layers start concurrently
 ```
 
-Six atoms: **Service** (a stable one-to-one capability), **Extension** (an open contribution set), **Event** (a transient fact), **Lifetime** (structured ownership), **Plugin**, **Application**.
+Six atoms: **Service** (a stable one-to-one capability), **ExtensionPoint** (an open contribution set), **Event** (a transient fact), **Lifetime** (structured ownership), **Plugin**, **Host**.
 
 Three core guarantees: dependencies and ownership are written **explicitly** in declarations; every semantic has exactly **one** canonical path; transactions expose only **committed** state.
 

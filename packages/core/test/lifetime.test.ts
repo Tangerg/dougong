@@ -1,9 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import {
-  createApp,
+  createHost,
   definePlugin,
   event,
-  extension,
+  extensionPoint,
   type Contribution,
   type LifetimeContext,
   type Task,
@@ -42,14 +42,14 @@ describe("structured lifetime", () => {
       },
     });
 
-    const app = createApp();
-    app.install(plugin);
-    await app.start();
+    const host = createHost();
+    host.install(plugin);
+    await host.start();
     await Promise.all([completed.result, started]);
     await completed.dispose();
     expect(completedSignal.aborted).toBe(false);
 
-    await app.stop();
+    await host.stop();
 
     expect(completedSignal.aborted).toBe(false);
     expect(liveSignal.aborted).toBe(true);
@@ -82,16 +82,16 @@ describe("structured lifetime", () => {
         );
       },
     });
-    const app = createApp();
-    app.install(plugin);
-    await app.start();
+    const host = createHost();
+    host.install(plugin);
+    await host.start();
     await started;
 
     const completion = task.dispose();
     await completion;
 
     expect(reentrantCompletion).toBe(completion);
-    await app.stop();
+    await host.stop();
   });
 
   it("runs cleanup in LIFO order, attempts every item and aggregates failures", async () => {
@@ -111,10 +111,10 @@ describe("structured lifetime", () => {
       },
     });
 
-    const app = createApp();
-    app.install(plugin);
-    await app.start();
-    await expect(app.stop()).rejects.toMatchObject({ errors: expect.any(Array) });
+    const host = createHost();
+    host.install(plugin);
+    await host.start();
+    await expect(host.stop()).rejects.toMatchObject({ errors: expect.any(Array) });
     expect(trace).toEqual(["third", "second", "first"]);
   });
 
@@ -137,14 +137,14 @@ describe("structured lifetime", () => {
         });
       },
     });
-    const app = createApp();
-    app.install(plugin);
-    await app.start();
+    const host = createHost();
+    host.install(plugin);
+    await host.start();
 
     const early = cleanup.dispose();
     await cleaning;
     let stopped = false;
-    const stopping = app.stop().then(() => {
+    const stopping = host.stop().then(() => {
       stopped = true;
     });
     await Promise.resolve();
@@ -167,16 +167,16 @@ describe("structured lifetime", () => {
         cleanup = ctx.cleanup(disposeBody);
       },
     });
-    const app = createApp();
-    app.install(plugin);
-    await app.start();
+    const host = createHost();
+    host.install(plugin);
+    await host.start();
 
     const completion = cleanup.dispose();
     await completion;
 
     expect(reentrantCompletion).toBe(completion);
     expect(disposeBody).toHaveBeenCalledOnce();
-    await app.stop();
+    await host.stop();
   });
 
   it("does not replay a failed cleanup after its early disposal has settled", async () => {
@@ -190,12 +190,12 @@ describe("structured lifetime", () => {
         });
       },
     });
-    const app = createApp();
-    app.install(plugin);
-    await app.start();
+    const host = createHost();
+    host.install(plugin);
+    await host.start();
 
     await expect(cleanup.dispose()).rejects.toBe(failure);
-    await expect(app.stop()).resolves.toBeUndefined();
+    await expect(host.stop()).resolves.toBeUndefined();
   });
 
   it("projects real nested ownership into immutable diagnostics", async () => {
@@ -214,12 +214,12 @@ describe("structured lifetime", () => {
         connection.cleanup(() => undefined);
       },
     });
-    const app = createApp();
-    const handle = app.install(plugin);
-    await app.start();
+    const host = createHost();
+    const handle = host.install(plugin);
+    await host.start();
     if (!session || !connection) throw new TypeError("Lifetime fixture did not initialize");
 
-    const diagnostics = app.diagnostics.get().plugins.get(handle.id)?.lifetime;
+    const diagnostics = host.diagnostics.get().installations.get(handle.id)?.lifetime;
     if (!diagnostics) throw new TypeError("Lifetime diagnostics were not published");
     const snapshot = diagnostics.get();
     expect(snapshot).toEqual({
@@ -275,7 +275,7 @@ describe("structured lifetime", () => {
       children: [],
     });
 
-    await app.stop();
+    await host.stop();
     expect(diagnostics.get()).toMatchObject({
       label: handle.id,
       phase: "disposed",
@@ -292,18 +292,18 @@ describe("structured lifetime", () => {
         ctx.lifetime("worker");
       },
     });
-    const app = createApp();
-    const handle = app.install(plugin);
-    await app.start();
+    const host = createHost();
+    const handle = host.install(plugin);
+    await host.start();
 
-    const snapshot = app.diagnostics.get().plugins.get(handle.id)?.lifetime?.get();
+    const snapshot = host.diagnostics.get().installations.get(handle.id)?.lifetime?.get();
     expect(snapshot?.children.map((child) => child.label)).toEqual(["worker", "worker"]);
 
-    await app.stop();
+    await host.stop();
   });
 
   it("does not publish listeners or contributions from a failed setup", async () => {
-    const ITEMS = extension<string>("lifetime/staged-items");
+    const ITEMS = extensionPoint<string>("lifetime/staged-items");
     const NOTICE = event<string>("lifetime/staged-notice");
     const listener = vi.fn<(value: string) => void>();
     const notified = vi.fn<() => void>();
@@ -332,23 +332,23 @@ describe("structured lifetime", () => {
       },
     });
 
-    const app = createApp();
-    app.install(reader);
-    app.install(emitter);
-    await app.start();
-    const failed = app.install(broken);
+    const host = createHost();
+    host.install(reader);
+    host.install(emitter);
+    await host.start();
+    const failed = host.install(broken);
     await expect(failed.ready()).rejects.toThrow("setup failed");
-    expect(app.status).toBe("active");
+    expect(host.status).toBe("active");
     expect(view.get().size).toBe(0);
     expect(notified).not.toHaveBeenCalled();
     await emit("after");
     expect(listener).not.toHaveBeenCalled();
-    await app.stop();
+    await host.stop();
   });
 
   it("uses one Disposable protocol for early resource release", async () => {
     const NOTICE = event<void>("lifetime/disposable-event");
-    const ITEMS = extension<string>("lifetime/disposable-items");
+    const ITEMS = extensionPoint<string>("lifetime/disposable-items");
     const listener = vi.fn<() => void>();
     let contribution!: Contribution<string>;
     const plugin = definePlugin({
@@ -367,18 +367,18 @@ describe("structured lifetime", () => {
       },
     });
 
-    const app = createApp();
-    app.install(plugin);
-    app.install(emitter);
-    await app.start();
+    const host = createHost();
+    host.install(plugin);
+    host.install(emitter);
+    await host.start();
     expect(listener).not.toHaveBeenCalled();
     expect(() => contribution.update("late")).toThrow("disposed");
     await expect(Promise.resolve(contribution.dispose())).resolves.toBeUndefined();
-    await app.stop();
+    await host.stop();
   });
 
   it("prevents an obsolete contribution handle from deleting its replacement", async () => {
-    const ITEMS = extension<string>("lifetime/replacement-items");
+    const ITEMS = extensionPoint<string>("lifetime/replacement-items");
     let old!: Contribution<string>;
     let current!: Contribution<string>;
     let view!: { get(): ReadonlyMap<string, string> };
@@ -398,21 +398,21 @@ describe("structured lifetime", () => {
       },
     });
 
-    const app = createApp();
-    app.install(reader);
-    const handle = app.install(writer, "old");
-    await app.start();
+    const host = createHost();
+    host.install(reader);
+    const handle = host.install(writer, "old");
+    await host.start();
     await handle.update({ config: "new" });
     old.dispose();
 
     expect([...view.get().values()]).toEqual(["new"]);
     current.dispose();
     expect(view.get().size).toBe(0);
-    await app.stop();
+    await host.stop();
   });
 
-  it("closes live Extension views with the Lifetime that owns them", async () => {
-    const ITEMS = extension<string>("lifetime/view-lease");
+  it("closes live ExtensionPoint views with the Lifetime that owns them", async () => {
+    const ITEMS = extensionPoint<string>("lifetime/view-lease");
     let view!: {
       get(): ReadonlyMap<string, string>;
       subscribe(listener: () => void): unknown;
@@ -424,19 +424,19 @@ describe("structured lifetime", () => {
         view = ctx.items;
       },
     });
-    const app = createApp();
-    app.install(reader);
-    await app.start();
+    const host = createHost();
+    host.install(reader);
+    await host.start();
     expect(view.get().size).toBe(0);
 
-    await app.stop();
+    await host.stop();
 
-    expect(() => view.get()).toThrow("Extension view has been disposed");
-    expect(() => view.subscribe(() => undefined)).toThrow("Extension view has been disposed");
+    expect(() => view.get()).toThrow("Contribution view has been disposed");
+    expect(() => view.subscribe(() => undefined)).toThrow("Contribution view has been disposed");
   });
 
-  it("withdraws an early-disposed Extension subscription from its Store", async () => {
-    const ITEMS = extension<string>("lifetime/extension-subscription");
+  it("withdraws an early-disposed ExtensionPoint subscription from its Store", async () => {
+    const ITEMS = extensionPoint<string>("lifetime/extension-subscription");
     const notified = vi.fn<() => void>();
     let subscription!: { dispose(): void | Promise<void> };
     let view!: { get(): ReadonlyMap<string, string> };
@@ -454,22 +454,22 @@ describe("structured lifetime", () => {
         ctx.contribute(ITEMS, "item", "value");
       },
     });
-    const app = createApp();
-    app.install(reader);
-    await app.start();
+    const host = createHost();
+    host.install(reader);
+    await host.start();
 
     await subscription.dispose();
-    const changes = app.change();
+    const changes = host.change();
     changes.install(writer);
     await changes.commit();
 
     expect([...view.get().values()]).toEqual(["value"]);
     expect(notified).not.toHaveBeenCalled();
-    await app.stop();
+    await host.stop();
   });
 
-  it("settles active installation only after its Extension batch is published", async () => {
-    const ITEMS = extension<string>("lifetime/ready-after-extension-batch");
+  it("settles active installation only after its ExtensionPoint batch is published", async () => {
+    const ITEMS = extensionPoint<string>("lifetime/ready-after-extension-batch");
     let view!: { get(): ReadonlyMap<string, string> };
     const reader = definePlugin({
       name: "lifetime.ready-reader",
@@ -484,19 +484,19 @@ describe("structured lifetime", () => {
         ctx.contribute(ITEMS, "item", "published");
       },
     });
-    const app = createApp();
-    app.install(reader);
-    await app.start();
+    const host = createHost();
+    host.install(reader);
+    await host.start();
 
-    const installed = app.install(writer);
+    const installed = host.install(writer);
     await installed.ready();
 
     expect([...view.get().values()]).toEqual(["published"]);
-    await app.stop();
+    await host.stop();
   });
 
-  it("coalesces a multi-plugin commit into one Extension notification", async () => {
-    const ITEMS = extension<string>("lifetime/batched-items");
+  it("coalesces a multi-plugin commit into one ExtensionPoint notification", async () => {
+    const ITEMS = extensionPoint<string>("lifetime/batched-items");
     const notified = vi.fn<() => void>();
     let view!: { get(): ReadonlyMap<string, string> };
     const reader = definePlugin({
@@ -515,10 +515,10 @@ describe("structured lifetime", () => {
         },
       });
 
-    const app = createApp();
-    app.install(reader);
-    await app.start();
-    const group = app.group("batch", (plugins) => {
+    const host = createHost();
+    host.install(reader);
+    await host.start();
+    const group = host.group("batch", (plugins) => {
       plugins.install(writer("first"));
       plugins.install(writer("second"));
     });
@@ -527,11 +527,11 @@ describe("structured lifetime", () => {
     expect(notified).toHaveBeenCalledTimes(1);
     expect([...view.get().values()]).toEqual(["first", "second"]);
     expect([...view.get().keys()].every((key) => key.endsWith("/shared"))).toBe(true);
-    await app.stop();
+    await host.stop();
   });
 
   it("qualifies contribution keys without collisions between owners and local keys", async () => {
-    const ITEMS = extension<number>("lifetime/collision-free-items");
+    const ITEMS = extensionPoint<number>("lifetime/collision-free-items");
     let view!: { get(): ReadonlyMap<string, number> };
 
     const first = definePlugin({
@@ -554,19 +554,19 @@ describe("structured lifetime", () => {
       },
     });
 
-    const app = createApp();
-    app.install(first);
-    app.install(second);
-    app.install(reader);
-    await app.start();
+    const host = createHost();
+    host.install(first);
+    host.install(second);
+    host.install(reader);
+    await host.start();
 
     expect([...view.get().values()]).toEqual([1, 2]);
     expect([...view.get().keys()]).toEqual(["owner:1/nested:2%2Fitem", "owner:1%2Fnested:2/item"]);
-    await app.stop();
+    await host.stop();
   });
 
-  it("preserves undefined as a live Extension contribution value", async () => {
-    const ITEMS = extension<number | undefined>("lifetime/undefined-items");
+  it("preserves undefined as a live ExtensionPoint contribution value", async () => {
+    const ITEMS = extensionPoint<number | undefined>("lifetime/undefined-items");
     let contribution: Contribution<number | undefined> | undefined;
     let view: { get(): ReadonlyMap<string, number | undefined> } | undefined;
     const writer = definePlugin({
@@ -583,17 +583,17 @@ describe("structured lifetime", () => {
       },
     });
 
-    const app = createApp();
-    app.install(writer);
-    app.install(reader);
-    await app.start();
-    if (!contribution || !view) throw new TypeError("Extension fixture did not initialize");
+    const host = createHost();
+    host.install(writer);
+    host.install(reader);
+    await host.start();
+    if (!contribution || !view) throw new TypeError("ExtensionPoint fixture did not initialize");
 
     expect([...view.get().values()]).toEqual([undefined]);
     contribution.update(1);
     expect([...view.get().values()]).toEqual([1]);
     contribution.update(undefined);
     expect([...view.get().values()]).toEqual([undefined]);
-    await app.stop();
+    await host.stop();
   });
 });

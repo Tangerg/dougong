@@ -1,8 +1,8 @@
 import { definePlugin, type Provisions, type Requirements } from "@dougongjs/core";
 import { PlatformError } from "./errors";
-import type { PluginLoader } from "./loader";
-import { defineManifest, matchesVersion, type PluginManifest } from "./manifest";
-import type { AnyPluginDefinition, NormalizedArtifact, PluginArtifact } from "./platform-api";
+import type { Loader } from "./loader";
+import { defineManifest, matchesVersion, type Manifest } from "./manifest";
+import type { AnyPlugin, NormalizedArtifact, Artifact } from "./platform-api";
 
 /** Normalizes and validates one host-facing artifact declaration. */
 export function normalizeArtifact<
@@ -13,7 +13,7 @@ export function normalizeArtifact<
   ConfigInput = Config,
 >(
   apiVersion: string,
-  artifact: PluginArtifact<Reference, Config, Requires, Provides, ConfigInput>,
+  artifact: Artifact<Reference, Config, Requires, Provides, ConfigInput>,
 ): NormalizedArtifact<Reference> {
   if (!artifact || typeof artifact !== "object") {
     throw new TypeError("Plugin artifact must be an object");
@@ -40,7 +40,7 @@ export function normalizeArtifact<
 
 /** Resolves one normalized artifact into its canonical Core definition. */
 export async function loadPluginDefinition<Reference>(
-  loader: PluginLoader<Reference>,
+  loader: Loader<Reference>,
   artifact: NormalizedArtifact<Reference>,
   signal: AbortSignal,
 ) {
@@ -62,9 +62,9 @@ export async function loadPluginDefinition<Reference>(
   }
 
   const candidate = (loaded as { default?: unknown }).default;
-  let definition: AnyPluginDefinition;
+  let definition: AnyPlugin;
   try {
-    definition = definePlugin(candidate as AnyPluginDefinition);
+    definition = definePlugin(candidate as AnyPlugin);
   } catch (error) {
     throw new PlatformError(
       "MODULE_INVALID",
@@ -72,26 +72,26 @@ export async function loadPluginDefinition<Reference>(
       { cause: error },
     );
   }
-  assertPluginIdentity(artifact.manifest, definition, "module");
+  assertArtifactIdentity(artifact.manifest, definition, "module");
   return definition;
 }
 
-function normalizePlaceholder(manifest: PluginManifest, placeholder: unknown) {
-  const definition = definePlugin(placeholder as AnyPluginDefinition);
-  assertPluginIdentity(manifest, definition, "placeholder");
+function normalizePlaceholder(manifest: Manifest, placeholder: unknown) {
+  const definition = definePlugin(placeholder as AnyPlugin);
+  assertArtifactIdentity(manifest, definition, "placeholder");
   return definition;
 }
 
-function assertPluginIdentity(
-  manifest: PluginManifest,
+function assertArtifactIdentity(
+  manifest: Manifest,
   definition: { readonly name: string },
   source: "module" | "placeholder",
 ) {
   if (definition.name !== manifest.name) {
     const mismatch = source === "module" ? "loaded plugin" : "placeholder is named";
     throw new PlatformError(
-      "PLUGIN_IDENTITY",
-      `Manifest '${manifest.name}' ${mismatch} '${definition.name}'`,
+      "ARTIFACT_IDENTITY",
+      `Artifact for manifest '${manifest.name}' ${mismatch} '${definition.name}'`,
     );
   }
 }

@@ -1,55 +1,50 @@
 import type { Provisions, Requirements } from "@dougongjs/core";
 import { PlatformError } from "./errors";
-import type { ManagedPluginRegistration } from "./managed-plugin";
-import type {
-  ManagedPlugin,
-  NormalizedArtifact,
-  PlatformChangeSet,
-  PluginArtifact,
-} from "./platform-api";
+import type { RegistrationRecord } from "./registration";
+import type { Registration, NormalizedArtifact, PlatformChangeSet, Artifact } from "./platform-api";
 
 export type PlatformChangeOperation<Reference> =
   | {
       readonly kind: "register";
-      readonly registration: ManagedPluginRegistration<Reference>;
+      readonly registration: RegistrationRecord<Reference>;
       readonly artifact: NormalizedArtifact<Reference>;
     }
   | {
       readonly kind: "update";
-      readonly registration: ManagedPluginRegistration<Reference>;
+      readonly registration: RegistrationRecord<Reference>;
       readonly artifact: NormalizedArtifact<Reference>;
     }
-  | { readonly kind: "remove"; readonly registration: ManagedPluginRegistration<Reference> };
+  | { readonly kind: "remove"; readonly registration: RegistrationRecord<Reference> };
 
-export interface PlatformChangeHost<Reference> {
+export interface PlatformChangePort<Reference> {
   normalize<
     Config = void,
     Requires extends Requirements = {},
     Provides extends Provisions = {},
     ConfigInput = Config,
   >(
-    artifact: PluginArtifact<Reference, Config, Requires, Provides, ConfigInput>,
+    artifact: Artifact<Reference, Config, Requires, Provides, ConfigInput>,
   ): NormalizedArtifact<Reference>;
-  createRegistration(artifact: NormalizedArtifact<Reference>): ManagedPluginRegistration<Reference>;
-  attachRegistration(registration: ManagedPluginRegistration<Reference>): void;
-  resolve(plugin: ManagedPlugin<Reference>): ManagedPluginRegistration<Reference>;
+  createRegistration(artifact: NormalizedArtifact<Reference>): RegistrationRecord<Reference>;
+  attachRegistration(registration: RegistrationRecord<Reference>): void;
+  resolve(plugin: Registration<Reference>): RegistrationRecord<Reference>;
   execute(operations: ReadonlyArray<PlatformChangeOperation<Reference>>): Promise<void>;
 }
 
 type PlatformChangeSetState<Reference> =
-  | { readonly phase: "open"; readonly host: PlatformChangeHost<Reference> }
+  | { readonly phase: "open"; readonly host: PlatformChangePort<Reference> }
   | { readonly phase: "committing" }
   | { readonly phase: "submitted"; readonly promise: Promise<void> };
 
 /** One-shot draft that owns target uniqueness and delegates candidate validation. */
 export class PlatformChangeSetDraft<Reference> implements PlatformChangeSet<Reference> {
   readonly #operations = new Map<
-    ManagedPluginRegistration<Reference>,
+    RegistrationRecord<Reference>,
     PlatformChangeOperation<Reference>
   >();
   #state: PlatformChangeSetState<Reference>;
 
-  constructor(host: PlatformChangeHost<Reference>) {
+  constructor(host: PlatformChangePort<Reference>) {
     this.#state = { phase: "open", host };
     Object.freeze(this);
   }
@@ -59,7 +54,7 @@ export class PlatformChangeSetDraft<Reference> implements PlatformChangeSet<Refe
     Requires extends Requirements = {},
     Provides extends Provisions = {},
     ConfigInput = Config,
-  >(artifact: PluginArtifact<Reference, Config, Requires, Provides, ConfigInput>) {
+  >(artifact: Artifact<Reference, Config, Requires, Provides, ConfigInput>) {
     const host = this.#requireOpen();
     const normalized = host.normalize(artifact);
     const registration = host.createRegistration(normalized);
@@ -73,23 +68,23 @@ export class PlatformChangeSetDraft<Reference> implements PlatformChangeSet<Refe
     Provides extends Provisions = {},
     ConfigInput = Config,
   >(
-    plugin: ManagedPlugin<Reference>,
-    artifact: PluginArtifact<Reference, Config, Requires, Provides, ConfigInput>,
+    plugin: Registration<Reference>,
+    artifact: Artifact<Reference, Config, Requires, Provides, ConfigInput>,
   ) {
     const host = this.#requireOpen();
     const registration = host.resolve(plugin);
     const normalized = host.normalize(artifact);
     if (normalized.manifest.name !== registration.name) {
       throw new PlatformError(
-        "PLUGIN_IDENTITY",
-        `Managed plugin '${registration.name}' cannot change name to '${normalized.manifest.name}'`,
+        "REGISTRATION_IDENTITY",
+        `Registration '${registration.name}' cannot change name to '${normalized.manifest.name}'`,
       );
     }
     this.#stage({ kind: "update", registration, artifact: normalized });
     return this;
   }
 
-  remove(plugin: ManagedPlugin<Reference>) {
+  remove(plugin: Registration<Reference>) {
     const host = this.#requireOpen();
     this.#stage({ kind: "remove", registration: host.resolve(plugin) });
     return this;

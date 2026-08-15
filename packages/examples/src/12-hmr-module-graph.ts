@@ -1,13 +1,13 @@
 import {
-  createApp,
+  createHost,
   createPlatform,
   definePlugin,
-  extension,
-  MemoryPluginLoader,
+  extensionPoint,
+  MemoryLoader,
   PermissionSet,
-  type ExtensionView,
-  type ManagedPlugin,
-  type PluginArtifact,
+  type ContributionView,
+  type Registration,
+  type Artifact,
 } from "dougong";
 import { exampleResult, type ExampleResult } from "./example";
 
@@ -29,7 +29,7 @@ interface Invalidation {
   readonly plugins: ReadonlyArray<string>;
 }
 
-const VIEWS = extension<View>("examples/hmr-module-graph/views");
+const VIEWS = extensionPoint<View>("examples/hmr-module-graph/views");
 const OUTLINE = "examples.hmr-module-graph.outline";
 const SEARCH = "examples.hmr-module-graph.search";
 const THEME = "examples.hmr-module-graph.theme";
@@ -106,7 +106,7 @@ function viewPlugin(name: string, key: string, label: string) {
   });
 }
 
-function artifact(name: string, version: string, reference: string): PluginArtifact<string> {
+function artifact(name: string, version: string, reference: string): Artifact<string> {
   return Object.freeze({
     manifest: { name, version, activation: ["startup"] },
     reference,
@@ -115,7 +115,7 @@ function artifact(name: string, version: string, reference: string): PluginArtif
 
 /** Explicit module invalidation selects updates; Platform still owns the only plugin transaction. */
 export async function hmrModuleGraph(): Promise<ExampleResult> {
-  let views!: ExtensionView<View>;
+  let views!: ContributionView<View>;
   const snapshots: string[] = [];
   const observer = definePlugin({
     name: "examples.hmr-module-graph.observer",
@@ -143,17 +143,17 @@ export async function hmrModuleGraph(): Promise<ExampleResult> {
     ["theme-v1", { default: viewPlugin(THEME, "theme", "Theme v1") }],
     ["theme-v2", { default: viewPlugin(THEME, "theme", "Theme v2") }],
   ]);
-  const app = createApp({ name: "hmr-module-graph-example" });
-  app.install(observer);
-  await app.start();
+  const host = createHost({ name: "hmr-module-graph-example" });
+  host.install(observer);
+  await host.start();
   const platform = createPlatform({
-    container: app,
+    installer: host,
     apiVersion: "1.0.0",
     permissions: new PermissionSet(),
-    loader: new MemoryPluginLoader<string>(modules),
+    loader: new MemoryLoader<string>(modules),
   });
 
-  const handles = new Map<string, ManagedPlugin<string>>();
+  const handles = new Map<string, Registration<string>>();
   const first = platform.change();
   handles.set(OUTLINE, first.register(artifact(OUTLINE, "1.0.0", "outline-v1")));
   handles.set(SEARCH, first.register(artifact(SEARCH, "1.0.0", "search-v1")));
@@ -173,7 +173,7 @@ export async function hmrModuleGraph(): Promise<ExampleResult> {
     { id: "theme/entry.ts", imports: [], plugin: THEME },
   ]);
   const invalidation = graph.invalidate(["shared/icons.ts"]);
-  const replacements = new Map<string, PluginArtifact<string>>([
+  const replacements = new Map<string, Artifact<string>>([
     [OUTLINE, artifact(OUTLINE, "2.0.0", "outline-v2")],
     [SEARCH, artifact(SEARCH, "2.0.0", "search-v2")],
     [THEME, artifact(THEME, "2.0.0", "theme-v2")],
@@ -197,7 +197,7 @@ export async function hmrModuleGraph(): Promise<ExampleResult> {
   const publishedSnapshots = [...snapshots];
 
   await platform.dispose();
-  await app.stop();
+  await host.stop();
 
   return exampleResult({
     id: "12",

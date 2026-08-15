@@ -39,8 +39,8 @@ core 与 reactive 互不依赖
 
 只依赖标准 JavaScript 与 Standard Schema 类型契约，负责：
 
-- Service / Extension / Event Contract；
-- PluginDefinition 与冻结 Context；
+- Service / ExtensionPoint / Event Contract；
+- Plugin 与冻结 Context；
 - Service 依赖图和稳定快照；
 - Lifetime、AbortSignal、任务和资源释放；
 - ChangeSet、增量重建、rollback 与 fail-closed；
@@ -48,7 +48,7 @@ core 与 reactive 互不依赖
 - 跨层共用、失败不污染后续命令的 SerialQueue；
 - 只读诊断投影。
 
-Core 内部也保持同一分工：Application 只拥有声明注册表、`SerialQueue` 和状态发布；GroupCoordinator 只拥有结构 Group；ApplicationRuntime 只拥有已经提交的 Contract、Service、Event、Extension、Lifetime 与运行图。Platform 直接复用 Core 的同一串行原语，不复制失败隔离状态机。事务由 Application 发起，但运行图的切换、rollback 与 fail-closed 只在 ApplicationRuntime 中执行，因此声明状态和实例状态各有一个真相源，而不是把全部职责堆进一个总类。
+Core 内部也保持同一分工：Host 只拥有声明注册表、`SerialQueue` 和状态发布；GroupCoordinator 只拥有结构 Group；Runtime 只拥有已经提交的 Contract、Service、Event、ExtensionPoint、Lifetime 与运行图。Platform 直接复用 Core 的同一串行原语，不复制失败隔离状态机。事务由 Host 发起，但运行图的切换、rollback 与 fail-closed 只在 Runtime 中执行，因此声明状态和实例状态各有一个真相源，而不是把全部职责堆进一个总类。
 
 ### `@dougongjs/reactive`
 
@@ -75,7 +75,7 @@ Core 不导入 reactive。二者通过结构化 `get()/subscribe()` 和 Lifetime
 - HMR / Artifact 更新；
 - Platform ChangeSet。
 
-Platform 把结果编译成普通 Core PluginDefinition 和一份 Core ChangeSet，不复制运行时。
+Platform 把结果编译成普通 Core Plugin 和一份 Core ChangeSet，不复制运行时。
 
 ### `dougong`
 
@@ -83,11 +83,11 @@ Platform 把结果编译成普通 Core PluginDefinition 和一份 Core ChangeSet
 
 ### `@dougongjs/examples`
 
-最外层的可执行学习与宿主参考包，只依赖公开 `dougong` facade。十二章分三段递进：原子（Service、Extension/Event、Lifetime、Signal）、组合（配置与失败、Contract family 与 Group、诊断、Platform）、真实宿主（Planet、Lynx、声明式计划、模块图 HMR）。
+最外层的可执行学习与应用参考包，只依赖公开 `dougong` facade。十二章分三段递进：原子（Service、ExtensionPoint/Event、Lifetime、Signal）、组合（配置与失败、Contract family 与 Group、诊断、Platform）、真实宿主（Planet、Lynx、声明式计划、模块图 HMR）。
 
 递进关系本身是受测的：每章声明自己首次引入的概念，测试把十二章的声明首尾相接，与 `example.ts` 中的教学大纲做全等比较——概念重复、顺序倒置或某章无新增都会失败。
 
-宿主策略先在这里接受真实使用与回归测试；只有多个宿主复用出稳定边界后才提炼成独立包。任何基础包都禁止反向依赖 examples；示例若必须访问内部模块，说明公共组合能力尚未闭合。
+应用策略先在这里接受真实使用与回归测试；只有多个应用复用出稳定边界后才提炼成独立包。任何基础包都禁止反向依赖 examples；示例若必须访问内部模块，说明公共组合能力尚未闭合。
 
 ## 三、为什么是四种能力
 
@@ -96,7 +96,7 @@ Platform 把结果编译成普通 Core PluginDefinition 和一份 Core ChangeSet
 | 问题 | 原子 | 关键保证 |
 | --- | --- | --- |
 | “谁能为我完成这个操作？” | Service | 一个提供者、实例期稳定 |
-| “目前有哪些开放贡献？” | Extension | Map 快照、动态增删 |
+| “目前有哪些开放贡献？” | ExtensionPoint | Map 快照、动态增删 |
 | “刚刚发生了什么？” | Event | 不保留、并发广播 |
 | “这组资源活到什么时候？” | Lifetime | 结构化取消和释放 |
 
@@ -104,10 +104,10 @@ Platform 把结果编译成普通 Core PluginDefinition 和一份 Core ChangeSet
 
 - Event 若返回业务结果，会同时变成命令、查询和 middleware；
 - Service 若动态替换对象而不重建消费者，闭包会持有不可预测引用；
-- Extension 若内置 key selector、order 和 override，就把 Command/Theme/HTTP 的策略泄露进 Core；
+- ExtensionPoint 若内置 key selector、order 和 override，就把 Command/Theme/HTTP 的策略泄露进 Core；
 - Lifetime 若解析依赖，就会变成隐藏 Scope 或 IoC 容器。
 
-四者分离后，Plugin 只负责生产，Application 只负责编排。
+四者分离后，Plugin 只负责生产，Host 只负责编排。
 
 ## 四、组合优于继承的可验证含义
 
@@ -151,7 +151,7 @@ platform.reload(artifact)
 - 安装计划中的实体：`status / ready / remove`；Plugin 额外 `update`。
 - 可提前释放的资源：统一 `dispose`。
 - 可观察值：统一 `get / subscribe`。
-- Application 与 Group：统一 `install / group / change`。
+- Host 与 Group：统一 `install / group / change`。
 
 跨层 API 的差异来自职责，不来自随意命名。
 
@@ -159,7 +159,7 @@ platform.reload(artifact)
 
 组合只有在边界可见时才比继承更容易推理。Dougong 不从 Group、祖先 Context、调用栈或全局“当前值”猜测 Service 提供者，也不从安装顺序猜测 setup 顺序。能力选择写进 Contract ID，依赖写进 `requires`，所有权写进 Lifetime，运行期选择写进普通方法参数。
 
-这也约束高层语法糖：它可以生成 token、PluginDefinition 或 ChangeSet，但展开结果必须完整表达关系，不能把一部分语义藏在另一张 scope/shadow/interceptor 图里。
+这也约束高层语法糖：它可以生成 token、Plugin 或 ChangeSet，但展开结果必须完整表达关系，不能把一部分语义藏在另一张 scope/shadow/interceptor 图里。
 
 ## 五、Service 图与普通闭包
 
@@ -169,11 +169,11 @@ Service 不使用 live Proxy：
 provider A ──► consumer B ──► consumer C
 ```
 
-更新 A 时，Application 计算新旧图的影响闭包，按 `C → B → A` 停止，再按 `A → B → C` 启动。未受影响插件不重启。
+更新 A 时，Host 计算新旧图的影响闭包，按 `C → B → A` 停止，再按 `A → B → C` 启动。未受影响插件不重启。
 
-Application 只缓存当前 active runtime 对应的已验证图。`app.get()` 在该图上做常数级 Map 查询；候选图只在 `start()` 或 ChangeSet 校验时构建，并在事务完全成功后替换缓存。idle 安装计划可以暂时缺少依赖，从而不破坏“先声明多个安装、最后统一 start”的使用方式。
+Host 只缓存当前 active runtime 对应的已验证图。`host.get()` 在该图上做常数级 Map 查询；候选图只在 `start()` 或 ChangeSet 校验时构建，并在事务完全成功后替换缓存。idle 安装计划可以暂时缺少依赖，从而不破坏“先声明多个安装、最后统一 start”的使用方式。
 
-Application active 时提交 ChangeSet，其停止与重建窗口是显式的 `changing` 状态，不是假 active。此时宿主 Service 读取关闭；成功提交或完整 rollback 后才恢复 `active`，从而避免同一读取边界混合旧图与新 runtime。
+Host active 时提交 ChangeSet，其停止与重建窗口是显式的 `changing` 状态，不是假 active。此时应用代码的 Service 读取关闭；成功提交或完整 rollback 后才恢复 `active`，从而避免同一读取边界混合旧图与新 runtime。
 
 这样插件可以放心使用普通闭包：
 
@@ -186,7 +186,7 @@ setup(ctx) {
 
 它不需要 Signal、Proxy 或“依赖是否已经变了”的防御逻辑。稳定 Service 是低心智负担的重要来源。
 
-依赖图同时给出不可变拓扑层。Application 对一层执行并发 prepare，等所有 setup 与 Service 输出校验成功后，再按稳定安装序统一 commit；下一层只能读取已经提交的前置 Service。任一同层插件失败会取消同层其余 setup，并释放整层所有未公开 Lifetime。
+依赖图同时给出不可变拓扑层。Host 对一层执行并发 prepare，等所有 setup 与 Service 输出校验成功后，再按稳定安装序统一 commit；下一层只能读取已经提交的前置 Service。任一同层插件失败会取消同层其余 setup，并释放整层所有未公开 Lifetime。
 
 ```text
 layer 0  [database, cache, logger]  ── concurrent prepare ── commit
@@ -194,11 +194,11 @@ layer 1  [users, search]            ── concurrent prepare ── commit
 layer 2  [http]                     ── prepare ───────────── commit
 ```
 
-这不是“尽量猜测哪些插件可以并发”：唯一依据仍是显式 Service 边。Event 和 Extension 不形成启动依赖；独立 setup 的先后顺序未定义。需要顺序的插件必须声明 Service，不得依赖安装先后或微任务时序。停止保持依赖逆序串行，因为资源撤销顺序是可观察语义，而不是启动吞吐瓶颈的镜像问题。
+这不是“尽量猜测哪些插件可以并发”：唯一依据仍是显式 Service 边。Event 和 ExtensionPoint 不形成启动依赖；独立 setup 的先后顺序未定义。需要顺序的插件必须声明 Service，不得依赖安装先后或微任务时序。停止保持依赖逆序串行，因为资源撤销顺序是可观察语义，而不是启动吞吐瓶颈的镜像问题。
 
-## 六、Extension 为什么保持原始
+## 六、ExtensionPoint 为什么保持原始
 
-Core Extension 的信息保真度最高：所有贡献都保留，真实 key 带实例前缀。它不提前丢弃同领域 key 的旧值，也不强加顺序。
+Core ExtensionPoint 的信息保真度最高：所有贡献都保留，真实 key 带实例前缀。它不提前丢弃同领域 key 的旧值，也不强加顺序。
 
 因此不同领域能独立选择策略：
 
@@ -213,7 +213,7 @@ raw contributions
 
 如果 Core 只暴露“当前 winner”，卸载后恢复旧 Theme 所需的信息已经丢失；如果 Core 直接规定 last-wins，命令系统希望 reject 时又需要旁路。保留原始集合，策略才能真正组合。
 
-ExtensionView 与 Signal 共享结构协议，但不是 Signal 节点。`computed()` 只追踪 Dougong Signal，避免一个看似纯的计算暗中订阅任意外部 Store。需要跨层同步时，使用显式 subscribe 或 reactive `observe()`。
+ContributionView 与 Signal 共享结构协议，但不是 Signal 节点。`computed()` 只追踪 Dougong Signal，避免一个看似纯的计算暗中订阅任意外部 Store。需要跨层同步时，使用显式 subscribe 或 reactive `observe()`。
 
 ## 七、Lifetime 是组合地基
 
@@ -222,8 +222,8 @@ ExtensionView 与 Signal 共享结构协议，但不是 Signal 节点。`compute
 ```text
 Plugin Lifetime
 ├── Event subscription
-├── Extension contribution
-├── ExtensionView subscription
+├── ExtensionPoint contribution
+├── ContributionView subscription
 ├── background task
 ├── child Lifetime ("session")
 │   ├── task
@@ -237,23 +237,23 @@ Plugin Lifetime
 
 子 Lifetime 提前 dispose 后会从父拥有集合脱离。后台 Task 自然 settle 后也会从父任务集合和父 AbortSignal 监听器中脱离；父释放只取消并等待仍在运行的任务。两者都避免长生命周期按历史创建次数积累已完成对象。
 
-同一规则覆盖全部内部 lease：Listener、Contribution、ExtensionView 及其订阅、cleanup 和 Task 在提前终止时都会从父集合摘除；终态对象同时清空 owner、Store、回调、payload 和诊断记账引用。七个资源类别复用同一套活跃资源集合实现，从而获得 O(1) 摘除、幂等 ownership release 与诊断增减。各类别仍使用独立集合表达发布顺序、释放顺序和分类计数，统一机制不混合语义。
+同一规则覆盖全部内部 lease：Listener、Contribution、ContributionView 及其订阅、cleanup 和 Task 在提前终止时都会从父集合摘除；终态对象同时清空 owner、Store、回调、payload 和诊断记账引用。七个资源类别复用同一套活跃资源集合实现，从而获得 O(1) 摘除、幂等 ownership release 与诊断增减。各类别仍使用独立集合表达发布顺序、释放顺序和分类计数，统一机制不混合语义。
 
-主动释放 Lifetime 或 Task 使用模块级冻结 `AbortError` 作为取消原因，父取消则原样转发父 reason。这里共享的只是无状态错误值，不是 ambient scope；它避免每次 `abort()` 自动创建的错误调用栈把终态 `AbortSignal.reason` 变成一条指回 Application 的隐藏保留边。释放完成后，Lifetime 用一个新的同 reason aborted signal 替换运行期 signal；终态 Handle 因而不会继续保留旧 signal 的监听器闭包。进行中的释放 Promise 只属于 `disposing` 状态，进入 `disposed` 后同样被结构性丢弃，原始失败仍由已取得该 Promise 的调用方观察。
+主动释放 Lifetime 或 Task 使用模块级冻结 `AbortError` 作为取消原因，父取消则原样转发父 reason。这里共享的只是无状态错误值，不是 ambient scope；它避免每次 `abort()` 自动创建的错误调用栈把终态 `AbortSignal.reason` 变成一条指回 Host 的隐藏保留边。释放完成后，Lifetime 用一个新的同 reason aborted signal 替换运行期 signal；终态 Handle 因而不会继续保留旧 signal 的监听器闭包。进行中的释放 Promise 只属于 `disposing` 状态，进入 `disposed` 后同样被结构性丢弃，原始失败仍由已取得该 Promise 的调用方观察。
 
-父级只拥有仍然存活的资源，保留一个已释放 Handle 不会反向保活整个 Application。ExtensionView 使用显式窄 Handle，而不是从 Store 实例方法返回捕获词法 `this` 的箭头函数；清空 binding 后，公开 View 本身也不能成为 Store 的隐藏所有权边。
+父级只拥有仍然存活的资源，保留一个已释放 Handle 不会反向保活整个 Host。ContributionView 使用显式窄 Handle，而不是从 Store 实例方法返回捕获词法 `this` 的箭头函数；清空 binding 后，公开 View 本身也不能成为 Store 的隐藏所有权边。
 
-相同约束也适用于安装所有权：终态 PluginInstallation 只保留不可变 group ID，已分离 Group 清空 parent、事务屏障与历史 failure。历史 Handle 因而不能经由所有权树或错误调用栈保活兄弟 Group 或 Application 根节点。
+相同约束也适用于安装所有权：终态 InstallationRecord 只保留不可变 group ID，已分离 Group 清空 parent、事务屏障与历史 failure。历史 Handle 因而不能经由所有权树或错误调用栈保活兄弟 Group 或 Host 根节点。
 
 终态摘除也覆盖错误对象。V8 的 `Error.stack` 可能携带创建错误时的编排调用帧，因此已脱离 Core 或 Platform 的失败 Handle 只保存 `name/message/code` 摘要，并在调用方再次读取失败时重建错误；正在等待提交的调用方仍接收原始错误。错误没有被静默丢弃，调用栈也不会成为一条不可见的宿主所有权边。
 
-ExtensionRegistry 也只保留仍有 claim、View 或 subscription 的 Store；最后一个所有者释放后，空 Store 会从注册表摘除。失败 setup 即使尝试过从未提交的 Extension ID，也不会让 Application 按历史失败次数积累空 Store。
+ExtensionRegistry 也只保留仍有 claim、View 或 subscription 的 Store；最后一个所有者释放后，空 Store 会从注册表摘除。失败 setup 即使尝试过从未提交的 ExtensionPoint ID，也不会让 Host 按历史失败次数积累空 Store。
 
-ExtensionView 订阅包含两条正交的内部所有权边：Lifetime 拥有 subscription handle，ExtensionStore 拥有 listener 注册。一次公开 `dispose()` 必须同时切断两者；前者保证父 Lifetime 不积累终态 Handle，后者保证 Store 不继续通知或保活已退订的回调。这只是同一 Disposable 操作的内部原子释放，不形成第二套公开 API。
+ContributionView 订阅包含两条正交的内部所有权边：Lifetime 拥有 subscription handle，ExtensionStore 拥有 listener 注册。一次公开 `dispose()` 必须同时切断两者；前者保证父 Lifetime 不积累终态 Handle，后者保证 Store 不继续通知或保活已退订的回调。这只是同一 Disposable 操作的内部原子释放，不形成第二套公开 API。
 
-每个根 Lifetime 还维护一份只读诊断视图。它逐节点投影真实的 Lifetime 所有权关系：根 label 是 installation ID，子节点 label 来自 `lifetime(label)`；每个节点按 cleanup、task、listener、contribution、ExtensionView 和 subscription 分类报告自己直接拥有的资源。子树总量可递归推导，不重复保存在节点中。诊断树不保存叶资源，也不从调用栈或函数名猜测伪节点。只有真实的共同释放边界才能形成节点，因此诊断结构与运行语义始终一致。
+每个根 Lifetime 还维护一份只读诊断视图。它逐节点投影真实的 Lifetime 所有权关系：根 label 是 installation ID，子节点 label 来自 `lifetime(label)`；每个节点按 cleanup、task、listener、contribution、ContributionView 和 subscription 分类报告自己直接拥有的资源。子树总量可递归推导，不重复保存在节点中。诊断树不保存叶资源，也不从调用栈或函数名猜测伪节点。只有真实的共同释放边界才能形成节点，因此诊断结构与运行语义始终一致。
 
-这份视图复用 `get/subscribe` 协议，并与 Application 结构快照分离：高频资源变化不会重建整张插件图，DevTools 又能回答“哪组资源当前持有什么”。子 Lifetime 终止即从父节点摘除；根终态视图只保留无子节点、全零计数的快照，不反向保活 Application 或资源对象。
+这份视图复用 `get/subscribe` 协议，并与 Host 结构快照分离：高频资源变化不会重建整张插件图，DevTools 又能回答“哪组资源当前持有什么”。子 Lifetime 终止即从父节点摘除；根终态视图只保留无子节点、全零计数的快照，不反向保活 Host 或资源对象。
 
 ## 八、事务模型
 
@@ -261,17 +261,17 @@ Core 区分三类事务边界：
 
 ### 插件 setup
 
-Contract kind、Listener 和 Contribution 都先进入事务草稿。Service 输出与整笔运行切换全部成功后，Contract kind 才进入 Application 注册表；Listener 和 Contribution 则随所属拓扑层的 Lifetime 发布。失败 setup 与 rollback 会丢弃草稿，同时切断草稿对注册表 authority 的引用，既不能留下幽灵 Contract 身份，也不能让终态草稿反向保活注册表。公共 Handle 只暴露 `dispose/update`，不暴露内部 `publish()`，因此 JavaScript 插件也无法提前越过提交点。
+Contract kind、Listener 和 Contribution 都先进入事务草稿。Service 输出与整笔运行切换全部成功后，Contract kind 才进入 Host 注册表；Listener 和 Contribution 则随所属拓扑层的 Lifetime 发布。失败 setup 与 rollback 会丢弃草稿，同时切断草稿对注册表 authority 的引用，既不能留下幽灵 Contract 身份，也不能让终态草稿反向保活注册表。公共 Handle 只暴露 `dispose/update`，不暴露内部 `publish()`，因此 JavaScript 插件也无法提前越过提交点。
 
-### Extension 通知
+### ExtensionPoint 通知
 
-Application start、stop 和 ChangeSet 使用批次。内部 Map 可以经历停止与重建，但 View 的公开快照只在事务结束时切换一次。
+Host start、stop 和 ChangeSet 使用批次。内部 Map 可以经历停止与重建，但 View 的公开快照只在事务结束时切换一次。
 
-Application active 时提交的 ChangeSet 先产生 committed 或 rolled-back outcome，Extension 批次完成发布后才 settle 对应 Plugin Handle。`ready()` 因而是事务屏障，不会早于最终 Extension 快照。
+Host active 时提交的 ChangeSet 先产生 committed 或 rolled-back outcome，ExtensionPoint 批次完成发布后才 settle 对应 Plugin Handle。`ready()` 因而是事务屏障，不会早于最终 ExtensionPoint 快照。
 
 ### 多插件图变更
 
-ChangeSet 先构造和验证完整候选图，再触碰当前 runtime。进入执行窗口后 Application 为 `changing`，`app.get()` 不观察逐实例停止与启动；成功或 rollback 完成后才恢复 active。任何清理不完整都会 fail closed，而不是留下“看起来 active”的混合状态。
+ChangeSet 先构造和验证完整候选图，再触碰当前 runtime。进入执行窗口后 Host 为 `changing`，`host.get()` 不观察逐实例停止与启动；成功或 rollback 完成后才恢复 active。任何清理不完整都会 fail closed，而不是留下“看起来 active”的混合状态。
 
 动态 import 的模块顶层副作用、网络请求或操作系统资源本身无法由内存事务回滚。这些属于 Loader/插件的补偿责任，文档不能把框架事务包装成分布式事务承诺。
 
@@ -286,11 +286,11 @@ Group 解决：
 
 Group 配置、结构所有权、运行状态与 Handle 权限各自使用封闭状态机。配置会话是 `open / failed / sealed`，结构节点是 `attached / detached`，生命周期保存 established 状态与当前 readiness barrier，Handle 是 `configuring / attached / revoked`。
 
-这些状态机由一个内部 `GroupCoordinator` 组合，不再散落在 Application 编排器中。Coordinator 完整拥有 Group 树、Handle authority 与 readiness；Application 只通过窄端口提供插件 ChangeSet、串行命令和诊断发布。这个边界不会新增公共概念，也不会让 Group 获得能力解析权。
+这些状态机由一个内部 `GroupCoordinator` 组合，不再散落在 Host 编排器中。Coordinator 完整拥有 Group 树、Handle authority 与 readiness；Host 只通过窄端口提供插件 ChangeSet、串行命令和诊断发布。这个边界不会新增公共概念，也不会让 Group 获得能力解析权。
 
 嵌套 configure 共享一份配置会话；第一次失败会毒化整笔草稿，外层即使捕获异常也不能继续声明或提交。任意非 `Error` 失败在边界分类后再进入生命周期，因此 `undefined` 永远不同时承担“失败值”和“没有失败”两种含义。已建立 Group 的失败变更若完整回滚，就继续呈现已提交状态；未建立 Group 可由后续成功变更替换失败 barrier。
 
-它不解决“谁能看见什么能力”。Service、Extension 和 Event 在同一个 Application 内全局一致。
+它不解决“谁能看见什么能力”。Service、ExtensionPoint 和 Event 在同一个 Host 内全局一致。
 
 把能力 Scope 塞进 Group 会带来三套新规则：祖先继承、局部遮蔽、事件冒泡/隔离；随后 Loader、诊断和事务都必须理解空间图。这不是四个能力原子自然推出的结果，而且很容易被误解为安全隔离。
 
@@ -301,7 +301,7 @@ Group 配置、结构所有权、运行状态与 Handle 权限各自使用封闭
 | 仅批量安装/卸载 | Group |
 | 少量固定工作区各有一份同型能力 | 显式 Contract family |
 | 请求期动态选择工作区数据 | Service API 显式带 workspace ID |
-| 独立能力图 | 多个 Application |
+| 独立能力图 | 多个 Host |
 | 不可信代码 | Worker / iframe / 进程 / 受限 Realm |
 | 远程能力 | RPC Service Proxy |
 
@@ -355,17 +355,17 @@ Effect-TS 与 Core 在 DI、Scope、Fiber 和错误运行时上高度重叠，�
 
 ## 十一、Platform 与安全边界
 
-同 Realm JavaScript 永远可以访问全局环境。Manifest permissions 表达宿主政策，不构成沙箱。
+同 Realm JavaScript 永远可以访问全局环境。Manifest permissions 表达应用侧政策，不构成沙箱。
 
 ```text
 可信插件      同 Realm ESM，可贡献函数和 UI 组件
 半可信插件    同 Realm + admission/activation 权限审核
 不可信插件    Worker / iframe / 独立进程
 跨 Realm      序列化消息或 RPC Service
-不可信 UI     声明式数据，由宿主渲染
+不可信 UI     声明式数据，由应用代码渲染
 ```
 
-Platform 的 Loader 可以返回宿主编写的 RPC PluginDefinition。Core 只看到普通 Service 与 Lifetime，不需要认识传输协议。
+Platform 的 Loader 可以返回应用代码编写的 RPC Plugin。Core 只看到普通 Service 与 Lifetime，不需要认识传输协议。
 
 ## 十二、真实项目映射
 
@@ -374,20 +374,20 @@ Platform 的 Loader 可以返回宿主编写的 RPC PluginDefinition。Core 只�
 | 需求 | Dougong 组合 |
 | --- | --- |
 | 播放器 / 数据库 | Service |
-| 音乐来源 | Extension 原始贡献 + ProviderSelector |
+| 音乐来源 | ExtensionPoint 原始贡献 + ProviderSelector |
 | 曲目变化 | Event 或 Store Service |
 | 音频连接 | Lifetime + spawn + cleanup |
 | Provider 热插拔 | Platform activation + Core update/remove |
 
-动态 Provider 贡献变化不会重启播放器；播放器订阅 ExtensionView 并更新自己的选择器。
+动态 Provider 贡献变化不会重启播放器；播放器订阅 ContributionView 并更新自己的选择器。
 
 ### Lynx Desktop
 
 | 需求 | Dougong 组合 |
 | --- | --- |
-| 命令、菜单、面板、renderer | Extension |
+| 命令、菜单、面板、renderer | ExtensionPoint |
 | 唯一命令与覆盖主题 | 领域 Catalog Service |
-| 文件系统、窗口、存储 | 宿主 Service |
+| 文件系统、窗口、存储 | 应用侧 Service |
 | 一组工作区插件 | Group |
 | sideload / lazy / HMR | Platform |
 | React 实时展示 | `useSyncExternalStore` 薄适配 |
@@ -407,7 +407,7 @@ Group 删除负责安装所有权；领域值中的 workspace ID 负责数据选
 - Core/Platform 源码不导入 Node built-in；
 - runtime 不读取隐藏 clock/entropy；
 - 诊断不直接调用 console；
-- Lifetime 只能由 ApplicationRuntime 和 Lifetime 自身构造；
+- Lifetime 只能由 Runtime 和 Lifetime 自身构造；
 - 无循环依赖。
 
 架构约束如果只存在于文字里，几个月后就会退化成建议；Dougong 把可以机械判断的部分交给工具。
@@ -423,6 +423,6 @@ Group 删除负责安装所有权；领域值中的 workspace ID 负责数据选
 5. 是否改变生命周期、事务或错误模型？
 6. 是否在类型之外泄露内部对象？
 7. 是否把组织、权限或便利误称为安全隔离？
-8. 删除具体框架和宿主后，这个抽象是否仍成立？
+8. 删除具体框架和应用后，这个抽象是否仍成立？
 
 Dougong 的目标不是“功能最多的 Core”，而是“最小且闭合的 Core”：原子足够少，组合表达力足够大，任何高级能力都不需要逃逸到底层。

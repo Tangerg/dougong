@@ -1,39 +1,38 @@
 export {
   event,
-  extension,
+  extensionPoint,
   optional,
   service,
   type ContractKind,
   type ContractValue,
   type Event,
-  type Extension,
+  type ExtensionPoint,
   type OptionalService,
   type Requirement,
   type Service,
 } from "./contracts";
 
 export {
-  createApp,
-  type Application,
-  type ApplicationSnapshot,
-  type ApplicationStatus,
-  type CreateAppOptions,
+  createHost,
+  type Host,
+  type HostSnapshot,
+  type HostStatus,
+  type HostOptions,
   type GroupSnapshot,
-  type InstallationHandle,
-  type PluginChangeSet,
-  type PluginContainer,
-  type PluginGroup,
-  type PluginHandle,
-  type PluginSnapshot,
+  type ChangeSet,
+  type Installer,
+  type Group,
+  type Installation,
+  type InstallationSnapshot,
   type InstallationStatus,
-  type PluginUpdate,
-} from "./application";
+  type InstallationUpdate,
+} from "./host";
 
 export {
   definePlugin,
   type Awaitable,
   type PluginContext,
-  type PluginDefinition,
+  type Plugin,
   type ProvidedServices,
   type Provisions,
   type Requirements,
@@ -53,7 +52,7 @@ export {
   type Task,
 } from "./lifetime";
 
-export type { Contribution, ExtensionView } from "./extension-store";
+export type { Contribution, ContributionView } from "./extension-store";
 export type { EventListener } from "./event-hub";
 export { ConfigValidationError, DougongError } from "./errors";
 export type { Disposable } from "./resource";

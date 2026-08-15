@@ -22,7 +22,7 @@ const manifestSchema = z
   })
   .strict();
 
-export interface PluginManifest {
+export interface Manifest {
   readonly name: string;
   readonly version: string;
   readonly apiVersion: string;
@@ -45,9 +45,9 @@ function isVersionRange(range: string) {
   }
 }
 
-export type PluginManifestInput = z.input<typeof manifestSchema>;
+export type ManifestInput = z.input<typeof manifestSchema>;
 
-export function defineManifest(input: PluginManifestInput | PluginManifest): PluginManifest {
+export function defineManifest(input: ManifestInput | Manifest): Manifest {
   const result = manifestSchema.safeParse(input);
   if (!result.success) {
     throw new PlatformError("MANIFEST_INVALID", z.prettifyError(result.error), {

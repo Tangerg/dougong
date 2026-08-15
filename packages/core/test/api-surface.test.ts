@@ -9,17 +9,17 @@ describe("public API surface", () => {
       "ReadonlyMapSnapshot",
       "SerialQueue",
       "SnapshotPublisher",
-      "createApp",
+      "createHost",
       "definePlugin",
       "event",
-      "extension",
+      "extensionPoint",
       "optional",
       "service",
     ]);
   });
 
   it("does not leak orchestrator internals through JavaScript handles", async () => {
-    const ITEMS = core.extension<string>("surface/items");
+    const ITEMS = core.extensionPoint<string>("surface/items");
     const NOTICE = core.event<void>("surface/notice");
     let surfaces!: {
       readonly context: object;
@@ -46,11 +46,11 @@ describe("public API surface", () => {
       },
     });
 
-    const app = core.createApp();
-    const change = app.change();
-    const handle = app.install(plugin);
-    const group = app.group("empty", () => {});
-    await app.start();
+    const host = core.createHost();
+    const change = host.change();
+    const handle = host.install(plugin);
+    const group = host.group("empty", () => {});
+    await host.start();
 
     expect(Object.keys(surfaces.context).sort()).toEqual([
       "cleanup",
@@ -72,8 +72,8 @@ describe("public API surface", () => {
     expect(Object.keys(surfaces.task)).toEqual(["result"]);
     expect(Object.keys(handle)).toEqual([]);
     expect(Object.keys(group)).toEqual([]);
-    expect(Object.keys(app.diagnostics).sort()).toEqual(["get", "subscribe"]);
-    expect(Object.isFrozen(app)).toBe(true);
+    expect(Object.keys(host.diagnostics).sort()).toEqual(["get", "subscribe"]);
+    expect(Object.isFrozen(host)).toBe(true);
     expect("cancel" in change).toBe(false);
     expect("attach" in handle).toBe(false);
     expect("revoke" in handle).toBe(false);
@@ -87,7 +87,7 @@ describe("public API surface", () => {
       "groupStatus",
       "removeGroup",
     ]) {
-      expect(internal in app).toBe(false);
+      expect(internal in host).toBe(false);
     }
 
     for (const resource of [
@@ -102,6 +102,6 @@ describe("public API surface", () => {
       expect(Object.isFrozen(resource)).toBe(true);
     }
 
-    await app.stop();
+    await host.stop();
   });
 });

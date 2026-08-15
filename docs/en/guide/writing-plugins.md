@@ -23,13 +23,13 @@ const plugin = definePlugin({
 
 ```ts
 const DATABASE = service<Database>("app/database")
-const ROUTES = extension<Route>("http/routes")
+const ROUTES = extensionPoint<Route>("http/routes")
 
 definePlugin({
   name: "app.users",
   requires: {
     db: DATABASE,      // Service → ctx.db is a Database
-    routes: ROUTES,    // Extension → ctx.routes is an ExtensionView<Route>
+    routes: ROUTES,    // ExtensionPoint → ctx.routes is an ContributionView<Route>
   },
   setup(ctx) {
     ctx.db.query("select 1")
@@ -67,7 +67,7 @@ definePlugin({
 
 With no provider, `ctx.tracer` is `undefined` and the plugin starts normally. If a provider later appears or disappears, this plugin is **rebuilt** — so `ctx.tracer` never changes within one instance lifetime.
 
-`optional()` accepts only Services. Extensions do not need it: an empty map is already valid.
+`optional()` accepts only Services. ExtensionPoints do not need it: an empty map is already valid.
 
 ## Providing capabilities
 
@@ -96,7 +96,7 @@ setup() {},        // ❌ Type '() => void' is not assignable to
 
 Two plugins providing the same Contract throws `SERVICE_CONFLICT` while the graph is built — before any plugin starts.
 
-## Contributing to an Extension
+## Contributing to an ExtensionPoint
 
 ```ts
 definePlugin({
@@ -134,7 +134,7 @@ Not calling `dispose()` is fine — every contribution is withdrawn when the plu
 import { z } from "zod"
 
 const schema = z.object({
-  host: z.string(),
+  hostname: z.string(),
   port: z.number().default(5432),
 })
 
@@ -144,14 +144,14 @@ const db = definePlugin({
   provides: { db: DATABASE },
   setup(ctx, config) {
     //             ^ the schema **output** type; port is always present
-    return { db: connect(config.host, config.port) }
+    return { db: connect(config.hostname, config.port) }
   },
 })
 
-app.install(db, { host: "localhost" })   // the input type; port may be omitted
+host.install(db, { hostname: "localhost" })   // the input type; port may be omitted
 ```
 
-Input and output are two distinct types: `app.install()` accepts the **input** (`port` optional), while `setup` receives the **output** (`port` defaulted).
+Input and output are two distinct types: `host.install()` accepts the **input** (`port` optional), while `setup` receives the **output** (`port` defaulted).
 
 Validation failure throws `ConfigValidationError` (code `CONFIG_INVALID`) carrying an `issues` array:
 
@@ -199,22 +199,22 @@ When setup throws:
 3. `ctx.signal` aborts for the other plugins in the same layer
 4. The whole change **rolls back** to the previous runtime graph
 5. `handle.ready()` rejects and `handle.status` becomes `"failed"`
-6. `app.status` returns to its pre-change value — it never stops in an intermediate state
+6. `host.status` returns to its pre-change value — it never stops in an intermediate state
 
 ```ts
-const handle = app.install(brokenPlugin)
+const handle = host.install(brokenPlugin)
 await expect(handle.ready()).rejects.toThrow("setup failed")
-expect(app.status).toBe("active")     // other plugins are untouched
+expect(host.status).toBe("active")     // other plugins are untouched
 ```
 
-Throwing a non-`Error` value (`throw "boom"`) is classified as a `DougongError` with code `PLUGIN_UNAVAILABLE`, keeping the original value in `cause` — so `undefined` never means both "the failure value" and "no failure".
+Throwing a non-`Error` value (`throw "boom"`) is classified as a `DougongError` with code `INSTALLATION_UNAVAILABLE`, keeping the original value in `cause` — so `undefined` never means both "the failure value" and "no failure".
 
 ## Update and remove
 
 ```ts
-const handle = app.install(plugin, { host: "a" })
+const handle = host.install(plugin, { hostname: "a" })
 
-await handle.update({ config: { host: "b" } })   // swap config
+await handle.update({ config: { hostname: "b" } })   // swap config
 await handle.update({ plugin: nextVersion })     // swap implementation, keep identity
 await handle.remove()
 ```
@@ -231,12 +231,12 @@ await handle.ready()   // resolve when this installation is ready; reject on fai
 ## A complete example
 
 ```ts
-import { createApp, definePlugin, extension, optional, service } from "dougong"
+import { createHost, definePlugin, extension, optional, service } from "dougong"
 import { z } from "zod"
 
 const DATABASE = service<Database>("app/database")
 const METRICS = service<Metrics>("app/metrics")
-const ROUTES = extension<Route>("http/routes")
+const ROUTES = extensionPoint<Route>("http/routes")
 
 const database = definePlugin({
   name: "app.database",
@@ -264,10 +264,10 @@ const users = definePlugin({
   },
 })
 
-const app = createApp({ name: "api" })
-app.install(users)
-app.install(database, { url: process.env.DATABASE_URL! })
-await app.start()
+const host = createHost({ name: "api" })
+host.install(users)
+host.install(database, { url: process.env.DATABASE_URL! })
+await host.start()
 ```
 
 ## Next

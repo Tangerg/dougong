@@ -1,19 +1,19 @@
 import { describe, expect, it } from "vitest";
 import {
-  createApp,
+  createHost,
   definePlugin,
   event,
-  extension,
+  extensionPoint,
   type Event,
-  type Extension,
+  type ExtensionPoint,
   type LifetimeContext,
   type PluginContext,
-  type PluginGroup,
+  type Group,
 } from "../src/index";
 import { ContractRegistry } from "../src/contract-registry";
 import { ExtensionRegistry, type ExtensionStore } from "../src/extension-store";
 import { GroupNode } from "../src/group";
-import { createInstallationSpec, PluginInstallation } from "../src/plugin-installation";
+import { createInstallationSpec, InstallationRecord } from "../src/installation";
 
 type ResourceKind =
   | "child-lifetimes"
@@ -55,7 +55,7 @@ describe("lifetime retention", () => {
         children: [],
       });
     } finally {
-      await fixture.app.stop();
+      await fixture.host.stop();
     }
   });
 
@@ -73,15 +73,15 @@ describe("lifetime retention", () => {
         expect.soft(count, `${kind} remained strongly owned`).toBe(0);
       }
     } finally {
-      await fixture.app.stop();
+      await fixture.host.stop();
     }
   });
 
-  it("does not retain an empty Extension Store after its last owner releases it", async () => {
+  it("does not retain an empty ExtensionPoint Store after its last owner releases it", async () => {
     const forceGc = (globalThis as typeof globalThis & { gc?: () => void }).gc;
     if (!forceGc) throw new TypeError("Retention tests require Node.js --expose-gc");
 
-    const ITEMS = extension<number>("lifetime/released-store");
+    const ITEMS = extensionPoint<number>("lifetime/released-store");
     const registry = new ExtensionRegistry(() => undefined);
     const retainedStore = createAndReleaseExtensionStore(registry, ITEMS);
     for (let pass = 0; pass < RELEASE_PASSES && retainedStore.deref(); pass++) {
@@ -108,7 +108,7 @@ describe("lifetime retention", () => {
     }
   });
 
-  it("does not retain an active Application through a released child Lifetime", async () => {
+  it("does not retain an active Host through a released child Lifetime", async () => {
     const forceGc = (globalThis as typeof globalThis & { gc?: () => void }).gc;
     if (!forceGc) throw new TypeError("Retention tests require Node.js --expose-gc");
 
@@ -124,7 +124,7 @@ describe("lifetime retention", () => {
     expect(Object.isFrozen(fixture.child.signal.reason)).toBe(true);
   });
 
-  it("does not retain an Application through a historical Lifetime diagnostic view", async () => {
+  it("does not retain an Host through a historical Lifetime diagnostic view", async () => {
     const forceGc = (globalThis as typeof globalThis & { gc?: () => void }).gc;
     if (!forceGc) throw new TypeError("Retention tests require Node.js --expose-gc");
 
@@ -135,7 +135,7 @@ describe("lifetime retention", () => {
     expect(fixture.references.get("application")?.deref()).toBeUndefined();
   });
 
-  it("collects an abandoned active Application without retained handles", async () => {
+  it("collects an abandoned active Host without retained handles", async () => {
     const forceGc = (globalThis as typeof globalThis & { gc?: () => void }).gc;
     if (!forceGc) throw new TypeError("Retention tests require Node.js --expose-gc");
 
@@ -180,7 +180,7 @@ describe("lifetime retention", () => {
     expect(() => fixture.draft.remember(event("lifetime/discarded-contract"))).toThrow("discarded");
   });
 
-  it("does not retain an Application through a removed plugin handle", async () => {
+  it("does not retain an Host through a removed plugin handle", async () => {
     const forceGc = (globalThis as typeof globalThis & { gc?: () => void }).gc;
     if (!forceGc) throw new TypeError("Retention tests require Node.js --expose-gc");
 
@@ -195,7 +195,7 @@ describe("lifetime retention", () => {
     expect(fixture.reference.deref()).toBeUndefined();
   });
 
-  it("does not retain an Application through an abandoned plugin handle", async () => {
+  it("does not retain an Host through an abandoned plugin handle", async () => {
     const forceGc = (globalThis as typeof globalThis & { gc?: () => void }).gc;
     if (!forceGc) throw new TypeError("Retention tests require Node.js --expose-gc");
 
@@ -214,7 +214,7 @@ describe("lifetime retention", () => {
     });
   });
 
-  it("does not retain an Application or failure stack through a removed Group handle", async () => {
+  it("does not retain an Host or failure stack through a removed Group handle", async () => {
     const forceGc = (globalThis as typeof globalThis & { gc?: () => void }).gc;
     if (!forceGc) throw new TypeError("Retention tests require Node.js --expose-gc");
 
@@ -245,7 +245,10 @@ describe("lifetime retention", () => {
   });
 });
 
-function createAndReleaseExtensionStore(registry: ExtensionRegistry, token: Extension<number>) {
+function createAndReleaseExtensionStore(
+  registry: ExtensionRegistry,
+  token: ExtensionPoint<number>,
+) {
   const store: ExtensionStore<number> = registry.get(token);
   const retainedStore = new WeakRef(store);
   const contribution = store.stage("owner:1", "item", 1, () => undefined);
@@ -274,7 +277,7 @@ function releaseTerminalOwnershipTrees() {
     name: "retention.terminal-plugin",
     setup(_context, _config: unknown) {},
   });
-  const record = new PluginInstallation(
+  const record = new InstallationRecord(
     "retention.terminal-plugin:1",
     1,
     pluginGroup,
@@ -298,18 +301,18 @@ function createDiscardedContractDraft() {
 }
 
 async function createRemovedPluginHandle() {
-  const app = createApp();
-  const handle = app.install(definePlugin({ name: "retention.removed-plugin", setup() {} }));
-  await app.start();
+  const host = createHost();
+  const handle = host.install(definePlugin({ name: "retention.removed-plugin", setup() {} }));
+  await host.start();
   await handle.remove();
-  await app.stop();
-  return { handle, reference: new WeakRef(app) };
+  await host.stop();
+  return { handle, reference: new WeakRef(host) };
 }
 
 async function createAbandonedPluginHandle() {
-  const app = createApp();
-  await app.start();
-  const handle = app.install(
+  const host = createHost();
+  await host.start();
+  const handle = host.install(
     definePlugin({
       name: "retention.abandoned-plugin",
       setup() {
@@ -317,14 +320,14 @@ async function createAbandonedPluginHandle() {
       },
     }),
   );
-  await app.stop();
-  return { handle, reference: new WeakRef(app) };
+  await host.stop();
+  return { handle, reference: new WeakRef(host) };
 }
 
 async function createRemovedGroupHandle() {
-  const app = createApp();
-  await app.start();
-  const group = app.group("retained-terminal", (plugins) => {
+  const host = createHost();
+  await host.start();
+  const group = host.group("retained-terminal", (plugins) => {
     plugins.install(
       definePlugin({
         name: "retention.failed-group-plugin",
@@ -336,15 +339,15 @@ async function createRemovedGroupHandle() {
   });
   await group.ready().catch(() => undefined);
   await group.remove();
-  await app.stop();
-  return { group, reference: new WeakRef(app) };
+  await host.stop();
+  return { group, reference: new WeakRef(host) };
 }
 
 async function createRevokedGroupHandle() {
-  const app = createApp();
-  let group: PluginGroup | undefined;
+  const host = createHost();
+  let group: Group | undefined;
   try {
-    app.group("revoked-configuration", (current) => {
+    host.group("revoked-configuration", (current) => {
       group = current;
       throw new Error("Group configuration failed");
     });
@@ -352,15 +355,15 @@ async function createRevokedGroupHandle() {
     // The captured handle must be terminal even when configuration throws.
   }
   if (!group) throw new TypeError("Retention fixture did not capture a Group handle");
-  await app.stop();
-  return { group, reference: new WeakRef(app) };
+  await host.stop();
+  return { group, reference: new WeakRef(host) };
 }
 
 async function createRetainedTerminalResourceHandle(
   retainedKind: (typeof RETAINED_HANDLE_KINDS)[number],
 ) {
   const NOTICE = event<void>("lifetime/retained-handle-notice");
-  const ITEMS = extension<object>("lifetime/retained-handle-items");
+  const ITEMS = extensionPoint<object>("lifetime/retained-handle-items");
   const handles = new Map<string, object>();
   const references = new Map<string, WeakRef<object>>();
   const payload = (name: string) => {
@@ -413,10 +416,10 @@ async function createRetainedTerminalResourceHandle(
       handles.set("extension-view", ctx.items);
     },
   });
-  const app = createApp();
-  references.set("application", new WeakRef(app));
-  app.install(plugin);
-  await app.start();
+  const host = createHost();
+  references.set("application", new WeakRef(host));
+  host.install(plugin);
+  await host.start();
 
   const task = handles.get("task");
   if (!task || !("result" in task) || !(task.result instanceof Promise)) {
@@ -432,7 +435,7 @@ async function createRetainedTerminalResourceHandle(
       }
     }
   }
-  await app.stop();
+  await host.stop();
   for (const name of [...handles.keys()]) {
     if (name !== retainedKind) handles.delete(name);
   }
@@ -447,37 +450,39 @@ async function createReleasedChildFromAbandonedApplication() {
       child = ctx.lifetime("released-child");
     },
   });
-  const app = createApp();
-  const references = new Map<string, WeakRef<object>>([["application", new WeakRef(app)]]);
-  app.install(plugin);
-  await app.start();
+  const host = createHost();
+  const references = new Map<string, WeakRef<object>>([["application", new WeakRef(host)]]);
+  host.install(plugin);
+  await host.start();
   if (!child) throw new TypeError("Released child fixture did not initialize");
   await child.dispose();
   return { child, references };
 }
 
 async function createHistoricalLifetimeDiagnostics() {
-  const app = createApp();
-  const handle = app.install(definePlugin({ name: "lifetime.historical-diagnostics", setup() {} }));
-  const references = new Map<string, WeakRef<object>>([["application", new WeakRef(app)]]);
-  await app.start();
-  const diagnostics = app.diagnostics.get().plugins.get(handle.id)?.lifetime;
+  const host = createHost();
+  const handle = host.install(
+    definePlugin({ name: "lifetime.historical-diagnostics", setup() {} }),
+  );
+  const references = new Map<string, WeakRef<object>>([["application", new WeakRef(host)]]);
+  await host.start();
+  const diagnostics = host.diagnostics.get().installations.get(handle.id)?.lifetime;
   if (!diagnostics) throw new TypeError("Lifetime diagnostics were not published");
-  await app.stop();
+  await host.stop();
   return { diagnostics, references };
 }
 
 async function createAbandonedActiveApplication() {
-  const app = createApp();
-  app.install(definePlugin({ name: "lifetime.abandoned-active", setup() {} }));
-  const references = new Map<string, WeakRef<object>>([["application", new WeakRef(app)]]);
-  await app.start();
+  const host = createHost();
+  host.install(definePlugin({ name: "lifetime.abandoned-active", setup() {} }));
+  const references = new Map<string, WeakRef<object>>([["application", new WeakRef(host)]]);
+  await host.start();
   return references;
 }
 
 async function startRetentionFixture() {
   const NOTICE = event<void>("lifetime/retention-notice");
-  const ITEMS = extension<number>("lifetime/retention-items");
+  const ITEMS = extensionPoint<number>("lifetime/retention-items");
   const references = createReferenceGroups();
   let releaseResources: (() => Promise<void>) | undefined;
   const plugin = definePlugin({
@@ -487,18 +492,18 @@ async function startRetentionFixture() {
       releaseResources = () => createAndReleaseResources(ctx, references, NOTICE, ITEMS);
     },
   });
-  const app = createApp();
-  const handle = app.install(plugin);
-  await app.start();
+  const host = createHost();
+  const handle = host.install(plugin);
+  await host.start();
 
-  const lifetime = app.diagnostics.get().plugins.get(handle.id)?.lifetime;
+  const lifetime = host.diagnostics.get().installations.get(handle.id)?.lifetime;
   if (!lifetime) {
-    await app.stop();
+    await host.stop();
     throw new TypeError("Retention fixture did not publish lifetime diagnostics");
   }
 
   return {
-    app,
+    host,
     installationId: handle.id,
     lifetime,
     references,
@@ -524,10 +529,10 @@ function createReferenceGroups() {
 }
 
 async function createAndReleaseResources(
-  ctx: PluginContext<{ readonly items: Extension<number> }>,
+  ctx: PluginContext<{ readonly items: ExtensionPoint<number> }>,
   references: Map<ResourceKind, WeakRef<object>[]>,
   notice: Event<void>,
-  items: Extension<number>,
+  items: ExtensionPoint<number>,
 ) {
   const pending: Promise<unknown>[] = [];
   for (let index = 0; index < RESOURCE_COUNT; index++) {

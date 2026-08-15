@@ -81,7 +81,7 @@ type GroupNodeState =
 
 /**
  * A Group is an ownership tree over installations, never a capability scope.
- * Service resolution and Extension/Event visibility remain application-wide.
+ * Service resolution and ExtensionPoint/Event visibility remain application-wide.
  */
 export class GroupNode {
   readonly #children = new Map<string, GroupNode>();

@@ -1,18 +1,18 @@
 import { DougongError, normalizeFailure } from "./errors";
 import type { Lifetime } from "./lifetime";
-import type { PluginDefinition, Provisions, Requirements } from "./plugin";
+import type { Plugin, Provisions, Requirements } from "./plugin";
 import type { GroupNode } from "./group";
 
 export type InstallationStatus = "pending" | "active" | "stopping" | "failed" | "removed";
 
-export type AnyPlugin = PluginDefinition<unknown, Requirements, Provisions, unknown>;
+export type AnyPlugin = Plugin<unknown, Requirements, Provisions, unknown>;
 
 export interface InstallationSpec {
   readonly plugin: AnyPlugin;
   readonly config: unknown;
 }
 
-export interface PluginRuntime {
+export interface InstallationRuntime {
   readonly plugin: AnyPlugin;
   readonly config: unknown;
   readonly lifetime: Lifetime;
@@ -28,7 +28,7 @@ interface InstallationAttachment {
   notifyChanged: (() => void) | undefined;
 }
 
-interface TerminalPluginFailure {
+interface TerminalFailure {
   readonly name: string;
   readonly message: string;
   readonly code?: string;
@@ -36,16 +36,16 @@ interface TerminalPluginFailure {
 
 type InstallationFailure =
   | { readonly retention: "live"; readonly error: Error }
-  | { readonly retention: "summary"; readonly summary: TerminalPluginFailure };
+  | { readonly retention: "summary"; readonly summary: TerminalFailure };
 
 type InstallationState =
   | { readonly phase: "pending" }
   | {
       readonly phase: "active";
-      readonly runtime: PluginRuntime;
+      readonly runtime: InstallationRuntime;
       readonly readiness: "unsettled" | "settled";
     }
-  | { readonly phase: "stopping"; readonly runtime: PluginRuntime }
+  | { readonly phase: "stopping"; readonly runtime: InstallationRuntime }
   | {
       readonly phase: "failed";
       readonly failure: InstallationFailure;
@@ -58,7 +58,7 @@ type InstallationState =
  * change. State transitions and ready waiters live here so orchestration code
  * cannot create a status that disagrees with the owned runtime.
  */
-export class PluginInstallation {
+export class InstallationRecord {
   #state: InstallationState = { phase: "pending" };
   #pendingReadiness: { readonly attempt: object; readonly barrier: Promise<void> } | undefined;
   #attachment: InstallationAttachment | undefined;
@@ -82,7 +82,8 @@ export class PluginInstallation {
 
   attach(notifyChanged: () => void) {
     const attachment = this.#requireAttachment();
-    if (attachment.notifyChanged) throw new TypeError(`Plugin '${this.id}' is already attached`);
+    if (attachment.notifyChanged)
+      throw new TypeError(`Installation '${this.id}' is already attached`);
     attachment.notifyChanged = notifyChanged;
   }
 
@@ -103,7 +104,7 @@ export class PluginInstallation {
         : restoreFailure(state.failure.summary);
     }
     if (state.phase === "removed") {
-      return new DougongError("PLUGIN_REMOVED", `Plugin '${this.id}' has been removed`);
+      return new DougongError("INSTALLATION_REMOVED", `Installation '${this.id}' has been removed`);
     }
     return undefined;
   }
@@ -152,7 +153,10 @@ export class PluginInstallation {
       if (state.phase === "failed" || state.phase === "removed") {
         return Promise.reject(
           this.error ??
-            new DougongError("PLUGIN_UNAVAILABLE", `Plugin '${this.id}' is ${state.phase}`),
+            new DougongError(
+              "INSTALLATION_UNAVAILABLE",
+              `Installation '${this.id}' is ${state.phase}`,
+            ),
         );
       }
     }
@@ -162,7 +166,7 @@ export class PluginInstallation {
     });
   }
 
-  activate(runtime: PluginRuntime) {
+  activate(runtime: InstallationRuntime) {
     this.#transition({ phase: "active", runtime, readiness: "unsettled" });
   }
 
@@ -178,7 +182,7 @@ export class PluginInstallation {
     } else {
       const error =
         this.error ??
-        new DougongError("PLUGIN_UNAVAILABLE", `Plugin '${this.id}' is ${state.phase}`);
+        new DougongError("INSTALLATION_UNAVAILABLE", `Installation '${this.id}' is ${state.phase}`);
       for (const waiter of this.#readyWaiters) waiter.reject(error);
     }
     this.#readyWaiters.clear();
@@ -236,26 +240,26 @@ export class PluginInstallation {
   #normalizeFailure(error: unknown) {
     return normalizeFailure(
       error,
-      "PLUGIN_UNAVAILABLE",
-      `Plugin '${this.id}' failed with a non-Error value`,
+      "INSTALLATION_UNAVAILABLE",
+      `Installation '${this.id}' failed with a non-Error value`,
     );
   }
 
   #requireAttachment() {
     const attachment = this.#attachment;
-    if (!attachment) throw new TypeError(`Plugin '${this.id}' is no longer installed`);
+    if (!attachment) throw new TypeError(`Installation '${this.id}' is no longer installed`);
     return attachment;
   }
 }
 
-function snapshotFailure(error: Error): TerminalPluginFailure {
+function snapshotFailure(error: Error): TerminalFailure {
   if (error instanceof DougongError) {
     return { name: error.name, message: error.message, code: error.code };
   }
   return { name: error.name, message: error.message };
 }
 
-function restoreFailure(failure: TerminalPluginFailure): Error {
+function restoreFailure(failure: TerminalFailure): Error {
   const error =
     failure.code === undefined
       ? new Error(failure.message)

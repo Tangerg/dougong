@@ -1,6 +1,22 @@
 # 错误码
 
-Dougong 的所有结构化错误都带一个稳定的 `code` 字符串。宿主应该 `switch (error.code)` 分流，而不是匹配消息文本——消息会变，`code` 不会。
+Dougong 的所有结构化错误都带一个稳定的 `code` 字符串。应用代码应该 `switch (error.code)` 分流，而不是匹配消息文本——消息会变，`code` 不会。
+
+## 命名规则
+
+错误码指向**哪个对象的不变量被违反**，而不是笼统地说「插件出错了」：
+
+| 前缀 | 违反不变量的对象 | 属于 |
+| --- | --- | --- |
+| `SERVICE_*` / `CONTRACT_*` / `CONFIG_*` | Contract 身份、依赖图、配置声明 | Core |
+| `INSTALLATION_*` | 一次已存在的安装 | Core |
+| `GROUP_*` | 一棵安装所有权子树 | Core |
+| `PLUGIN_*` | Plugin 声明本身，或 Manifest 声明的插件依赖关系 | Platform |
+| `ARTIFACT_*` | 一份外部制品内部不自洽 | Platform |
+| `REGISTRATION_*` | 一条已存在的注册记录 | Platform |
+| `MANIFEST_*` / `MODULE_*` / `API_*` / `PERMISSION_*` / `PLATFORM_*` | 信任边界与加载边界 | Platform |
+
+所以看到 `INSTALLATION_REMOVED` 就知道是 Core 的一次安装，看到 `REGISTRATION_REMOVED` 就知道是 Platform 的一条注册——不用点进实现确认层级。
 
 ## 错误类型
 
@@ -55,16 +71,16 @@ class PermissionDeniedError extends PlatformError {  // code: "PERMISSION_DENIED
 | Code | 触发条件 |
 | --- | --- |
 | `SERVICE_NOT_RETURNED` | `provides` 声明了某个 key，但 `setup` 的返回值里没有 |
-| `SERVICE_UNAVAILABLE` | `app.get()` 在非 `active` 状态调用；或依赖的 Service 所属插件未处于活动状态 |
-| `PLUGIN_UNAVAILABLE` | 插件处于 `failed` 状态；或 setup 抛出了**非 Error** 的值（原值在 `cause` 里）；或在未提交的 draft 上操作 |
-| `PLUGIN_REMOVED` | 在已移除的插件 Handle 上操作 |
-| `PLUGIN_IDENTITY` | `update()` 试图更换插件名字。更新可以换实现和配置，不能换身份 |
+| `SERVICE_UNAVAILABLE` | `host.get()` 在非 `active` 状态调用；或依赖的 Service 所属安装未处于活动状态 |
+| `INSTALLATION_UNAVAILABLE` | 安装处于 `failed` 状态；或 setup 抛出了**非 Error** 的值（原值在 `cause` 里）；或在未提交的 draft 上操作 |
+| `INSTALLATION_REMOVED` | 在已移除的 Installation 上操作 |
+| `INSTALLATION_IDENTITY` | `update()` 试图更换 Plugin 名称。更新可以换实现和配置，不能换身份 |
 
 ### Group
 
 | Code | 触发条件 |
 | --- | --- |
-| `GROUP_REMOVED` | 在已移除的 Group Handle 上操作 |
+| `GROUP_REMOVED` | 在已移除的 Group 上操作 |
 | `GROUP_UNAVAILABLE` | Group 尚未成功建立；或 Group 操作失败时抛出的是非 Error 值 |
 
 ## Platform（`@dougongjs/platform`）
@@ -76,28 +92,41 @@ class PermissionDeniedError extends PlatformError {  // code: "PERMISSION_DENIED
 | Code | 触发条件 |
 | --- | --- |
 | `MANIFEST_INVALID` | Manifest 形状非法，或声明了重复的激活事件 / 权限 / 依赖 |
-| `API_INCOMPATIBLE` | 插件要求的 `apiVersion` 不满足宿主版本 |
-| `PERMISSION_DENIED` | 授权器拒绝。`error.denied` 是被拒的权限列表 |
-| `PLUGIN_DUPLICATE` | 同名插件重复注册 |
+| `API_INCOMPATIBLE` | 插件要求的 `apiVersion` 不满足应用版本 |
+| `PERMISSION_DENIED` | Authorizer 拒绝。`error.denied` 是被拒的权限列表 |
+| `PLUGIN_DUPLICATE` | 同一个 Plugin 名称被两份 Artifact 声明 |
 
-### 依赖解析
+### Manifest 依赖解析
+
+这几条描述的是 Manifest 里**声明的插件依赖关系**，所以仍属于 `PLUGIN_*`。
 
 | Code | 触发条件 |
 | --- | --- |
-| `PLUGIN_DEPENDENCY_MISSING` | manifest 依赖的插件未注册 |
+| `PLUGIN_DEPENDENCY_MISSING` | Manifest 依赖的插件未注册 |
 | `PLUGIN_DEPENDENCY_INCOMPATIBLE` | 依赖已注册但版本范围不满足 |
 | `PLUGIN_DEPENDENCY_INACTIVE` | 依赖存在但未能激活 |
-| `PLUGIN_CYCLE` | manifest 依赖成环。消息带真实环路径 |
+| `PLUGIN_CYCLE` | Manifest 依赖成环。消息带真实环路径 |
 
 ### 加载与激活
 
 | Code | 触发条件 |
 | --- | --- |
 | `MODULE_LOAD_FAILED` | Loader 抛异常。原始错误在 `cause` 里 |
-| `MODULE_INVALID` | 模块加载成功但没有导出合法的插件定义 |
-| `PLUGIN_BUSY` | 该插件有一笔变更正在进行中 |
-| `PLUGIN_IDENTITY` | 更新时 manifest 名字和原插件不一致；或 manifest 名字和模块导出的定义名字不匹配 |
+| `MODULE_INVALID` | 模块加载成功但没有导出合法的 Plugin |
+| `ARTIFACT_IDENTITY` | 同一份 Artifact 内部不自洽：Manifest 名称与 placeholder 或加载出的 Plugin 名称不一致 |
+| `REGISTRATION_BUSY` | 该 Registration 有一笔变更正在进行中 |
+| `REGISTRATION_UNAVAILABLE` | Registration 不可用，或在未提交的注册上操作 |
+| `REGISTRATION_REMOVED` | 在已移除的 Registration 上操作 |
+| `REGISTRATION_IDENTITY` | 更新 Registration 时，新 Artifact 的 Manifest 名称与原名称不同 |
 | `PLATFORM_UNAVAILABLE` | Platform 已释放，或处于不允许该操作的状态 |
+
+::: tip 三种 IDENTITY 的区别
+它们描述的是三个不同对象的身份不变量：
+
+- **`INSTALLATION_IDENTITY`** —— 已存在的 Installation 想换 Plugin 名称（Core）
+- **`REGISTRATION_IDENTITY`** —— 已存在的 Registration 想换 Manifest 名称（Platform）
+- **`ARTIFACT_IDENTITY`** —— 一份 Artifact 自身的 Manifest 和它加载出的 Plugin 名字对不上（Platform，此时可能还不存在 Registration）
+:::
 
 ## 怎么处理
 
@@ -105,7 +134,7 @@ class PermissionDeniedError extends PlatformError {  // code: "PERMISSION_DENIED
 
 ```ts
 try {
-  await handle.ready()
+  await installation.ready()
 } catch (error) {
   if (!(error instanceof DougongError)) throw error
 
@@ -116,7 +145,7 @@ try {
     case "SERVICE_MISSING":
       suggestInstallDependency(error.message)
       break
-    case "PLUGIN_UNAVAILABLE":
+    case "INSTALLATION_UNAVAILABLE":
       offerRetry()
       break
     default:
@@ -129,7 +158,7 @@ try {
 
 ```ts
 try {
-  await app.stop()
+  await host.stop()
 } catch (error) {
   if (error instanceof AggregateError) {
     for (const cause of error.errors) report(cause)
@@ -139,10 +168,10 @@ try {
 
 ### 接收后台错误
 
-后台任务、监听器和诊断订阅者抛出的异常不会中断运行时命令，它们通过 Application 的上报通道送出：
+后台任务、监听器和诊断订阅者抛出的异常不会中断运行时命令，它们通过 Host 的上报通道送出：
 
 ```ts
-const app = createApp({
+const host = createHost({
   name: "app",
   onError: (error) => reportToSentry(error),
   logger: myLogger,          // onError 未提供或自身抛错时的兜底
@@ -153,11 +182,11 @@ const app = createApp({
 
 ### 终态失败的信息量
 
-插件脱离 Application 之后（被移除或丢弃），它的 Handle 只保留错误的 `name` / `message` / `code` 纯数据摘要，读取时重建一个 Error。
+Installation 脱离 Host 之后（被移除或丢弃），它只保留错误的 `name` / `message` / `code` 纯数据摘要，读取时重建一个 Error。
 
-原因是 JavaScript 的 `Error.stack` 可能携带创建错误时的整个编排调用帧，让一个历史 Handle 反向保活整个 Application。
+原因是 JavaScript 的 `Error.stack` 可能携带创建错误时的整个编排调用帧，让一个历史对象反向保活整个 Host。
 
-**这不影响正常路径**：等待 `ready()` 的调用方总是收到原始 `Error`；仍属于活动 Application 的失败实例也保留原始错误。只有「实例已脱离、且调用方没 await 过 ready()」的事后读取会拿到摘要——此时 `ConfigValidationError.issues` 这类子类附加数据不再可用。
+**这不影响正常路径**：等待 `ready()` 的调用方总是收到原始 `Error`；仍属于活动 Host 的失败实例也保留原始错误。只有「实例已脱离、且调用方没 await 过 ready()」的事后读取会拿到摘要——此时 `ConfigValidationError.issues` 这类子类附加数据不再可用。
 
 ## 相关
 

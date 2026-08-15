@@ -25,7 +25,7 @@ npm install dougong
 ```
 
 ```ts
-import { createApp, definePlugin, service } from "dougong"
+import { createHost, definePlugin, service } from "dougong"
 
 const CLOCK = service<Clock>("app/clock")
 
@@ -43,10 +43,10 @@ const greeter = definePlugin({
   },
 })
 
-const app = createApp({ name: "hello" })
-app.install(greeter)                 // install order does not decide start order
-app.install(clock)
-await app.start()                    // topology derived from declarations, layers start concurrently
+const host = createHost({ name: "hello" })
+host.install(greeter)                 // install order does not decide start order
+host.install(clock)
+await host.start()                    // topology derived from declarations, layers start concurrently
 ```
 
 ## Why it looks like this
@@ -60,25 +60,25 @@ await app.start()                    // topology derived from declarations, laye
 | Install a plugin | `install()` | | Listen / emit an Event | `on()` / `emit()` |
 | Atomic plan change | `change()` | | Register a resource | `cleanup()` |
 | Publish a Service | `provides` + `setup` return | | Child lifetime / task | `lifetime(label)` / `spawn()` |
-| Contribute to an Extension | `contribute()` | | Read / subscribe to a live value | `get()` / `subscribe()` |
+| Contribute to an ExtensionPoint | `contribute()` | | Read / subscribe to a live value | `get()` / `subscribe()` |
 | Update / remove an installation | `update()` / `remove()` | | Release a resource early | `dispose()` |
 
 **Transactions expose only committed state.** Contract kinds, listeners and contributions made during setup stay staged until the whole layer validates. A failed change rolls back, and fails closed when it cannot roll back reliably — never a half-built runtime.
 
-**Types are the constraint.** Using an undeclared dependency, reading an Extension as a Service, declaring `provides` without returning it — all compile errors.
+**Types are the constraint.** Using an undeclared dependency, reading an ExtensionPoint as a Service, declaring `provides` without returning it — all compile errors.
 
 ## Six atoms
 
 ```text
 Service      a stable one-to-one capability, fixed per instance;
              a provider change rebuilds consumers
-Extension    an open contribution set that adds and removes live,
+ExtensionPoint    an open contribution set that adds and removes live,
              notifying subscribers
 Event        a transient fact retaining no state, with one dispatch semantic
 Lifetime     structured ownership of listeners, contributions, tasks and
              resources; terminal items detach automatically
 Plugin       one setup producing a set of capabilities
-Application  dependency graph, transactions and instance orchestration
+Host  dependency graph, transactions and instance orchestration
 ```
 
 A signal is not a fifth capability. `@dougongjs/reactive` provides `signal()` / `computed()` / `batch()` and an `observe()` built on the public Lifetime protocol; Core neither depends on it nor offers implicit effects.
@@ -129,7 +129,7 @@ Chapters 11 and 12 are roughly 200 lines each and implement, using only the publ
 
 ## Requirements
 
-Node.js ≥ 22, or an equivalent ES2024 host (`Promise.withResolvers()` is required).
+Node.js ≥ 22, or an equivalent ES2024 runtime (`Promise.withResolvers()` is required).
 
 TypeScript consumers need this in `tsconfig.json`:
 

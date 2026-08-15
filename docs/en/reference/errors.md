@@ -1,6 +1,22 @@
 # Error codes
 
-Every structured error Dougong throws carries a stable `code` string. Hosts should branch on `error.code` rather than matching message text — messages change, codes do not.
+Every structured error Dougong throws carries a stable `code` string. Application code should branch on `error.code` rather than matching message text — messages change, codes do not.
+
+## The naming rule
+
+A code names **which object's invariant was violated**, instead of vaguely saying "a plugin failed":
+
+| Prefix | The object whose invariant broke | Package |
+| --- | --- | --- |
+| `SERVICE_*` / `CONTRACT_*` / `CONFIG_*` | Contract identity, the dependency graph, a config declaration | Core |
+| `INSTALLATION_*` | One existing installation | Core |
+| `GROUP_*` | One installation-ownership subtree | Core |
+| `PLUGIN_*` | The Plugin declaration itself, or the plugin dependencies a manifest declares | Platform |
+| `ARTIFACT_*` | One external artifact that disagrees with itself | Platform |
+| `REGISTRATION_*` | One existing registration record | Platform |
+| `MANIFEST_*` / `MODULE_*` / `API_*` / `PERMISSION_*` / `PLATFORM_*` | The trust and loading boundaries | Platform |
+
+So `INSTALLATION_REMOVED` is a Core installation and `REGISTRATION_REMOVED` is a Platform registration — no need to open the implementation to learn which layer you are in.
 
 ## Error types
 
@@ -21,51 +37,51 @@ class PermissionDeniedError extends PlatformError {  // code: "PERMISSION_DENIED
 }
 ```
 
-Multiple failures aggregate into a standard `AggregateError`, with every cause retained in `errors`.
+Several failures are aggregated into a standard `AggregateError`, with every cause preserved in `errors`.
 
-::: tip TypeError vs Error
-Besides coded errors, Dougong uses two native types:
+::: tip TypeError versus Error
+Beyond coded errors, Dougong uses two native types:
 
-- **`TypeError`** — the caller passed something wrong (not a function, not a Contract, a key conflict, an operation on a released object)
-- **`Error`** — an internal invariant was violated; that is a framework bug you should not hit in normal use
+- **`TypeError`** — the caller passed the wrong thing (not a function, not a Contract, a key conflict, an operation on a released object)
+- **`Error`** — an internal invariant broke; that is a framework bug you should never reach in normal use
 
 So you can branch by constructor: a `DougongError` is an expected runtime failure, a `TypeError` is a usage problem.
 :::
 
 ## Core (`@dougongjs/core`)
 
-### Graph time
+### Graph construction
 
-These are thrown **before any plugin starts**. The runtime graph has not moved.
+These are thrown **before any plugin starts**. The running graph has not moved.
 
-| Code | Condition |
+| Code | Trigger |
 | --- | --- |
-| `SERVICE_CYCLE` | A dependency cycle. The message carries the real path: `app.a:1 -> app.b:2 -> app.a:1`. A plugin requiring a Service it provides itself also counts |
+| `SERVICE_CYCLE` | A dependency cycle. The message carries the real path: `app.a:1 -> app.b:2 -> app.a:1`. A plugin requiring a Service it provides counts too |
 | `SERVICE_CONFLICT` | Two plugins provide the same Service |
-| `SERVICE_MISSING` | A required Service has no provider (`optional()` declarations excluded) |
-| `CONTRACT_CONFLICT` | One Contract ID used as two kinds |
-| `CONFIG_INVALID` | Config failed its Standard Schema. `error.issues` lists the problems per field |
+| `SERVICE_MISSING` | A required Service has no provider (an `optional()` declaration does not count) |
+| `CONTRACT_CONFLICT` | The same Contract ID is used as two different kinds |
+| `CONFIG_INVALID` | Config failed Standard Schema validation. `error.issues` lists the problems per field |
 
 ::: warning Validation precedes shutdown
-Every affected plugin's config is validated before any running instance is stopped. A misspelled field never leaves the application halfway down.
+Every affected plugin's config is validated in full before any running instance is stopped. One misspelled field cannot leave the application halfway down.
 :::
 
 ### Startup and runtime
 
-| Code | Condition |
+| Code | Trigger |
 | --- | --- |
-| `SERVICE_NOT_RETURNED` | `provides` declares a key that `setup`'s return value omits |
-| `SERVICE_UNAVAILABLE` | `app.get()` called outside `active`; or a required Service's owning plugin is not active |
-| `PLUGIN_UNAVAILABLE` | The plugin is `failed`; or setup threw a **non-Error** value (kept in `cause`); or an operation on an uncommitted draft |
-| `PLUGIN_REMOVED` | An operation on a removed plugin handle |
-| `PLUGIN_IDENTITY` | `update()` attempted to change the plugin name. An update may swap implementation and config, never identity |
+| `SERVICE_NOT_RETURNED` | `provides` declared a key that the `setup` return value does not contain |
+| `SERVICE_UNAVAILABLE` | `host.get()` was called outside `active`; or the depended-on Service's installation is not active |
+| `INSTALLATION_UNAVAILABLE` | The installation is `failed`; or setup threw a **non-Error** value (the original is in `cause`); or an operation ran on an uncommitted draft |
+| `INSTALLATION_REMOVED` | An operation on a removed Installation |
+| `INSTALLATION_IDENTITY` | `update()` tried to change the Plugin name. An update may swap implementation and config, never identity |
 
 ### Group
 
-| Code | Condition |
+| Code | Trigger |
 | --- | --- |
-| `GROUP_REMOVED` | An operation on a removed Group handle |
-| `GROUP_UNAVAILABLE` | The Group was never successfully established; or a Group operation failed with a non-Error value |
+| `GROUP_REMOVED` | An operation on a removed Group |
+| `GROUP_UNAVAILABLE` | The Group was never established; or a Group operation failed with a non-Error value |
 
 ## Platform (`@dougongjs/platform`)
 
@@ -73,39 +89,52 @@ Every affected plugin's config is validated before any running instance is stopp
 
 Thrown **before** any external module code is loaded.
 
-| Code | Condition |
+| Code | Trigger |
 | --- | --- |
-| `MANIFEST_INVALID` | Malformed manifest, or duplicate activation events / permissions / dependencies |
-| `API_INCOMPATIBLE` | The plugin's required `apiVersion` does not match the host |
-| `PERMISSION_DENIED` | The authorizer refused. `error.denied` lists the refused permissions |
-| `PLUGIN_DUPLICATE` | A plugin with that name is already registered |
+| `MANIFEST_INVALID` | The manifest shape is illegal, or it declares duplicate activation events / permissions / dependencies |
+| `API_INCOMPATIBLE` | The plugin's required `apiVersion` does not satisfy the application version |
+| `PERMISSION_DENIED` | The Authorizer refused. `error.denied` lists the refused permissions |
+| `PLUGIN_DUPLICATE` | Two artifacts declare the same Plugin name |
 
-### Dependency resolution
+### Manifest dependency resolution
 
-| Code | Condition |
+These describe the **plugin dependencies a manifest declares**, so they stay `PLUGIN_*`.
+
+| Code | Trigger |
 | --- | --- |
 | `PLUGIN_DEPENDENCY_MISSING` | A manifest dependency is not registered |
-| `PLUGIN_DEPENDENCY_INCOMPATIBLE` | Registered but outside the version range |
-| `PLUGIN_DEPENDENCY_INACTIVE` | Present but failed to activate |
-| `PLUGIN_CYCLE` | Manifest dependencies form a cycle; the message carries the real path |
+| `PLUGIN_DEPENDENCY_INCOMPATIBLE` | The dependency is registered but outside the version range |
+| `PLUGIN_DEPENDENCY_INACTIVE` | The dependency exists but could not activate |
+| `PLUGIN_CYCLE` | Manifest dependencies form a cycle. The message carries the real path |
 
 ### Loading and activation
 
-| Code | Condition |
+| Code | Trigger |
 | --- | --- |
 | `MODULE_LOAD_FAILED` | The loader threw. The original error is in `cause` |
-| `MODULE_INVALID` | The module loaded but exports no valid plugin definition |
-| `PLUGIN_BUSY` | A change is already in flight for that plugin |
-| `PLUGIN_IDENTITY` | An update's manifest name differs from the existing plugin's; or the manifest name does not match the definition the module exports |
+| `MODULE_INVALID` | The module loaded but exports no valid Plugin |
+| `ARTIFACT_IDENTITY` | One artifact disagrees with itself: the manifest name differs from the placeholder's or the loaded Plugin's name |
+| `REGISTRATION_BUSY` | That Registration already has a change in flight |
+| `REGISTRATION_UNAVAILABLE` | The Registration is unavailable, or an operation ran on an uncommitted registration |
+| `REGISTRATION_REMOVED` | An operation on a removed Registration |
+| `REGISTRATION_IDENTITY` | An update's new artifact carries a different manifest name |
 | `PLATFORM_UNAVAILABLE` | The Platform is disposed, or in a state that forbids the operation |
+
+::: tip The three IDENTITY codes
+They describe identity invariants on three different objects:
+
+- **`INSTALLATION_IDENTITY`** — an existing Installation tried to change its Plugin name (Core)
+- **`REGISTRATION_IDENTITY`** — an existing Registration tried to change its manifest name (Platform)
+- **`ARTIFACT_IDENTITY`** — one artifact's manifest disagrees with the Plugin it loads (Platform, where a Registration may not exist yet)
+:::
 
 ## Handling them
 
-### Branch on code
+### Branch on the code
 
 ```ts
 try {
-  await handle.ready()
+  await installation.ready()
 } catch (error) {
   if (!(error instanceof DougongError)) throw error
 
@@ -116,7 +145,7 @@ try {
     case "SERVICE_MISSING":
       suggestInstallDependency(error.message)
       break
-    case "PLUGIN_UNAVAILABLE":
+    case "INSTALLATION_UNAVAILABLE":
       offerRetry()
       break
     default:
@@ -129,7 +158,7 @@ try {
 
 ```ts
 try {
-  await app.stop()
+  await host.stop()
 } catch (error) {
   if (error instanceof AggregateError) {
     for (const cause of error.errors) report(cause)
@@ -139,28 +168,28 @@ try {
 
 ### Receive background errors
 
-Exceptions from background tasks, listeners and diagnostic subscribers never interrupt the runtime command that is executing. They travel through the Application's reporting channel:
+Exceptions from background tasks, listeners and diagnostic subscribers never interrupt a runtime command; they arrive through the Host's reporting channel:
 
 ```ts
-const app = createApp({
+const host = createHost({
   name: "app",
   onError: (error) => reportToSentry(error),
   logger: myLogger,          // fallback when onError is absent or itself throws
 })
 ```
 
-The reporting channel is fail-safe: if `onError` throws it falls back to the logger, and if the logger throws it goes silent — **error observation must never mutate the runtime command being observed.**
+The channel is fail-safe: a throwing `onError` falls back to the logger, and a throwing logger falls silent — **observing an error never changes the runtime command being observed**.
 
 ### How much a terminal failure retains
 
-Once an installation detaches from the Application (removed or discarded), its handle keeps only a `name` / `message` / `code` data summary and reconstructs an `Error` on read.
+Once an Installation detaches from its Host (removed or discarded), it keeps only a plain-data summary of the error — `name` / `message` / `code` — and rebuilds an Error when read.
 
-The reason is that a JavaScript `Error.stack` can carry the entire orchestration frame that created it, letting a historical handle keep the whole Application alive.
+The reason is that JavaScript's `Error.stack` can carry the whole orchestration call frame from where the error was created, letting one historical object keep an entire Host alive.
 
-**This does not affect the normal path**: callers awaiting `ready()` always receive the original `Error`, and failed instances still belonging to a live Application keep the original too. Only a read made after the instance has detached, by a caller that never awaited `ready()`, sees the summary — at which point subclass data such as `ConfigValidationError.issues` is no longer available.
+**The normal path is unaffected**: a caller awaiting `ready()` always receives the original `Error`, and a failed instance still attached to a live Host keeps its original error too. Only an after-the-fact read of a detached instance whose caller never awaited `ready()` gets the summary — and there subclass data such as `ConfigValidationError.issues` is no longer available.
 
 ## Related
 
-- [Core API specification · error conventions](./core-api.md)
-- [Platform specification · stable error codes](./platform.md)
+- [Core API specification · Error conventions](./core-api.md)
+- [Platform specification · Stable error codes](./platform.md)
 - [Transactions and change](../guide/transactions.md) — the three-level failure model

@@ -23,13 +23,13 @@ const plugin = definePlugin({
 
 ```ts
 const DATABASE = service<Database>("app/database")
-const ROUTES = extension<Route>("http/routes")
+const ROUTES = extensionPoint<Route>("http/routes")
 
 definePlugin({
   name: "app.users",
   requires: {
     db: DATABASE,      // Service → ctx.db 是 Database
-    routes: ROUTES,    // Extension → ctx.routes 是 ExtensionView<Route>
+    routes: ROUTES,    // ExtensionPoint → ctx.routes 是 ContributionView<Route>
   },
   setup(ctx) {
     ctx.db.query("select 1")
@@ -67,7 +67,7 @@ definePlugin({
 
 没有提供者时 `ctx.tracer` 是 `undefined`，插件照常启动。提供者后来出现或消失时，这个插件会被**重建**——所以 `ctx.tracer` 在一次实例期内不会变。
 
-`optional()` 只接受 Service。Extension 不需要它：空 Map 本身就是合法值。
+`optional()` 只接受 Service。ExtensionPoint 不需要它：空 Map 本身就是合法值。
 
 ## 提供能力
 
@@ -96,7 +96,7 @@ setup() {},        // ❌ Type '() => void' is not assignable to
 
 同一个 Contract 被两个插件 `provides` 会在构图时抛 `SERVICE_CONFLICT`——在任何插件启动之前。
 
-## 贡献到 Extension
+## 贡献到 ExtensionPoint
 
 ```ts
 definePlugin({
@@ -134,7 +134,7 @@ c.dispose()           // 提前撤回
 import { z } from "zod"
 
 const schema = z.object({
-  host: z.string(),
+  hostname: z.string(),
   port: z.number().default(5432),
 })
 
@@ -144,14 +144,14 @@ const db = definePlugin({
   provides: { db: DATABASE },
   setup(ctx, config) {
     //             ^ 类型是 schema 的 **输出** 类型，port 一定存在
-    return { db: connect(config.host, config.port) }
+    return { db: connect(config.hostname, config.port) }
   },
 })
 
-app.install(db, { host: "localhost" })   // 输入类型，port 可省略
+host.install(db, { hostname: "localhost" })   // 输入类型，port 可省略
 ```
 
-注意输入和输出是两个类型：`app.install()` 接受**输入**（`port` 可选），`setup` 收到**输出**（`port` 已填默认值）。
+注意输入和输出是两个类型：`host.install()` 接受**输入**（`port` 可选），`setup` 收到**输出**（`port` 已填默认值）。
 
 校验失败抛 `ConfigValidationError`（code `CONFIG_INVALID`），它带一个 `issues` 数组：
 
@@ -199,22 +199,22 @@ setup 抛异常时：
 3. 同一层其他插件的 `ctx.signal` 被 abort
 4. 整笔变更**回滚**到变更前的运行图
 5. `handle.ready()` reject，`handle.status` 变成 `"failed"`
-6. `app.status` 回到变更前的状态，**不会**停在中间态
+6. `host.status` 回到变更前的状态，**不会**停在中间态
 
 ```ts
-const handle = app.install(brokenPlugin)
+const handle = host.install(brokenPlugin)
 await expect(handle.ready()).rejects.toThrow("setup failed")
-expect(app.status).toBe("active")     // 其他插件不受影响
+expect(host.status).toBe("active")     // 其他插件不受影响
 ```
 
-抛出非 `Error` 的值（`throw "boom"`）会被分类为 `PLUGIN_UNAVAILABLE` 的 `DougongError`，原值保留在 `cause` 里——`undefined` 永远不会同时表示「失败值」和「没有失败」。
+抛出非 `Error` 的值（`throw "boom"`）会被分类为 `INSTALLATION_UNAVAILABLE` 的 `DougongError`，原值保留在 `cause` 里——`undefined` 永远不会同时表示「失败值」和「没有失败」。
 
 ## 更新与移除
 
 ```ts
-const handle = app.install(plugin, { host: "a" })
+const handle = host.install(plugin, { hostname: "a" })
 
-await handle.update({ config: { host: "b" } })   // 换配置
+await handle.update({ config: { hostname: "b" } })   // 换配置
 await handle.update({ plugin: nextVersion })     // 换实现，保持实例身份
 await handle.remove()
 ```
@@ -231,12 +231,12 @@ await handle.ready()   // 等待这次安装就绪；失败则 reject
 ## 一个完整的例子
 
 ```ts
-import { createApp, definePlugin, extension, optional, service } from "dougong"
+import { createHost, definePlugin, extension, optional, service } from "dougong"
 import { z } from "zod"
 
 const DATABASE = service<Database>("app/database")
 const METRICS = service<Metrics>("app/metrics")
-const ROUTES = extension<Route>("http/routes")
+const ROUTES = extensionPoint<Route>("http/routes")
 
 const database = definePlugin({
   name: "app.database",
@@ -264,10 +264,10 @@ const users = definePlugin({
   },
 })
 
-const app = createApp({ name: "api" })
-app.install(users)
-app.install(database, { url: process.env.DATABASE_URL! })
-await app.start()
+const host = createHost({ name: "api" })
+host.install(users)
+host.install(database, { url: process.env.DATABASE_URL! })
+await host.start()
 ```
 
 ## 接下来

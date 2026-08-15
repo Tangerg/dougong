@@ -15,14 +15,14 @@ npm install @dougongjs/core
 ### 六个原子
 
 - **`Service`** —— 稳定的一对一能力。依赖通过 `requires` 显式声明，实例期内不变；提供者变化会重建消费者，不使用 live Proxy。
-- **`Extension`** —— 可动态增删的开放贡献集合。Core 只保存原始贡献；排序、领域 key、覆盖和 pipeline 是高层组合策略。
+- **`ExtensionPoint`** —— 可动态增删的开放贡献集合。Core 只保存原始贡献；排序、领域 key、覆盖和 pipeline 是高层组合策略。
 - **`Event`** —— 不保留状态的瞬时事实。只有一种分发语义：并发广播并等待全部监听器。
 - **`Lifetime`** —— 监听、贡献、任务、子生命周期与清理的结构化所有权。终态资源自动从父级摘除。
 - **`Plugin`** —— 一次 `setup` 产生一组能力。
-- **`Application`** / **`ChangeSet`** —— 事务化的安装图；失败回滚，无法可靠回滚时 fail closed。
+- **`Host`** / **`ChangeSet`** —— 事务化的安装图；失败回滚，无法可靠回滚时 fail closed。
 
 ```ts
-import { createApp, definePlugin, service } from "@dougongjs/core"
+import { createHost, definePlugin, service } from "@dougongjs/core"
 
 const DATABASE = service<Database>("app/database")
 
@@ -36,9 +36,9 @@ const database = definePlugin({
   },
 })
 
-const app = createApp({ name: "api" })
-app.install(database)
-await app.start()
+const host = createHost({ name: "api" })
+host.install(database)
+await host.start()
 ```
 
 不使用 Service Locator、环境作用域、原型链注入或 Proxy。运行时依赖只有 `@standard-schema/spec`（类型契约）。
@@ -61,14 +61,14 @@ npm install @dougongjs/core
 ### Six atoms
 
 - **`Service`** — a stable one-to-one capability. Dependencies are declared explicitly through `requires` and stay fixed for the instance lifetime; a provider change rebuilds consumers rather than using a live proxy.
-- **`Extension`** — an open contribution set that adds and removes live. Core keeps only raw contributions; ordering, domain keys, override and pipelines are higher-level composition policy.
+- **`ExtensionPoint`** — an open contribution set that adds and removes live. Core keeps only raw contributions; ordering, domain keys, override and pipelines are higher-level composition policy.
 - **`Event`** — a transient fact retaining no state, with one dispatch semantic: broadcast concurrently and await every listener.
 - **`Lifetime`** — structured ownership of listeners, contributions, tasks, child lifetimes and cleanups. Terminal resources detach from their parent automatically.
 - **`Plugin`** — one `setup` producing a set of capabilities.
-- **`Application`** / **`ChangeSet`** — a transactional installation graph; a failure rolls back, and fails closed when it cannot roll back reliably.
+- **`Host`** / **`ChangeSet`** — a transactional installation graph; a failure rolls back, and fails closed when it cannot roll back reliably.
 
 ```ts
-import { createApp, definePlugin, service } from "@dougongjs/core"
+import { createHost, definePlugin, service } from "@dougongjs/core"
 
 const DATABASE = service<Database>("app/database")
 
@@ -82,9 +82,9 @@ const database = definePlugin({
   },
 })
 
-const app = createApp({ name: "api" })
-app.install(database)
-await app.start()
+const host = createHost({ name: "api" })
+host.install(database)
+await host.start()
 ```
 
 No service locator, ambient scope, prototype-chain injection or proxy. The only runtime dependency is `@standard-schema/spec` (a type contract).

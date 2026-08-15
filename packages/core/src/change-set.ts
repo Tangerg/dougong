@@ -1,9 +1,9 @@
-import type { PluginChangeSet, PluginHandle, PluginUpdate } from "./application-api";
-import type { AnyPlugin } from "./plugin-installation";
-import type { PluginInstallation } from "./plugin-installation";
-import { definePlugin, type PluginDefinition, type Provisions, type Requirements } from "./plugin";
+import type { ChangeSet, Installation, InstallationUpdate } from "./host-api";
+import type { AnyPlugin } from "./installation";
+import type { InstallationRecord } from "./installation";
+import { definePlugin, type Plugin, type Provisions, type Requirements } from "./plugin";
 
-type PluginDeclarationUpdate =
+type DeclarationUpdate =
   | { readonly kind: "plugin"; readonly plugin: AnyPlugin }
   | { readonly kind: "config"; readonly config: unknown }
   | {
@@ -12,38 +12,38 @@ type PluginDeclarationUpdate =
       readonly config: unknown;
     };
 
-export type PluginChangeOperation =
-  | { readonly kind: "install"; readonly installation: PluginInstallation }
+export type ChangeOperation =
+  | { readonly kind: "install"; readonly installation: InstallationRecord }
   | {
       readonly kind: "update";
-      readonly installation: PluginInstallation;
-      readonly declaration: PluginDeclarationUpdate;
+      readonly installation: InstallationRecord;
+      readonly declaration: DeclarationUpdate;
     }
-  | { readonly kind: "remove"; readonly installation: PluginInstallation };
+  | { readonly kind: "remove"; readonly installation: InstallationRecord };
 
-interface PluginChangeHost {
+interface ChangePort {
   create(
     plugin: AnyPlugin,
     config: unknown,
   ): {
-    readonly installation: PluginInstallation;
+    readonly installation: InstallationRecord;
     readonly handle: object;
   };
-  resolve(handle: object): PluginInstallation;
-  execute(operations: ReadonlyArray<PluginChangeOperation>): Promise<void>;
-  attach(installation: PluginInstallation): void;
-  discard(installation: PluginInstallation, error: unknown): void;
+  resolve(handle: object): InstallationRecord;
+  execute(operations: ReadonlyArray<ChangeOperation>): Promise<void>;
+  attach(installation: InstallationRecord): void;
+  discard(installation: InstallationRecord, error: unknown): void;
 }
 
-type PluginChangeSetState =
-  | { readonly phase: "open"; readonly host: PluginChangeHost }
+type ChangeSetState =
+  | { readonly phase: "open"; readonly host: ChangePort }
   | { readonly phase: "committing" }
   | { readonly phase: "submitted"; readonly promise: Promise<void> }
   | { readonly phase: "discarded" };
 
-const draftDiscarders = new WeakMap<PluginChangeSetDraft, (error: unknown) => void>();
+const draftDiscarders = new WeakMap<ChangeSetDraft, (error: unknown) => void>();
 
-export function discardPluginChangeSetDraft(draft: PluginChangeSetDraft, error: unknown) {
+export function discardPluginChangeSetDraft(draft: ChangeSetDraft, error: unknown) {
   draftDiscarders.get(draft)?.(error);
 }
 
@@ -52,30 +52,30 @@ export function discardPluginChangeSetDraft(draft: PluginChangeSetDraft, error: 
  * uniqueness, handle authority, sealing and commit idempotency before the
  * application ever sees a candidate graph.
  */
-export class PluginChangeSetDraft implements PluginChangeSet {
-  readonly #operations = new Map<PluginInstallation, PluginChangeOperation>();
-  #state: PluginChangeSetState;
+export class ChangeSetDraft implements ChangeSet {
+  readonly #operations = new Map<InstallationRecord, ChangeOperation>();
+  #state: ChangeSetState;
 
-  constructor(host: PluginChangeHost) {
+  constructor(host: ChangePort) {
     this.#state = { phase: "open", host };
     draftDiscarders.set(this, (error) => this.#discard(error));
     Object.freeze(this);
   }
 
   install<Config, Requires extends Requirements, Provides extends Provisions, ConfigInput>(
-    plugin: PluginDefinition<Config, Requires, Provides, ConfigInput>,
+    plugin: Plugin<Config, Requires, Provides, ConfigInput>,
     ...config: [ConfigInput] extends [void] ? [config?: ConfigInput] : [config: ConfigInput]
-  ): PluginHandle<Config, Requires, Provides, ConfigInput> {
+  ): Installation<Config, Requires, Provides, ConfigInput> {
     const host = this.#requireOpen();
     const definition = definePlugin(plugin) as unknown as AnyPlugin;
     const draft = host.create(definition, config[0]);
     this.#stage({ kind: "install", installation: draft.installation });
-    return draft.handle as PluginHandle<Config, Requires, Provides, ConfigInput>;
+    return draft.handle as Installation<Config, Requires, Provides, ConfigInput>;
   }
 
   update<Config, Requires extends Requirements, Provides extends Provisions, ConfigInput>(
-    handle: PluginHandle<Config, Requires, Provides, ConfigInput>,
-    update: PluginUpdate<Config, Requires, Provides, ConfigInput>,
+    handle: Installation<Config, Requires, Provides, ConfigInput>,
+    update: InstallationUpdate<Config, Requires, Provides, ConfigInput>,
   ) {
     const host = this.#requireOpen();
     if (!update || typeof update !== "object") {
@@ -94,7 +94,7 @@ export class PluginChangeSetDraft implements PluginChangeSet {
       if (!replacement) throw new TypeError("Plugin update 'plugin' must be a plugin definition");
       plugin = definePlugin(replacement) as unknown as AnyPlugin;
     }
-    let declaration: PluginDeclarationUpdate;
+    let declaration: DeclarationUpdate;
     if (plugin && hasConfig) {
       declaration = { kind: "plugin-and-config", plugin, config: update.config };
     } else if (plugin) {
@@ -102,13 +102,13 @@ export class PluginChangeSetDraft implements PluginChangeSet {
     } else {
       declaration = { kind: "config", config: update.config };
     }
-    const operation: PluginChangeOperation = { kind: "update", installation, declaration };
+    const operation: ChangeOperation = { kind: "update", installation, declaration };
     this.#stage(operation);
     return this;
   }
 
   remove<Config, Requires extends Requirements, Provides extends Provisions, ConfigInput>(
-    handle: PluginHandle<Config, Requires, Provides, ConfigInput>,
+    handle: Installation<Config, Requires, Provides, ConfigInput>,
   ) {
     const host = this.#requireOpen();
     this.#stage({ kind: "remove", installation: host.resolve(handle) });
@@ -160,10 +160,10 @@ export class PluginChangeSetDraft implements PluginChangeSet {
     }
   }
 
-  #stage(operation: PluginChangeOperation) {
+  #stage(operation: ChangeOperation) {
     if (this.#operations.has(operation.installation)) {
       throw new TypeError(
-        `Plugin '${operation.installation.id}' can only appear once in the same ChangeSet`,
+        `Installation '${operation.installation.id}' can only appear once in the same ChangeSet`,
       );
     }
     this.#operations.set(operation.installation, Object.freeze(operation));

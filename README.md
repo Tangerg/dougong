@@ -25,7 +25,7 @@ npm install dougong
 ```
 
 ```ts
-import { createApp, definePlugin, service } from "dougong"
+import { createHost, definePlugin, service } from "dougong"
 
 const CLOCK = service<Clock>("app/clock")
 
@@ -43,10 +43,10 @@ const greeter = definePlugin({
   },
 })
 
-const app = createApp({ name: "hello" })
-app.install(greeter)                 // 安装顺序不决定启动顺序
-app.install(clock)
-await app.start()                    // 从声明推导拓扑，同层并发启动
+const host = createHost({ name: "hello" })
+host.install(greeter)                 // 安装顺序不决定启动顺序
+host.install(clock)
+await host.start()                    // 从声明推导拓扑，同层并发启动
 ```
 
 ## 为什么是这样
@@ -60,22 +60,22 @@ await app.start()                    // 从声明推导拓扑，同层并发启�
 | 安装插件 | `install()` | | 监听 / 发送 Event | `on()` / `emit()` |
 | 原子修改安装计划 | `change()` | | 注册资源 | `cleanup()` |
 | 发布 Service | `provides` + `setup` 返回值 | | 子生命周期 / 任务 | `lifetime(label)` / `spawn()` |
-| 贡献 Extension | `contribute()` | | 读取 / 订阅实时值 | `get()` / `subscribe()` |
+| 贡献 ExtensionPoint | `contribute()` | | 读取 / 订阅实时值 | `get()` / `subscribe()` |
 | 更新 / 删除安装 | `update()` / `remove()` | | 提前释放资源 | `dispose()` |
 
 **事务只暴露已提交状态。** setup 期间的 Contract kind、监听与贡献先暂存，整层校验通过才发布。失败回滚旧图，无法可靠回滚时 fail closed，不会留下半装好的运行时。
 
-**类型即约束。** 用未声明的依赖、把 Extension 当 Service 取、声明了 `provides` 却不返回——全部是编译错误。
+**类型即约束。** 用未声明的依赖、把 ExtensionPoint 当 Service 取、声明了 `provides` 却不返回——全部是编译错误。
 
 ## 六个原子
 
 ```text
 Service      稳定的一对一能力，实例期不变，提供者变化则重建消费者
-Extension    可动态增删的开放贡献集合，变化通知订阅者
+ExtensionPoint    可动态增删的开放贡献集合，变化通知订阅者
 Event        不保留状态的瞬时事实，一种分发语义
 Lifetime     监听、贡献、任务与资源的结构化所有权，终态自动摘除
 Plugin       一次 setup 产生一组能力
-Application  依赖图、事务与实例编排
+Host  依赖图、事务与实例编排
 ```
 
 Signal 不是第五种能力。`@dougongjs/reactive` 提供 `signal()` / `computed()` / `batch()` 和基于公开 Lifetime 协议的 `observe()`；Core 不依赖它，也不提供隐式 effect。
@@ -126,7 +126,7 @@ pnpm examples
 
 ## 环境要求
 
-Node.js ≥ 22，或等价的 ES2024 宿主（需要 `Promise.withResolvers()`）。
+Node.js ≥ 22，或等价的 ES2024 运行时（需要 `Promise.withResolvers()`）。
 
 TypeScript 消费者的 `tsconfig.json` 需要：
 

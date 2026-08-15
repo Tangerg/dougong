@@ -1,31 +1,31 @@
 import type { StandardSchemaV1 } from "@standard-schema/spec";
 import { ContractRegistry, type ContractRegistryDraft } from "./contract-registry";
-import { assertContract, type Event, type Extension, type Service } from "./contracts";
+import { assertContract, type Event, type ExtensionPoint, type Service } from "./contracts";
 import { ConfigValidationError, DougongError, type ValidationIssue } from "./errors";
 import { EventHub, type EventListener } from "./event-hub";
-import { ExtensionRegistry, type ExtensionView } from "./extension-store";
-import { Lifetime, type LifetimeHost, type Logger, type PluginMeta } from "./lifetime";
+import { ExtensionRegistry, type ContributionView } from "./extension-store";
+import { Lifetime, type LifetimePort, type Logger, type PluginMeta } from "./lifetime";
 import { PluginGraph } from "./plugin-graph";
-import { type AnyPlugin, type PluginInstallation, type PluginRuntime } from "./plugin-installation";
+import { type AnyPlugin, type InstallationRecord, type InstallationRuntime } from "./installation";
 import type { PluginContext, Requirements } from "./plugin";
 import type { Publication } from "./resource";
 
 export type RuntimeChangeOutcome =
-  | { readonly kind: "committed"; readonly affected: ReadonlySet<PluginInstallation> }
+  | { readonly kind: "committed"; readonly affected: ReadonlySet<InstallationRecord> }
   | {
       readonly kind: "rolled-back";
-      readonly affected: ReadonlySet<PluginInstallation>;
+      readonly affected: ReadonlySet<InstallationRecord>;
       readonly error: unknown;
     };
 
 interface PreparedActivation {
-  readonly installation: PluginInstallation;
-  readonly runtime: PluginRuntime;
+  readonly installation: InstallationRecord;
+  readonly runtime: InstallationRuntime;
   readonly services: ReadonlyMap<string, unknown>;
 }
 
 interface ApplicationRuntimeOptions {
-  readonly applicationName: string;
+  readonly hostName: string;
   readonly logger: Logger;
   readonly isInstalled: (installationId: string) => boolean;
   readonly report: (error: unknown) => void;
@@ -37,24 +37,24 @@ class IncompletePluginCleanupError extends AggregateError {}
 
 /**
  * Owns the committed plugin runtime: contracts, services, events, extensions,
- * Lifetimes and graph transitions. The Application owns declarations and
+ * Lifetimes and graph transitions. The Host owns declarations and
  * command serialization; neither side duplicates the other's state.
  */
-export class ApplicationRuntime {
-  readonly #applicationName: string;
+export class Runtime {
+  readonly #hostName: string;
   readonly #logger: Logger;
   readonly #isInstalled: (installationId: string) => boolean;
   readonly #report: (error: unknown) => void;
-  readonly #services = new Map<PluginInstallation, ReadonlyMap<string, unknown>>();
+  readonly #services = new Map<InstallationRecord, ReadonlyMap<string, unknown>>();
   readonly #contracts = new ContractRegistry();
   readonly #events = new EventHub();
   readonly #extensions: ExtensionRegistry;
 
   #plan: PluginGraph | undefined;
-  #activationOrder: PluginInstallation[] = [];
+  #activationOrder: InstallationRecord[] = [];
 
   constructor(options: ApplicationRuntimeOptions) {
-    this.#applicationName = options.applicationName;
+    this.#hostName = options.hostName;
     this.#logger = options.logger;
     this.#isInstalled = options.isInstalled;
     this.#report = options.report;
@@ -79,7 +79,7 @@ export class ApplicationRuntime {
     return services.get(token.id) as T;
   }
 
-  buildPlan(installations: Iterable<PluginInstallation>) {
+  buildPlan(installations: Iterable<InstallationRecord>) {
     return PluginGraph.build(installations, this.#contracts.kinds);
   }
 
@@ -105,13 +105,13 @@ export class ApplicationRuntime {
 
   async transition(
     nextPlan: PluginGraph,
-    changed: ReadonlySet<PluginInstallation>,
+    changed: ReadonlySet<InstallationRecord>,
     restoreDeclarations: () => void,
   ): Promise<RuntimeChangeOutcome> {
     return this.#withExtensionBatch(async () => {
       const previousPlan = this.#requirePlan();
       const affected = previousPlan.affectedByTransitionTo(nextPlan, changed);
-      let nextConfigs: ReadonlyMap<PluginInstallation, unknown>;
+      let nextConfigs: ReadonlyMap<InstallationRecord, unknown>;
       let contracts: ContractRegistryDraft;
       try {
         nextConfigs = await this.#resolveConfigs(
@@ -123,7 +123,7 @@ export class ApplicationRuntime {
         throw error;
       }
 
-      const previousConfigs = new Map<PluginInstallation, unknown>();
+      const previousConfigs = new Map<InstallationRecord, unknown>();
       for (const installation of affected) {
         const runtime = installation.runtime;
         if (runtime) previousConfigs.set(installation, runtime.config);
@@ -175,7 +175,7 @@ export class ApplicationRuntime {
     } catch (error) {
       const cleanupErrors = await this.#deactivateInstallations(installations);
       if (cleanupErrors.length) {
-        throw new AggregateError([error, ...cleanupErrors], "Application startup failed");
+        throw new AggregateError([error, ...cleanupErrors], "Host startup failed");
       }
       throw error;
     }
@@ -195,8 +195,8 @@ export class ApplicationRuntime {
   async #rollback(
     restoreDeclarations: () => void,
     previousPlan: PluginGraph,
-    affected: ReadonlySet<PluginInstallation>,
-    previousConfigs: ReadonlyMap<PluginInstallation, unknown>,
+    affected: ReadonlySet<InstallationRecord>,
+    previousConfigs: ReadonlyMap<InstallationRecord, unknown>,
     causes: ReadonlyArray<unknown>,
   ): Promise<RuntimeChangeOutcome> {
     restoreDeclarations();
@@ -222,11 +222,11 @@ export class ApplicationRuntime {
 
   async #activateInstallations(
     plan: PluginGraph,
-    installations: ReadonlySet<PluginInstallation>,
-    configs: ReadonlyMap<PluginInstallation, unknown>,
+    installations: ReadonlySet<InstallationRecord>,
+    configs: ReadonlyMap<InstallationRecord, unknown>,
     contracts: ContractRegistryDraft,
   ) {
-    const host = this.#createLifetimeHost(contracts);
+    const host = this.#createLifetimePort(contracts);
     for (const layer of plan.layers) {
       const candidates = layer.filter(
         (installation) => installations.has(installation) && !installation.runtime,
@@ -288,10 +288,10 @@ export class ApplicationRuntime {
 
   async #prepareActivation(
     plan: PluginGraph,
-    installation: PluginInstallation,
+    installation: InstallationRecord,
     config: unknown,
     startupSignal: AbortSignal,
-    host: LifetimeHost,
+    host: LifetimePort,
   ): Promise<PreparedActivation> {
     installation.deactivate();
     const plugin = installation.spec.plugin;
@@ -300,7 +300,7 @@ export class ApplicationRuntime {
     try {
       const requirements = this.#resolveRequirements(plan, installation, plugin, lifetime);
       const meta: PluginMeta = {
-        applicationName: this.#applicationName,
+        hostName: this.#hostName,
         pluginName: plugin.name,
         installationId: installation.id,
         groupId: installation.groupId,
@@ -358,7 +358,7 @@ export class ApplicationRuntime {
     return errors;
   }
 
-  async #deactivateInstallations(installations: ReadonlySet<PluginInstallation>) {
+  async #deactivateInstallations(installations: ReadonlySet<InstallationRecord>) {
     const errors: unknown[] = [];
     const order = this.#activationOrder
       .filter((installation) => installations.has(installation))
@@ -382,8 +382,8 @@ export class ApplicationRuntime {
     return errors;
   }
 
-  async #resolveConfigs(installations: ReadonlyArray<PluginInstallation>) {
-    const configs = new Map<PluginInstallation, unknown>();
+  async #resolveConfigs(installations: ReadonlyArray<InstallationRecord>) {
+    const configs = new Map<InstallationRecord, unknown>();
     for (const installation of installations) {
       configs.set(
         installation,
@@ -395,7 +395,7 @@ export class ApplicationRuntime {
 
   #resolveRequirements(
     plan: PluginGraph,
-    installation: PluginInstallation,
+    installation: InstallationRecord,
     plugin: AnyPlugin,
     lifetime: Lifetime,
   ): Record<string, unknown> {
@@ -426,7 +426,7 @@ export class ApplicationRuntime {
         }
         values[alias] = services.get(requirement.id);
       } else {
-        values[alias] = this.#extensionView(requirement, lifetime);
+        values[alias] = this.#contributionView(requirement, lifetime);
       }
     }
     return values;
@@ -467,7 +467,7 @@ export class ApplicationRuntime {
     return result.value;
   }
 
-  #createLifetimeHost(contracts: ContractRegistryDraft): LifetimeHost {
+  #createLifetimePort(contracts: ContractRegistryDraft): LifetimePort {
     return {
       stageOn: (ownerId, token, listener, release) => {
         return this.#stageOn(ownerId, token, listener, release, contracts);
@@ -502,19 +502,19 @@ export class ApplicationRuntime {
 
   #stageContribution<T>(
     ownerId: string,
-    token: Extension<T>,
+    token: ExtensionPoint<T>,
     key: string,
     value: T,
     release: (publication: Publication) => void,
     contracts: ContractRegistryDraft,
   ) {
     this.#assertOwner(ownerId);
-    assertContract(token, "extension");
+    assertContract(token, "extensionPoint");
     contracts.remember(token);
     return this.#extensions.get(token).stage(ownerId, key, value, release);
   }
 
-  #extensionView<T>(token: Extension<T>, lifetime: Lifetime): ExtensionView<T> {
+  #contributionView<T>(token: ExtensionPoint<T>, lifetime: Lifetime): ContributionView<T> {
     return this.#extensions.get(token).view((resource, kind) => lifetime.ownLease(resource, kind));
   }
 
@@ -540,5 +540,5 @@ export class ApplicationRuntime {
 }
 
 function applicationServicesUnavailable() {
-  return new DougongError("SERVICE_UNAVAILABLE", "Application services are not active");
+  return new DougongError("SERVICE_UNAVAILABLE", "Host services are not active");
 }

@@ -1,10 +1,10 @@
 import {
-  createApp,
+  createHost,
   createPlatform,
   definePlugin,
   event,
-  extension,
-  MemoryPluginLoader,
+  extensionPoint,
+  MemoryLoader,
   PermissionSet,
   service,
   signal,
@@ -34,7 +34,7 @@ interface Player {
 }
 
 const AUDIO_OUTPUT = service<AudioOutput>("examples/planet/audio-output");
-const MEDIA_SOURCES = extension<MediaSource>("examples/planet/media-sources");
+const MEDIA_SOURCES = extensionPoint<MediaSource>("examples/planet/media-sources");
 const PLAYER = service<Player>("examples/planet/player");
 const TRACK_CHANGED = event<Track>("examples/planet/track-changed");
 
@@ -138,20 +138,20 @@ export async function planetScenario(): Promise<ExampleResult> {
     },
   });
 
-  const app = createApp({ name: "planet-example" });
-  app.install(audioAdapter);
-  app.install(localSource);
-  const playerHandle = app.install(playerPlugin);
-  app.install(historyPlugin);
-  app.install(shellPlugin);
-  const providers = app.group("providers", () => undefined);
-  await app.start();
+  const host = createHost({ name: "planet-example" });
+  host.install(audioAdapter);
+  host.install(localSource);
+  const playerHandle = host.install(playerPlugin);
+  host.install(historyPlugin);
+  host.install(shellPlugin);
+  const providers = host.group("providers", () => undefined);
+  await host.start();
 
   const platform = createPlatform({
-    container: providers,
+    installer: providers,
     apiVersion: "1.0.0",
     permissions: new PermissionSet(["network"]),
-    loader: new MemoryPluginLoader(new Map([["remote", { default: remoteSource }]])),
+    loader: new MemoryLoader(new Map([["remote", { default: remoteSource }]])),
   });
   const remote = await platform.register({
     manifest: {
@@ -169,10 +169,10 @@ export async function planetScenario(): Promise<ExampleResult> {
   await remote.remove();
   await player.play("outro");
 
-  const lifetime = app.diagnostics.get().plugins.get(playerHandle.id)?.lifetime?.get();
+  const lifetime = host.diagnostics.get().installations.get(playerHandle.id)?.lifetime?.get();
   await platform.dispose();
   await providers.remove();
-  await app.stop();
+  await host.stop();
 
   return exampleResult({
     id: "09",
@@ -182,7 +182,7 @@ export async function planetScenario(): Promise<ExampleResult> {
     facts: [
       `The player picked the best available source each time: ${history.map((track) => track.source).join(" → ")}.`,
       `Audio output received ${audioUris.join(", ")}.`,
-      `Providers were added and removed live, yet the player started ${playerStarts} time — an Extension is not a dependency edge.`,
+      `Providers were added and removed live, yet the player started ${playerStarts} time — an ExtensionPoint is not a dependency edge.`,
       `The shell observed ${shellTracks.join(", ")}; the player kept ${lifetime?.children.length} playback Lifetime, replaced per track.`,
       "The Platform was scoped to the /providers Group, so removing that Group removed every downloaded provider with it.",
     ],

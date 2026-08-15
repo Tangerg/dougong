@@ -8,11 +8,11 @@ Dougong's model is six atoms. They are **orthogonal** — each solves one thing,
 | --- | --- | --- |
 | **Contract** | A frozen identity token | "What is this capability called, and what type is it" |
 | **Service** | A stable one-to-one capability | "Who provides the database connection" |
-| **Extension** | An open contribution set | "Which routes / commands / themes exist" |
+| **ExtensionPoint** | An open contribution set | "Which routes / commands / themes exist" |
 | **Event** | A transient fact | "What just happened" |
 | **Lifetime** | Structured ownership | "Who owns this resource, and when is it released" |
 | **Plugin** | One setup producing a set of capabilities | "What is this unit of functionality" |
-| **Application** | Graph + transactions + orchestration | "How do these units become one runtime" |
+| **Host** | Graph + transactions + orchestration | "How do these units become one runtime" |
 
 ## Contract: identity before implementation
 
@@ -22,13 +22,13 @@ A Contract is a frozen `{ id, kind }` object binding a **string ID** to a **Type
 import { service, extension, event } from "dougong"
 
 const DATABASE = service<Database>("app/database")
-const ROUTES = extension<Route>("http/routes")
+const ROUTES = extensionPoint<Route>("http/routes")
 const USER_CREATED = event<User>("users/created")
 ```
 
-The three kinds correspond to the three capability semantics. One ID cannot serve **two kinds** in the same Application; doing so throws `CONTRACT_CONFLICT`.
+The three kinds correspond to the three capability semantics. One ID cannot serve **two kinds** in the same Host; doing so throws `CONTRACT_CONFLICT`.
 
-Contracts hold no runtime state, are reusable across Applications, and should be exported **once** from a stable module:
+Contracts hold no runtime state, are reusable across Hosts, and should be exported **once** from a stable module:
 
 ```ts
 // contracts.ts — both providers and consumers import from here
@@ -48,17 +48,17 @@ export const FOO = service<Database>("app/foo")   // same ID, same kind, differe
 TypeScript cannot prevent this and the runtime does not report it — consumers silently receive the wrong type. **A fixed Contract ID should be declared exactly once and exported from a stable module.**
 :::
 
-## Service vs Extension: one-to-one vs many-to-many
+## Service vs ExtensionPoint: one-to-one vs many-to-many
 
 This is the most common decision. There is a single criterion: **does this capability have one provider, or arbitrarily many?**
 
 ```ts
-// Service: exactly one provider per Application
+// Service: exactly one provider per Host
 const DATABASE = service<Database>("app/database")
 // Two plugins declaring provides: { db: DATABASE } → SERVICE_CONFLICT
 
-// Extension: any number of plugins contribute, and may add or remove at runtime
-const ROUTES = extension<Route>("http/routes")
+// ExtensionPoint: any number of plugins contribute, and may add or remove at runtime
+const ROUTES = extensionPoint<Route>("http/routes")
 ```
 
 How they differ in use:
@@ -77,7 +77,7 @@ definePlugin({
   setup: (ctx) => { ctx.db.query("...") },     // ctx.db is a Database
 })
 
-// Extension — contributors get an updatable, releasable handle
+// ExtensionPoint — contributors get an updatable, releasable handle
 definePlugin({
   setup(ctx) {
     const c = ctx.contribute(ROUTES, "users.list", { path: "/users", run })
@@ -86,7 +86,7 @@ definePlugin({
   },
 })
 
-// Extension — consumers get a live view, not a snapshot
+// ExtensionPoint — consumers get a live view, not a snapshot
 definePlugin({
   requires: { routes: ROUTES },
   setup(ctx) {
@@ -98,14 +98,14 @@ definePlugin({
 
 The essential differences:
 
-| | Service | Extension |
+| | Service | ExtensionPoint |
 | --- | --- | --- |
 | Providers | exactly 1 | 0..n |
 | Consumers receive | an implementation **fixed** for the instance | a **live** view: `get()` / `subscribe()` |
 | When the provider changes | the consumer is **rebuilt** | the consumer is notified, not rebuilt |
 | When absent | `SERVICE_MISSING` (unless `optional()`) | an empty map is a valid value |
 
-That last row explains why `optional()` only accepts a Service: an empty Extension is already a valid state, so "optional" adds nothing.
+That last row explains why `optional()` only accepts a Service: an empty ExtensionPoint is already a valid state, so "optional" adds nothing.
 
 ### Why the Service snapshot is fixed
 
@@ -140,14 +140,14 @@ definePlugin({
 })
 ```
 
-`emit()` returns a Promise and awaits all listeners. There is exactly one dispatch mode — no `parallel` / `serial` / `bail` / `waterfall` decision to get wrong. Need to collect return values? That is not Event semantics; use an Extension.
+`emit()` returns a Promise and awaits all listeners. There is exactly one dispatch mode — no `parallel` / `serial` / `bail` / `waterfall` decision to get wrong. Need to collect return values? That is not Event semantics; use an ExtensionPoint.
 
 ### Choosing between the three
 
 Ask: **does the consumer need "the current state" or "the fact that something changed"?**
 
 - State, from a single source → **Service**
-- State, from an open set of sources → **Extension**
+- State, from an open set of sources → **ExtensionPoint**
 - The change itself, with nothing retained → **Event**
 
 A common mistake is shipping state through an Event:
@@ -156,7 +156,7 @@ A common mistake is shipping state through an Event:
 ctx.emit(CONFIG_CHANGED, newConfig)   // ❌ plugins installed later never see the current config
 ```
 
-Configuration is state. It belongs in a Service or an Extension.
+Configuration is state. It belongs in a Service or an ExtensionPoint.
 
 ## Lifetime: who owns what
 
@@ -198,20 +198,20 @@ const plugin = definePlugin({
 
 **A plugin is a definition; an installation is an instance.** The same definition can be installed multiple times with different configs, each with its own ID and Lifetime.
 
-## Application: putting it together
+## Host: putting it together
 
 ```ts
-const app = createApp({ name: "my-app" })
+const host = createHost({ name: "my-app" })
 
-const handle = app.install(plugin, config)  // returns a handle
-await app.start()                           // build the graph, sort, start layers concurrently
-app.status                                  // "idle" | "starting" | "active" | "changing" | "stopping"
-app.get(SOME_SERVICE)                       // host read (only while active)
-app.diagnostics.get()                       // an immutable runtime snapshot
-await app.stop()                            // stop in reverse order
+const handle = host.install(plugin, config)  // returns a handle
+await host.start()                           // build the graph, sort, start layers concurrently
+host.status                                  // "idle" | "starting" | "active" | "changing" | "stopping"
+host.get(SOME_SERVICE)                       // host read (only while active)
+host.diagnostics.get()                       // an immutable runtime snapshot
+await host.stop()                            // stop in reverse order
 ```
 
-An Application owns four things:
+An Host owns four things:
 
 1. **The dependency graph** — derived from `requires` / `provides`, detecting cycles (`SERVICE_CYCLE`, reporting the real path) and duplicate providers (`SERVICE_CONFLICT`)
 2. **Transactions** — a change either takes effect entirely or rolls back; see [Transactions and change](./transactions.md)
@@ -222,16 +222,16 @@ An Application owns four things:
 
 `@dougongjs/reactive` provides `signal()` / `computed()` / `batch()` / `observe()`, but **a signal is not a fifth capability**.
 
-The reason: a signal is a way of **representing a value**, not a way of **organising a capability**. A Service can return a signal; an Extension's values can be signals. Making "signal" a fourth Contract kind would turn "should this capability be a Service or a Signal?" into a question with no correct answer.
+The reason: a signal is a way of **representing a value**, not a way of **organising a capability**. A Service can return a signal; an ExtensionPoint's values can be signals. Making "signal" a fourth Contract kind would turn "should this capability be a Service or a Signal?" into a question with no correct answer.
 
 Core does not depend on reactive, and offers no implicit effects. See [Reactive and observation](./reactive.md).
 
 ## A Group is not a scope
 
-`app.group(name, configure)` builds an **installation ownership tree** — for installing, removing and awaiting a set of plugins together.
+`host.group(name, configure)` builds an **installation ownership tree** — for installing, removing and awaiting a set of plugins together.
 
 ```ts
-const feature = app.group("feature", (plugins) => {
+const feature = host.group("feature", (plugins) => {
   plugins.install(a)
   plugins.install(b)
 })
@@ -239,9 +239,9 @@ await feature.ready()
 await feature.remove()   // removes the whole subtree
 ```
 
-A Group changes **no** visibility: Service resolution and Extension/Event visibility are always **application-wide**. It is not a capability scope, not a provider shadow tree, not a permission boundary and not a security sandbox.
+A Group changes **no** visibility: Service resolution and ExtensionPoint/Event visibility are always **application-wide**. It is not a capability scope, not a provider shadow tree, not a permission boundary and not a security sandbox.
 
-Need several instances of the same shape? Use an explicit Contract family. Need runtime tenant selection? Use an ordinary method parameter. Need security isolation? Use an Application, Worker, iframe or process — a real isolation boundary.
+Need several instances of the same shape? Use an explicit Contract family. Need runtime tenant selection? Use an ordinary method parameter. Need security isolation? Use an Host, Worker, iframe or process — a real isolation boundary.
 
 ## Next
 
