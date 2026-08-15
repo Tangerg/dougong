@@ -1,111 +1,153 @@
+<div align="center">
+
 # Dougong
 
-[文档站](https://tangerg.github.io/dougong/) · [API 设计](docs/api-design.zh-CN.md) · [整体架构](docs/architecture.zh-CN.md) · [可执行示例](packages/examples/README.md)
+**能力组合与结构化生命周期内核** · 纯 JavaScript/TypeScript
 
-Dougong（斗拱）是一个面向 JavaScript/TypeScript 的能力组合与结构化生命周期内核，以及建立在它之上的插件分发层。
+[![npm](https://img.shields.io/npm/v/dougong?color=9f3f2f)](https://www.npmjs.com/package/dougong)
+[![license](https://img.shields.io/npm/l/dougong?color=9f3f2f)](./LICENSE)
+[![node](https://img.shields.io/node/v/dougong?color=9f3f2f)](https://nodejs.org)
 
-它只用普通对象、普通函数、Promise、AbortSignal 和 Disposable，解决六件事：
+[文档站](https://tangerg.github.io/dougong/) ·
+[快速开始](https://tangerg.github.io/dougong/guide/getting-started) ·
+[核心概念](https://tangerg.github.io/dougong/guide/concepts) ·
+[API 规范](https://tangerg.github.io/dougong/reference/core-api) ·
+**简体中文** · [English](./README.en.md)
 
-- `Service`：稳定的一对一能力；
-- `Extension`：可动态增减的开放贡献集合；
-- `Event`：不保留状态的瞬时事实；
-- `Lifetime`：监听、贡献、任务和资源的所有权；
-- `Plugin`：一次 setup 产生一组能力；
-- `Application`：依赖图、事务与实例编排。
+</div>
 
-Signal 不是第五种插件能力。`@dougongjs/reactive` 提供 `signal()`、`computed()`、`batch()` 和基于公开 Lifetime API 的 `observe()`；Core 不依赖它，也不提供隐式 effect。
+---
 
-## 单路径原则
+Dougong（斗拱）解决一个具体问题：**当一个应用的能力需要被拆成可独立装卸的单元时，如何让它们之间的依赖、生命周期和变更保持可推理。**
 
-同一层、同一种语义只有一个正式入口。高层语法糖必须机械展开到这个入口，不能拥有第二套状态机：
-
-| 语义 | 正式入口 |
-| --- | --- |
-| 安装插件 | `install()` |
-| 原子修改安装计划 | `change()` |
-| 发布 Service | `provides` + `setup()` 返回值 |
-| 贡献 Extension | `contribute()` |
-| 监听 / 发送 Event | `on()` / `emit()` |
-| 注册资源 | `cleanup()` |
-| 创建子生命周期 / 任务 | `lifetime(label)` / `spawn()` |
-| 读取 / 订阅实时值 | `get()` / `subscribe()` |
-| 更新 / 删除安装 | `update()` / `remove()` |
-| 提前释放资源 | `dispose()` |
-
-同时遵守**显式优于隐式**：Service 选择写进 Contract ID，依赖写进 `requires`，资源归属写进 Lifetime，运行期租户选择写进普通方法参数。Core 不从 Group、调用栈、祖先 Context 或全局“当前 workspace”猜测关系。
-
-## Workspace
-
-```text
-packages/
-  core/       六个内核原子、依赖图、事务、Group 与诊断
-  reactive/   独立的 Signal 值层与 Lifetime 组合器
-  platform/   Manifest、Loader、权限、懒激活与 HMR
-  dougong/    纯 re-export 的便利入口
-  examples/   从基础原子到 Planet / Lynx、声明式计划与模块图 HMR 的可执行示例
+```sh
+npm install dougong
 ```
-
-`core` 与 `reactive` 是互不依赖的基础层；`platform` 只依赖 `core`；`dougong` 只是组合入口。
-
-## Example
 
 ```ts
-import { createApp, definePlugin, extension, service } from "dougong"
+import { createApp, definePlugin, service } from "dougong"
 
-const DATABASE = service<Database>("app/database")
-const ROUTES = extension<Route>("http/routes")
+const CLOCK = service<Clock>("app/clock")
 
-const database = definePlugin({
-  name: "app.database",
-  provides: { database: DATABASE },
+const clock = definePlugin({
+  name: "app.clock",
+  provides: { clock: CLOCK },
+  setup: () => ({ clock: { now: () => new Date() } }),
+})
+
+const greeter = definePlugin({
+  name: "app.greeter",
+  requires: { clock: CLOCK },        // 依赖写在这里
   setup(ctx) {
-    const client = createDatabaseClient()
-    ctx.cleanup(() => client.close())
-    return { database: client }
+    console.log(ctx.clock.now())     // 只能读声明过的依赖，否则编译错误
   },
 })
 
-const users = definePlugin({
-  name: "app.users",
-  requires: { database: DATABASE },
-  setup(ctx) {
-    ctx.contribute(ROUTES, "users.list", {
-      path: "/users",
-      run: () => ctx.database.query("select * from users"),
-    })
-  },
-})
-
-const app = createApp({ name: "example" })
-app.install(users)
-app.install(database)
-
-await app.start()
+const app = createApp({ name: "hello" })
+app.install(greeter)                 // 安装顺序不决定启动顺序
+app.install(clock)
+await app.start()                    // 从声明推导拓扑，同层并发启动
 ```
 
-安装顺序不必等于启动顺序；Dougong 从 Service 声明推导依赖图，同一拓扑层并发 prepare、整层成功后统一发布，并按逆依赖顺序停止。
+## 为什么是这样
 
-## Guarantees
+**显式优于隐式。** 依赖写在 `requires`，身份写在 Contract，所有权写在 Lifetime，运行期选择写在普通参数。没有 Service Locator、环境作用域、原型链注入或 Proxy——`ctx.foo` 的来源永远在同一个文件里看得见。
 
-- 插件拿到的是整个实例期不变的 Service 快照；提供者变化会重建消费者，不使用 live Proxy。
-- Extension 只保存原始贡献。排序、领域 key、覆盖和 pipeline 是公开 API 上的高层组合策略，不进入 Core。
-- setup 期间的 Contract kind、监听与贡献先暂存；成功提交后才进入正式注册表或对外发布。
-- 多插件变更只走一份 ChangeSet；失败时恢复旧图，无法可靠恢复时 fail closed。
-- Group 只负责组合、批量提交和子树所有权，不改变 Service、Extension 或 Event 的可见性。
-- 同型多实例使用显式 Contract family；Group 不参与 Service shadow 或作用域查找。
-- 插件诊断包含独立的实时 Lifetime 所有权树；子 Lifetime 的显式 label 与逐节点资源计数让结构可解释，高频资源变化不重建整张 Application 快照。
-- 所有公共 Handle 都是冻结的窄对象；不会在 JavaScript 运行时泄露内部安装状态、registry、host 或事务发布方法。
-- Core 不理解 Node、DOM、React、HTTP、文件系统、Loader 或权限。
+**一种语义，一条路径。** 每个语义操作只有一个正式入口，高层便利 API 必须机械展开到它，不能拥有第二套状态机。
 
-完整规范见 [API 设计](docs/api-design.zh-CN.md)、[架构说明](docs/architecture.zh-CN.md) 与 [Platform 设计](docs/platform-design.zh-CN.md)。
+| 语义 | 正式入口 | | 语义 | 正式入口 |
+| --- | --- | --- | --- | --- |
+| 安装插件 | `install()` | | 监听 / 发送 Event | `on()` / `emit()` |
+| 原子修改安装计划 | `change()` | | 注册资源 | `cleanup()` |
+| 发布 Service | `provides` + `setup` 返回值 | | 子生命周期 / 任务 | `lifetime(label)` / `spawn()` |
+| 贡献 Extension | `contribute()` | | 读取 / 订阅实时值 | `get()` / `subscribe()` |
+| 更新 / 删除安装 | `update()` / `remove()` | | 提前释放资源 | `dispose()` |
 
-从最小 Service 到 Planet / Lynx、声明式计划与模块图 HMR 的完整学习路径见 [examples package](packages/examples/README.md)，可运行 `pnpm examples`。
+**事务只暴露已提交状态。** setup 期间的 Contract kind、监听与贡献先暂存，整层校验通过才发布。失败回滚旧图，无法可靠回滚时 fail closed，不会留下半装好的运行时。
 
-## Development
+**类型即约束。** 用未声明的依赖、把 Extension 当 Service 取、声明了 `provides` 却不返回——全部是编译错误。
+
+## 六个原子
+
+```text
+Service      稳定的一对一能力，实例期不变，提供者变化则重建消费者
+Extension    可动态增删的开放贡献集合，变化通知订阅者
+Event        不保留状态的瞬时事实，一种分发语义
+Lifetime     监听、贡献、任务与资源的结构化所有权，终态自动摘除
+Plugin       一次 setup 产生一组能力
+Application  依赖图、事务与实例编排
+```
+
+Signal 不是第五种能力。`@dougongjs/reactive` 提供 `signal()` / `computed()` / `batch()` 和基于公开 Lifetime 协议的 `observe()`；Core 不依赖它，也不提供隐式 effect。
+
+## 包结构
+
+| 包 | 说明 | 运行时依赖 |
+| --- | --- | --- |
+| [`dougong`](./packages/dougong) | 门面，re-export 下面三个 | 三个内部包 |
+| [`@dougongjs/core`](./packages/core) | 六个原子、依赖图、事务、Group、诊断 | `@standard-schema/spec` |
+| [`@dougongjs/reactive`](./packages/reactive) | Signal 值层与 `observe()` | **无** |
+| [`@dougongjs/platform`](./packages/platform) | Manifest、Loader、权限、懒激活、HMR | core、zod、compare-versions |
+
+`core` 与 `reactive` 是互不依赖的基础层；`platform` 只依赖 `core`；`dougong` 只是组合入口。这条方向由 CI 的架构门禁强制。
+
+## 适用场景
+
+| 适合 | 不适合 |
+| --- | --- |
+| 能力需要动态装卸、更新、回滚 | 只需要一个简单的 DI 容器 |
+| 插件之间有真实依赖关系 | 插件完全独立、互不通信 |
+| 半加载状态不可接受 | 长驻服务，局部降级比一致性更重要 |
+| 桌面应用、编辑器内核、构建工具链 | 简单的 Web 页面 |
+
+Dougong 的失败模型是**事务性**的——一个插件 setup 失败会让整笔变更回滚。如果你更需要「一个插件挂了不影响其他」的隔离性，[cordis](https://github.com/cordiverse/cordis) 这类设计更合适。这是产品取舍，不是优劣。
+
+## 文档
+
+从入门到规范分三层：
+
+**上手** — [快速开始](https://tangerg.github.io/dougong/guide/getting-started) · [核心概念](https://tangerg.github.io/dougong/guide/concepts)
+
+**深入** — [编写插件](https://tangerg.github.io/dougong/guide/writing-plugins) · [生命周期与资源](https://tangerg.github.io/dougong/guide/lifetime) · [事务与变更](https://tangerg.github.io/dougong/guide/transactions) · [响应式与观察](https://tangerg.github.io/dougong/guide/reactive) · [外部插件分发](https://tangerg.github.io/dougong/guide/platform)
+
+**规范** — [Core API 规范](https://tangerg.github.io/dougong/reference/core-api) · [整体架构](https://tangerg.github.io/dougong/reference/architecture) · [Platform 规范](https://tangerg.github.io/dougong/reference/platform) · [错误码](https://tangerg.github.io/dougong/reference/errors)
+
+## 示例
+
+[九个可执行示例](./packages/examples)从最小 Service 走到 Planet / Lynx 真实场景、声明式计划和模块图 HMR，全部进 CI：
+
+```sh
+pnpm examples
+```
+
+其中示例 08 和 09 各约 200 行，只用公开 API 实现了成熟框架里动辄上千行的声明式配置加载器和热更新引擎——这是对「Core 抽象是否足够可展开」的检验。
+
+## 环境要求
+
+Node.js ≥ 22，或等价的 ES2024 宿主（需要 `Promise.withResolvers()`）。
+
+TypeScript 消费者的 `tsconfig.json` 需要：
+
+```json
+"lib": ["ES2024", "DOM", "DOM.Iterable", "ESNext.Disposable"]
+```
+
+## 开发
 
 ```sh
 pnpm install
-pnpm check
+pnpm check      # 9 步验证门禁
+pnpm docs:dev   # 本地文档站
 ```
 
-`pnpm check` 依次执行类型检查、lint、格式检查、测试与覆盖率、未使用代码检查、循环依赖检查、架构层级检查和发布构建。
+`pnpm check` 依次执行：类型检查 → lint → 格式检查 → 测试与覆盖率 → 死代码检查 → 循环依赖检查 → 架构层级检查 → 发布构建 → 文档构建。
+
+架构约束不只写在文档里：`scripts/check-layers.mjs` 把包依赖方向、模块层级、"Platform 必须复用 Core 的观察协议"等规则变成 CI 失败。
+
+## 状态
+
+早期开发阶段（`0.0.x`），**当前不承诺向后兼容**。优先保证模型正确、API 一致和可执行证据完整。
+
+## 许可证
+
+[MIT](./LICENSE)
