@@ -3,8 +3,8 @@ import { rememberContractKind } from "./contract-registry";
 import { DougongError } from "./errors";
 import type { InstallationRecord } from "./installation";
 
-/** Immutable validated dependency plan over one application-wide capability graph. */
-export class PluginGraph {
+/** Immutable validated dependency plan over one Host-wide installation graph. */
+export class InstallationGraph {
   readonly #resolvedProviders: ReadonlyMap<
     InstallationRecord,
     ReadonlyMap<string, InstallationRecord>
@@ -35,7 +35,7 @@ export class PluginGraph {
       dependencies.indegree,
     );
 
-    return new PluginGraph(
+    return new InstallationGraph(
       Object.freeze(order),
       Object.freeze(layers.map((layer) => Object.freeze(layer))),
       providers,
@@ -53,7 +53,7 @@ export class PluginGraph {
     return this.providers.get(serviceId);
   }
 
-  affectedByTransitionTo(other: PluginGraph, changed: ReadonlySet<InstallationRecord>) {
+  affectedByTransitionTo(other: InstallationGraph, changed: ReadonlySet<InstallationRecord>) {
     const affected = new Set<InstallationRecord>();
     this.#expand(changed, affected);
     other.#expand(changed, affected);
@@ -80,7 +80,7 @@ function collectProviders(
 ) {
   const providers = new Map<string, InstallationRecord>();
   for (const installation of installations) {
-    for (const token of Object.values(installation.spec.plugin.provides ?? {})) {
+    for (const token of Object.values(installation.declaration.plugin.provides ?? {})) {
       rememberContractKind(contractKinds, token);
       const previous = providers.get(token.id);
       if (previous) {
@@ -105,7 +105,7 @@ function connectRequirements(
   const indegree = new Map(installations.map((installation) => [installation, 0]));
 
   for (const installation of installations) {
-    for (const requirement of Object.values(installation.spec.plugin.requires ?? {})) {
+    for (const requirement of Object.values(installation.declaration.plugin.requires ?? {})) {
       const token = requirement.kind === "optional" ? requirement.service : requirement;
       rememberContractKind(contractKinds, token);
       if (token.kind === "extensionPoint") continue;
@@ -115,13 +115,13 @@ function connectRequirements(
         if (requirement.kind === "optional") continue;
         throw new DougongError(
           "SERVICE_MISSING",
-          `Plugin '${installation.id}' requires missing service '${token.id}'`,
+          `Installation '${installation.id}' requires missing Service '${token.id}'`,
         );
       }
       if (provider === installation) {
         throw new DougongError(
           "SERVICE_CYCLE",
-          `Plugin '${installation.id}' cannot require service '${token.id}' that it provides`,
+          `Installation '${installation.id}' cannot require Service '${token.id}' that it provides`,
         );
       }
 
@@ -166,7 +166,7 @@ function sortDependencies(
     const cycle = findDependencyCycle(installations, dependents);
     throw new DougongError(
       "SERVICE_CYCLE",
-      `Plugin dependency cycle: ${cycle.map((installation) => installation.id).join(" -> ")}`,
+      `Installation dependency cycle: ${cycle.map((installation) => installation.id).join(" -> ")}`,
     );
   }
   return { order, layers };
@@ -206,5 +206,5 @@ function findDependencyCycle(
     if (cycle) return cycle;
   }
 
-  throw new TypeError("Dependency graph is cyclic but no cycle path was found");
+  throw new Error("Dependency graph is cyclic but no cycle path was found");
 }

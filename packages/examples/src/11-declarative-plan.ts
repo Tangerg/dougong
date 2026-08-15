@@ -16,14 +16,14 @@ interface Greeter {
 }
 
 interface PlanEntry {
-  /** Explicit content identity; the Manifest name remains the only plugin identity. */
+  /** Explicit content identity; the Manifest name remains the Registration identity. */
   readonly revision: string;
   readonly artifact: Artifact<string>;
 }
 
 interface DeploymentRecord {
   readonly revision: string;
-  readonly plugin: Registration<string>;
+  readonly registration: Registration<string>;
 }
 
 const GREETER = service<Greeter>("examples/declarative-plan/greeter");
@@ -32,7 +32,7 @@ const LEGACY_NAME = "examples.declarative-plan.legacy";
 const TOOL_NAME = "examples.declarative-plan.tool";
 
 /**
- * A host-owned desired-state controller. It remembers stable Platform handles,
+ * An application-owned desired-state controller. It remembers stable Registrations,
  * but delegates all validation, loading, atomicity and rollback to one
  * canonical Platform ChangeSet.
  */
@@ -50,7 +50,7 @@ class PlanDeployment {
     const next = new Map<string, DeploymentRecord>();
 
     for (const [key, current] of this.#records) {
-      if (!desired.has(key)) change.remove(current.plugin);
+      if (!desired.has(key)) change.remove(current.registration);
     }
 
     for (const [name, entry] of desired) {
@@ -58,15 +58,15 @@ class PlanDeployment {
       if (!current) {
         next.set(name, {
           revision: entry.revision,
-          plugin: change.register(entry.artifact),
+          registration: change.register(entry.artifact),
         });
       } else {
         if (current.revision !== entry.revision) {
-          change.update(current.plugin, entry.artifact);
+          change.update(current.registration, entry.artifact);
         }
         next.set(name, {
           revision: entry.revision,
-          plugin: current.plugin,
+          registration: current.registration,
         });
       }
     }
@@ -88,7 +88,7 @@ function indexPlan(plan: ReadonlyArray<PlanEntry>) {
     ) {
       throw new TypeError(`Plan revision for '${name}' must be a non-empty, trimmed string`);
     }
-    if (entries.has(name)) throw new TypeError(`Duplicate plugin '${name}' in plan`);
+    if (entries.has(name)) throw new TypeError(`Duplicate Registration '${name}' in plan`);
     entries.set(name, entry);
   }
   return entries;
@@ -148,7 +148,7 @@ export async function declarativePlan(): Promise<ExampleResult> {
   const platform = createPlatform({
     installer: host,
     apiVersion: "1.0.0",
-    permissions: new PermissionSet(),
+    authorizer: new PermissionSet(),
     loader: new MemoryLoader<string>(modules),
   });
   const deployment = new PlanDeployment(platform);
@@ -185,15 +185,15 @@ export async function declarativePlan(): Promise<ExampleResult> {
 
   return exampleResult({
     id: "11",
-    stage: "hosts",
+    stage: "applications",
     title: "A desired-state controller compiled into one Platform ChangeSet",
     introduces: ["desired-state", "content-revision", "platform-change-set"],
     facts: [
       `The initial plan published '${before}'.`,
       `The invalid plan was rejected = ${rejected}; the running service remained '${afterFailure}'.`,
       `Rollback restored the whole plan, not just the failing entry: the removal candidate's disposal count stayed ${legacyAfterFailure}.`,
-      `The valid plan atomically published '${afterCommit}' and disposed the legacy plugin ${legacyDisposals} time.`,
-      `The final plan contains ${deployed}; the newly declared tool started ${toolStarts} time.`,
+      `The valid plan atomically published '${afterCommit}' and disposed the legacy Instance ${legacyDisposals} time.`,
+      `The final plan contains ${deployed}; the newly declared tool Instance started ${toolStarts} time.`,
       "Identity came from the manifest name and change detection from an explicit revision — never guessed from paths or object contents.",
     ],
   });

@@ -65,7 +65,7 @@ function explorerPlugin(title: string, relativePath: string) {
 }
 
 /**
- * A workbench. Two rules that hosts usually get wrong are made explicit here:
+ * A workbench. Two rules that applications usually get wrong are made explicit here:
  * command uniqueness is a domain policy, not a Core ExtensionPoint mode; and a
  * Group owns installations, so it is not a capability scope.
  */
@@ -75,7 +75,7 @@ export async function lynxScenario(): Promise<ExampleResult> {
   let workspaceRoot = "";
   let initialWorkspaceCommands = 0;
   const filesystemAdapter = definePlugin({
-    name: "examples.lynx.host.filesystem",
+    name: "examples.lynx.adapter.filesystem",
     provides: { filesystem: FILESYSTEM },
     setup: () => ({
       filesystem: {
@@ -142,7 +142,7 @@ export async function lynxScenario(): Promise<ExampleResult> {
   const platform = createPlatform({
     installer: workspace,
     apiVersion: "1.0.0",
-    permissions: new PermissionSet(["filesystem:read"]),
+    authorizer: new PermissionSet(["filesystem:read"]),
     loader: new MemoryLoader(
       new Map([
         ["explorer-v1", { default: explorerV1 }],
@@ -190,9 +190,9 @@ export async function lynxScenario(): Promise<ExampleResult> {
 
   return exampleResult({
     id: "10",
-    stage: "hosts",
+    stage: "applications",
     title: "Lynx: a domain catalog, workspace ownership and updates in place",
-    introduces: ["domain-catalog", "workspace-ownership", "plugin-update"],
+    introduces: ["domain-catalog", "workspace-ownership", "registration-update"],
     facts: [
       "Command uniqueness is a CommandCatalog Service policy, not a special Core ExtensionPoint mode.",
       `The workspace shell bound to '${workspaceRoot}' with ${initialWorkspaceCommands} initial commands.`,

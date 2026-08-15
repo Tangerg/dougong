@@ -14,10 +14,9 @@ Platform 把这四件事编译成 Core 的操作。它**不复制** Core 的注�
 ## 心智模型
 
 ```text
-应用代码
- └─ Platform            ← 外部关注点：manifest / loader / 权限 / 激活
-      └─ Installer      ← 就是 Core 的 Host
-           └─ 已安装的插件
+应用代码 → Platform → Artifact / Registration
+                        ↓ 编译变更到
+               Installer（Host 或 Group）→ Installation
 ```
 
 Platform 拿一个 `Installer`（Host 或 Group），把外部插件编译成对它的 `install` / `update` / `remove`。
@@ -32,12 +31,12 @@ const host = createHost({ name: "editor" })
 await host.start()
 
 const platform = createPlatform({
-  installer: app,                       // 编译目标
+  installer: host,                      // 编译目标
   apiVersion: "1.0.0",                  // 应用 API 版本
   loader: new ImportLoader(),     // 怎么加载模块
 })
 
-const plugin = await platform.register({
+const registration = await platform.register({
   manifest: defineManifest({
     name: "acme.markdown",
     version: "1.2.0",
@@ -87,7 +86,7 @@ new ImportLoader()        // 动态 import()，Reference 是 string | URL
 new MemoryLoader(map)     // 从 Map 取，测试用
 ```
 
-Loader 是**唯一**执行外部代码的地方。加载失败抛 `MODULE_LOAD_FAILED`，模块形状不对（没有导出合法的插件定义）抛 `MODULE_INVALID`。
+Loader 是**唯一**执行外部代码的地方。加载失败抛 `MODULE_LOAD_FAILED`，模块没有导出合法 `Plugin` 时抛 `MODULE_INVALID`。
 
 `signal` 让加载可以被取消——移除一个正在加载的插件不会留下一个孤儿 import。
 
@@ -97,17 +96,17 @@ Loader 是**唯一**执行外部代码的地方。加载失败抛 `MODULE_LOAD_F
 import { PermissionSet } from "dougong"
 
 const platform = createPlatform({
-  installer: app,
+  installer: host,
   apiVersion: "1.0.0",
   loader: new ImportLoader(),
-  permissions: new PermissionSet(["fs:read", "net:fetch"]),
+  authorizer: new PermissionSet(["fs:read", "net:fetch"]),
 })
 ```
 
 也可以给一个自定义授权器（比如弹窗问用户）：
 
 ```ts
-const permissions = {
+const authorizer = {
   async authorize(manifest, signal) {
     const granted = await askUser(manifest.name, manifest.permissions)
     if (!granted) throw new PermissionDeniedError(manifest.name, manifest.permissions)
@@ -128,18 +127,18 @@ JavaScript 模块一旦被 `import` 就和应用代码在同一个 realm 里，�
 外部插件通常不该在启动时全部加载。Platform 的模型是**注册 ≠ 激活**：
 
 ```ts
-const plugin = await platform.register({
+const registration = await platform.register({
   manifest,
   reference: "./heavy-plugin.js",
   placeholder: lightweightStub,     // 可选：激活前对外提供的应用侧定义
 })
 
-plugin.status      // "registered" → 尚未加载
-await plugin.activate()             // 显式激活
-plugin.status      // "active"
+registration.status      // "registered" → 尚未加载
+await registration.activate()       // 显式激活
+registration.status      // "activated"
 ```
 
-`placeholder` 是一个**应用代码编写**的插件定义，在真实模块激活之前占位。它让「命令已经在菜单里，但点击时才加载实现」这类体验成为可能——而且占位到真实实现的替换是**原子**的，走同一笔 Core ChangeSet。
+`placeholder` 是一个**应用代码编写的 Plugin**，在加载所得 Plugin 激活之前占位。它让「命令已经在菜单里，但点击时才加载实现」这类体验成为可能——而且两者替换是**原子**的，走同一笔 Core ChangeSet。
 
 激活也可以由事件触发：
 
@@ -148,7 +147,7 @@ plugin.status      // "active"
 await platform.trigger("onLanguage:markdown")
 ```
 
-`trigger()` 会激活所有声明了该事件的插件，**并发**执行，独立失败被聚合成 `AggregateError`——一个插件激活失败不影响其他插件。
+`trigger()` 会激活所有声明了该事件的 Registration，**并发**执行，独立失败被聚合成 `AggregateError`——一次激活失败不影响其他 Registration。
 
 ## Manifest 依赖
 
@@ -165,11 +164,11 @@ Platform 会在激活前按依赖顺序激活它们，并检查：
 
 | 错误码 | 条件 |
 | --- | --- |
-| `PLUGIN_DEPENDENCY_MISSING` | 依赖未注册 |
-| `PLUGIN_DEPENDENCY_INCOMPATIBLE` | 版本范围不满足 |
-| `PLUGIN_DEPENDENCY_INACTIVE` | 依赖未能激活 |
-| `PLUGIN_CYCLE` | manifest 依赖成环 |
-| `PLUGIN_DUPLICATE` | 同名插件重复注册 |
+| `REGISTRATION_DEPENDENCY_MISSING` | 依赖没有对应 Registration |
+| `REGISTRATION_DEPENDENCY_INCOMPATIBLE` | 依赖 Registration 的版本范围不满足 |
+| `REGISTRATION_DEPENDENCY_INACTIVE` | 依赖 Registration 未激活 |
+| `REGISTRATION_CYCLE` | 候选 Registration 图中的 Manifest 依赖成环 |
+| `REGISTRATION_DUPLICATE` | 已存在同一 Manifest 名称的 Registration |
 
 ::: tip 两张图，各管各的
 Manifest 依赖（外部插件之间的**分发**关系）和 Core 的 Service 依赖（能力之间的**运行**关系）是两张独立的图。
@@ -193,26 +192,26 @@ await changes.commit()
 
 任何一步失败，Core 那边一动没动。
 
-更新时会检查身份：新 artifact 的 manifest 名字必须和原插件一致，否则 `REGISTRATION_IDENTITY`。这保证「更新」不会偷偷变成「换成另一个插件」。
+更新时会检查身份：新 Artifact 的 Manifest 名字必须与 Registration 一致，否则 `REGISTRATION_IDENTITY`。这保证「更新」不会偷偷变成「注册另一个 Plugin」。
 
 ## 热更新
 
-`update()` 保持实例身份，换实现：
+`update()` 保持 Registration 与 Core Installation 身份，同时替换活动 Instance：
 
 ```ts
-await plugin.update({
+await registration.update({
   manifest: nextManifest,
   reference: "./plugin@1.3.0.js",
 })
 ```
 
-底层走的是 Core 的 `handle.update({ plugin })`，所以只有受影响的依赖闭包会重启。应用代码想做真正的 HMR（监听文件变化、计算失效传播、批量重载），可以在这之上组合——[示例 12](../examples.md#stage-3) 演示了一个约 200 行的完整模块图 HMR。
+底层走的是 Core 的 `installation.update({ plugin })`，所以只有受影响的依赖闭包会重启。应用代码想做真正的 HMR（监听文件变化、计算失效传播、批量重载），可以在这之上组合——[示例 12](../examples.md#stage-3) 演示了一个约 200 行的完整模块图 HMR。
 
 ## 诊断
 
 ```ts
 platform.diagnostics.get()
-// { apiVersion, status, plugins: ReadonlyMap<string, RegistrationSnapshot> }
+// { apiVersion, status, registrations: ReadonlyMap<string, RegistrationSnapshot> }
 
 platform.diagnostics.subscribe(() => render())
 ```
@@ -227,10 +226,10 @@ await platform.dispose()
 await using platform = createPlatform({ ... })
 ```
 
-释放会取消在途激活、从 Core 移除全部已安装的句柄、关闭诊断。之后任何 Platform 方法抛 `PLATFORM_UNAVAILABLE`。
+释放会取消在途激活、从 Core 移除全部 Installation、关闭诊断。之后任何 Platform 方法抛 `PLATFORM_UNAVAILABLE`。
 
 ## 接下来
 
 - [Platform 规范](../reference/platform.md) —— 精确语义与边界情形
-- [错误码](../reference/errors.md) —— 全部 28 个稳定错误码
+- [错误码](../reference/errors.md) —— 稳定错误码及触发条件
 - [可执行示例 08 / 12](../examples.md) —— 懒激活与模块图 HMR 的完整场景

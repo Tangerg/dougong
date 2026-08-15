@@ -1,6 +1,5 @@
 import { DougongError, normalizeFailure } from "./errors";
-import type { GroupNode } from "./group";
-import type { InstallationStatus } from "./installation";
+import type { GroupNode, GroupStatus } from "./group";
 
 /**
  * Owns the readiness barrier for one structural Group node. A failed mutation
@@ -20,7 +19,7 @@ export class GroupLifecycle {
     this.#notifyChanged = notifyChanged;
   }
 
-  status(contents: InstallationStatus): InstallationStatus {
+  status(contents: GroupStatus): GroupStatus {
     if (!this.node.attached) return "removed";
     const state = this.#state;
     if (state.phase === "pending") return contents === "stopping" ? "stopping" : "pending";

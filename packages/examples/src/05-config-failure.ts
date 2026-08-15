@@ -81,14 +81,14 @@ export async function configAndFailure(): Promise<ExampleResult> {
   });
 
   const host = createHost({ name: "config-failure" });
-  const cache = host.install(cachePlugin, { capacity: 128 });
+  const cacheInstallation = host.install(cachePlugin, { capacity: 128 });
   await host.start();
   const running = host.get(CACHE).capacity;
 
   // 1. An invalid declaration. Validation runs before anything is stopped.
   let issues: ReadonlyArray<string> = [];
   try {
-    await cache.update({ config: { capacity: 0 } });
+    await cacheInstallation.update({ config: { capacity: 0 } });
   } catch (error) {
     if (!(error instanceof ConfigValidationError)) throw error;
     issues = error.issues.map((issue) => issue.message);
@@ -123,10 +123,10 @@ export async function configAndFailure(): Promise<ExampleResult> {
     introduces: ["config-schema", "config-validation", "change-set", "setup-failure", "rollback"],
     facts: [
       `The schema applied its default and the caller's override: capacity ${running}.`,
-      `The invalid update was rejected with ${issues.join("; ")}, before any instance stopped.`,
+      `The invalid update was rejected with ${issues.join("; ")}, before any Instance stopped.`,
       `The running cache never moved: capacity ${afterInvalidConfig} → ${afterRollback}.`,
-      `The failing commit rejected with '${rejection}'; the audit plugin started ${auditStarts} time and was released ${auditReleases} time.`,
-      `Rollback is undone work, not skipped work — AUDIT published = ${auditPublished}, application status '${status}'.`,
+      `The failing commit rejected with '${rejection}'; the audit Instance started ${auditStarts} time and was released ${auditReleases} time.`,
+      `Rollback is undone work, not skipped work — AUDIT published = ${auditPublished}, Host status '${status}'.`,
     ],
   });
 }

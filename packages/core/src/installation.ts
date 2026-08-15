@@ -1,29 +1,30 @@
 import { DougongError, normalizeFailure } from "./errors";
 import type { Lifetime } from "./lifetime";
-import type { Plugin, Provisions, Requirements } from "./plugin";
+import type { ErasedPlugin } from "./plugin";
 import type { GroupNode } from "./group";
 
 export type InstallationStatus = "pending" | "active" | "stopping" | "failed" | "removed";
 
-export type AnyPlugin = Plugin<unknown, Requirements, Provisions, unknown>;
-
-export interface InstallationSpec {
-  readonly plugin: AnyPlugin;
+export interface InstallationDeclaration {
+  readonly plugin: ErasedPlugin;
   readonly config: unknown;
 }
 
-export interface InstallationRuntime {
-  readonly plugin: AnyPlugin;
+export interface Instance {
+  readonly plugin: ErasedPlugin;
   readonly config: unknown;
   readonly lifetime: Lifetime;
 }
 
-export function createInstallationSpec(plugin: AnyPlugin, config: unknown): InstallationSpec {
+export function createInstallationDeclaration(
+  plugin: ErasedPlugin,
+  config: unknown,
+): InstallationDeclaration {
   return Object.freeze({ plugin, config });
 }
 
 interface InstallationAttachment {
-  spec: InstallationSpec;
+  declaration: InstallationDeclaration;
   readonly group: GroupNode;
   notifyChanged: (() => void) | undefined;
 }
@@ -42,10 +43,10 @@ type InstallationState =
   | { readonly phase: "pending" }
   | {
       readonly phase: "active";
-      readonly runtime: InstallationRuntime;
+      readonly instance: Instance;
       readonly readiness: "unsettled" | "settled";
     }
-  | { readonly phase: "stopping"; readonly runtime: InstallationRuntime }
+  | { readonly phase: "stopping"; readonly instance: Instance }
   | {
       readonly phase: "failed";
       readonly failure: InstallationFailure;
@@ -54,9 +55,9 @@ type InstallationState =
   | { readonly phase: "removed"; readonly readiness: "unsettled" | "settled" };
 
 /**
- * A plugin installation is a stable identity whose declaration and runtime may
- * change. State transitions and ready waiters live here so orchestration code
- * cannot create a status that disagrees with the owned runtime.
+ * An installation is a stable identity whose declaration and active Instance
+ * may change. State transitions and ready waiters live here so orchestration
+ * code cannot create a status that disagrees with the owned Instance.
  */
 export class InstallationRecord {
   #state: InstallationState = { phase: "pending" };
@@ -74,16 +75,15 @@ export class InstallationRecord {
     readonly id: string,
     readonly index: number,
     group: GroupNode,
-    spec: InstallationSpec,
+    declaration: InstallationDeclaration,
   ) {
     this.groupId = group.id;
-    this.#attachment = { spec, group, notifyChanged: undefined };
+    this.#attachment = { declaration, group, notifyChanged: undefined };
   }
 
   attach(notifyChanged: () => void) {
     const attachment = this.#requireAttachment();
-    if (attachment.notifyChanged)
-      throw new TypeError(`Installation '${this.id}' is already attached`);
+    if (attachment.notifyChanged) throw new Error(`Installation '${this.id}' is already attached`);
     attachment.notifyChanged = notifyChanged;
   }
 
@@ -91,9 +91,9 @@ export class InstallationRecord {
     return this.#state.phase;
   }
 
-  get runtime() {
+  get instance() {
     const state = this.#state;
-    return state.phase === "active" || state.phase === "stopping" ? state.runtime : undefined;
+    return state.phase === "active" || state.phase === "stopping" ? state.instance : undefined;
   }
 
   get error() {
@@ -113,18 +113,28 @@ export class InstallationRecord {
     return this.#requireAttachment().group;
   }
 
-  get spec() {
-    return this.#requireAttachment().spec;
+  get declaration() {
+    return this.#requireAttachment().declaration;
   }
 
-  reconfigure(spec: InstallationSpec) {
-    this.#requireAttachment().spec = spec;
+  replaceDeclaration(declaration: InstallationDeclaration) {
+    this.#requireAttachment().declaration = declaration;
   }
 
   ready() {
     const pending = this.#pendingReadiness;
     if (pending) return pending.barrier.then(() => this.#readyFromCurrentState());
     return this.#readyFromCurrentState();
+  }
+
+  unavailableError() {
+    return (
+      this.error ??
+      new DougongError(
+        "INSTALLATION_UNAVAILABLE",
+        `Installation '${this.id}' has not been committed`,
+      )
+    );
   }
 
   trackReadiness(operation: Promise<void>) {
@@ -161,13 +171,13 @@ export class InstallationRecord {
       }
     }
 
-    return new Promise<void>((resolve, reject) => {
-      this.#readyWaiters.add({ resolve, reject });
-    });
+    const completion = Promise.withResolvers<void>();
+    this.#readyWaiters.add(completion);
+    return completion.promise;
   }
 
-  activate(runtime: InstallationRuntime) {
-    this.#transition({ phase: "active", runtime, readiness: "unsettled" });
+  activate(instance: Instance) {
+    this.#transition({ phase: "active", instance, readiness: "unsettled" });
   }
 
   settleReady() {
@@ -191,7 +201,7 @@ export class InstallationRecord {
   beginStopping() {
     const state = this.#state;
     if (state.phase !== "active") return false;
-    this.#transition({ phase: "stopping", runtime: state.runtime });
+    this.#transition({ phase: "stopping", instance: state.instance });
     return true;
   }
 
@@ -200,7 +210,7 @@ export class InstallationRecord {
   }
 
   fail(error: unknown) {
-    this.#transitionToFailed(error);
+    return this.#transitionToFailed(error);
   }
 
   discard(error: unknown) {
@@ -247,7 +257,7 @@ export class InstallationRecord {
 
   #requireAttachment() {
     const attachment = this.#attachment;
-    if (!attachment) throw new TypeError(`Installation '${this.id}' is no longer installed`);
+    if (!attachment) throw new Error(`Installation '${this.id}' is no longer installed`);
     return attachment;
   }
 }

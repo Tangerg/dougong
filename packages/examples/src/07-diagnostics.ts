@@ -54,7 +54,7 @@ export async function diagnostics(): Promise<ExampleResult> {
   });
 
   const host = createHost({ name: "diagnostics" });
-  const handle = host.install(workbenchPlugin);
+  const installation = host.install(workbenchPlugin);
   host.install(shellPlugin);
 
   // The view is a `get()` + `subscribe()` pair — the same protocol an
@@ -67,10 +67,10 @@ export async function diagnostics(): Promise<ExampleResult> {
   await host.start();
 
   const snapshot = host.diagnostics.get();
-  const workbench = snapshot.installations.get(handle.id);
-  const shell = [...snapshot.installations.values()].find((entry) => entry.id !== handle.id);
+  const workbench = snapshot.installations.get(installation.id);
+  const shell = [...snapshot.installations.values()].find((entry) => entry.id !== installation.id);
   if (!workbench?.lifetime || !shell)
-    throw new TypeError("Diagnostics did not report both plugins");
+    throw new TypeError("Diagnostics did not report both Installations");
   const lifetime = workbench.lifetime;
   const busy = lifetime.get();
 
@@ -82,7 +82,7 @@ export async function diagnostics(): Promise<ExampleResult> {
   subscription.dispose();
   await host.stop();
 
-  // The tree is gone, but a handle kept from before still reads its final
+  // The tree is gone, but a view kept from before still reads its final
   // state — as plain data, without holding the Host alive.
   const final = lifetime.get();
   let acceptsNewSubscribers = true;
@@ -103,7 +103,7 @@ export async function diagnostics(): Promise<ExampleResult> {
       "view-finalization",
     ],
     facts: [
-      `The Host snapshot named ${snapshot.installations.size} plugins at status '${snapshot.status}', revision ${snapshot.revision}.`,
+      `The Host snapshot reported ${snapshot.installations.size} Installations at status '${snapshot.status}', revision ${snapshot.revision}.`,
       `Declarations are readable as data: the shell requires [${shell.requires.join(", ")}], the workbench provides [${workbench.provides.join(", ")}].`,
       `Ownership is a labeled tree: ${describe(busy)}.`,
       `The task finished and detached itself: tasks ${busy.tasks} → ${settled.tasks}, with the plugin still active.`,

@@ -2,9 +2,9 @@ import { definePlugin, type Provisions, type Requirements } from "@dougongjs/cor
 import { PlatformError } from "./errors";
 import type { Loader } from "./loader";
 import { defineManifest, matchesVersion, type Manifest } from "./manifest";
-import type { AnyPlugin, NormalizedArtifact, Artifact } from "./platform-api";
+import type { ErasedPlugin, NormalizedArtifact, Artifact } from "./platform-api";
 
-/** Normalizes and validates one host-facing artifact declaration. */
+/** Normalizes and validates one public Artifact declaration. */
 export function normalizeArtifact<
   Reference,
   Config = void,
@@ -16,13 +16,13 @@ export function normalizeArtifact<
   artifact: Artifact<Reference, Config, Requires, Provides, ConfigInput>,
 ): NormalizedArtifact<Reference> {
   if (!artifact || typeof artifact !== "object") {
-    throw new TypeError("Plugin artifact must be an object");
+    throw new TypeError("Artifact must be an object");
   }
   const manifest = defineManifest(artifact.manifest);
   if (!matchesVersion(apiVersion, manifest.apiVersion)) {
     throw new PlatformError(
       "API_INCOMPATIBLE",
-      `Plugin '${manifest.name}' requires API ${manifest.apiVersion}, host is ${apiVersion}`,
+      `Manifest '${manifest.name}' requires API ${manifest.apiVersion}, Platform provides ${apiVersion}`,
     );
   }
 
@@ -38,8 +38,8 @@ export function normalizeArtifact<
   });
 }
 
-/** Resolves one normalized artifact into its canonical Core definition. */
-export async function loadPluginDefinition<Reference>(
+/** Resolves one normalized Artifact into its canonical Core Plugin. */
+export async function loadPlugin<Reference>(
   loader: Loader<Reference>,
   artifact: NormalizedArtifact<Reference>,
   signal: AbortSignal,
@@ -49,49 +49,63 @@ export async function loadPluginDefinition<Reference>(
   try {
     loaded = await loader.load(artifact.reference, signal);
   } catch (error) {
-    if (signal.aborted) throw signal.reason;
+    if (isLoadCancellation(signal, error)) throw error;
     throw new PlatformError(
       "MODULE_LOAD_FAILED",
-      `Failed to load plugin '${artifact.manifest.name}'`,
+      `Failed to load module for Manifest '${artifact.manifest.name}'`,
       { cause: error },
     );
   }
   signal.throwIfAborted();
   if (!loaded || (typeof loaded !== "object" && typeof loaded !== "function")) {
-    throw new PlatformError("MODULE_INVALID", `Plugin '${artifact.manifest.name}' has no module`);
+    throw new PlatformError(
+      "MODULE_INVALID",
+      `Artifact '${artifact.manifest.name}' did not load a module`,
+    );
   }
 
   const candidate = (loaded as { default?: unknown }).default;
-  let definition: AnyPlugin;
+  let plugin: ErasedPlugin;
   try {
-    definition = definePlugin(candidate as AnyPlugin);
+    plugin = normalizePluginCandidate(candidate);
   } catch (error) {
     throw new PlatformError(
       "MODULE_INVALID",
-      `Plugin '${artifact.manifest.name}' default export is not a plugin definition`,
+      `Module '${artifact.manifest.name}' does not default-export a valid Plugin`,
       { cause: error },
     );
   }
-  assertArtifactIdentity(artifact.manifest, definition, "module");
-  return definition;
+  assertArtifactIdentity(artifact.manifest, plugin, "module");
+  return plugin;
+}
+
+function isLoadCancellation(signal: AbortSignal, error: unknown) {
+  if (!signal.aborted) return false;
+  if (Object.is(error, signal.reason)) return true;
+  return error instanceof Error && error.name === "AbortError";
 }
 
 function normalizePlaceholder(manifest: Manifest, placeholder: unknown) {
-  const definition = definePlugin(placeholder as AnyPlugin);
-  assertArtifactIdentity(manifest, definition, "placeholder");
-  return definition;
+  const plugin = normalizePluginCandidate(placeholder);
+  assertArtifactIdentity(manifest, plugin, "placeholder");
+  return plugin;
+}
+
+/** The sole Platform boundary that validates and type-erases a Plugin candidate. */
+function normalizePluginCandidate(candidate: unknown): ErasedPlugin {
+  return definePlugin(candidate as ErasedPlugin);
 }
 
 function assertArtifactIdentity(
   manifest: Manifest,
-  definition: { readonly name: string },
+  plugin: { readonly name: string },
   source: "module" | "placeholder",
 ) {
-  if (definition.name !== manifest.name) {
-    const mismatch = source === "module" ? "loaded plugin" : "placeholder is named";
+  if (plugin.name !== manifest.name) {
+    const candidate = source === "module" ? "loaded Plugin" : "placeholder Plugin";
     throw new PlatformError(
       "ARTIFACT_IDENTITY",
-      `Artifact for manifest '${manifest.name}' ${mismatch} '${definition.name}'`,
+      `Artifact Manifest '${manifest.name}' does not match ${candidate} '${plugin.name}'`,
     );
   }
 }

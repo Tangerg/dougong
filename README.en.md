@@ -51,7 +51,7 @@ await host.start()                    // topology derived from declarations, lay
 
 ## Why it looks like this
 
-**Explicit over implicit.** Dependencies live in `requires`, identity lives in Contracts, ownership lives in Lifetimes, runtime selection lives in ordinary parameters. No service locator, ambient scope, prototype-chain injection or proxy — where `ctx.foo` comes from is always visible in the same file.
+**Explicit over implicit.** Dependencies live in `requires`, identity lives in Contracts, ownership lives in Lifetimes, and call-time choices live in ordinary parameters. No service locator, ambient scope, prototype-chain injection or proxy — where `ctx.foo` comes from is always visible in the same file.
 
 **One semantic, one path.** Every semantic operation has exactly one canonical entry point, and higher-level convenience must expand mechanically onto it rather than owning a second state machine.
 
@@ -63,22 +63,22 @@ await host.start()                    // topology derived from declarations, lay
 | Contribute to an ExtensionPoint | `contribute()` | | Read / subscribe to a live value | `get()` / `subscribe()` |
 | Update / remove an installation | `update()` / `remove()` | | Release a resource early | `dispose()` |
 
-**Transactions expose only committed state.** Contract kinds, listeners and contributions made during setup stay staged until the whole layer validates. A failed change rolls back, and fails closed when it cannot roll back reliably — never a half-built runtime.
+**Transactions expose only committed state.** Contract kinds, listeners and contributions made during setup stay staged until the whole layer validates. A failed change rolls back, and fails closed when it cannot roll back reliably — never a half-built execution graph.
 
 **Types are the constraint.** Using an undeclared dependency, reading an ExtensionPoint as a Service, declaring `provides` without returning it — all compile errors.
 
 ## Six atoms
 
 ```text
-Service      a stable one-to-one capability, fixed per instance;
-             a provider change rebuilds consumers
-ExtensionPoint    an open contribution set that adds and removes live,
-             notifying subscribers
-Event        a transient fact retaining no state, with one dispatch semantic
-Lifetime     structured ownership of listeners, contributions, tasks and
-             resources; terminal items detach automatically
-Plugin       one setup producing a set of capabilities
-Host  dependency graph, transactions and instance orchestration
+Service          a stable one-to-one capability, fixed for an Instance;
+                 a provider change rebuilds consumers
+ExtensionPoint   an open contribution set that adds and removes live,
+                 notifying subscribers
+Event            a transient fact retaining no state, with one dispatch semantic
+Lifetime         structured ownership of listeners, contributions, tasks and
+                 resources; terminal items detach automatically
+Plugin           one setup producing a set of capabilities
+Host             dependency graph, transactions and Instance orchestration
 ```
 
 A signal is not a fifth capability. `@dougongjs/reactive` provides `signal()` / `computed()` / `batch()` and an `observe()` built on the public Lifetime protocol; Core neither depends on it nor offers implicit effects.
@@ -98,7 +98,7 @@ A signal is not a fifth capability. `@dougongjs/reactive` provides `signal()` / 
 
 | Fits | Does not fit |
 | --- | --- |
-| Capabilities install, update and roll back at runtime | You just need a small DI container |
+| Capabilities install, update and roll back after startup | You just need a small DI container |
 | Plugins have real dependencies on each other | Plugins are fully independent |
 | A half-loaded state is unacceptable | A long-running service where partial degradation beats consistency |
 | Desktop apps, editor kernels, build toolchains | A simple web page |
@@ -117,7 +117,7 @@ Three layers, from first run to specification:
 
 ## Examples
 
-[Twelve runnable chapters](./packages/examples) climb three stages — atoms, composition, real hosts — from a minimal Service to the Planet / Lynx scenarios, declarative plans and module-graph HMR, all in CI:
+[Twelve runnable chapters](./packages/examples) climb three stages — atoms, composition, complete applications — from a minimal Service to the Planet / Lynx scenarios, declarative plans and module-graph HMR, all in CI:
 
 ```sh
 pnpm examples

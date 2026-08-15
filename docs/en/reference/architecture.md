@@ -10,7 +10,7 @@ The shared problem it solves is:
 
 ```text
 where does a capability come from
-→ which instances depend on it
+→ which Installations depend on it
 → how do open contributions change dynamically
 → how are facts broadcast
 → who owns a resource, and when is it released
@@ -48,7 +48,7 @@ Depends only on standard JavaScript and the Standard Schema type contract. It ow
 - a SerialQueue shared across layers, where one failure does not poison later commands
 - read-only diagnostic projections
 
-Core keeps the same division internally: Host owns only the declaration registry, the `SerialQueue` and status publication; GroupCoordinator owns only structural Groups; Runtime owns only committed Contracts, Services, Events, ExtensionPoints, Lifetimes and the runtime graph. Platform reuses Core's serialization primitive directly rather than copying its failure-isolation state machine. Transactions are initiated by Host, but switching the runtime graph, rollback and fail-closed happen only in Runtime — so declaration state and instance state each have exactly one source of truth, instead of piling every responsibility into one class.
+Core keeps the same division internally: Host owns only Installation declarations, the `SerialQueue` and status publication; GroupCoordinator owns only structural Groups; Engine owns committed Contracts, Services, Events, ExtensionPoints, Lifetimes, Instances and graph transitions. Platform reuses Core's serialization primitive directly rather than copying its failure-isolation state machine. Transactions are initiated by Host, but graph switching, rollback and fail-closed happen only in Engine — so declaration state and active execution state each have exactly one source of truth, instead of piling every responsibility into one class.
 
 ### `@dougongjs/reactive`
 
@@ -61,7 +61,7 @@ A zero-dependency value layer providing:
 
 Core does not import reactive. The two compose through the structural `get()/subscribe()` protocol and the Lifetime object protocol, which also lets third-party observables plug in.
 
-Minimal protocols such as `Disposable` are declared separately in both foundation packages. They carry no runtime object or implementation, and TypeScript makes them interoperate structurally. This is deliberate duplication of a protocol declaration, traded for zero dependencies in both directions. The single-path principle forbids duplicated state machines and runtime semantics, not shared type sources between independent foundation packages.
+Minimal protocols such as `Disposable` are declared separately in both foundation packages. They carry no state or implementation, and TypeScript makes them interoperate structurally. This is deliberate duplication of a protocol declaration, traded for zero dependencies in both directions. The single-path principle forbids duplicated state machines and execution semantics, not shared type sources between independent foundation packages.
 
 ### `@dougongjs/platform`
 
@@ -75,7 +75,7 @@ The external plugin delivery layer, owning:
 - HMR and artifact updates
 - the Platform ChangeSet
 
-Platform compiles its results into ordinary Core `Plugin`s and one Core ChangeSet. It does not copy the runtime.
+Platform compiles its results into ordinary Core `Plugin`s and one Core ChangeSet. It does not copy Engine semantics.
 
 ### `dougong`
 
@@ -83,11 +83,11 @@ A pure re-export convenience entry point: no logic, no state, no second path. Li
 
 ### `@dougongjs/examples`
 
-The outermost executable learning and host-reference package, depending only on the public `dougong` facade. Twelve chapters climb three stages: atoms (Service, ExtensionPoint/Event, Lifetime, signals), composition (config and failure, Contract families and Groups, diagnostics, Platform) and real hosts (Planet, Lynx, declarative plan, module-graph HMR).
+The outermost executable learning and application-reference package, depending only on the public `dougong` facade. Twelve chapters climb three stages: atoms (Service, ExtensionPoint/Event, Lifetime, signals), composition (config and failure, Contract families and Groups, diagnostics, Platform) and complete applications (Planet, Lynx, declarative plan, module-graph HMR).
 
 The progression itself is under test: each chapter declares the concepts it is first to use, and the test concatenates all twelve declarations and compares them to the syllabus in `example.ts` for exact equality — a repeated concept, an inverted order or a chapter that adds nothing all fail.
 
-Host strategies face real usage and regression tests here first; only after several hosts converge on a stable boundary is one extracted into its own package. No foundation package may depend on examples in reverse; if an example needs access to an internal module, that means the public composition surface is not yet closed.
+Application strategies face real usage and regression tests here first; only after several applications converge on a stable boundary is one extracted into its own package. No foundation package may depend on examples in reverse; if an example needs access to an internal module, that means the public composition surface is not yet closed.
 
 ## 3. Why four capabilities
 
@@ -95,7 +95,7 @@ The four basic temporal semantics of capability change are genuinely different:
 
 | Question | Atom | Key guarantee |
 | --- | --- | --- |
-| "Who can perform this operation for me?" | Service | one provider, stable for the instance lifetime |
+| "Who can perform this operation for me?" | Service | one provider, stable for the Instance lifetime |
 | "Which open contributions exist right now?" | ExtensionPoint | a map snapshot with dynamic add/remove |
 | "What just happened?" | Event | nothing retained, concurrent broadcast |
 | "How long does this group of resources live?" | Lifetime | structured cancellation and release |
@@ -107,7 +107,7 @@ Merging them produces smells:
 - if an ExtensionPoint builds in key selection, ordering and override, it leaks Command/Theme/HTTP policy into Core
 - if a Lifetime resolves dependencies, it becomes a hidden scope or IoC container
 
-With the four separated, a Plugin only produces and an Host only orchestrates.
+With the four separated, a Plugin only produces and a Host only orchestrates.
 
 ## 4. What "composition over inheritance" verifiably means
 
@@ -125,7 +125,7 @@ Official and third-party implementations must use the same public API. None of t
 - schedulers, background jobs, log sinks, metrics
 - loaders, HMR, devtools and testing utilities
 
-If an official catalog needed to read `ExtensionStore` directly, the abstraction would not yet be closed.
+If an official catalog needed to read `ContributionStore` directly, the abstraction would not yet be closed.
 
 ### 4.2 Higher-level capabilities expand mechanically
 
@@ -141,14 +141,14 @@ observe(ctx, source, callback)
   + ctx.lifetime + ctx.spawn + ctx.cleanup
 
 platform.reload(artifact)
-  = coreHandle.update({ plugin, config })
+  = installation.update({ plugin, config })
 ```
 
 A higher layer may add schemas, defaults, policy and domain errors, but may not bypass ownership, transactions or permissions.
 
-### 4.3 Handles are isomorphic
+### 4.3 Public shapes are isomorphic
 
-- entities in the installation plan: `status / ready / remove`; a Plugin adds `update`
+- `Group` and `Installation`: `status / ready / remove`; Installation alone adds `update`
 - resources releasable early: a uniform `dispose`
 - observable values: a uniform `get / subscribe`
 - Host and Group: a uniform `install / group / change`
@@ -157,7 +157,7 @@ Differences between layered APIs come from responsibility, not from arbitrary na
 
 ### 4.4 Explicit relationships are the precondition for composition
 
-Composition is only easier to reason about than inheritance when boundaries are visible. Dougong never guesses a Service provider from a Group, an ancestor context, the call stack or a global "current value", and never guesses setup order from install order. Capability selection lives in the Contract ID, dependencies live in `requires`, ownership lives in Lifetimes, and runtime selection lives in ordinary method parameters.
+Composition is only easier to reason about than inheritance when boundaries are visible. Dougong never guesses a Service provider from a Group, an ancestor Context, the call stack or a global "current value", and never guesses setup order from install order. Capability selection lives in the Contract ID, dependencies live in `requires`, ownership lives in Lifetimes, and execution-time selection lives in ordinary method parameters.
 
 That also constrains higher-level sugar: it may generate tokens, `Plugin`s or ChangeSets, but the expansion must express the relationship completely. It may not hide part of the semantics in a second scope/shadow/interceptor graph.
 
@@ -171,9 +171,9 @@ provider A ──► consumer B ──► consumer C
 
 When A is updated, Host computes the affected closure over both the old and new graph, stops in `C → B → A` order and starts in `A → B → C` order. Unaffected plugins never restart.
 
-Host caches only the validated graph corresponding to the current active runtime. `host.get()` is a constant-time map lookup on that graph; candidate graphs are built only during `start()` or ChangeSet validation, and replace the cache only after the transaction fully succeeds. An idle installation plan may temporarily lack dependencies, which preserves the "declare several installations, then start once" workflow.
+Host caches only the validated graph corresponding to committed execution state. `host.get()` is a constant-time map lookup on that graph; candidate graphs are built only during `start()` or ChangeSet validation, and replace the cache only after the transaction fully succeeds. An idle installation plan may temporarily lack dependencies, which preserves the "declare several Installations, then start once" workflow.
 
-When a ChangeSet commits while the Host is active, its stop-and-rebuild window is an explicit `changing` status, not a fake active. Host Service reads are closed during it and only resume at `active` after a successful commit or complete rollback, so one read boundary never mixes the old graph with the new runtime.
+When a ChangeSet commits while the Host is active, its stop-and-rebuild window is an explicit `changing` status, not a fake active. Application-code Service reads are closed during it and only resume at `active` after a successful commit or complete rollback, so one read boundary never mixes the old graph with new Instances.
 
 That is what makes ordinary closures safe:
 
@@ -186,7 +186,7 @@ setup(ctx) {
 
 No signal, no proxy, no "has my dependency changed?" defensive logic. Stable Services are a major source of low cognitive load.
 
-The dependency graph also yields immutable topological layers. Host prepares a whole layer concurrently and commits it in stable install order only after every setup and Service output validates; the next layer may only read already-committed predecessor Services. A failure in any plugin of a layer cancels the rest of that layer's setup and releases every unpublished Lifetime in it.
+The dependency graph also yields immutable topological layers. Host prepares a whole layer concurrently and commits it in stable install order only after every setup and Service output validates; the next layer may only read already-committed predecessor Services. A setup failure in any Installation of a layer cancels the rest of that layer's setup and releases every unpublished Lifetime in it.
 
 ```text
 layer 0  [database, cache, logger]  ── concurrent prepare ── commit
@@ -217,7 +217,7 @@ If Core exposed only "the current winner", the information needed to restore the
 
 ## 7. Lifetime is the composition foundation
 
-Every plugin instance owns a root Lifetime forming a resource tree:
+Every Instance owns a root Lifetime forming a resource tree:
 
 ```text
 Plugin Lifetime
@@ -231,7 +231,7 @@ Plugin Lifetime
 └── cleanup stack
 ```
 
-This is not a hook or a reactive effect; it is ownership. Children are created through the single entry point `lifetime(label)`, where the label describes why this group of resources lives together and takes no part in dependency resolution, runtime lookup or identity.
+This is not a hook or a reactive effect; it is ownership. Children are created through the single entry point `lifetime(label)`, where the label describes why this group of resources lives together and takes no part in dependency resolution, execution lookup or identity.
 
 Order is encoded explicitly as an object state machine: revoke public capabilities first, then cancel tasks and children, then run user cleanups. Internally nothing relies on "reversing whatever registration order happened" to obtain correct semantics.
 
@@ -239,21 +239,21 @@ A child Lifetime disposed early detaches from the parent's ownership set. A back
 
 The same rule covers every internal lease: listeners, contributions, ContributionViews and their subscriptions, cleanups and tasks all detach from the parent set on early termination, and terminal objects clear their owner, store, callback, payload and diagnostic-accounting references. The seven resource categories reuse one live-resource-set implementation, giving O(1) detachment, idempotent ownership release and diagnostic accounting. They still use separate sets to express publication order, release order and per-category counts — a shared mechanism, not mixed semantics.
 
-Actively releasing a Lifetime or task uses a module-level frozen `AbortError` as the cancellation reason, while a parent cancellation forwards the parent's reason unchanged. What is shared is only a stateless error value, not an ambient scope; it prevents the stack automatically created by every `abort()` from turning a terminal `AbortSignal.reason` into a hidden retaining edge back to the Host. After release, the Lifetime replaces its runtime signal with a fresh already-aborted signal carrying the same reason, so a terminal handle does not keep the old signal's listener closures. An in-flight release promise belongs only to the `disposing` state and is structurally dropped on reaching `disposed`; the original failure is still observed by whoever obtained that promise.
+Actively releasing a Lifetime or Task uses a module-level frozen `AbortError` as the cancellation reason, while a parent cancellation forwards the parent's reason unchanged. What is shared is only a stateless error value, not an ambient scope; it prevents the stack automatically created by every `abort()` from turning a terminal `AbortSignal.reason` into a hidden retaining edge back to the Host. After release, the Lifetime replaces its active signal with a fresh already-aborted signal carrying the same reason, so a terminal resource does not keep the old signal's listener closures. An in-flight release promise belongs only to the `disposing` state and is structurally dropped on reaching `disposed`; the original failure is still observed by whoever obtained that promise.
 
-A parent owns only what is still alive, so holding a released handle never keeps the whole Host alive. `ContributionView` uses an explicit narrow handle rather than arrow functions returned from store instance methods that capture lexical `this` — once the binding is cleared, the public view itself cannot become a hidden ownership edge into the store.
+A parent owns only what is still alive, so holding a released resource never keeps the whole Host alive. `ContributionView` uses an explicit narrow facade rather than arrow functions returned from store methods that capture lexical `this` — once the binding is cleared, the public view itself cannot become a hidden ownership edge into the store.
 
-The same constraint applies to installation ownership: a terminal `InstallationRecord` keeps only an immutable group ID, and a detached Group clears its parent, transaction barrier and historical failure. A historical handle therefore cannot keep a sibling Group or the Host root alive through the ownership tree or an error stack.
+The same constraint applies to installation ownership: a terminal `InstallationRecord` keeps only an immutable Group ID, and a detached Group clears its parent, transaction barrier and historical failure. A historical Installation or Group therefore cannot keep a sibling Group or the Host root alive through the ownership tree or an error stack.
 
-Terminal detachment covers error objects too. V8's `Error.stack` may carry the orchestration frames present when the error was created, so a failed handle that has left Core or Platform keeps only a `name/message/code` summary and reconstructs an error when the caller reads the failure again. Callers still awaiting a commit receive the original error. Nothing is silently dropped, and a call stack never becomes an invisible host ownership edge.
+Terminal detachment covers error objects too. V8's `Error.stack` may carry the orchestration frames present when the error was created, so a failed Installation or Registration that has detached from its owner keeps only a `name/message/code` summary and reconstructs an error when the caller reads the failure again. Callers still awaiting a commit receive the original error. Nothing is silently dropped, and a call stack never becomes an invisible Host ownership edge.
 
-`ExtensionRegistry` likewise keeps only stores that still have a claim, view or subscription; when the last owner releases it, an empty store is removed from the registry. A failed setup that touched a never-committed ExtensionPoint ID therefore cannot make an Host accumulate empty stores proportional to its failure history.
+`ContributionRegistry` likewise keeps only stores that still have a claim, view or subscription; when the last owner releases it, an empty store is removed from the registry. A failed setup that touched a never-committed ExtensionPoint ID therefore cannot make a Host accumulate empty stores proportional to its failure history.
 
-An ContributionView subscription contains two orthogonal internal ownership edges: the Lifetime owns the subscription handle, and the ExtensionStore owns the listener registration. One public `dispose()` must cut both — the first so the parent Lifetime does not accumulate terminal handles, the second so the store neither keeps notifying nor keeps an unsubscribed callback alive. That is internal atomic release of a single Disposable operation, not a second public API.
+A ContributionView subscription contains two orthogonal internal ownership edges: the Lifetime owns the subscription resource, and the ContributionStore owns the listener registration. One public `dispose()` must cut both — the first so the parent Lifetime does not accumulate terminal resources, the second so the store neither keeps notifying nor keeps an unsubscribed callback alive. That is internal atomic release of a single Disposable operation, not a second public API.
 
-Every root Lifetime also maintains a read-only diagnostic view. It projects the real Lifetime ownership relationship node by node: the root label is the installation ID, child labels come from `lifetime(label)`, and each node reports the resources it directly owns, categorised into cleanups, tasks, listeners, contributions, ContributionViews and subscriptions. Subtree totals are derived recursively rather than stored a second time in each node. The diagnostic tree stores no leaf resources and invents no pseudo-nodes from call stacks or function names. Only a real shared release boundary forms a node, so the diagnostic structure always agrees with the runtime semantics.
+Every root Lifetime also maintains a read-only diagnostic view. It projects the real Lifetime ownership relationship node by node: the root label is the Installation ID, child labels come from `lifetime(label)`, and each node reports the resources it directly owns, categorised into cleanups, Tasks, listeners, Contributions, ContributionViews and subscriptions. Subtree totals are derived recursively rather than stored a second time in each node. The diagnostic tree stores no leaf resources and invents no pseudo-nodes from call stacks or function names. Only a real shared release boundary forms a node, so the diagnostic structure always agrees with execution semantics.
 
-That view reuses the `get/subscribe` protocol and is separate from the Host structural snapshot: high-frequency resource churn never rebuilds the whole plugin graph, while devtools can still answer "which group of resources currently holds what". A child Lifetime detaches from its parent node as soon as it terminates; a terminal root view keeps only a childless, all-zero snapshot and keeps neither the Host nor any resource object alive.
+That view reuses the `get/subscribe` protocol and is separate from the Host structural snapshot: high-frequency resource churn never rebuilds the whole Installation graph, while devtools can still answer "which group of resources currently holds what". A child Lifetime detaches from its parent node as soon as it terminates; a terminal root view keeps only a childless, all-zero snapshot and keeps neither the Host nor any resource object alive.
 
 ## 8. The transaction model
 
@@ -261,17 +261,17 @@ Core distinguishes three transaction boundaries.
 
 ### Plugin setup
 
-Contract kinds, listeners and contributions all enter a transaction draft first. Contract kinds reach the Host registry only after Service outputs and the whole runtime switch succeed; listeners and contributions are published with the Lifetime of their topological layer. A failed setup or a rollback discards the draft and severs the draft's reference to the registry authority, so it can neither leave a ghost Contract identity behind nor let a terminal draft keep the registry alive. Public handles expose only `dispose/update`, never an internal `publish()`, so even a JavaScript plugin cannot cross the commit point early.
+Contract kinds, listeners and Contributions all enter a transaction draft first. Contract kinds reach the Engine registry only after Service outputs and the whole Instance switch succeed; listeners and Contributions are published with the Lifetime of their topological layer. A failed setup or a rollback discards the draft and severs the draft's reference to the registry authority, so it can neither leave a ghost Contract identity behind nor let a terminal draft keep the registry alive. Public facades expose only `dispose/update`, never an internal `publish()`, so even a JavaScript Plugin cannot cross the commit point early.
 
 ### ExtensionPoint notification
 
 Host start, stop and ChangeSet use batches. The internal map may go through stop and rebuild, but a view's public snapshot switches exactly once, at the end of the transaction.
 
-A ChangeSet committed while the Host is active first produces a committed or rolled-back outcome; the corresponding plugin handles settle only after the ExtensionPoint batch has published. `ready()` is therefore a transaction barrier and never resolves before the final ExtensionPoint snapshot.
+A ChangeSet committed while the Host is active first produces a committed or rolled-back outcome; the corresponding Installations settle only after the ExtensionPoint batch has published. `ready()` is therefore a transaction barrier and never resolves before the final ExtensionPoint snapshot.
 
-### Multi-plugin graph change
+### Multi-Installation graph change
 
-A ChangeSet builds and validates the complete candidate graph before touching the current runtime. Once inside the execution window the Host is `changing`, so `host.get()` never observes per-instance stops and starts; it returns to active only after success or a completed rollback. Any incomplete cleanup fails closed rather than leaving a mixed state that merely "looks active".
+A ChangeSet builds and validates the complete candidate graph before touching committed execution state. Once inside the execution window the Host is `changing`, so `host.get()` never observes per-Instance stops and starts; it returns to active only after success or a completed rollback. Any incomplete cleanup fails closed rather than leaving a mixed state that merely "looks active".
 
 Top-level side effects of a dynamic import, network requests and operating-system resources cannot be rolled back by an in-memory transaction. Those are the loader's or the plugin's compensation responsibility, and the documentation must not dress a framework transaction up as a distributed-transaction promise.
 
@@ -281,12 +281,12 @@ A Group solves:
 
 - how a set of installations shares one commit
 - how they nest
-- how to await a set of instances becoming ready
+- how to await a set of Installations becoming ready
 - how to atomically delete a whole installation subtree
 
-Group configuration, structural ownership, runtime state and handle authority each use a closed state machine. The configuration session is `open / failed / sealed`, the structural node is `attached / detached`, the lifecycle keeps the established flag and the current readiness barrier, and the handle is `configuring / attached / revoked`.
+Group configuration, structural ownership, lifecycle state and facade authority each use a closed state machine. The configuration session is `open / failed / sealed`, the structural node is `attached / detached`, the lifecycle keeps the established flag and the current readiness barrier, and the public Group is `configuring / attached / revoked`.
 
-Those state machines are composed by an internal `GroupCoordinator` instead of being scattered through the Host orchestrator. The coordinator fully owns the Group tree, handle authority and readiness; Host supplies only plugin ChangeSets, serialized commands and diagnostics publication through narrow ports. That boundary adds no public concept and grants a Group no capability-resolution power.
+Those state machines are composed by an internal `GroupCoordinator` instead of being scattered through the Host orchestrator. The coordinator fully owns the Group tree, facade authority and readiness; Host supplies only Installation ChangeSets, serialized commands and diagnostics publication through narrow ports. That boundary adds no public concept and grants a Group no capability-resolution power.
 
 A nested `configure` shares one configuration session; the first failure poisons the whole draft, so an outer caller that swallows the exception still cannot continue declaring or commit. Any non-`Error` failure is classified at the boundary before entering the lifecycle, so `undefined` never means both "the failure value" and "no failure". A failed change against an established Group that rolls back completely keeps presenting the committed state; a Group that was never established can have its failed barrier replaced by a later successful change.
 
@@ -328,7 +328,7 @@ const alphaSearchPlugin = definePlugin({
 })
 ```
 
-One interface can have many providers, but each provider belongs to a distinct explicit ID, and conflicts, absences, dependency closures and diagnostics are still handled by the same PluginGraph. To layer configuration over one particular Service, use an explicit adapter plugin: it requires the base token, provides a new token, and constructs the wrapped value using types that Service itself understands. Core offers no untypeable general `intercept()` or proxy shadow chain.
+One interface can have many providers, but each provider belongs to a distinct explicit ID, and conflicts, absences, dependency closures and diagnostics are still handled by the same InstallationGraph. To layer configuration over one particular Service, use an explicit adapter plugin: it requires the base token, provides a new token, and constructs the wrapped value using types that Service itself understands. Core offers no untypeable general `intercept()` or proxy shadow chain.
 
 ## 10. Signals and the side-effect boundary
 
@@ -351,11 +351,11 @@ Lifetime  when this synchronisation ends
 4. third-party `Readable`s are structurally compatible
 5. automatic tracking never controls plugin setup or resource boundaries
 
-Effect-TS overlaps heavily with Core on DI, scope, fiber and error runtime, so only one-way adaptation is allowed; it does not enter the base model.
+Effect-TS overlaps heavily with Core on DI, scope, fiber and the error execution model, so only one-way adaptation is allowed; it does not enter the base model.
 
 ## 11. Platform and the security boundary
 
-Same-realm JavaScript can always reach the global environment. Manifest permissions express host policy; they are not a sandbox.
+Same-realm JavaScript can always reach the global environment. Manifest permissions express application policy; they are not a sandbox.
 
 ```text
 trusted plugins       same-realm ESM, may contribute functions and UI components
@@ -387,7 +387,7 @@ Changing provider contributions never restarts the player; the player subscribes
 | --- | --- |
 | Commands, menus, panels, renderers | ExtensionPoint |
 | Unique commands and theme override | a domain catalog Service |
-| Filesystem, windows, storage | host Services |
+| Filesystem, windows, storage | application-provided Services |
 | A set of workspace plugins | Group |
 | sideload / lazy / HMR | Platform |
 | Live React display | a thin `useSyncExternalStore` adapter |
@@ -405,9 +405,9 @@ Group removal handles installation ownership; a workspace ID inside domain value
 - examples may only be the outermost consumer; no package may depend on it in reverse
 - modules inside Core/Platform may only import strictly lower ranks
 - Core/Platform sources import no Node built-ins
-- the runtime reads no hidden clock or entropy
+- source code reads no hidden clock or entropy
 - diagnostics never call console directly
-- a Lifetime may only be constructed by Runtime and Lifetime itself
+- a Lifetime may only be constructed by Engine and Lifetime itself
 - no circular dependencies
 
 An architectural constraint that exists only in prose degrades into a suggestion within months. Dougong hands the mechanically decidable part to tooling.
@@ -423,6 +423,6 @@ Before adding an abstraction, check every item:
 5. Does it change the lifecycle, transaction or error model?
 6. Does it leak internal objects beyond the type level?
 7. Does it mislabel organisation, permission or convenience as security isolation?
-8. With every concrete framework and host removed, does the abstraction still hold?
+8. With every concrete framework and application adapter removed, does the abstraction still hold?
 
 Dougong's goal is not "the Core with the most features" but "the smallest closed Core": few enough atoms, expressive enough composition, and no advanced capability needing to escape to a lower layer.

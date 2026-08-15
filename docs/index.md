@@ -6,7 +6,7 @@ description: 纯 JavaScript/TypeScript 的能力组合与结构化生命周期�
 hero:
   name: Dougong
   text: 组合出应用，而不是堆叠框架
-  tagline: 用少量正交的原子组织能力、依赖、变化与资源所有权。零运行时魔法。
+  tagline: 用少量正交的原子组织能力、依赖、变化与资源所有权。零隐藏魔法。
   actions:
     - theme: brand
       text: 快速开始
@@ -23,11 +23,11 @@ features:
   - title: 一种语义，一条路径
     details: 每个语义操作只有一个正式入口。高层便利 API 必须机械展开到它，不能拥有第二套状态机。
   - title: 事务只暴露已提交状态
-    details: setup 期间的声明先暂存，整层校验通过才发布。失败回滚旧图，无法可靠回滚时 fail closed，不会留下半装好的运行时。
+    details: setup 期间的声明先暂存，整层校验通过才发布。失败回滚旧图，无法可靠回滚时 fail closed，不会留下半装好的 Instance 图。
   - title: 结构化资源所有权
-    details: 监听、贡献、任务、子生命周期都归属于某个 Lifetime。终态资源自动从父级摘除，保留一个已释放的 Handle 不会反向保活整个 Host。
+    details: 监听、贡献、任务、子生命周期都归属于某个 Lifetime。终态资源自动从父级摘除，保留一个已释放的资源不会反向保活整个 Host。
   - title: 类型即约束
-    details: 用未声明的依赖、把 ExtensionPoint 当 Service 取、声明了 provides 却不返回——全部是编译错误，不是运行时惊喜。
+    details: 用未声明的依赖、把 ExtensionPoint 当 Service 取、声明了 provides 却不返回——全部是编译错误，不会拖到执行阶段才暴露。
   - title: 不绑定运行环境
     details: Core 不理解 Node、DOM、React、HTTP、文件系统或打包器。只用普通对象、函数、Promise、AbortSignal 和 Disposable。
 ---
@@ -75,7 +75,7 @@ await host.start()                    // 从 Service 声明推导拓扑，同层
 | 能力需要动态装卸、更新、回滚 | 只需要一个简单的 DI 容器 |
 | 插件之间有真实依赖关系 | 插件完全独立、互不通信 |
 | 半加载状态不可接受，需要事务一致性 | 长驻服务，一个模块坏了其他照跑更重要 |
-| 需要向应用代码暴露可观察的运行状态 | 不关心运行时诊断 |
+| 需要向应用代码暴露可观察的 Host 状态 | 不关心执行诊断 |
 | 桌面应用、编辑器内核、构建工具链 | 简单的 Web 页面 |
 
 最后一行值得展开：Dougong 的失败模型是**事务性**的——一个插件 setup 失败会让整笔变更回滚。如果你的场景更需要「一个插件挂了不影响其他」的隔离性，那么 [cordis](https://github.com/cordiverse/cordis) 这类设计更合适。这是产品取舍，不是优劣。
@@ -104,7 +104,7 @@ await host.start()                    // 从 Service 声明推导拓扑，同层
 8. [Core API 规范](./reference/core-api.md) —— 每个 API 的精确语义与边界情形
 9. [整体架构](./reference/architecture.md) —— 分层、依赖方向与设计论证
 10. [Platform 规范](./reference/platform.md) —— 外部插件边界
-11. [错误码](./reference/errors.md) —— 28 个稳定错误码及触发条件
+11. [错误码](./reference/errors.md) —— 稳定错误码及触发条件
 
 </div>
 

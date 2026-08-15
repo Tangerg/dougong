@@ -4,7 +4,7 @@ import * as reactive from "../src/index";
 const { batch, computed, signal } = reactive;
 
 describe("public API surface", () => {
-  it("keeps the reactive runtime budget explicit", () => {
+  it("keeps the reactive value-export budget explicit", () => {
     expect(Object.keys(reactive).sort()).toEqual(["batch", "computed", "observe", "signal"]);
   });
 });

@@ -52,7 +52,7 @@ export class ContractRegistryDraft {
       return;
     }
     if (state.phase === "discarded") {
-      throw new TypeError("Contract registry draft has been discarded");
+      throw new Error("Contract registry draft has been discarded");
     }
 
     state.registry.assertCompatible(contract);

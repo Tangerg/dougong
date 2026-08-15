@@ -6,7 +6,7 @@ export type RegistrationStatus =
   "pending" | "registered" | "loading" | "activated" | "failed" | "removed";
 
 export interface RegistrationSnapshot {
-  readonly name: string;
+  readonly manifestName: string;
   readonly version: string;
   readonly status: RegistrationStatus;
   readonly activation: ReadonlyArray<string>;
@@ -59,7 +59,7 @@ export class PlatformDiagnostics {
     for (const registration of registrations) {
       const { manifest } = registration;
       const snapshot = {
-        name: manifest.name,
+        manifestName: manifest.name,
         version: manifest.version,
         status: registration.status,
         activation: manifest.activation,

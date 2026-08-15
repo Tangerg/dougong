@@ -58,7 +58,13 @@ export function assertContract(
   expected?: ContractKind,
 ): asserts value is ContractIdentity {
   if (isContract(value, expected)) return;
-  throw new TypeError(expected ? `Expected a ${expected} contract` : "Invalid contract");
+  throw new TypeError(expected ? `Expected ${contractDescription(expected)}` : "Invalid contract");
+}
+
+function contractDescription(kind: ContractKind) {
+  if (kind === "extensionPoint") return "an ExtensionPoint";
+  if (kind === "event") return "an Event";
+  return "a Service";
 }
 
 export function service<T>(id: string): Service<T> {
@@ -75,7 +81,7 @@ export function extensionPoint<T>(id: string): ExtensionPoint<T> {
 
 export function optional<T>(token: Service<T>): OptionalService<T> {
   if (!isContract(token, "service")) {
-    throw new TypeError("optional() expects a service contract");
+    throw new TypeError("optional() expects a Service");
   }
   return Object.freeze({ kind: "optional", service: token });
 }

@@ -1,19 +1,19 @@
 import type { Group, Installation } from "./host-api";
-import { discardPluginChangeSetDraft, ChangeSetDraft, type ChangeOperation } from "./change-set";
+import { discardChangeSetDraft, ChangeSetDraft, type ChangeOperation } from "./change-set";
 import { normalizeFailure } from "./errors";
-import { GroupConfigurationSession, GroupNode } from "./group";
+import { GroupConfigurationSession, GroupNode, type GroupStatus } from "./group";
 import { groupRemovedError, GroupLifecycle } from "./group-lifecycle";
-import type { AnyPlugin, InstallationStatus, InstallationRecord } from "./installation";
-import type { Plugin, Provisions, Requirements } from "./plugin";
+import type { InstallationRecord } from "./installation";
+import type { ErasedPlugin, Plugin, Provisions, Requirements } from "./plugin";
 
 export interface GroupCoordinatorPort {
   installations(): Iterable<InstallationRecord>;
   createDraft(
     group: GroupNode,
-    plugin: AnyPlugin,
+    plugin: ErasedPlugin,
     config: unknown,
-  ): { readonly installation: InstallationRecord; readonly handle: object };
-  resolveHandle(handle: object): InstallationRecord;
+  ): { readonly record: InstallationRecord; readonly publicInstallation: object };
+  resolveInstallation(installation: object): InstallationRecord;
   executeChanges(operations: ReadonlyArray<ChangeOperation>): Promise<void>;
   attachInstallation(installation: InstallationRecord): void;
   discardInstallation(installation: InstallationRecord, error: unknown): void;
@@ -22,14 +22,14 @@ export interface GroupCoordinatorPort {
   notifyChanged(): void;
 }
 
-interface GroupHandleControl {
+interface GroupControl {
   finishConfiguration(): void;
   revoke(): void;
 }
 
-const groupHandleControls = new WeakMap<object, GroupHandleControl>();
+const groupControls = new WeakMap<object, GroupControl>();
 
-type PluginGroupState =
+type GroupState =
   | {
       readonly phase: "configuring";
       readonly coordinator: GroupCoordinator;
@@ -38,9 +38,9 @@ type PluginGroupState =
   | { readonly phase: "attached"; readonly coordinator: GroupCoordinator }
   | { readonly phase: "revoked" };
 
-class PluginGroupImpl implements Group {
+class GroupImpl implements Group {
   readonly #node: GroupNode;
-  #state: PluginGroupState;
+  #state: GroupState;
 
   constructor(
     coordinator: GroupCoordinator,
@@ -51,7 +51,7 @@ class PluginGroupImpl implements Group {
     this.#state = configuration
       ? { phase: "configuring", coordinator, configuration }
       : { phase: "attached", coordinator };
-    groupHandleControls.set(this, {
+    groupControls.set(this, {
       finishConfiguration: () => {
         const state = this.#state;
         if (state.phase === "configuring") {
@@ -93,11 +93,7 @@ class PluginGroupImpl implements Group {
     if (state.phase === "configuring") {
       return state.configuration.requireDraft().install(plugin, ...config);
     }
-    return this.#requireCoordinator().install(
-      this.#node,
-      plugin as unknown as AnyPlugin,
-      config[0],
-    ) as Installation<Config, Requires, Provides, ConfigInput>;
+    return this.#requireCoordinator().install(this.#node, plugin, ...config);
   }
 
   change() {
@@ -133,19 +129,19 @@ class PluginGroupImpl implements Group {
   }
 }
 
-/** Owns the complete structural Group model and compiles it to plugin changes. */
+/** Owns the complete structural Group model and compiles it to Installation changes. */
 export class GroupCoordinator {
   readonly root: GroupNode;
-  readonly #host: GroupCoordinatorPort;
-  readonly #handles = new WeakMap<GroupNode, PluginGroupImpl>();
+  readonly #port: GroupCoordinatorPort;
+  readonly #publicGroups = new WeakMap<GroupNode, GroupImpl>();
   readonly #lifecycles = new WeakMap<GroupNode, GroupLifecycle>();
 
-  constructor(rootName: string, host: GroupCoordinatorPort) {
+  constructor(rootName: string, port: GroupCoordinatorPort) {
     this.root = GroupNode.root(rootName);
-    this.#host = host;
+    this.#port = port;
     this.#lifecycles.set(
       this.root,
-      new GroupLifecycle(this.root, "established", () => host.notifyChanged()),
+      new GroupLifecycle(this.root, "established", () => port.notifyChanged()),
     );
   }
 
@@ -159,32 +155,34 @@ export class GroupCoordinator {
     ...config: [ConfigInput] extends [void] ? [config?: ConfigInput] : [config: ConfigInput]
   ): Installation<Config, Requires, Provides, ConfigInput> {
     const changes = this.change(group);
-    const handle = changes.install(plugin, ...config);
+    const installation = changes.install(plugin, ...config);
     observeReadinessOperation(changes.commit());
-    return handle;
+    return installation;
   }
 
   change(group: GroupNode, tracking: "immediate" | "deferred" = "immediate") {
-    group.assertAttached();
+    this.#requireLifecycle(group);
     return new ChangeSetDraft({
-      create: (plugin, config) => this.#host.createDraft(group, plugin, config),
-      resolve: (handle) => {
-        const installation = this.#host.resolveHandle(handle);
-        if (!group.containsId(installation.groupId)) {
-          throw new TypeError(
-            `Plugin '${installation.id}' is outside ChangeSet group '${group.id}'`,
-          );
+      create: (plugin, config) => this.#port.createDraft(group, plugin, config),
+      resolve: (value) => {
+        const installation = this.#port.resolveInstallation(value);
+        if (!group.contains(installation.group)) {
+          throw new TypeError(`Installation '${installation.id}' is outside Group '${group.id}'`);
         }
         return installation;
       },
       execute: (operations) => {
-        const operation = this.#host.executeChanges(operations);
+        this.#requireLifecycle(group);
+        const operation = this.#port.executeChanges(operations);
         for (const change of operations) change.installation.trackReadiness(operation);
         if (tracking === "immediate") this.#track(group, operation);
         return operation;
       },
-      attach: (installation) => this.#host.attachInstallation(installation),
-      discard: (installation, error) => this.#host.discardInstallation(installation, error),
+      attach: (installation) => {
+        this.#requireLifecycle(group);
+        this.#port.attachInstallation(installation);
+      },
+      discard: (installation, error) => this.#port.discardInstallation(installation, error),
     });
   }
 
@@ -196,22 +194,19 @@ export class GroupCoordinator {
   ) {
     if (typeof configure !== "function") throw new TypeError("Group configure must be a function");
     const node = parent.create(name);
-    this.#lifecycles.set(node, new GroupLifecycle(node, "new", () => this.#host.notifyChanged()));
+    this.#lifecycles.set(node, new GroupLifecycle(node, "new", () => this.#port.notifyChanged()));
     const ownsConfiguration = inherited === undefined;
     const configuration =
       inherited ??
-      new GroupConfigurationSession(
-        this.change(node, "deferred"),
-        discardPluginChangeSetDraft,
-        (error) =>
-          normalizeFailure(
-            error,
-            "GROUP_UNAVAILABLE",
-            `Group '${node.id}' configuration failed with a non-Error value`,
-          ),
+      new GroupConfigurationSession(this.change(node, "deferred"), discardChangeSetDraft, (error) =>
+        normalizeFailure(
+          error,
+          "GROUP_UNAVAILABLE",
+          `Group '${node.id}' configuration failed with a non-Error value`,
+        ),
       );
-    const group = new PluginGroupImpl(this, node, configuration);
-    this.#handles.set(node, group);
+    const group = new GroupImpl(this, node, configuration);
+    this.#publicGroups.set(node, group);
 
     try {
       const result: unknown = configure(group);
@@ -226,20 +221,20 @@ export class GroupCoordinator {
       node.detach();
       this.#revoke(removedGroups);
       if (ownsConfiguration) configuration.discard(failure);
-      this.#host.notifyChanged();
+      this.#port.notifyChanged();
       throw failure;
     }
 
     if (ownsConfiguration) {
       const operation = configuration.seal().commit();
       for (const child of node.walk()) {
-        const childHandle = this.#handles.get(child);
-        if (childHandle) groupHandleControls.get(childHandle)?.finishConfiguration();
+        const childGroup = this.#publicGroups.get(child);
+        if (childGroup) groupControls.get(childGroup)?.finishConfiguration();
         this.#track(child, operation);
       }
       observeReadinessOperation(operation);
     }
-    this.#host.notifyChanged();
+    this.#port.notifyChanged();
     return group;
   }
 
@@ -249,7 +244,7 @@ export class GroupCoordinator {
     });
   }
 
-  status(group: GroupNode): InstallationStatus {
+  status(group: GroupNode): GroupStatus {
     if (!group.attached) return "removed";
     return this.#requireLifecycle(group).status(this.#contentsStatus(group));
   }
@@ -260,7 +255,7 @@ export class GroupCoordinator {
       this.#revoke([group]);
       return Promise.resolve();
     }
-    return this.#host.runExclusive(async () => {
+    return this.#port.runExclusive(async () => {
       if (!group.attached) {
         this.#revoke([group]);
         return;
@@ -270,20 +265,20 @@ export class GroupCoordinator {
         kind: "remove",
         installation,
       }));
-      await this.#host.removeInstallations(operations);
+      await this.#port.removeInstallations(operations);
       group.detach();
       this.#revoke(removedGroups);
-      this.#host.notifyChanged();
+      this.#port.notifyChanged();
     });
   }
 
   #installationsIn(group: GroupNode) {
-    return [...this.#host.installations()].filter((installation) =>
-      group.containsId(installation.groupId),
+    return [...this.#port.installations()].filter((installation) =>
+      group.contains(installation.group),
     );
   }
 
-  #contentsStatus(group: GroupNode): InstallationStatus {
+  #contentsStatus(group: GroupNode): GroupStatus {
     const installations = this.#installationsIn(group);
     if (installations.some((installation) => installation.status === "failed")) return "failed";
     if (installations.some((installation) => installation.status === "stopping")) {
@@ -304,7 +299,7 @@ export class GroupCoordinator {
 
   #requireLifecycle(group: GroupNode) {
     const lifecycle = this.#lifecycles.get(group);
-    if (!lifecycle) throw groupRemovedError(group);
+    if (!group.attached || !lifecycle) throw groupRemovedError(group);
     return lifecycle;
   }
 
@@ -312,12 +307,12 @@ export class GroupCoordinator {
     for (const group of groups) {
       this.#lifecycles.get(group)?.release();
       this.#lifecycles.delete(group);
-      const handle = this.#handles.get(group);
-      if (handle) {
-        groupHandleControls.get(handle)?.revoke();
-        groupHandleControls.delete(handle);
+      const publicGroup = this.#publicGroups.get(group);
+      if (publicGroup) {
+        groupControls.get(publicGroup)?.revoke();
+        groupControls.delete(publicGroup);
       }
-      this.#handles.delete(group);
+      this.#publicGroups.delete(group);
     }
   }
 }

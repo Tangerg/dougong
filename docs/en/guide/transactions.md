@@ -2,39 +2,39 @@
 
 A running application needs to install plugins, remove them and swap configuration. Dougong's guarantee is:
 
-> **Transactions expose only committed state.** A change either takes effect entirely, or the runtime graph returns to what it was — never a half-built runtime.
+> **Transactions expose only committed state.** A change either takes effect entirely, or the execution graph returns to what it was — never a half-built set of Instances.
 
 ## A single change
 
 ```ts
-const handle = host.install(plugin, config)   // returns immediately
-await handle.ready()                         // await this installation becoming ready
+const installation = host.install(plugin, config)   // returns immediately
+await installation.ready()                         // await this installation becoming ready
 
-await handle.update({ config: nextConfig })
-await handle.remove()
+await installation.update({ config: nextConfig })
+await installation.remove()
 ```
 
-Before `host.start()`, `install()` only records a declaration. After it, the call runs a runtime transaction.
+Before `host.start()`, `install()` only records a declaration. After it, the call runs a Host transaction.
 
-## Atomic multi-plugin change: ChangeSet
+## Atomic multi-Installation change: ChangeSet
 
 When several operations must **succeed or fail together**, use `change()`:
 
 ```ts
 const changes = host.change()
 changes.install(newProvider)
-changes.update(oldHandle, { plugin: nextVersion })
-changes.remove(deprecatedHandle)
+changes.update(current, { plugin: nextVersion })
+changes.remove(deprecated)
 await changes.commit()          // one transaction
 ```
 
-This is the **canonical** entry point for multi-plugin change. `install()` / `update()` / `remove()` are its single-item degenerate forms — they run the same path internally and own no second state machine.
+This is the **canonical** entry point for multi-Installation change. `install()` / `update()` / `remove()` are its single-item degenerate forms — they run the same path internally and own no second state machine.
 
 Properties:
 
 - **One-shot** — no modification after `commit()`; calling it again returns the same promise
-- **One operation per installation** — the same handle cannot be both updated and removed in one ChangeSet
-- **Nothing before commit** — an abandoned draft never touches the runtime
+- **One operation per installation** — the same installation cannot be both updated and removed in one ChangeSet
+- **Nothing before commit** — an abandoned draft never touches committed execution state
 
 ## What failure does
 
@@ -49,14 +49,14 @@ const changes = host.change()
 changes.install(brokenPlugin)
 await expect(changes.commit()).rejects.toThrow("setup failed")
 
-expect(host.status).toBe("active")     // other plugins are entirely unaffected
+expect(host.status).toBe("active")     // other Installations are entirely unaffected
 ```
 
 ### 2. Fail closed
 
-The old graph **also** cannot be restored (say a plugin's cleanup threw, so whether its resources were released is unknown) → do not pretend to be healthy. Stop the Host at `idle` and throw an error aggregating every cause.
+The old graph **also** cannot be restored (say an Instance's cleanup threw, so whether its resources were released is unknown) → do not pretend to be healthy. Stop the Host at `idle` and throw an error aggregating every cause.
 
-Better for application code to see "I stopped, and here is why" than to be handed a runtime that may be damaged.
+Better for application code to see "I stopped, and here is why" than to be handed execution state that may be damaged.
 
 ### 3. Aggregated reporting
 
@@ -64,7 +64,7 @@ Multiple failures during shutdown aggregate into an `AggregateError` with every 
 
 ### Validation precedes shutdown
 
-**Every affected plugin's config is validated before any running instance is stopped.**
+**Every affected Installation's Plugin config is validated before any running Instance is stopped.**
 
 ```ts
 const changes = host.change()
@@ -72,7 +72,7 @@ changes.update(a, { config: validConfig })
 changes.update(b, { config: invalidConfig })   // this one fails validation
 await expect(changes.commit()).rejects.toMatchObject({ code: "CONFIG_INVALID" })
 
-// Neither a nor b was ever stopped — the runtime graph did not move
+// Neither a nor b was ever stopped — the execution graph did not move
 ```
 
 A misspelled config field never leaves your application halfway down.
@@ -88,7 +88,7 @@ D ← E            E is unrelated to B
 Affected: B, C     Untouched: A, D, E
 ```
 
-Unrelated plugins are never stopped; their Service instances, Lifetimes and background tasks survive intact.
+Instances of unrelated Installations are never stopped; their Service values, Lifetimes and background tasks survive intact.
 
 ## The startup model
 
@@ -96,7 +96,7 @@ Unrelated plugins are never stopped; their Service instances, Lifetimes and back
 
 1. **Build the graph** — derive dependencies from `requires` / `provides`, detect cycles and duplicate providers
 2. **Validate** — every config through its Standard Schema
-3. **Start layers concurrently** — plugins in the same topological layer set up in parallel
+3. **Start layers concurrently** — Installations in the same topological layer run setup in parallel
 4. **Commit the layer** — only after every Service output in that layer validates are Services registered and staged listeners and contributions published
 
 Step 4 is what "transactions expose only committed state" means at startup: listeners and contributions registered during setup are **staged**, and if any plugin in the layer fails, not one of them is published.
@@ -113,7 +113,7 @@ Acquired resources         all release attempted
 
 ### Graph-time errors
 
-These are thrown **before any plugin starts**:
+These are thrown **before any Instance starts**:
 
 | Code | Condition |
 | --- | --- |
@@ -125,7 +125,7 @@ These are thrown **before any plugin starts**:
 Cycle detection reports the actual path, not "everything that failed to sort":
 
 ```text
-Plugin dependency cycle: app.a:1 -> app.b:2 -> app.a:1
+Installation dependency cycle: app.a:1 -> app.b:2 -> app.a:1
 ```
 
 ## Group: an installation ownership tree
@@ -133,11 +133,11 @@ Plugin dependency cycle: app.a:1 -> app.b:2 -> app.a:1
 A Group manages a set of plugins as one unit:
 
 ```ts
-const feature = host.group("editor", (plugins) => {
-  plugins.install(syntax)
-  plugins.install(formatter)
+const feature = host.group("editor", (group) => {
+  group.install(syntax)
+  group.install(formatter)
 
-  plugins.group("lsp", (nested) => {      // nesting is allowed
+  group.group("lsp", (nested) => {      // nesting is allowed
     nested.install(languageServer)
   })
 })
@@ -162,15 +162,15 @@ await changes.commit()
 ::: warning The most common misreading
 A Group expresses **installation ownership only**. It is not a capability scope, not a provider shadow tree, not a permission boundary and not a security sandbox.
 
-Service resolution and ExtensionPoint/Event visibility are always **application-wide**. Putting a plugin inside a Group does not make it "see only" what is in that Group.
+Service resolution and ExtensionPoint/Event visibility are always **Host-wide**. Putting a Plugin inside a Group does not make it "see only" what is in that Group.
 :::
 
 So how do you get those things:
 
 | Need | The right tool |
 | --- | --- |
-| Several instances of the same shape (a store per workspace) | An explicit Contract family: ``service<Store>(`app/ws/${id}/store`)`` |
-| Runtime tenant selection | An ordinary method parameter: `store.forTenant(id)` |
+| Several statically selected variants of one capability (a store per workspace) | An explicit Contract family: ``service<Store>(`app/ws/${id}/store`)`` |
+| Request-time tenant selection | An ordinary method parameter: `store.forTenant(id)` |
 | Security isolation | A separate Host, Worker, iframe or process — a real boundary |
 
 ### An established Group is not poisoned by failure
@@ -196,12 +196,12 @@ host.status
 // "idle" | "starting" | "active" | "changing" | "stopping"
 
 host.diagnostics.get()
-// { name, status, plugins: ReadonlyMap<string, InstallationSnapshot>, groups, ... }
+// { name, status, installations: ReadonlyMap<string, InstallationSnapshot>, groups, ... }
 
 host.diagnostics.subscribe(() => render())
 ```
 
-The `changing` status exists for a reason: while a runtime transaction is in flight the host's read window is closed — `host.get()` throws `SERVICE_UNAVAILABLE` rather than handing you an intermediate state that is being replaced.
+The `changing` status exists for a reason: while a Host transaction is in flight the application-code read window is closed — `host.get()` throws `SERVICE_UNAVAILABLE` rather than handing you an intermediate state that is being replaced.
 
 ## Next
 

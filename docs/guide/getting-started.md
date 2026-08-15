@@ -112,7 +112,7 @@ await host.stop()
 
 ### 安装顺序不是启动顺序
 
-`greeter` 先安装，但它依赖 `clock`。`host.start()` 时 Dougong 从 `requires` / `provides` 的声明构建依赖图，做拓扑排序，**同一拓扑层内并发启动**，然后按逆依赖顺序停止。
+`greeter` 先安装，但它依赖 `clock`。`host.start()` 时 Dougong 从 `requires` / `provides` 的声明构建依赖图，做拓扑排序，**同一拓扑层内并发执行 setup**，然后按逆依赖顺序停止 Instance。
 
 你不需要手工排序，也不需要 `dependsOn: ["example.clock"]` 这种字符串数组——依赖关系已经在类型里了。
 
@@ -127,7 +127,7 @@ definePlugin({
 })
 ```
 
-`ctx` 的类型是从 `requires` 推导出来的。没声明就没有这个属性——这是**编译期**错误，不是运行时的 `undefined`。
+`ctx` 的类型是从 `requires` 推导出来的。没声明就没有这个属性——这是**编译期**错误，不会在执行阶段才得到 `undefined`。
 
 这条是 Dougong 和大多数插件框架最实际的区别。在依赖靠字符串或环境上下文解析的系统里，忘记声明依赖通常表现为「有时候能跑、有时候拿到 undefined」，取决于加载顺序。
 
@@ -155,7 +155,7 @@ pnpm check           # 完整验证门禁
 pnpm docs:dev        # 本地启动这个文档站
 ```
 
-十二章示例分三段递进——原子、组合、真实宿主——从最小 Service 一路走到 Planet / Lynx 场景、声明式计划和模块图 HMR，全部进 CI。详见[可执行示例](../examples.md)。
+十二章示例分三段递进——原子、组合、完整应用——从最小 Service 一路走到 Planet / Lynx 场景、声明式计划和模块图 HMR，全部进 CI。详见[可执行示例](../examples.md)。
 
 ## 接下来
 

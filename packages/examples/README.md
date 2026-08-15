@@ -21,7 +21,7 @@ pnpm examples:benchmark   # 单独运行启动拓扑基准
 | --- | --- | --- |
 | **一 · 原子** | 01–04 | 每章一个原语，各自解决什么问题 |
 | **二 · 组合** | 05–08 | 原语一起工作：失败、身份、观察、外部代码 |
-| **三 · 真实宿主** | 09–12 | 实际应用形态，不引入任何新原语 |
+| **三 · 完整应用** | 09–12 | 实际应用形态，不引入任何新原语 |
 
 **第一段 · 原子**
 
@@ -41,14 +41,14 @@ pnpm examples:benchmark   # 单独运行启动拓扑基准
 | 07 | [`07-diagnostics.ts`](./src/07-diagnostics.ts) | `diagnostics-view` · `lifetime-snapshot` · `terminal-detachment` · `view-finalization` |
 | 08 | [`08-platform.ts`](./src/08-platform.ts) | `manifest` · `permissions` · `placeholder` · `activation` |
 
-**第三段 · 真实宿主**
+**第三段 · 完整应用**
 
 | # | 文件 | 新增概念 |
 | --- | --- | --- |
-| 09 | [`09-planet.ts`](./src/09-planet.ts) | `runtime-selection` · `live-provider-swap` · `group-scoped-platform` |
-| 10 | [`10-lynx.ts`](./src/10-lynx.ts) | `domain-catalog` · `workspace-ownership` · `plugin-update` |
+| 09 | [`09-planet.ts`](./src/09-planet.ts) | `call-time-selection` · `live-provider-swap` · `group-bound-platform` |
+| 10 | [`10-lynx.ts`](./src/10-lynx.ts) | `domain-catalog` · `workspace-ownership` · `registration-update` |
 | 11 | [`11-declarative-plan.ts`](./src/11-declarative-plan.ts) | `desired-state` · `content-revision` · `platform-change-set` |
-| 12 | [`12-hmr-module-graph.ts`](./src/12-hmr-module-graph.ts) | `module-graph` · `invalidation-closure` · `multi-plugin-hmr` |
+| 12 | [`12-hmr-module-graph.ts`](./src/12-hmr-module-graph.ts) | `module-graph` · `invalidation-closure` · `multi-registration-hmr` |
 
 ### 「层层递进」是一条测试，不是一句话
 
@@ -85,7 +85,7 @@ console.log(result.facts)
 
 ### 为什么第三段这样拆
 
-**09 · Planet（媒体宿主）**
+**09 · Planet（媒体应用）**
 
 - Audio output 与 Player 是稳定 Service；媒体 Provider 是实时 ExtensionPoint 贡献。
 - 增删 Provider 不重启 Player——ExtensionPoint 不是依赖边。
@@ -96,17 +96,17 @@ console.log(result.facts)
 
 - 命令唯一性由领域 `CommandCatalog` Service 负责，而不是 Core ExtensionPoint 的特殊模式。
 - 工作区身份使用显式 Contract family；Group 只拥有工作区安装子树。
-- Explorer placeholder 在激活前贡献可展示元数据；更新保持插件身份，只换实现。
+- Explorer placeholder 在激活前贡献可展示元数据；更新保持 Registration 与 Installation 身份，只换 Instance。
 - 根级消费者能看到工作区贡献，诚实展示 Group **不是**能力 Scope。
 
-**11 / 12 · 宿主策略**
+**11 / 12 · 应用策略**
 
-- 声明式计划只是宿主的期望状态控制器；每次 reconcile 机械编译成一份 Platform ChangeSet，不复制校验、加载或回滚状态机。
-- 插件身份只用 Manifest name；计划另带显式内容 revision 判断声明是否变化，不从路径、对象内容或运行状态猜测。
+- 声明式计划只是应用的期望状态控制器；每次 reconcile 机械编译成一份 Platform ChangeSet，不复制校验、加载或回滚状态机。
+- Registration 身份只用 Manifest name；计划另带显式内容 revision 判断 Artifact 是否变化，不从路径、对象内容或执行状态猜测。
 - HMR 图由 watcher / bundler 适配器显式提供；示例只计算反向依赖闭包，不接管文件监听或 ESM cache。
 - 受影响的多个插件通过一份 ChangeSet 更新，消费者只看到提交前或提交后的快照。
 
-这两章各约 200 行，做的是成熟框架里动辄上千行的事（声明式配置加载器、热更新引擎），而且**没有引入任何新原语**。它们先作为可执行宿主参考；只有多个真实宿主复用出稳定边界后，才值得提炼成独立包。
+这两章各约 200 行，做的是成熟框架里动辄上千行的事（声明式配置加载器、热更新引擎），而且**没有引入任何新原语**。它们先作为可执行应用参考；只有多个真实应用复用出稳定边界后，才值得提炼成独立包。
 
 ### 启动拓扑基准
 
@@ -114,7 +114,7 @@ console.log(result.facts)
 pnpm examples:benchmark
 ```
 
-实际耗时**刻意不作为 CI 断言**。Core 测试使用确定性的屏障证明并发和事务发布；这个基准只用于在真实宿主上观察性能数量级，避免不稳定的时间测试。
+实际耗时**刻意不作为 CI 断言**。Core 测试使用确定性的屏障证明并发和事务发布；这个基准只用于在代表性运行时中观察性能数量级，避免不稳定的时间测试。
 
 ---
 
@@ -135,7 +135,7 @@ pnpm examples:benchmark   # run the startup-topology benchmark separately
 | --- | --- | --- |
 | **1 · Atoms** | 01–04 | One primitive per chapter, and the problem it exists to solve |
 | **2 · Composition** | 05–08 | The primitives together: failure, identity, observation, external code |
-| **3 · Real hosts** | 09–12 | Shapes real applications take, introducing no new primitive |
+| **3 · Complete applications** | 09–12 | Shapes real applications take, introducing no new primitive |
 
 **Stage 1 · Atoms**
 
@@ -155,14 +155,14 @@ pnpm examples:benchmark   # run the startup-topology benchmark separately
 | 07 | [`07-diagnostics.ts`](./src/07-diagnostics.ts) | `diagnostics-view` · `lifetime-snapshot` · `terminal-detachment` · `view-finalization` |
 | 08 | [`08-platform.ts`](./src/08-platform.ts) | `manifest` · `permissions` · `placeholder` · `activation` |
 
-**Stage 3 · Real hosts**
+**Stage 3 · Complete applications**
 
 | # | File | New concepts |
 | --- | --- | --- |
-| 09 | [`09-planet.ts`](./src/09-planet.ts) | `runtime-selection` · `live-provider-swap` · `group-scoped-platform` |
-| 10 | [`10-lynx.ts`](./src/10-lynx.ts) | `domain-catalog` · `workspace-ownership` · `plugin-update` |
+| 09 | [`09-planet.ts`](./src/09-planet.ts) | `call-time-selection` · `live-provider-swap` · `group-bound-platform` |
+| 10 | [`10-lynx.ts`](./src/10-lynx.ts) | `domain-catalog` · `workspace-ownership` · `registration-update` |
 | 11 | [`11-declarative-plan.ts`](./src/11-declarative-plan.ts) | `desired-state` · `content-revision` · `platform-change-set` |
-| 12 | [`12-hmr-module-graph.ts`](./src/12-hmr-module-graph.ts) | `module-graph` · `invalidation-closure` · `multi-plugin-hmr` |
+| 12 | [`12-hmr-module-graph.ts`](./src/12-hmr-module-graph.ts) | `module-graph` · `invalidation-closure` · `multi-registration-hmr` |
 
 ### "Strictly progressive" is a test, not a claim
 
@@ -199,7 +199,7 @@ console.log(result.facts)
 
 ### Why stage 3 is split this way
 
-**09 · Planet (a media host)**
+**09 · Planet (a media application)**
 
 - Audio output and the player are stable Services; media providers are live ExtensionPoint contributions.
 - Adding or removing a provider never restarts the player — an ExtensionPoint is not a dependency edge.
@@ -210,17 +210,17 @@ console.log(result.facts)
 
 - Command uniqueness belongs to a domain `CommandCatalog` Service, not to a special Core ExtensionPoint mode.
 - Workspace identity uses an explicit Contract family; the Group owns only the workspace installation subtree.
-- The explorer placeholder contributes displayable metadata before activation; an update keeps the plugin's identity and swaps only the implementation.
+- The explorer placeholder contributes displayable metadata before activation; an update preserves the Registration and Installation identities and replaces only the Instance.
 - A root-level consumer can see workspace contributions, honestly demonstrating that a Group is **not** a capability scope.
 
-**11 / 12 · Host strategies**
+**11 / 12 · Application strategies**
 
-- The declarative plan is only a host desired-state controller; each reconcile compiles mechanically into one Platform ChangeSet, duplicating no validation, loading or rollback state machine.
-- Plugin identity uses only the manifest name; the plan carries an explicit content revision to decide whether a declaration changed, rather than guessing from paths, object contents or runtime state.
+- The declarative plan is only an application desired-state controller; each reconcile compiles mechanically into one Platform ChangeSet, duplicating no validation, loading or rollback state machine.
+- Registration identity uses only the manifest name; the plan carries an explicit content revision to decide whether an Artifact changed, rather than guessing from paths, object contents or execution state.
 - The HMR graph is supplied explicitly by a watcher/bundler adapter; the example computes only the reverse dependency closure and takes over neither file watching nor the ESM cache.
-- Several affected plugins update through one ChangeSet, so consumers see only the pre-commit or post-commit snapshot.
+- Several affected Registrations update through one ChangeSet, so consumers see only the pre-commit or post-commit snapshot.
 
-Each is roughly 200 lines, doing what mature frameworks spend thousands of lines on (a declarative config loader, a hot-reload engine), and **introducing no new primitive**. They serve first as executable host references; only after several real hosts converge on a stable boundary is one worth extracting into its own package.
+Each is roughly 200 lines, doing what mature frameworks spend thousands of lines on (a declarative config loader, a hot-reload engine), and **introducing no new primitive**. They serve first as executable application references; only after several real applications converge on a stable boundary is one worth extracting into its own package.
 
 ### Startup-topology benchmark
 
@@ -228,4 +228,4 @@ Each is roughly 200 lines, doing what mature frameworks spend thousands of lines
 pnpm examples:benchmark
 ```
 
-Wall-clock timing is **deliberately not a CI assertion**. Core tests prove concurrency and transactional publication with deterministic barriers; this benchmark only observes the order of magnitude on a real host, avoiding flaky timing tests.
+Wall-clock timing is **deliberately not a CI assertion**. Core tests prove concurrency and transactional publication with deterministic barriers; this benchmark only observes the order of magnitude in a representative runtime, avoiding flaky timing tests.

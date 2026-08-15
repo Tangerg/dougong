@@ -1,14 +1,14 @@
 # 生命周期与资源
 
-插件会打开数据库连接、注册监听器、启动轮询任务、订阅集合变化。这些资源必须在插件停止时释放干净——**一次都不能漏，也不能重复释放**。
+`setup` 会打开数据库连接、注册监听器、启动轮询任务、订阅集合变化。这些资源必须在 Instance 停止时释放干净——**一次都不能漏，也不能重复释放**。
 
 Dougong 用一个概念解决全部情况：**Lifetime**。
 
 ## 一条规则
 
-> 插件在 `setup` 里从 `ctx` 拿到的一切，都归它的根 Lifetime 所有。插件停止时逆序释放。
+> `setup` 从 `ctx` 拿到的一切都归当前 Instance 的根 Lifetime 所有，Instance 停止时逆序释放。
 
-你不需要收集句柄、不需要写 `dispose` 数组、不需要担心异常路径漏掉某一项。
+你不需要收集资源、不需要写 `dispose` 数组、不需要担心异常路径漏掉某一项。
 
 ```ts
 setup(ctx) {
@@ -18,7 +18,7 @@ setup(ctx) {
   ctx.contribute(ROUTES, "a", route)     // 贡献 —— 自动归属
   ctx.spawn(async (signal) => poll(signal))  // 任务 —— 自动归属
 }
-// 插件停止时：任务被 abort 并等待、监听器注销、贡献撤回、client.close() 执行
+// Instance 停止时：任务被 abort 并等待、监听器注销、贡献撤回、client.close() 执行
 ```
 
 ## 七种资源，同一套规则
@@ -28,8 +28,8 @@ setup(ctx) {
 | `cleanups` | `ctx.cleanup(fn)` | 逆序执行 `fn` |
 | `tasks` | `ctx.spawn(fn)` | abort signal，等待任务结束 |
 | `listeners` | `ctx.on(EVENT, fn)` | 从 EventHub 注销 |
-| `contributions` | `ctx.contribute(EXT, key, v)` | 从 ExtensionPoint Store 撤回 |
-| `extensionViews` | `requires` 里的 ExtensionPoint | 视图关闭，再读抛错 |
+| `contributions` | `ctx.contribute(EXT, key, v)` | 从贡献集合撤回 |
+| `contributionViews` | `requires` 里的 ExtensionPoint | 视图关闭，再读抛错 |
 | `subscriptions` | `view.subscribe(fn)` | 从 Store 摘除监听 |
 | `children` | `ctx.lifetime(label)` | 递归释放整棵子树 |
 
@@ -43,7 +43,7 @@ setup(ctx) {
 
 ## 提前释放
 
-每个 Handle 都实现同一个 `Disposable` 协议：
+每个可释放资源都实现同一个 `Disposable` 协议：
 
 ```ts
 const subscription = ctx.on(TICK, handler)
@@ -56,7 +56,7 @@ const cleanup = ctx.cleanup(fn)
 await cleanup.dispose()         // 提前执行 fn（只会执行一次）
 ```
 
-`dispose()` 是**幂等**的：重复调用不会重复执行清理，也不会抛错。插件停止时不会再执行一遍已经释放的项。
+`dispose()` 是**幂等**的：重复调用不会重复执行清理，也不会抛错。Instance 停止时不会再执行一遍已经释放的项。
 
 同时支持 `using` 语法（需要 `ESNext.Disposable`）：
 
@@ -89,7 +89,7 @@ task.dispose()   // abort 并等待结束
 
 这个区分很重要：一个跑了十万次的轮询插件，不会在停止时去 abort 十万个已完成的任务。
 
-任务抛出的异常不会静默消失，会通过 Host 的错误上报通道（`createHost({ onError })` 或 logger）报出来。
+任务抛出的异常不会静默消失，会通过 Host 的错误上报通道（`createHost({ onError })` 或 logger）报出来。取消只覆盖 `signal.reason` 或明确的 `AbortError`；任务在收到取消后又发生的其他错误仍会报告。
 
 ## 子生命周期
 
@@ -137,14 +137,14 @@ setup(ctx) {
 
 ```ts
 const snapshot = host.diagnostics.get()
-const lifetime = snapshot.plugins.get(handle.id)?.lifetime
+const lifetime = snapshot.installations.get(installationId)?.lifetime
 
 lifetime.get()
 // {
 //   label: "app.users:1",
 //   phase: "active",
 //   cleanups: 1, tasks: 1, listeners: 2,
-//   contributions: 3, extensionViews: 1, subscriptions: 1,
+//   contributions: 3, contributionViews: 1, subscriptions: 1,
 //   children: [
 //     { label: "conn:wss://a", phase: "active", tasks: 1, ... }
 //   ]
@@ -161,17 +161,17 @@ lifetime.subscribe(() => render())   // 资源变化时通知
 
 这是一条容易被忽略但影响很大的性质：
 
-> 保留一个已释放的 Handle，不会保活 Host、Store、回调或 payload。
+> 保留一个已释放的资源，不会保活 Host、Store、回调或 payload。
 
 具体做法：
 
 - 终态资源清空自己对 owner、Store、回调和 payload 的引用
-- 终态 `InstallationRecord` 只保留不可变的 group ID，不持有 GroupNode
-- 已分离的 Group 清空 parent 引用，历史 Handle 不能经所有权树保活兄弟子树
+- 终态 Installation 只保留不可变身份数据，不持有 GroupNode
+- 已分离的 Group 清空 parent 引用，历史 Group 不能经所有权树保活兄弟子树
 - **终态失败只保留 `name` / `message` / `code` 纯数据摘要**——JavaScript 的 `Error.stack` 可能携带创建错误时的整个编排调用帧，不能成为一条隐形的所有权边
 - 历史诊断视图在关闭时切断上报回调
 
-仍属于活动 Host 的失败实例继续保留原始错误，供诊断和重试使用。等待 `ready()` 的调用方也总是收到原始 `Error`——摘要只影响实例**脱离 Host 之后**的事后读取。
+仍附着于活动 Host 的失败 Installation 继续保留原始错误，供诊断和重试使用。等待 `ready()` 的调用方也总是收到原始 `Error`——摘要只影响 Installation **脱离 Host 之后**的事后读取。
 
 ## 常见错误
 
@@ -201,6 +201,6 @@ setup(ctx) {
 
 ## 接下来
 
-- [事务与变更](./transactions.md) —— 多插件原子变更与回滚
+- [事务与变更](./transactions.md) —— 多 Installation 原子变更与回滚
 - [响应式与观察](./reactive.md) —— `observe()` 如何在 Lifetime 上组合
 - [Core API 规范](../reference/core-api.md#九lifetime-与-disposable) —— 精确语义与边界情形

@@ -67,13 +67,13 @@ export function defineManifest(input: ManifestInput | Manifest): Manifest {
   });
 }
 
-function assertUnique(values: ReadonlyArray<string>, label: string, plugin: string) {
+function assertUnique(values: ReadonlyArray<string>, label: string, manifestName: string) {
   const seen = new Set<string>();
   for (const value of values) {
     if (seen.has(value)) {
       throw new PlatformError(
         "MANIFEST_INVALID",
-        `Plugin '${plugin}' declares duplicate ${label} '${value}'`,
+        `Manifest '${manifestName}' declares duplicate ${label} '${value}'`,
       );
     }
     seen.add(value);

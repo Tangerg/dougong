@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import * as core from "../src/index";
 
 describe("public API surface", () => {
-  it("keeps the Core runtime budget explicit", () => {
+  it("keeps the Core value-export budget explicit", () => {
     expect(Object.keys(core).sort()).toEqual([
       "ConfigValidationError",
       "DougongError",
@@ -13,12 +13,13 @@ describe("public API surface", () => {
       "definePlugin",
       "event",
       "extensionPoint",
+      "isLogger",
       "optional",
       "service",
     ]);
   });
 
-  it("does not leak orchestrator internals through JavaScript handles", async () => {
+  it("does not leak orchestrator internals through public objects", async () => {
     const ITEMS = core.extensionPoint<string>("surface/items");
     const NOTICE = core.event<void>("surface/notice");
     let surfaces!: {
@@ -48,7 +49,7 @@ describe("public API surface", () => {
 
     const host = core.createHost();
     const change = host.change();
-    const handle = host.install(plugin);
+    const installation = host.install(plugin);
     const group = host.group("empty", () => {});
     await host.start();
 
@@ -70,13 +71,13 @@ describe("public API surface", () => {
     expect(Object.keys(surfaces.cleanup)).toEqual([]);
     expect(Object.keys(surfaces.child)).toEqual([]);
     expect(Object.keys(surfaces.task)).toEqual(["result"]);
-    expect(Object.keys(handle)).toEqual([]);
+    expect(Object.keys(installation)).toEqual([]);
     expect(Object.keys(group)).toEqual([]);
     expect(Object.keys(host.diagnostics).sort()).toEqual(["get", "subscribe"]);
     expect(Object.isFrozen(host)).toBe(true);
     expect("cancel" in change).toBe(false);
-    expect("attach" in handle).toBe(false);
-    expect("revoke" in handle).toBe(false);
+    expect("attach" in installation).toBe(false);
+    expect("revoke" in installation).toBe(false);
     expect("revoke" in group).toBe(false);
     expect("finishConfiguration" in group).toBe(false);
     for (const internal of [
@@ -96,7 +97,7 @@ describe("public API surface", () => {
       surfaces.cleanup,
       surfaces.child,
       surfaces.task,
-      handle,
+      installation,
       group,
     ]) {
       expect(Object.isFrozen(resource)).toBe(true);

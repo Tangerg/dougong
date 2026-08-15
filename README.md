@@ -51,7 +51,7 @@ await host.start()                    // 从声明推导拓扑，同层并发启
 
 ## 为什么是这样
 
-**显式优于隐式。** 依赖写在 `requires`，身份写在 Contract，所有权写在 Lifetime，运行期选择写在普通参数。没有 Service Locator、环境作用域、原型链注入或 Proxy——`ctx.foo` 的来源永远在同一个文件里看得见。
+**显式优于隐式。** 依赖写在 `requires`，身份写在 Contract，所有权写在 Lifetime，调用期选择写在普通参数。没有 Service Locator、环境作用域、原型链注入或 Proxy——`ctx.foo` 的来源永远在同一个文件里看得见。
 
 **一种语义，一条路径。** 每个语义操作只有一个正式入口，高层便利 API 必须机械展开到它，不能拥有第二套状态机。
 
@@ -63,19 +63,19 @@ await host.start()                    // 从声明推导拓扑，同层并发启
 | 贡献 ExtensionPoint | `contribute()` | | 读取 / 订阅实时值 | `get()` / `subscribe()` |
 | 更新 / 删除安装 | `update()` / `remove()` | | 提前释放资源 | `dispose()` |
 
-**事务只暴露已提交状态。** setup 期间的 Contract kind、监听与贡献先暂存，整层校验通过才发布。失败回滚旧图，无法可靠回滚时 fail closed，不会留下半装好的运行时。
+**事务只暴露已提交状态。** setup 期间的 Contract kind、监听与贡献先暂存，整层校验通过才发布。失败回滚旧图，无法可靠回滚时 fail closed，不会留下半装好的执行图。
 
 **类型即约束。** 用未声明的依赖、把 ExtensionPoint 当 Service 取、声明了 `provides` 却不返回——全部是编译错误。
 
 ## 六个原子
 
 ```text
-Service      稳定的一对一能力，实例期不变，提供者变化则重建消费者
-ExtensionPoint    可动态增删的开放贡献集合，变化通知订阅者
-Event        不保留状态的瞬时事实，一种分发语义
-Lifetime     监听、贡献、任务与资源的结构化所有权，终态自动摘除
-Plugin       一次 setup 产生一组能力
-Host  依赖图、事务与实例编排
+Service          稳定的一对一能力，Instance 生命周期内不变，提供者变化则重建消费者
+ExtensionPoint   可动态增删的开放贡献集合，变化通知订阅者
+Event            不保留状态的瞬时事实，一种分发语义
+Lifetime         监听、贡献、任务与资源的结构化所有权，终态自动摘除
+Plugin           一次 setup 产生一组能力
+Host             依赖图、事务与 Instance 编排
 ```
 
 Signal 不是第五种能力。`@dougongjs/reactive` 提供 `signal()` / `computed()` / `batch()` 和基于公开 Lifetime 协议的 `observe()`；Core 不依赖它，也不提供隐式 effect。
@@ -114,7 +114,7 @@ Dougong 的失败模型是**事务性**的——一个插件 setup 失败会让�
 
 ## 示例
 
-[十二章可执行示例](./packages/examples)分三段由浅入深——原子、组合、真实宿主——从最小 Service 走到 Planet / Lynx 场景、声明式计划和模块图 HMR，全部进 CI：
+[十二章可执行示例](./packages/examples)分三段由浅入深——原子、组合、完整应用——从最小 Service 走到 Planet / Lynx 场景、声明式计划和模块图 HMR，全部进 CI：
 
 ```sh
 pnpm examples

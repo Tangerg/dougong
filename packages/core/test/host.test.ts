@@ -12,7 +12,8 @@ import {
   type Plugin,
   type Service,
 } from "../src/index";
-import { PluginGraph } from "../src/plugin-graph";
+import { InstallationGraph } from "../src/installation-graph";
+import { Lifetime } from "../src/lifetime";
 
 const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
 
@@ -33,8 +34,9 @@ async function within<T>(promise: Promise<T>, milliseconds = 500) {
   }
 }
 
-describe("application", () => {
-  it("validates host ports at the JavaScript trust boundary", () => {
+describe("Host", () => {
+  it("validates Host options at the JavaScript trust boundary", () => {
+    expect(createHost().name).toBe("host");
     expect(() => createHost(null as never)).toThrow("options must be an object");
     expect(() => createHost({ logger: {} as never })).toThrow(
       "logger must implement debug/info/warn/error",
@@ -59,7 +61,7 @@ describe("application", () => {
   });
 
   it("validates JavaScript definitions at every installation boundary", () => {
-    const TOKEN = service<string>("test/definition-boundary");
+    const TOKEN = service<string>("test/plugin-boundary");
     expect(() =>
       definePlugin({
         name: "test.bad-alias",
@@ -70,13 +72,39 @@ describe("application", () => {
     expect(() => optional({ kind: "service", id: " invalid" } as Service<unknown>)).toThrow(
       TypeError,
     );
+    expect(() =>
+      definePlugin({
+        name: "test.duplicate-requirement",
+        requires: { first: TOKEN, second: service<string>(TOKEN.id) },
+        setup() {},
+      }),
+    ).toThrow(
+      "requirement aliases 'first' and 'second' reference the same Service 'test/plugin-boundary'",
+    );
+    expect(() =>
+      definePlugin({
+        name: "test.duplicate-provision",
+        provides: { first: TOKEN, second: service<string>(TOKEN.id) },
+        setup: () => ({ first: "first", second: "second" }),
+      }),
+    ).toThrow(
+      "provision aliases 'first' and 'second' reference the same Service 'test/plugin-boundary'",
+    );
+    expect(() =>
+      definePlugin({
+        name: "test.self-dependency",
+        requires: { input: TOKEN },
+        provides: { output: TOKEN },
+        setup: () => ({ output: "value" }),
+      }),
+    ).toThrow("cannot both require and provide Service 'test/plugin-boundary'");
 
     const host = createHost();
     const invalid = { name: " invalid", setup() {} } as Plugin;
     expect(() => host.install(invalid)).toThrow("cannot start or end with whitespace");
   });
 
-  it("isolates runtime commands from failing diagnostics observers", async () => {
+  it("isolates Host commands from failing diagnostics observers", async () => {
     const logger = {
       debug: vi.fn<(...args: unknown[]) => void>(),
       info: vi.fn<(...args: unknown[]) => void>(),
@@ -89,10 +117,10 @@ describe("application", () => {
       throw new Error("broken observer");
     });
 
-    const handle = host.install(plugin);
+    const installation = host.install(plugin);
     await host.start();
 
-    expect(handle.status).toBe("active");
+    expect(installation.status).toBe("active");
     expect(logger.error).toHaveBeenCalled();
     subscription.dispose();
     await host.stop();
@@ -307,6 +335,71 @@ describe("application", () => {
     expect(host.status).toBe("idle");
   });
 
+  it("does not duplicate a layer failure through cancelled siblings", async () => {
+    const failure = new Error("root setup failed");
+    let entered = 0;
+    let bothEntered!: () => void;
+    const ready = new Promise<void>((resolve) => {
+      bothEntered = resolve;
+    });
+    const host = createHost();
+    host.install(
+      definePlugin({
+        name: "test.layer-root-failure",
+        async setup() {
+          entered++;
+          if (entered === 2) bothEntered();
+          await ready;
+          throw failure;
+        },
+      }),
+    );
+    host.install(
+      definePlugin({
+        name: "test.layer-cancelled-sibling",
+        setup(ctx) {
+          entered++;
+          if (entered === 2) bothEntered();
+          return new Promise<never>((_resolve, reject) => {
+            ctx.signal.addEventListener("abort", () => reject(ctx.signal.reason), { once: true });
+          });
+        },
+      }),
+    );
+
+    await expect(host.start()).rejects.toBe(failure);
+    expect(host.status).toBe("idle");
+  });
+
+  it("preserves independent failures from the same startup layer", async () => {
+    const firstFailure = new Error("first setup failed");
+    const secondFailure = new Error("second setup failed");
+    let entered = 0;
+    let bothEntered!: () => void;
+    const ready = new Promise<void>((resolve) => {
+      bothEntered = resolve;
+    });
+    const failingPlugin = (name: string, failure: Error) =>
+      definePlugin({
+        name,
+        async setup() {
+          entered++;
+          if (entered === 2) bothEntered();
+          await ready;
+          throw failure;
+        },
+      });
+    const host = createHost();
+    host.install(failingPlugin("test.layer-first-failure", firstFailure));
+    host.install(failingPlugin("test.layer-second-failure", secondFailure));
+
+    const failure = await host.start().catch((error: unknown) => error);
+
+    expect(failure).toBeInstanceOf(AggregateError);
+    expect((failure as AggregateError).errors).toEqual([firstFailure, secondFailure]);
+    expect(host.status).toBe("idle");
+  });
+
   it("keeps a prepared layer invisible until every sibling succeeds", async () => {
     const NOTICE = event<void>("test/layer-publication-barrier");
     let emit!: () => Promise<void>;
@@ -383,20 +476,20 @@ describe("application", () => {
     expect(values).toEqual([undefined]);
   });
 
-  it("exposes Service lookup only at the active application boundary", async () => {
-    const CLOCK = service<{ readonly version: number }>("test/application-get");
+  it("exposes Service lookup only at the active Host boundary", async () => {
+    const CLOCK = service<{ readonly version: number }>("test/host-get");
     const clock = definePlugin({
-      name: "test.application-get",
+      name: "test.host-get",
       provides: { clock: CLOCK },
       setup: (_ctx, version: number) => ({ clock: { version } }),
     });
     const host = createHost();
-    const handle = host.install(clock, 1);
+    const installation = host.install(clock, 1);
 
     expect(() => host.get(CLOCK)).toThrow("not active");
     await host.start();
     expect(host.get(CLOCK).version).toBe(1);
-    await handle.update({ config: 2 });
+    await installation.update({ config: 2 });
     expect(host.get(CLOCK).version).toBe(2);
     await host.stop();
     expect(() => host.get(CLOCK)).toThrow("not active");
@@ -409,16 +502,16 @@ describe("application", () => {
       provides: { value: VALUE },
       setup: (_ctx, version: number) => ({ value: { version } }),
     });
-    const build = vi.spyOn(PluginGraph, "build");
+    const build = vi.spyOn(InstallationGraph, "build");
     const host = createHost();
-    const handle = host.install(provider, 1);
+    const installation = host.install(provider, 1);
     await host.start();
 
     const afterStart = build.mock.calls.length;
     for (let index = 0; index < 100; index++) expect(host.get(VALUE).version).toBe(1);
     expect(build).toHaveBeenCalledTimes(afterStart);
 
-    await handle.update({ config: 2 });
+    await installation.update({ config: 2 });
     expect(build).toHaveBeenCalledTimes(afterStart + 1);
     const afterUpdate = build.mock.calls.length;
     for (let index = 0; index < 100; index++) expect(host.get(VALUE).version).toBe(2);
@@ -427,7 +520,7 @@ describe("application", () => {
     await host.stop();
   });
 
-  it("closes the host service boundary while an active ChangeSet rebuilds runtime", async () => {
+  it("closes the Host Service boundary while a ChangeSet rebuilds instances", async () => {
     const VALUE = service<{ readonly version: number }>("test/changing-service-boundary");
     let entered!: () => void;
     let release!: () => void;
@@ -449,10 +542,10 @@ describe("application", () => {
       },
     });
     const host = createHost();
-    const handle = host.install(provider, 1);
+    const installation = host.install(provider, 1);
     await host.start();
 
-    const update = handle.update({ config: 2 });
+    const update = installation.update({ config: 2 });
     await rebuilding;
 
     expect(host.status).toBe("changing");
@@ -466,7 +559,7 @@ describe("application", () => {
     await host.stop();
   });
 
-  it("keeps extensions live without restarting their consumers", async () => {
+  it("keeps ExtensionPoint contributions live without restarting their consumers", async () => {
     const ROUTES = extensionPoint<{ path: string }>("test/routes");
     const snapshots: string[][] = [];
     let contribution!: Contribution<{ path: string }>;
@@ -494,7 +587,7 @@ describe("application", () => {
 
     const host = createHost();
     host.install(reader);
-    const writerHandle = host.install(writer);
+    const writerInstallation = host.install(writer);
     await host.start();
     await tick();
 
@@ -504,7 +597,7 @@ describe("application", () => {
     await tick();
     expect(snapshots.at(-1)).toEqual(["/home"]);
 
-    await writerHandle.remove();
+    await writerInstallation.remove();
     await tick();
     expect(snapshots.at(-1)).toEqual([]);
 
@@ -549,7 +642,7 @@ describe("application", () => {
     await host.stop();
   });
 
-  it("restores the previous application when an update fails", async () => {
+  it("restores the previous Instances when an update fails", async () => {
     const WORKER = service<{ readonly failed: boolean }>("test/rollback-worker");
     const starts: boolean[] = [];
 
@@ -564,19 +657,19 @@ describe("application", () => {
     });
 
     const host = createHost();
-    const handle = host.install(worker, { fail: false });
+    const installation = host.install(worker, { fail: false });
     await host.start();
 
-    await expect(handle.update({ config: { fail: true } })).rejects.toThrow("update failed");
+    await expect(installation.update({ config: { fail: true } })).rejects.toThrow("update failed");
 
-    expect(handle.status).toBe("active");
+    expect(installation.status).toBe("active");
     expect(host.get(WORKER)).toEqual({ failed: false });
     expect(starts).toEqual([false, true, false]);
 
     await host.stop();
   });
 
-  it("fails the whole host closed when an affected runtime cannot be cleaned up", async () => {
+  it("fails the whole Host closed when affected Instances cannot be cleaned up", async () => {
     let workerStarts = 0;
     let unrelatedStops = 0;
 
@@ -599,15 +692,17 @@ describe("application", () => {
     });
 
     const host = createHost();
-    const workerHandle = host.install(worker, 1);
-    const unrelatedHandle = host.install(unrelated);
+    const workerInstallation = host.install(worker, 1);
+    const unrelatedInstallation = host.install(unrelated);
     await host.start();
 
-    await expect(workerHandle.update({ config: 2 })).rejects.toThrow("could not cleanly stop");
+    await expect(workerInstallation.update({ config: 2 })).rejects.toThrow(
+      "could not cleanly stop",
+    );
 
     expect(host.status).toBe("idle");
-    expect(workerHandle.status).toBe("pending");
-    expect(unrelatedHandle.status).toBe("pending");
+    expect(workerInstallation.status).toBe("pending");
+    expect(unrelatedInstallation.status).toBe("pending");
     expect(workerStarts).toBe(1);
     expect(unrelatedStops).toBe(1);
   });
@@ -664,13 +759,13 @@ describe("application", () => {
     });
 
     const host = createHost();
-    const rootHandle = host.install(root, 1);
+    const rootInstallation = host.install(root, 1);
     host.install(middle);
     host.install(leaf);
     host.install(unrelated);
     await host.start();
 
-    await rootHandle.update({ config: 2 });
+    await rootInstallation.update({ config: 2 });
 
     expect(trace).toEqual([
       "root:start:1",
@@ -717,9 +812,9 @@ describe("application", () => {
     host.install(consumer);
     await host.start();
 
-    const providerHandle = host.install(provider);
-    await providerHandle.ready();
-    await providerHandle.remove();
+    const providerInstallation = host.install(provider);
+    await providerInstallation.ready();
+    await providerInstallation.remove();
 
     expect(values).toEqual([undefined, "memory", undefined]);
     expect(stops).toBe(2);
@@ -759,13 +854,13 @@ describe("application", () => {
     });
 
     const host = createHost();
-    const handle = host.install(worker, { enabled: true });
+    const installation = host.install(worker, { enabled: true });
     await host.start();
 
-    await expect(handle.update({ config: { enabled: false } })).rejects.toBeInstanceOf(
+    await expect(installation.update({ config: { enabled: false } })).rejects.toBeInstanceOf(
       ConfigValidationError,
     );
-    expect({ starts, stops, status: handle.status }).toEqual({
+    expect({ starts, stops, status: installation.status }).toEqual({
       starts: 1,
       stops: 0,
       status: "active",
@@ -797,12 +892,44 @@ describe("application", () => {
     });
 
     const host = createHost();
-    const handle = host.install(parser, "21");
+    const installation = host.install(parser, "21");
     await host.start();
-    await handle.update({ config: "42" });
+    await installation.update({ config: "42" });
 
     expect(received).toEqual([21, 42]);
     await host.stop();
+  });
+
+  it("classifies non-Error config validator failures at the command boundary", async () => {
+    const schema: StandardSchemaV1<unknown, unknown> = {
+      "~standard": {
+        version: 1,
+        vendor: "test",
+        async validate() {
+          throw undefined;
+        },
+      },
+    };
+    const host = createHost();
+    const installation = host.install(
+      definePlugin({
+        name: "test.non-error-validator",
+        config: schema,
+        setup() {},
+      }),
+      undefined,
+    );
+
+    const commandFailure = await host.start().catch((error: unknown) => error);
+    expect(commandFailure).toMatchObject({
+      code: "INSTALLATION_UNAVAILABLE",
+      message: `Installation '${installation.id}' failed with a non-Error value`,
+    });
+    const stableFailure = await installation.ready().catch((error: unknown) => error);
+    expect(stableFailure).toMatchObject({
+      code: "INSTALLATION_UNAVAILABLE",
+    });
+    expect(stableFailure).toBe(commandFailure);
   });
 
   it("requires an explicit new start after startup fails", async () => {
@@ -827,15 +954,43 @@ describe("application", () => {
     host.install(consumer);
     await expect(host.start()).rejects.toMatchObject({ code: "SERVICE_MISSING" });
 
-    const providerHandle = host.install(provider);
+    const providerInstallation = host.install(provider);
     await tick();
     expect(host.status).toBe("idle");
-    expect(providerHandle.status).toBe("pending");
+    expect(providerInstallation.status).toBe("pending");
     expect(providerStarts).toBe(0);
 
     await host.start();
     expect(providerStarts).toBe(1);
     await host.stop();
+  });
+
+  it("establishes layer-wide Instance ownership before publishing Lifetimes", async () => {
+    const failure = new Error("publication failed");
+    const publish = vi.spyOn(Lifetime.prototype, "publish").mockImplementationOnce(() => {
+      throw failure;
+    });
+    const cleaned: string[] = [];
+    const host = createHost();
+    for (const name of ["first", "second"]) {
+      host.install(
+        definePlugin({
+          name: `test.publication-ownership-${name}`,
+          setup(ctx) {
+            ctx.cleanup(() => {
+              cleaned.push(name);
+            });
+          },
+        }),
+      );
+    }
+
+    try {
+      await expect(host.start()).rejects.toBe(failure);
+      expect(cleaned).toEqual(["second", "first"]);
+    } finally {
+      publish.mockRestore();
+    }
   });
 
   it("serializes stop followed immediately by an offline update", async () => {
@@ -851,15 +1006,15 @@ describe("application", () => {
     });
 
     const host = createHost();
-    const handle = host.install(worker, 1);
+    const installation = host.install(worker, 1);
     await host.start();
 
     const stopping = host.stop();
-    const updating = handle.update({ config: 2 });
+    const updating = installation.update({ config: 2 });
     await Promise.all([stopping, updating]);
 
     expect(trace).toEqual(["start:1", "stop:1"]);
-    expect(handle.status).toBe("pending");
+    expect(installation.status).toBe("pending");
 
     await host.start();
     expect(trace).toEqual(["start:1", "stop:1", "start:2"]);
@@ -893,8 +1048,8 @@ describe("application", () => {
     const A = service<string>("test/cycle-a");
     const B = service<string>("test/cycle-b");
 
-    const cyclicApp = createHost();
-    cyclicApp.install(
+    const cyclicHost = createHost();
+    cyclicHost.install(
       definePlugin({
         name: "test.cycle-a",
         requires: { b: B },
@@ -902,7 +1057,7 @@ describe("application", () => {
         setup: () => ({ a: "a" }),
       }),
     );
-    cyclicApp.install(
+    cyclicHost.install(
       definePlugin({
         name: "test.cycle-b",
         requires: { a: A },
@@ -910,15 +1065,15 @@ describe("application", () => {
         setup: () => ({ b: "b" }),
       }),
     );
-    await expect(cyclicApp.start()).rejects.toMatchObject({
+    await expect(cyclicHost.start()).rejects.toMatchObject({
       code: "SERVICE_CYCLE",
-      message: "Plugin dependency cycle: test.cycle-a:1 -> test.cycle-b:2 -> test.cycle-a:1",
+      message: "Installation dependency cycle: test.cycle-a:1 -> test.cycle-b:2 -> test.cycle-a:1",
     });
 
     const DUPLICATE = service<number>("test/duplicate");
-    const duplicateApp = createHost();
+    const duplicateHost = createHost();
     for (const name of ["first", "second"]) {
-      duplicateApp.install(
+      duplicateHost.install(
         definePlugin({
           name: `test.${name}`,
           provides: { value: DUPLICATE },
@@ -926,35 +1081,35 @@ describe("application", () => {
         }),
       );
     }
-    await expect(duplicateApp.start()).rejects.toMatchObject({ code: "SERVICE_CONFLICT" });
+    await expect(duplicateHost.start()).rejects.toMatchObject({ code: "SERVICE_CONFLICT" });
 
     const sharedService = service<number>("test/shared-kind");
     const sharedExtension = extensionPoint<number>("test/shared-kind");
-    const collisionApp = createHost();
-    collisionApp.install(
+    const collisionHost = createHost();
+    collisionHost.install(
       definePlugin({
         name: "test.kind-provider",
         provides: { value: sharedService },
         setup: () => ({ value: 1 }),
       }),
     );
-    collisionApp.install(
+    collisionHost.install(
       definePlugin({
         name: "test.kind-reader",
         requires: { values: sharedExtension },
         setup() {},
       }),
     );
-    await expect(collisionApp.start()).rejects.toMatchObject({ code: "CONTRACT_CONFLICT" });
+    await expect(collisionHost.start()).rejects.toMatchObject({ code: "CONTRACT_CONFLICT" });
   });
 
-  it("commits runtime Contract identities only after a successful transaction", async () => {
+  it("commits Contract identities only after a successful transaction", async () => {
     const VALUES = extensionPoint<number>("test/transactional-contract-kind");
     const VALUE = service<number>("test/transactional-contract-kind");
     const host = createHost();
     await host.start();
 
-    const failed = host.install(
+    const failedInstallation = host.install(
       definePlugin({
         name: "test.failed-contract-declaration",
         setup(ctx) {
@@ -963,16 +1118,16 @@ describe("application", () => {
         },
       }),
     );
-    await expect(failed.ready()).rejects.toThrow("setup failed");
+    await expect(failedInstallation.ready()).rejects.toThrow("setup failed");
 
-    const provider = host.install(
+    const providerInstallation = host.install(
       definePlugin({
         name: "test.recovered-contract-declaration",
         provides: { value: VALUE },
         setup: () => ({ value: 2 }),
       }),
     );
-    await provider.ready();
+    await providerInstallation.ready();
 
     expect(host.get(VALUE)).toBe(2);
     await host.stop();
@@ -985,7 +1140,7 @@ describe("application", () => {
     await host.start();
 
     expect(() => host.get(VALUE)).toThrow("is not active");
-    const reader = host.install(
+    const readerInstallation = host.install(
       definePlugin({
         name: "test.extension-after-unavailable-read",
         requires: { values: VALUES },
@@ -994,7 +1149,7 @@ describe("application", () => {
         },
       }),
     );
-    await reader.ready();
+    await readerInstallation.ready();
 
     await host.stop();
   });
@@ -1068,47 +1223,47 @@ describe("application", () => {
     });
 
     const host = createHost();
-    const provider = host.install(providerV1);
-    const consumer = host.install(consumerV1);
+    const providerInstallation = host.install(providerV1);
+    const consumerInstallation = host.install(consumerV1);
     await host.start();
 
-    await expect(provider.update({ plugin: providerV2 })).rejects.toMatchObject({
+    await expect(providerInstallation.update({ plugin: providerV2 })).rejects.toMatchObject({
       code: "SERVICE_MISSING",
     });
-    expect(provider.status).toBe("active");
-    expect(consumer.status).toBe("active");
+    expect(providerInstallation.status).toBe("active");
+    expect(consumerInstallation.status).toBe("active");
 
     const migration = host.change();
-    migration.update(provider, { plugin: providerV2 });
-    migration.update(consumer, { plugin: consumerV2 });
+    migration.update(providerInstallation, { plugin: providerV2 });
+    migration.update(consumerInstallation, { plugin: consumerV2 });
     await migration.commit();
 
     expect(observed).toEqual(["v1", "v2"]);
-    expect(provider.status).toBe("active");
-    expect(consumer.status).toBe("active");
+    expect(providerInstallation.status).toBe("active");
+    expect(consumerInstallation.status).toBe("active");
 
     const removal = host.change();
-    removal.remove(provider).remove(consumer);
+    removal.remove(providerInstallation).remove(consumerInstallation);
     await removal.commit();
-    expect(provider.status).toBe("removed");
-    expect(consumer.status).toBe("removed");
-    await expect(provider.remove()).resolves.toBeUndefined();
-    await expect(provider.update({ plugin: providerV2 })).rejects.toMatchObject({
+    expect(providerInstallation.status).toBe("removed");
+    expect(consumerInstallation.status).toBe("removed");
+    await expect(providerInstallation.remove()).resolves.toBeUndefined();
+    await expect(providerInstallation.update({ plugin: providerV2 })).rejects.toMatchObject({
       code: "INSTALLATION_REMOVED",
     });
   });
 
-  it("preserves plugin identity across updates", async () => {
+  it("preserves Installation identity across Plugin updates", async () => {
     const original = definePlugin({ name: "test.identity", setup() {} });
     const renamed = definePlugin({ name: "test.renamed", setup() {} });
     const host = createHost();
-    const handle = host.install(original);
+    const installation = host.install(original);
     await host.start();
 
-    await expect(handle.update({ plugin: renamed })).rejects.toMatchObject({
+    await expect(installation.update({ plugin: renamed })).rejects.toMatchObject({
       code: "INSTALLATION_IDENTITY",
     });
-    expect(handle.status).toBe("active");
+    expect(installation.status).toBe("active");
 
     await host.stop();
   });
@@ -1117,22 +1272,24 @@ describe("application", () => {
     const plugin = definePlugin({ name: "test.change-owner", setup() {} });
     const first = createHost();
     const second = createHost();
-    const handle = first.install(plugin);
+    const installation = first.install(plugin);
     const foreign = second.change();
 
-    expect(() => foreign.remove(handle)).toThrow("different Host");
+    expect(() => foreign.remove(installation)).toThrow("different Host");
 
     const change = first.change();
-    expect(() => change.update(handle, {} as never)).toThrow("must include 'plugin' or 'config'");
-    change.update(handle, { config: undefined });
-    expect(() => change.remove(handle)).toThrow("can only appear once");
+    expect(() => change.update(installation, {} as never)).toThrow(
+      "must include 'plugin' or 'config'",
+    );
+    change.update(installation, { config: undefined });
+    expect(() => change.remove(installation)).toThrow("can only appear once");
     const committing = change.commit();
     expect(change.commit()).toBe(committing);
     expect(() => change.install(plugin)).toThrow("submitted ChangeSet");
     await committing;
   });
 
-  it("commits an empty ChangeSet without creating a fake runtime transition", async () => {
+  it("commits an empty ChangeSet without creating a fake execution transition", async () => {
     const host = createHost();
     await host.start();
     const before = host.diagnostics.get();
@@ -1156,16 +1313,22 @@ describe("application", () => {
     });
     const host = createHost();
     const change = host.change();
-    const handle = change.install(plugin, 1);
+    const installation = change.install(plugin, 1);
 
-    await expect(handle.update({ config: 2 })).rejects.toMatchObject({
+    await expect(installation.update({ config: 2 })).rejects.toMatchObject({
       code: "INSTALLATION_UNAVAILABLE",
     });
-    await expect(handle.remove()).rejects.toMatchObject({ code: "INSTALLATION_UNAVAILABLE" });
+    await expect(installation.remove()).rejects.toMatchObject({ code: "INSTALLATION_UNAVAILABLE" });
 
-    const installation = change.commit();
-    const update = handle.update({ config: 2 });
-    await Promise.all([installation, update]);
+    const unrelatedChange = host.change().remove(installation);
+    await expect(unrelatedChange.commit()).rejects.toMatchObject({
+      code: "INSTALLATION_UNAVAILABLE",
+    });
+    expect(installation.status).toBe("pending");
+
+    const commit = change.commit();
+    const update = installation.update({ config: 2 });
+    await Promise.all([commit, update]);
     await host.start();
     expect(received).toEqual([2]);
     await host.stop();
@@ -1230,10 +1393,10 @@ describe("application", () => {
     expect("set" in snapshot.installations).toBe(false);
 
     const providerSnapshot = [...snapshot.installations.values()].find(
-      (plugin) => plugin.name === "test.diagnostic-provider",
+      (installation) => installation.pluginName === "test.diagnostic-provider",
     );
     const consumerSnapshot = [...snapshot.installations.values()].find(
-      (plugin) => plugin.name === "test.diagnostic-consumer",
+      (installation) => installation.pluginName === "test.diagnostic-consumer",
     );
     expect(providerSnapshot?.provides).toEqual(["test/diagnostic-clock"]);
     expect(consumerSnapshot?.requires).toEqual(["test/diagnostic-clock"]);
@@ -1276,21 +1439,21 @@ describe("application", () => {
       },
     });
     const host = createHost();
-    const handle = host.install(plugin);
+    const installation = host.install(plugin);
     await host.start();
 
     const hostSnapshot = host.diagnostics.get();
-    const lifetime = hostSnapshot.installations.get(handle.id)?.lifetime;
+    const lifetime = hostSnapshot.installations.get(installation.id)?.lifetime;
     expect(Object.keys(lifetime ?? {}).sort()).toEqual(["get", "subscribe"]);
     expect(Object.isFrozen(lifetime)).toBe(true);
     expect(lifetime?.get()).toEqual({
-      label: handle.id,
+      label: installation.id,
       phase: "active",
       cleanups: 1,
       tasks: 1,
       listeners: 1,
       contributions: 1,
-      extensionViews: 1,
+      contributionViews: 1,
       subscriptions: 1,
       children: [
         {
@@ -1300,7 +1463,7 @@ describe("application", () => {
           tasks: 0,
           listeners: 0,
           contributions: 0,
-          extensionViews: 0,
+          contributionViews: 0,
           subscriptions: 0,
           children: [],
         },
@@ -1315,13 +1478,13 @@ describe("application", () => {
     completeTask();
     await taskResult;
     expect(lifetime?.get()).toEqual({
-      label: handle.id,
+      label: installation.id,
       phase: "active",
       cleanups: 0,
       tasks: 0,
       listeners: 0,
       contributions: 0,
-      extensionViews: 1,
+      contributionViews: 1,
       subscriptions: 0,
       children: [],
     });
@@ -1330,17 +1493,17 @@ describe("application", () => {
 
     await host.stop();
     expect(lifetime?.get()).toEqual({
-      label: handle.id,
+      label: installation.id,
       phase: "disposed",
       cleanups: 0,
       tasks: 0,
       listeners: 0,
       contributions: 0,
-      extensionViews: 0,
+      contributionViews: 0,
       subscriptions: 0,
       children: [],
     });
-    expect(host.diagnostics.get().installations.get(handle.id)?.lifetime).toBeUndefined();
+    expect(host.diagnostics.get().installations.get(installation.id)?.lifetime).toBeUndefined();
     subscription.dispose();
   });
 
@@ -1358,16 +1521,16 @@ describe("application", () => {
     await expect(host.start()).rejects.toBe(failure);
     const snapshot = [...host.diagnostics.get().installations.values()][0];
     expect(snapshot).toMatchObject({
-      name: "test.diagnostic-failure",
+      pluginName: "test.diagnostic-failure",
       status: "failed",
       error: failure,
     });
   });
 
-  it("classifies non-Error setup failures for stable handles", async () => {
+  it("classifies non-Error setup failures for stable Installations", async () => {
     const failure: unknown = undefined;
     const host = createHost();
-    const handle = host.install(
+    const installation = host.install(
       definePlugin({
         name: "test.non-error-failure",
         setup() {
@@ -1376,14 +1539,20 @@ describe("application", () => {
       }),
     );
 
-    await host.start().catch(() => undefined);
-    const classified = await handle.ready().catch((error: unknown) => error);
+    const commandFailure = await host.start().catch((error: unknown) => error);
+    expect(commandFailure).toMatchObject({
+      name: "DougongError",
+      code: "INSTALLATION_UNAVAILABLE",
+      message: `Installation '${installation.id}' failed with a non-Error value`,
+    });
+    const classified = await installation.ready().catch((error: unknown) => error);
     expect(classified).toMatchObject({
       name: "DougongError",
       code: "INSTALLATION_UNAVAILABLE",
-      message: `Installation '${handle.id}' failed with a non-Error value`,
+      message: `Installation '${installation.id}' failed with a non-Error value`,
     });
-    expect(host.diagnostics.get().installations.get(handle.id)?.error).toBe(classified);
+    expect(classified).toBe(commandFailure);
+    expect(host.diagnostics.get().installations.get(installation.id)?.error).toBe(classified);
     await host.stop();
   });
 });

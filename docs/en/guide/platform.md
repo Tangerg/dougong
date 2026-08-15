@@ -1,6 +1,6 @@
 # External plugin delivery
 
-Every plugin so far has been **written by the host**: you `import` it, then `install` it.
+Every Plugin so far has been **written by application code**: you `import` it, then `install` it.
 
 `@dougongjs/platform` handles the other case — plugins that come from **outside**: a third-party registry, a user-installed extension, a dynamically downloaded module. That raises four concerns Core should not know about:
 
@@ -14,13 +14,12 @@ Platform compiles those four into Core operations. It **does not duplicate** Cor
 ## The mental model
 
 ```text
-Host
- └─ Platform            ← external concerns: manifest / loader / permissions / activation
-      └─ Installer      ← this is Core's Host
-           └─ installed plugins
+Application code → Platform → Artifact / Registration
+                              ↓ compiles changes to
+                     Installer (Host or Group) → Installation
 ```
 
-Platform takes a `Installer` (an Host or a Group) and compiles external plugins into `install` / `update` / `remove` against it.
+Platform takes an `Installer` (a Host or a Group) and compiles external Plugins into `install` / `update` / `remove` against it.
 
 ## A minimal example
 
@@ -32,12 +31,12 @@ const host = createHost({ name: "editor" })
 await host.start()
 
 const platform = createPlatform({
-  installer: app,                       // the compilation target
+  installer: host,                      // the compilation target
   apiVersion: "1.0.0",                  // the application API version
   loader: new ImportLoader(),     // how modules are loaded
 })
 
-const plugin = await platform.register({
+const registration = await platform.register({
   manifest: defineManifest({
     name: "acme.markdown",
     version: "1.2.0",
@@ -59,7 +58,7 @@ A manifest is an external plugin's **declaration**, validated and frozen at the 
 interface Manifest {
   readonly name: string
   readonly version: string
-  readonly apiVersion: string                        // what it requires of the host
+  readonly apiVersion: string                        // required application API range
   readonly activation: ReadonlyArray<string>         // activation events
   readonly permissions: ReadonlyArray<string>
   readonly dependencies: Readonly<Record<string, string>>
@@ -68,7 +67,7 @@ interface Manifest {
 
 `defineManifest()` fills optional fields, validates the shape and freezes the result. An invalid manifest throws `MANIFEST_INVALID` — **before any module code is loaded**.
 
-A mismatched `apiVersion` throws `API_INCOMPATIBLE`. That is the only compatibility contract between host and external plugin.
+A mismatched `apiVersion` throws `API_INCOMPATIBLE`. That is the compatibility contract between the application API and an external Plugin.
 
 ## The loader is the execution boundary
 
@@ -87,7 +86,7 @@ new ImportLoader()        // dynamic import(); Reference is string | URL
 new MemoryLoader(map)     // from a Map, for tests
 ```
 
-The loader is the **only** place external code executes. A failed load throws `MODULE_LOAD_FAILED`; a module that does not export a valid plugin definition throws `MODULE_INVALID`.
+The Loader is the **only** place external code executes. A failed load throws `MODULE_LOAD_FAILED`; a module that does not export a valid `Plugin` throws `MODULE_INVALID`.
 
 The `signal` makes loading cancellable, so removing a plugin mid-load does not leave an orphan import running.
 
@@ -97,17 +96,17 @@ The `signal` makes loading cancellable, so removing a plugin mid-load does not l
 import { PermissionSet } from "dougong"
 
 const platform = createPlatform({
-  installer: app,
+  installer: host,
   apiVersion: "1.0.0",
   loader: new ImportLoader(),
-  permissions: new PermissionSet(["fs:read", "net:fetch"]),
+  authorizer: new PermissionSet(["fs:read", "net:fetch"]),
 })
 ```
 
 Or supply your own authorizer — for example one that asks the user:
 
 ```ts
-const permissions = {
+const authorizer = {
   async authorize(manifest, signal) {
     const granted = await askUser(manifest.name, manifest.permissions)
     if (!granted) throw new PermissionDeniedError(manifest.name, manifest.permissions)
@@ -118,7 +117,7 @@ const permissions = {
 ::: danger This is not a sandbox
 The permission check happens **before** the module executes. It decides whether to run the code, not what the code may touch.
 
-Once a JavaScript module is imported it shares the host's realm and reaches the same globals. Real isolation needs a Worker, iframe, process or separate Host — Platform does not pretend otherwise.
+Once a JavaScript module is imported it shares the application's realm and reaches the same globals. Real isolation needs a Worker, iframe, process or separate Host — Platform does not pretend otherwise.
 
 Authorization is re-checked **immediately before** module execution, so revoking a permission takes effect at once for plugins that have not yet activated.
 :::
@@ -128,18 +127,18 @@ Authorization is re-checked **immediately before** module execution, so revoking
 External plugins usually should not all load at startup. Platform's model is **registration ≠ activation**:
 
 ```ts
-const plugin = await platform.register({
+const registration = await platform.register({
   manifest,
   reference: "./heavy-plugin.js",
-  placeholder: lightweightStub,     // optional: a host definition exposed before activation
+  placeholder: lightweightStub,     // optional: an application-authored Plugin
 })
 
-plugin.status      // "registered" → not loaded yet
-await plugin.activate()             // activate explicitly
-plugin.status      // "active"
+registration.status      // "registered" → not loaded yet
+await registration.activate()       // activate explicitly
+registration.status      // "activated"
 ```
 
-The `placeholder` is a **application-authored** plugin definition standing in until the real module activates. That is what makes "the command is already in the menu, but the implementation loads on click" possible — and the swap from placeholder to real implementation is **atomic**, through the same Core ChangeSet.
+The `placeholder` is an **application-authored Plugin** standing in until the loaded Plugin activates. That is what makes "the command is already in the menu, but the implementation loads on click" possible — and the swap is **atomic**, through the same Core ChangeSet.
 
 Activation can also be event-driven:
 
@@ -148,7 +147,7 @@ Activation can also be event-driven:
 await platform.trigger("onLanguage:markdown")
 ```
 
-`trigger()` activates every plugin declaring that event, **concurrently**, aggregating independent failures into an `AggregateError` — one failed activation does not affect the others.
+`trigger()` activates every Registration declaring that event, **concurrently**, aggregating independent failures into an `AggregateError` — one failed activation does not affect the others.
 
 ## Manifest dependencies
 
@@ -165,14 +164,14 @@ Platform activates them in dependency order and checks:
 
 | Code | Condition |
 | --- | --- |
-| `PLUGIN_DEPENDENCY_MISSING` | the dependency is not registered |
-| `PLUGIN_DEPENDENCY_INCOMPATIBLE` | registered but outside the version range |
-| `PLUGIN_DEPENDENCY_INACTIVE` | present but failed to activate |
-| `PLUGIN_CYCLE` | manifest dependencies form a cycle |
-| `PLUGIN_DUPLICATE` | a plugin with that name is already registered |
+| `REGISTRATION_DEPENDENCY_MISSING` | the dependency has no Registration |
+| `REGISTRATION_DEPENDENCY_INCOMPATIBLE` | the dependency Registration is outside the version range |
+| `REGISTRATION_DEPENDENCY_INACTIVE` | the dependency Registration is not activated |
+| `REGISTRATION_CYCLE` | manifest dependencies form a cycle in the candidate Registration graph |
+| `REGISTRATION_DUPLICATE` | a Registration with that manifest name already exists |
 
 ::: tip Two graphs, separate jobs
-Manifest dependencies (a **delivery** relationship between external plugins) and Core's Service dependencies (a **runtime** relationship between capabilities) are two independent graphs.
+Manifest dependencies (a **delivery** relationship between external Plugins) and Core's Service dependencies (an **execution** relationship between capabilities) are two independent graphs.
 
 Manifest dependencies decide load order; Service dependencies decide start order. Platform does not fold one into the other.
 :::
@@ -193,26 +192,26 @@ It then, in order: awaits in-flight operations on the affected plugins → autho
 
 If any step fails, Core has not moved at all.
 
-Updates check identity: the new artifact's manifest name must match the existing plugin's, otherwise `REGISTRATION_IDENTITY`. That keeps "update" from quietly becoming "replace with a different plugin".
+Updates check identity: the new Artifact's Manifest name must match the Registration's, otherwise `REGISTRATION_IDENTITY`. That keeps "update" from quietly becoming "register a different Plugin".
 
 ## Hot reload
 
-`update()` keeps the instance identity and swaps the implementation:
+`update()` keeps the Registration and Core Installation identities while replacing the active Instance:
 
 ```ts
-await plugin.update({
+await registration.update({
   manifest: nextManifest,
   reference: "./plugin@1.3.0.js",
 })
 ```
 
-Underneath it is Core's `handle.update({ plugin })`, so only the affected dependency closure restarts. A host wanting real HMR (watch files, compute invalidation, reload in batches) composes on top — [example 12](../examples.md#stage-3) demonstrates a complete module-graph HMR in roughly 200 lines.
+Underneath it is Core's `installation.update({ plugin })`, so only the affected dependency closure restarts. Application code wanting real HMR (watch files, compute invalidation, reload in batches) composes on top — [example 12](../examples.md#stage-3) demonstrates a complete module-graph HMR in roughly 200 lines.
 
 ## Diagnostics
 
 ```ts
 platform.diagnostics.get()
-// { apiVersion, status, plugins: ReadonlyMap<string, RegistrationSnapshot> }
+// { apiVersion, status, registrations: ReadonlyMap<string, RegistrationSnapshot> }
 
 platform.diagnostics.subscribe(() => render())
 ```
@@ -227,10 +226,10 @@ await platform.dispose()
 await using platform = createPlatform({ ... })
 ```
 
-Disposal cancels in-flight activations, removes every installed handle from Core and closes diagnostics. Any Platform method afterwards throws `PLATFORM_UNAVAILABLE`.
+Disposal cancels in-flight activations, removes every Core Installation and closes diagnostics. Any Platform method afterwards throws `PLATFORM_UNAVAILABLE`.
 
 ## Next
 
 - [Platform specification](../reference/platform.md) — exact semantics and edge cases
-- [Error codes](../reference/errors.md) — all 28 stable codes
+- [Error codes](../reference/errors.md) — stable codes and their trigger conditions
 - [Runnable examples 08 / 12](../examples.md) — lazy activation and module-graph HMR end to end

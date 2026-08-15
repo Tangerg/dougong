@@ -1,5 +1,6 @@
 import type { Event, ExtensionPoint } from "./contracts";
-import type { Contribution, ExtensionLeaseKind } from "./extension-store";
+import type { Contribution, ContributionLeaseKind } from "./contribution-store";
+import { isCancellationReason } from "./errors";
 import type { EventListener } from "./event-hub";
 import {
   LifetimeDiagnostics,
@@ -17,7 +18,15 @@ export interface Logger {
   error(message: unknown, ...details: unknown[]): void;
 }
 
-export interface PluginMeta {
+export function isLogger(value: unknown): value is Logger {
+  if (!value || typeof value !== "object") return false;
+  const candidate = value as Partial<Logger>;
+  return [candidate.debug, candidate.info, candidate.warn, candidate.error].every(
+    (method) => typeof method === "function",
+  );
+}
+
+export interface InstanceMeta {
   readonly hostName: string;
   readonly pluginName: string;
   readonly installationId: string;
@@ -74,7 +83,7 @@ interface LifetimeOptions {
 }
 
 interface LifetimeBinding {
-  readonly host: LifetimePort;
+  readonly port: LifetimePort;
   readonly diagnostics: LifetimeDiagnostics;
   readonly diagnosticNode: LifetimeDiagnosticNode;
 }
@@ -89,7 +98,7 @@ class LifetimeResources<T extends Disposable> implements Iterable<T> {
   }
 
   add(resource: T) {
-    if (this.#resources.has(resource)) throw new TypeError("Lifetime already owns this resource");
+    if (this.#resources.has(resource)) throw new Error("Lifetime already owns this resource");
     this.#resources.add(resource);
     const accounting = this.#accounting;
     if (accounting) accounting.diagnostics.change(accounting.node, accounting.kind, 1);
@@ -206,7 +215,7 @@ class TaskRecord<T> implements Task<T> {
         () => this.#settle(),
         (error) => {
           try {
-            if (!controller.signal.aborted) report(error);
+            if (!isCancellationReason(controller.signal, error)) report(error);
           } finally {
             this.#settle();
           }
@@ -257,7 +266,7 @@ export class Lifetime implements LifetimeContext {
   readonly #ownerId: string;
   readonly #listeners: LifetimeResources<Publication>;
   readonly #contributions: LifetimeResources<Publication>;
-  readonly #extensionViews: LifetimeResources<Disposable>;
+  readonly #contributionViews: LifetimeResources<Disposable>;
   readonly #subscriptions: LifetimeResources<Disposable>;
   readonly #tasks: LifetimeResources<Disposable>;
   readonly #children: LifetimeResources<Lifetime>;
@@ -268,7 +277,7 @@ export class Lifetime implements LifetimeContext {
   readonly handle: LifetimeContext;
   #state: LifetimeState;
 
-  constructor(host: LifetimePort, ownerId: string, options: LifetimeOptions = {}) {
+  constructor(port: LifetimePort, ownerId: string, options: LifetimeOptions = {}) {
     this.#ownerId = ownerId;
     this.handle = new LifetimeHandle(this);
     const controller = new AbortController();
@@ -281,9 +290,9 @@ export class Lifetime implements LifetimeContext {
     this.#detachFromParent = parent?.detach;
     this.#kind = parent ? "child" : "root";
     const diagnostics =
-      parent?.diagnostics ?? new LifetimeDiagnostics(ownerId, (error) => host.report(error));
+      parent?.diagnostics ?? new LifetimeDiagnostics(ownerId, (error) => port.report(error));
     const diagnosticNode = parent?.diagnosticNode ?? diagnostics.root;
-    this.#binding = { host, diagnostics, diagnosticNode };
+    this.#binding = { port, diagnostics, diagnosticNode };
     const account = (kind: LifetimeResourceKind): LifetimeResourceAccounting => ({
       diagnostics,
       node: diagnosticNode,
@@ -291,7 +300,7 @@ export class Lifetime implements LifetimeContext {
     });
     this.#listeners = new LifetimeResources(account("listeners"));
     this.#contributions = new LifetimeResources(account("contributions"));
-    this.#extensionViews = new LifetimeResources(account("extensionViews"));
+    this.#contributionViews = new LifetimeResources(account("contributionViews"));
     this.#subscriptions = new LifetimeResources(account("subscriptions"));
     this.#tasks = new LifetimeResources(account("tasks"));
     this.#children = new LifetimeResources();
@@ -323,10 +332,10 @@ export class Lifetime implements LifetimeContext {
   }
 
   lifetime(label: string) {
-    const { host, diagnostics, diagnosticNode: parentNode } = this.#requireActive();
+    const { port, diagnostics, diagnosticNode: parentNode } = this.#requireActive();
     validateLifetimeLabel(label);
     const diagnosticNode = diagnostics.createNode(label);
-    const child = new Lifetime(host, this.#ownerId, {
+    const child = new Lifetime(port, this.#ownerId, {
       parentSignal: this.signal,
       declarations: this.#declarations(),
       parent: {
@@ -344,12 +353,12 @@ export class Lifetime implements LifetimeContext {
   }
 
   spawn<T>(task: BackgroundTask<T>): Task<T> {
-    const { host } = this.#requireActive();
+    const { port } = this.#requireActive();
     if (typeof task !== "function") throw new TypeError("Background task must be a function");
     const taskRecord = new TaskRecord(
       this.signal,
       task,
-      (error) => host.report(error),
+      (error) => port.report(error),
       this.#tasks.release,
     );
     this.#tasks.add(taskRecord);
@@ -357,20 +366,20 @@ export class Lifetime implements LifetimeContext {
   }
 
   on<T>(token: Event<T>, listener: EventListener<T>) {
-    const { host } = this.#requireActive();
-    const publication = host.stageOn(this.#ownerId, token, listener, this.#listeners.release);
+    const { port } = this.#requireActive();
+    const publication = port.stageOn(this.#ownerId, token, listener, this.#listeners.release);
     this.#listeners.add(publication);
     if (this.#declarations() === "published") publication.publish();
     return publication.handle;
   }
 
   emit<T>(token: Event<T>, payload: T) {
-    return this.#requireActive().host.emit(this.#ownerId, token, payload);
+    return this.#requireActive().port.emit(this.#ownerId, token, payload);
   }
 
   contribute<T>(token: ExtensionPoint<T>, key: string, value: T) {
-    const { host } = this.#requireActive();
-    const publication = host.stageContribution(
+    const { port } = this.#requireActive();
+    const publication = port.stageContribution(
       this.#ownerId,
       token,
       key,
@@ -383,9 +392,9 @@ export class Lifetime implements LifetimeContext {
   }
 
   /** Owns an internal live capability without exposing a second Context API. */
-  ownLease(resource: Disposable, kind: ExtensionLeaseKind) {
+  ownLease(resource: Disposable, kind: ContributionLeaseKind) {
     this.#requireActive();
-    const resources = kind === "view" ? this.#extensionViews : this.#subscriptions;
+    const resources = kind === "view" ? this.#contributionViews : this.#subscriptions;
     return resources.own(resource);
   }
 
@@ -419,7 +428,7 @@ export class Lifetime implements LifetimeContext {
         await this.#listeners.dispose(errors);
         await this.#contributions.dispose(errors);
         await this.#subscriptions.dispose(errors);
-        await this.#extensionViews.dispose(errors);
+        await this.#contributionViews.dispose(errors);
 
         state.controller.abort(disposalReason);
         this.detachStartupSignal();

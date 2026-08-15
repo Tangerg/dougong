@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { ExtensionStore } from "../src/extension-store";
+import { ContributionStore } from "../src/contribution-store";
 
-describe("ExtensionStore invariants", () => {
+describe("ContributionStore invariants", () => {
   it("distinguishes a duplicate declaration from invalid publication state", () => {
     const store = createStore<number>();
     const claimed = store.stage("owner", "item", 1, () => undefined);
@@ -23,7 +23,7 @@ describe("ExtensionStore invariants", () => {
 });
 
 function createStore<T>() {
-  return new ExtensionStore<T>(
+  return new ContributionStore<T>(
     () => undefined,
     () => undefined,
     () => undefined,

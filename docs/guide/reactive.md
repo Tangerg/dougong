@@ -135,7 +135,7 @@ definePlugin({
 
 1. 释放上一个 `lifetime`（暂停并清理旧的 audio 元素、abort 旧任务）
 2. 用新值创建一个新的子 Lifetime
-3. 插件停止时，最后一个子 Lifetime 和这个观察本身一起被释放
+3. Instance 停止时，最后一个子 Lifetime 和这个观察本身一起被释放
 
 你不需要写「先判断有没有上一个、有的话先清理」这类样板——**释放旧的、建立新的**是 `observe` 的语义本身。
 
@@ -172,12 +172,12 @@ Core 里有两个地方产出 `Readable`：
 ctx.routes.get()                    // ReadonlyMap<string, Route>
 ctx.routes.subscribe(() => ...)
 
-// 诊断 —— 运行状态
+// 诊断 —— Host 状态
 host.diagnostics.get()
 host.diagnostics.subscribe(() => ...)
 
 // 插件的 Lifetime 所有权树
-snapshot.plugins.get(id)?.lifetime.get()
+snapshot.installations.get(id)?.lifetime?.get()
 ```
 
 它们都能直接喂给 `observe()`：

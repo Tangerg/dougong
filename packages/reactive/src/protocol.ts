@@ -4,7 +4,7 @@ export interface Disposable {
   [Symbol.asyncDispose]?(): Promise<void>;
 }
 
-/** Structural observable protocol shared by signals, extensions and diagnostics. */
+/** Structural observable protocol shared by signals, ContributionViews and diagnostics. */
 export interface Readable<T> {
   get(): T;
   subscribe(listener: () => void): Disposable;

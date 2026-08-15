@@ -94,6 +94,51 @@ describe("structured lifetime", () => {
     await host.stop();
   });
 
+  it("reports failures after cancellation unless the rejection is the cancellation outcome", async () => {
+    const failure = new Error("shutdown flush failed");
+    const report = vi.fn<(error: unknown) => void>();
+    let failedTask!: Task;
+    let cancelledTask!: Task;
+    let tasksStarted!: () => void;
+    let startedCount = 0;
+    const started = new Promise<void>((resolve) => {
+      tasksStarted = resolve;
+    });
+    const plugin = definePlugin({
+      name: "lifetime.cancelled-task-failure",
+      setup(ctx) {
+        const startedTask = () => {
+          startedCount++;
+          if (startedCount === 2) tasksStarted();
+        };
+        failedTask = ctx.spawn(
+          (signal) =>
+            new Promise<never>((_resolve, reject) => {
+              signal.addEventListener("abort", () => reject(failure), { once: true });
+              startedTask();
+            }),
+        );
+        cancelledTask = ctx.spawn(
+          (signal) =>
+            new Promise<never>((_resolve, reject) => {
+              signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+              startedTask();
+            }),
+        );
+      },
+    });
+    const host = createHost({ onError: report });
+    host.install(plugin);
+    await host.start();
+    await started;
+
+    await Promise.all([failedTask.dispose(), cancelledTask.dispose()]);
+
+    expect(report).toHaveBeenCalledOnce();
+    expect(report).toHaveBeenCalledWith(failure);
+    await host.stop();
+  });
+
   it("runs cleanup in LIFO order, attempts every item and aggregates failures", async () => {
     const trace: string[] = [];
     const plugin = definePlugin({
@@ -215,21 +260,21 @@ describe("structured lifetime", () => {
       },
     });
     const host = createHost();
-    const handle = host.install(plugin);
+    const installation = host.install(plugin);
     await host.start();
     if (!session || !connection) throw new TypeError("Lifetime fixture did not initialize");
 
-    const diagnostics = host.diagnostics.get().installations.get(handle.id)?.lifetime;
+    const diagnostics = host.diagnostics.get().installations.get(installation.id)?.lifetime;
     if (!diagnostics) throw new TypeError("Lifetime diagnostics were not published");
     const snapshot = diagnostics.get();
     expect(snapshot).toEqual({
-      label: handle.id,
+      label: installation.id,
       phase: "active",
       cleanups: 1,
       tasks: 0,
       listeners: 0,
       contributions: 0,
-      extensionViews: 0,
+      contributionViews: 0,
       subscriptions: 0,
       children: [
         {
@@ -239,7 +284,7 @@ describe("structured lifetime", () => {
           tasks: 0,
           listeners: 0,
           contributions: 0,
-          extensionViews: 0,
+          contributionViews: 0,
           subscriptions: 0,
           children: [
             {
@@ -249,7 +294,7 @@ describe("structured lifetime", () => {
               tasks: 0,
               listeners: 0,
               contributions: 0,
-              extensionViews: 0,
+              contributionViews: 0,
               subscriptions: 0,
               children: [],
             },
@@ -277,7 +322,7 @@ describe("structured lifetime", () => {
 
     await host.stop();
     expect(diagnostics.get()).toMatchObject({
-      label: handle.id,
+      label: installation.id,
       phase: "disposed",
       cleanups: 0,
       children: [],
@@ -293,10 +338,10 @@ describe("structured lifetime", () => {
       },
     });
     const host = createHost();
-    const handle = host.install(plugin);
+    const installation = host.install(plugin);
     await host.start();
 
-    const snapshot = host.diagnostics.get().installations.get(handle.id)?.lifetime?.get();
+    const snapshot = host.diagnostics.get().installations.get(installation.id)?.lifetime?.get();
     expect(snapshot?.children.map((child) => child.label)).toEqual(["worker", "worker"]);
 
     await host.stop();
@@ -336,8 +381,8 @@ describe("structured lifetime", () => {
     host.install(reader);
     host.install(emitter);
     await host.start();
-    const failed = host.install(broken);
-    await expect(failed.ready()).rejects.toThrow("setup failed");
+    const failedInstallation = host.install(broken);
+    await expect(failedInstallation.ready()).rejects.toThrow("setup failed");
     expect(host.status).toBe("active");
     expect(view.get().size).toBe(0);
     expect(notified).not.toHaveBeenCalled();
@@ -377,7 +422,7 @@ describe("structured lifetime", () => {
     await host.stop();
   });
 
-  it("prevents an obsolete contribution handle from deleting its replacement", async () => {
+  it("prevents an obsolete Contribution from deleting its replacement", async () => {
     const ITEMS = extensionPoint<string>("lifetime/replacement-items");
     let old!: Contribution<string>;
     let current!: Contribution<string>;
@@ -392,17 +437,17 @@ describe("structured lifetime", () => {
     const writer = definePlugin({
       name: "lifetime.replacement-writer",
       setup(ctx, value: string) {
-        const handle = ctx.contribute(ITEMS, "item", value);
-        if (value === "old") old = handle;
-        else current = handle;
+        const contribution = ctx.contribute(ITEMS, "item", value);
+        if (value === "old") old = contribution;
+        else current = contribution;
       },
     });
 
     const host = createHost();
     host.install(reader);
-    const handle = host.install(writer, "old");
+    const installation = host.install(writer, "old");
     await host.start();
-    await handle.update({ config: "new" });
+    await installation.update({ config: "new" });
     old.dispose();
 
     expect([...view.get().values()]).toEqual(["new"]);
@@ -435,7 +480,7 @@ describe("structured lifetime", () => {
     expect(() => view.subscribe(() => undefined)).toThrow("Contribution view has been disposed");
   });
 
-  it("withdraws an early-disposed ExtensionPoint subscription from its Store", async () => {
+  it("withdraws an early-disposed ContributionView subscription from its ContributionStore", async () => {
     const ITEMS = extensionPoint<string>("lifetime/extension-subscription");
     const notified = vi.fn<() => void>();
     let subscription!: { dispose(): void | Promise<void> };
@@ -488,14 +533,14 @@ describe("structured lifetime", () => {
     host.install(reader);
     await host.start();
 
-    const installed = host.install(writer);
-    await installed.ready();
+    const installation = host.install(writer);
+    await installation.ready();
 
     expect([...view.get().values()]).toEqual(["published"]);
     await host.stop();
   });
 
-  it("coalesces a multi-plugin commit into one ExtensionPoint notification", async () => {
+  it("coalesces a multi-Installation commit into one ExtensionPoint notification", async () => {
     const ITEMS = extensionPoint<string>("lifetime/batched-items");
     const notified = vi.fn<() => void>();
     let view!: { get(): ReadonlyMap<string, string> };

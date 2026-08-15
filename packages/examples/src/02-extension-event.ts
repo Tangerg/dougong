@@ -41,7 +41,7 @@ export async function extensionAndEvent(): Promise<ExampleResult> {
   const helloPlugin = definePlugin({
     name: "examples.commands.hello",
     setup(ctx) {
-      // The returned handle is the contributor's own withdrawal right.
+      // The returned Contribution is the contributor's own withdrawal right.
       contribution = ctx.contribute(COMMANDS, "hello", {
         id: "hello",
         run: () => ctx.emit(COMMAND_EXECUTED, { id: "hello" }),

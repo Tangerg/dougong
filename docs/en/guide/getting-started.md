@@ -10,7 +10,7 @@ This page takes about ten minutes: install Dougong, write your first capability 
 | JavaScript runtime | Must provide ES2024 standard capabilities, including `Promise.withResolvers()` |
 | TypeScript | ≥ 5.5 (if you use TypeScript) |
 
-::: warning Browser and WebView hosts
+::: warning Browser and WebView runtimes
 `Promise.withResolvers()` requires Safari 17.4+ (macOS 14.4+), Chrome 119+ or Firefox 121+.
 If you embed a system WebView through Electron, Tauri or Wails, check your minimum target OS first.
 :::
@@ -127,14 +127,14 @@ definePlugin({
 })
 ```
 
-The type of `ctx` is derived from `requires`. Undeclared means the property does not exist — a **compile-time** error, not a runtime `undefined`.
+The type of `ctx` is derived from `requires`. Undeclared means the property does not exist — a **compile-time** error, not an `undefined` discovered during execution.
 
 This is the most practical difference from most plugin frameworks. Where dependencies resolve through strings or an ambient context, a forgotten declaration usually shows up as "works sometimes, undefined other times", depending on load order.
 
-### `host.get()` is for the host, not for plugins
+### `host.get()` is for application code, not for Plugins
 
 ```ts
-host.get(GREETER)     // ✓ the host crossing the runtime boundary
+host.get(GREETER)     // ✓ application code crossing the Host boundary
 ctx.get(GREETER)     // ✗ no such method
 ```
 
@@ -155,7 +155,7 @@ pnpm check           # the full verification gate
 pnpm docs:dev        # serve this documentation site locally
 ```
 
-Twelve chapters climb three stages — atoms, composition, real hosts — from a minimal Service through the Planet / Lynx scenarios to declarative plans and module-graph HMR, all in CI. See [runnable examples](../examples.md).
+Twelve chapters climb three stages — atoms, composition, complete applications — from a minimal Service through the Planet / Lynx scenarios to declarative plans and module-graph HMR, all in CI. See [runnable examples](../examples.md).
 
 ## Next
 

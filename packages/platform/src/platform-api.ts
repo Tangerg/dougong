@@ -20,7 +20,7 @@ interface ArtifactDeclaration<
 > {
   readonly manifest: Manifest | ManifestInput;
   readonly reference: Reference;
-  /** Host-authored definition exposed until the external module is activated. */
+  /** Plugin supplied by application code until the external module is activated. */
   readonly placeholder?: Plugin<Config, Requires, Provides, ConfigInput>;
 }
 
@@ -36,7 +36,6 @@ export type Artifact<
     : { readonly config: ConfigInput });
 
 export interface Registration<Reference> {
-  readonly name: string;
   readonly manifest: Manifest;
   readonly status: RegistrationStatus;
   ready(): Promise<void>;
@@ -67,10 +66,10 @@ export interface PlatformChangeSet<Reference> {
     Provides extends Provisions = {},
     ConfigInput = Config,
   >(
-    plugin: Registration<Reference>,
+    registration: Registration<Reference>,
     artifact: Artifact<Reference, Config, Requires, Provides, ConfigInput>,
   ): this;
-  remove(plugin: Registration<Reference>): this;
+  remove(registration: Registration<Reference>): this;
   commit(): Promise<void>;
 }
 
@@ -96,15 +95,15 @@ export interface PlatformOptions<Reference> {
   readonly installer: Installer;
   readonly apiVersion: string;
   readonly loader: Loader<Reference>;
-  readonly permissions?: Authorizer;
+  readonly authorizer?: Authorizer;
   readonly logger?: Logger;
 }
 
-export type AnyPlugin = Plugin<unknown, Requirements, Provisions, unknown>;
+export type ErasedPlugin = Plugin<unknown, Requirements, Provisions, unknown>;
 
 export interface NormalizedArtifact<Reference> {
   readonly manifest: Manifest;
   readonly reference: Reference;
   readonly config: unknown;
-  readonly placeholder?: AnyPlugin;
+  readonly placeholder?: ErasedPlugin;
 }

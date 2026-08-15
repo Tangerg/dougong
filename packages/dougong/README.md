@@ -45,7 +45,7 @@ await host.start()                    // 从声明推导拓扑，同层并发启
 
 ### 环境要求
 
-Node.js ≥ 22 或等价的 ES2024 宿主。TypeScript 消费者需要：
+Node.js ≥ 22 或等价的 ES2024 运行时。TypeScript 消费者需要：
 
 ```json
 "lib": ["ES2024", "DOM", "DOM.Iterable", "ESNext.Disposable"]
@@ -94,7 +94,7 @@ Three core guarantees: dependencies and ownership are written **explicitly** in 
 
 ### Requirements
 
-Node.js ≥ 22 or an equivalent ES2024 host. TypeScript consumers need:
+Node.js ≥ 22 or an equivalent ES2024 runtime. TypeScript consumers need:
 
 ```json
 "lib": ["ES2024", "DOM", "DOM.Iterable", "ESNext.Disposable"]

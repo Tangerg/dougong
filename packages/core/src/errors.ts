@@ -10,9 +10,22 @@ export class DougongError extends Error {
   }
 }
 
-/** Preserves Error values and classifies non-Error rejection reasons. */
+/** Internal marker that lets a higher public boundary reclassify the original non-Error reason. */
+class NonErrorFailure extends DougongError {}
+
+/** Preserves explicit Error values and classifies non-Error rejection reasons. */
 export function normalizeFailure(error: unknown, code: string, message: string): Error {
-  return error instanceof Error ? error : new DougongError(code, message, { cause: error });
+  if (error instanceof NonErrorFailure) {
+    return error.code === code ? error : new NonErrorFailure(code, message, { cause: error.cause });
+  }
+  return error instanceof Error ? error : new NonErrorFailure(code, message, { cause: error });
+}
+
+/** Classifies only an AbortSignal's explicit outcome, never arbitrary post-abort failures. */
+export function isCancellationReason(signal: AbortSignal, error: unknown) {
+  if (!signal.aborted) return false;
+  if (Object.is(error, signal.reason)) return true;
+  return error instanceof Error && error.name === "AbortError";
 }
 
 export interface ValidationIssue {
@@ -45,7 +58,7 @@ export class ConfigValidationError extends DougongError {
     );
     super(
       "CONFIG_INVALID",
-      `Invalid plugin config:\n${snapshot.map((issue) => `  - ${issue.message}`).join("\n")}`,
+      `Invalid Plugin config:\n${snapshot.map((issue) => `  - ${issue.message}`).join("\n")}`,
     );
     this.issues = snapshot;
   }

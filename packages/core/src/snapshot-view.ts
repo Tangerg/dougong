@@ -48,12 +48,20 @@ export class SnapshotPublisher<T> implements Disposable {
   invalidate() {
     const { report } = this.#requireActive();
     this.#dirty = true;
+    const reportingFailures: unknown[] = [];
     for (const subscription of [...this.#subscriptions]) {
       try {
         notifySnapshotSubscription(subscription);
-      } catch (error) {
-        report(error);
+      } catch (subscriberError) {
+        try {
+          report(subscriberError);
+        } catch (reporterError) {
+          reportingFailures.push(subscriberError, reporterError);
+        }
       }
+    }
+    if (reportingFailures.length) {
+      throw new AggregateError(reportingFailures, "Snapshot error reporting failed");
     }
   }
 

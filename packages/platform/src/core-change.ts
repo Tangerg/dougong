@@ -1,15 +1,15 @@
 import type { ChangeSet, Installer, Installation } from "@dougongjs/core";
-import type { RegistrationCoreState, RegistrationRecord } from "./registration";
+import type { RegistrationCommitState, RegistrationRecord } from "./registration";
 import type { PlatformChangeOperation } from "./platform-change-set";
-import type { AnyPlugin } from "./platform-api";
+import type { ErasedPlugin } from "./platform-api";
 
 export interface StagedCoreChange<Reference> {
-  readonly artifactStates: ReadonlyArray<{
+  readonly registrationStates: ReadonlyArray<{
     readonly operation: Extract<
       PlatformChangeOperation<Reference>,
       { kind: "register" | "update" }
     >;
-    readonly state: RegistrationCoreState;
+    readonly state: RegistrationCommitState;
   }>;
   commit(): Promise<void>;
 }
@@ -18,47 +18,47 @@ export interface StagedCoreChange<Reference> {
 export function stageCoreChange<Reference>(
   installer: Installer,
   operations: ReadonlyArray<PlatformChangeOperation<Reference>>,
-  definitions: ReadonlyMap<RegistrationRecord<Reference>, AnyPlugin>,
+  loadedPlugins: ReadonlyMap<RegistrationRecord<Reference>, ErasedPlugin>,
 ): StagedCoreChange<Reference> {
   let change: ChangeSet | undefined;
   const requireChange = () => (change ??= installer.change());
-  const artifactStates: Array<StagedCoreChange<Reference>["artifactStates"][number]> = [];
+  const registrationStates: Array<StagedCoreChange<Reference>["registrationStates"][number]> = [];
 
   for (const operation of operations) {
     if (operation.kind === "register") {
-      const handle = operation.artifact.placeholder
+      const installation = operation.artifact.placeholder
         ? requireChange().install(operation.artifact.placeholder, operation.artifact.config)
         : undefined;
-      artifactStates.push({
+      registrationStates.push({
         operation,
-        state: { phase: "registered", coreHandle: handle },
+        state: { phase: "registered", installation },
       });
       continue;
     }
 
-    const current = operation.registration.coreHandle;
+    const current = operation.registration.installation;
     if (operation.kind === "remove") {
       if (current && current.status !== "removed") requireChange().remove(current);
       continue;
     }
 
-    const definition = definitions.get(operation.registration);
-    if (definition) {
-      const coreHandle = stageActivatedUpdate(
+    const plugin = loadedPlugins.get(operation.registration);
+    if (plugin) {
+      const installation = stageActivatedUpdate(
         requireChange,
         current,
         operation.artifact.config,
-        definition,
+        plugin,
       );
-      artifactStates.push({ operation, state: { phase: "activated", coreHandle } });
+      registrationStates.push({ operation, state: { phase: "activated", installation } });
     } else {
-      const coreHandle = stagePlaceholderUpdate(requireChange, current, operation.artifact);
-      artifactStates.push({ operation, state: { phase: "registered", coreHandle } });
+      const installation = stagePlaceholderUpdate(requireChange, current, operation.artifact);
+      registrationStates.push({ operation, state: { phase: "registered", installation } });
     }
   }
 
   return Object.freeze({
-    artifactStates: Object.freeze(artifactStates),
+    registrationStates: Object.freeze(registrationStates),
     commit: () => change?.commit() ?? Promise.resolve(),
   });
 }
@@ -67,13 +67,13 @@ function stageActivatedUpdate(
   requireChange: () => ChangeSet,
   current: Installation | undefined,
   config: unknown,
-  definition: AnyPlugin,
+  plugin: ErasedPlugin,
 ) {
   if (current) {
-    requireChange().update(current, { plugin: definition, config });
+    requireChange().update(current, { plugin, config });
     return current;
   }
-  return requireChange().install(definition, config);
+  return requireChange().install(plugin, config);
 }
 
 function stagePlaceholderUpdate<Reference>(

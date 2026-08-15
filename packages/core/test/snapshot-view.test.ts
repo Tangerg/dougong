@@ -49,6 +49,28 @@ describe("SnapshotPublisher", () => {
     expect(succeeding).toHaveBeenCalledOnce();
   });
 
+  it("finishes notification and preserves both failures when error reporting fails", () => {
+    const subscriberFailure = new Error("subscriber failed");
+    const reporterFailure = new Error("reporter failed");
+    const publisher = new SnapshotPublisher(
+      () => 0,
+      () => {
+        throw reporterFailure;
+      },
+    );
+    const succeeding = vi.fn<() => void>();
+    publisher.view.subscribe(() => {
+      throw subscriberFailure;
+    });
+    publisher.view.subscribe(succeeding);
+
+    const failure = captureError(() => publisher.invalidate());
+
+    expect(failure).toBeInstanceOf(AggregateError);
+    expect((failure as AggregateError).errors).toEqual([subscriberFailure, reporterFailure]);
+    expect(succeeding).toHaveBeenCalledOnce();
+  });
+
   it("materializes its final snapshot and severs terminal subscriptions", () => {
     let value = 1;
     const publisher = new SnapshotPublisher(
@@ -131,4 +153,13 @@ function createTerminalPublisherFixture() {
   };
   publisher.dispose();
   return { view: publisher.view, subscription, references };
+}
+
+function captureError(operation: () => void) {
+  try {
+    operation();
+  } catch (error) {
+    return error;
+  }
+  throw new Error("Expected operation to fail");
 }

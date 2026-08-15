@@ -39,7 +39,7 @@ export const concepts = [
   "setup-failure",
   "rollback",
 
-  // 06 · Many instances of one shape, and who owns which subtree.
+  // 06 · Many statically selected variants of one capability shape.
   "contract-family",
   "group",
   "atomic-commit",
@@ -57,34 +57,34 @@ export const concepts = [
   "placeholder",
   "activation",
 
-  // 09 · Planet: a media host.
-  "runtime-selection",
+  // 09 · Planet: a media application.
+  "call-time-selection",
   "live-provider-swap",
-  "group-scoped-platform",
+  "group-bound-platform",
 
   // 10 · Lynx: a workbench.
   "domain-catalog",
   "workspace-ownership",
-  "plugin-update",
+  "registration-update",
 
-  // 11 · A host-owned desired-state controller.
+  // 11 · An application-owned desired-state controller.
   "desired-state",
   "content-revision",
   "platform-change-set",
 
-  // 12 · A host-owned hot-reload strategy.
+  // 12 · An application-owned hot-reload strategy.
   "module-graph",
   "invalidation-closure",
-  "multi-plugin-hmr",
+  "multi-registration-hmr",
 ] as const;
 
 export type Concept = (typeof concepts)[number];
 
 /**
  * Chapters climb three rungs: one atom at a time, then the atoms combined,
- * then the shapes real hosts actually take.
+ * then the shapes real applications actually take.
  */
-export type ExampleStage = "atoms" | "composition" | "hosts";
+export type ExampleStage = "atoms" | "composition" | "applications";
 
 export interface ExampleResult {
   readonly id: string;

@@ -24,7 +24,7 @@ const examples: ReadonlyArray<Example> = [
   contractsAndGroups,
   diagnostics,
   lazyPlatform,
-  // Real host shapes.
+  // Complete application shapes.
   planetScenario,
   lynxScenario,
   declarativePlan,

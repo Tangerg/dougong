@@ -24,7 +24,7 @@ Dougong Core 的定位是：
 | --- | --- | --- |
 | 安装插件 | `install()` | `use` / `apply` / `load` |
 | 修改安装计划 | `change()` | 第二套 transaction / batch |
-| 发布 Service | `provides` + setup 返回值 | `ctx.provide` / `app.provide` |
+| 发布 Service | `provides` + setup 返回值 | `ctx.provide` / `host.provide` |
 | 贡献 ExtensionPoint | `contribute()` | `add` / `append` / `register` |
 | 监听 Event | `on()` | `listen` / `hook` |
 | 发送 Event | `emit()` | `dispatch` / `publish` / `fire` |
@@ -33,11 +33,11 @@ Dougong Core 的定位是：
 | 启动后台任务 | `spawn()` | `run` / `fork` / `task` |
 | 读取实时值 | `get()` | `.value` / 函数调用 / `getSnapshot()` |
 | 订阅变化 | `subscribe()` | `watch` / `listen` / `observeChanges` |
-| 更新插件 | `update()` | `replace` / `reload` / `restart` |
+| 更新 Installation | `update()` | `replace` / `reload` / `restart` |
 | 删除安装 | `remove()` | `uninstall` / `delete` |
 | 释放资源 | `dispose()` | `close` / `destroy` / `off` |
 
-`host.install()`、`handle.update()` 和 `handle.remove()`是单目标语法糖，内部只创建一份 one-shot ChangeSet 并提交。它们不拥有第二套校验、队列或回滚逻辑。
+`host.install()`、`installation.update()` 和 `installation.remove()` 是单目标语法糖，内部只创建一份 one-shot ChangeSet 并提交。它们不拥有第二套校验、队列或回滚逻辑。
 
 ### 2. 组合闭包
 
@@ -45,9 +45,9 @@ Dougong Core 的定位是：
 
 ```text
 Lifetime + owned resources → Lifetime
-Plugin installations + Group → Installation
+Plugin + Group → Installation
 ExtensionPoint contributions + ordinary composer → Catalog / Pipeline
-Core plugins + Manifest / Loader → managed external plugin
+Manifest + Reference → Artifact → Registration → Core Installation
 ```
 
 Group 机械展开到 canonical ChangeSet；Platform 和 reactive `observe()` 只能用公开 API 组合。三者都不能创建第二套 Registry 或事务状态机。
@@ -71,7 +71,7 @@ Group 机械展开到 canonical ChangeSet；Platform 和 reactive `observe()` �
 - 资源所有权来自创建它的 Lifetime，跨边界转交必须通过普通参数或 `Disposable` 明确表达；
 - 领域配置通过插件配置、方法参数或显式适配器 Service 组合，不使用全局拦截链、Proxy shadow 或原型链覆盖。
 
-“约定默认值”可以减少样板，但不能改变上述语义。若删除一段声明后运行时仍会从环境中猜出关系，说明抽象已经过度隐式。
+“约定默认值”可以减少样板，但不能改变上述语义。若删除一段声明后 Core 仍会从环境中猜出关系，说明抽象已经过度隐式。
 
 ## 二、能力代数
 
@@ -79,14 +79,14 @@ Core 只有四个能力原子和两个编排原子：
 
 ```text
 能力原子
-├── Service      稳定的一对一能力
-├── ExtensionPoint    动态的开放贡献集合
-├── Event        不保留状态的事实
-└── Lifetime     资源所有权与取消
+├── Service          稳定的一对一能力
+├── ExtensionPoint   动态的开放贡献集合
+├── Event            不保留状态的事实
+└── Lifetime         资源所有权与取消
 
 编排原子
-├── Plugin       一次 setup 的能力生产者
-└── Host  依赖图、事务和实例编排
+├── Plugin   一次 setup 的能力生产者
+└── Host     依赖图、事务和 Instance 编排
 ```
 
 | 原子 | 保留当前值 | 动态变化 | 变化后的行为 |
@@ -107,7 +107,7 @@ import {
   createHost,
   definePlugin,
   service,
-  extension,
+  extensionPoint,
   event,
   optional,
 } from "@dougongjs/core"
@@ -125,15 +125,15 @@ const USER_CREATED = event<User>("users/created")
 
 统一规则：
 
-- 第一个参数是稳定字符串 ID，也是运行时唯一身份；对象身份不参与匹配。
+- 第一个参数是稳定字符串 ID，也是执行身份；对象身份不参与匹配。
 - 返回值是冻结普通对象，形状只有 `{ id, kind }`。
-- Contract 不持有运行时状态，可跨应用复用。
+- Contract 不持有执行状态，可跨应用复用。
 - ID 必须非空且首尾无空白；区分大小写，不做 trim 或 Unicode 规范化。
 - 同一 ID 在一个 Host 中不能同时承担两种 kind，否则抛 `CONTRACT_CONFLICT`。
-- 只有成功提交的声明和 active Lifetime 的运行期使用才登记 kind；失败的 setup、rollback 和未命中的宿主读取不会占用 Contract ID。
+- 只有成功提交的声明和 active Lifetime 的使用才登记 kind；失败的 setup、rollback 和未命中的应用代码读取不会占用 Contract ID。
 - `optional()` 只接受 Service；ExtensionPoint 的空 Map 本身就是合法值，Event 没有提供者概念。
 
-固定 Contract 的同一 ID 应在代码库中只声明一次并从稳定模块导出。TypeScript 无法阻止两个模块为同一 ID 写出不同类型参数。
+固定 Contract 的同一 ID 应在代码库中只声明一次并从稳定模块导出。TypeScript 本身无法阻止两个模块为同一 ID 写出不同类型参数，因此 Dougong 仓库的架构门禁会拒绝重复的固定字符串声明；下游代码库也应执行同类静态检查。参数化 Contract family 不属于重复的固定声明。
 
 同一种接口需要多份静态实例时，使用普通函数构造显式 Contract family，而不是引入隐式 Scope：
 
@@ -145,7 +145,7 @@ const ALPHA_STORE = workspaceStore("alpha")
 const BETA_STORE = workspaceStore("beta")
 ```
 
-family 函数本身是唯一声明源：类型和 ID namespace 只写一次，重复调用相同参数得到等价 ID，不依赖对象身份。提供者和消费者必须声明同一个具体 token。Contract ID 因而同时携带“能力是什么”和“选择哪一份”的稳定身份，依赖图、错误和诊断无需再解释第二张作用域树。动态且由每次请求选择的租户不应无限扩张插件图，应改为一个显式接收 tenant/workspace 参数的 Service。
+family 函数本身是唯一声明源：类型和 ID namespace 只写一次，重复调用相同参数得到等价 ID，不依赖对象身份。提供者和消费者必须声明同一个具体 token。Contract ID 因而同时携带“能力是什么”和“选择哪一份”的稳定身份，依赖图、错误和诊断无需再解释第二张作用域树。动态且由每次请求选择的租户不应无限扩张 Installation 图，应改为一个显式接收 tenant/workspace 参数的 Service。
 
 局部配置叠加同样使用显式 Service adapter，而不是通用 `intercept()`：
 
@@ -165,7 +165,7 @@ const alphaHttpPlugin = definePlugin({
 
 adapter 的输入、输出和影响闭包都在普通依赖图中可见，包装策略由真正理解 `HttpClient` 类型的领域代码决定。Core 不用 Proxy 猜方法调用，也不需要一套独立的配置合并协议。
 
-Core 刻意不提供 `extension.keyed()`、`extension.many()`、`ordered()` 或 `override()`。这些是 Catalog、Pipeline 或具体领域的组合策略，不是贡献集合原子。
+Core 刻意不提供 `extensionPoint.keyed()`、`extensionPoint.many()`、`ordered()` 或 `override()`。这些是 Catalog、Pipeline 或具体领域的组合策略，不是贡献集合原子。
 
 ## 四、Plugin
 
@@ -218,6 +218,8 @@ ctx.analytics
 
 Service alias 得到稳定值；ExtensionPoint alias 得到稳定的 `ContributionView` 对象。Context 和 `ctx.meta` 浅冻结，但 Service 值本身不被代理或冻结。
 
+同一个 Plugin 内，每个 Contract ID 只能声明一次。两个 alias 不能引用同一份能力，一个 Contract 也不能同时出现在 `requires` 与 `provides`；这些歧义会在 `definePlugin()` 边界立即以 `TypeError` 拒绝，而不是留到依赖图或 setup 阶段猜测调用者意图。
+
 保留 alias：
 
 ```text
@@ -235,7 +237,7 @@ setup() {
 }
 ```
 
-缺少声明的输出抛 `SERVICE_NOT_RETURNED`。即使现成值来自应用代码，也应包装成普通插件；Core 不提供 `app.provide()` 分支。
+缺少声明的输出抛 `SERVICE_NOT_RETURNED`。即使现成值来自应用代码，也应包装成普通 Plugin；Core 不提供 `host.provide()` 分支。
 
 ### 4.3 配置
 
@@ -267,13 +269,13 @@ ctx.lifetime(label)
 ctx.spawn(task)
 ctx.on(event, listener)
 ctx.emit(event, payload)
-ctx.contribute(extension, localKey, value)
+ctx.contribute(point, localKey, value)
 ```
 
-`ctx.signal` 是标准 AbortSignal。`ctx.meta`：
+`ctx.signal` 是标准 AbortSignal。`ctx.meta` 是冻结的 `InstanceMeta`：
 
 ```ts
-{
+interface InstanceMeta {
   hostName: string
   pluginName: string
   installationId: string
@@ -291,7 +293,7 @@ Context 不提供 `effect()`、`observe()` 或 `using()`：
 
 ## 六、Service
 
-Service 是插件实例期内的稳定快照：
+Service 是 Instance 生命周期内的稳定快照：
 
 ```ts
 const db = ctx.db
@@ -316,11 +318,11 @@ Host 外部和测试边界可以读取：
 const users = host.get(USERS)
 ```
 
-`host.get()` 只接受 Service，并只在 Host 为 active 且该 Service 正在运行时成功；插件内部仍只能使用声明依赖。
+`host.get()` 只接受 Service，并只在 Host 为 active 且该 Service 当前可用时成功；Plugin 内部仍只能使用声明依赖。
 
-Host 缓存当前 active runtime 对应的已验证依赖图；`host.get()` 只做 provider 与 Service Map 查询，不重新构图。idle 状态允许分步安装暂时不完整的计划，因此只在 `start()` 或 Host active 时提交的 ChangeSet 中构造候选图。
+Host 缓存已提交执行状态对应的已验证依赖图；`host.get()` 只做 provider 与 Service Map 查询，不重新构图。idle 状态允许分步安装暂时不完整的计划，因此只在 `start()` 或 Host active 时提交的 ChangeSet 中构造候选图。
 
-Host active 时执行 ChangeSet 会明确进入 `changing`，应用代码的 `host.get()` 暂时拒绝读取；它不会在停旧运行时、启新运行时的窗口中伪装成稳定的 active。事务成功或 rollback 完成后才重新进入 `active` 并切换对应图；无法恢复则 fail closed 到 `idle`。因此宿主读取边界只存在“提交前”和“提交后”，候选图或半重建的 Service Map 都不会泄漏。
+Host active 时执行 ChangeSet 会明确进入 `changing`，应用代码的 `host.get()` 暂时拒绝读取；它不会在旧 Instance 停止、新 Instance 启动的窗口中伪装成稳定的 active。事务成功或 rollback 完成后才重新进入 `active` 并切换对应图；无法恢复则 fail closed 到 `idle`。因此应用代码的读取边界只存在“提交前”和“提交后”，候选图或半重建的 Service Map 都不会泄漏。
 
 ### 6.1 启动调度
 
@@ -343,7 +345,7 @@ Core 当前不提供并发上限配置。它没有第二种调度模式，也没
 
 所有 ExtensionPoint 都是：
 
-> 由插件实例拥有、以稳定局部 key 标识的动态贡献 Map。
+> 由 Instance 拥有、以稳定局部 key 标识的动态贡献 Map。
 
 ```ts
 const ROUTES = extensionPoint<Route>("http/routes")
@@ -353,10 +355,10 @@ contribution.update(nextRoute)
 contribution.dispose()
 ```
 
-真实 key 由运行时组合：
+真实 key 由 Core 组合：
 
 ```text
-<escaped plugin installation id>/<escaped local key>
+<escaped installation id>/<escaped local key>
 ```
 
 其中 `%` 与 `/` 分别转义为 `%25` 与 `%2F`，因此分隔符不会让两组不同的 installation ID / 局部 key 组合产生同一个真实 key，同时常见 key 仍保持可读。
@@ -365,10 +367,10 @@ contribution.dispose()
 
 - 不同插件使用相同局部 key 不冲突；
 - 同一 installation、同一局部 key 只能有一个存活贡献；
-- 更新必须通过原 Contribution Handle；
+- 更新必须通过原 `Contribution`；
 - `undefined` 是合法贡献值，存活性由真实 key 与记录身份决定，不用值充当终态哨兵；
-- 旧 Handle 使用记录身份校验，不能删除后来创建的同 key 贡献；
-- 插件停止自动删除全部贡献；
+- 旧 `Contribution` 使用记录身份校验，不能删除后来创建的同 key 贡献；
+- Instance 停止时自动删除全部贡献；
 - setup 失败不会发布贡献。
 
 ### 7.2 统一观察协议
@@ -395,9 +397,9 @@ ctx.routes.subscribe(rebuild)
 
 快照是真正只读的 Map，没有 `set/delete/clear`。无变化时保持对象身份；提交变化时创建新快照。一次 Core ChangeSet 内同一 ExtensionPoint 无论改变多少次，只通知一次。
 
-ContributionView 是插件 Lifetime 拥有的 live capability，而不是可永久泄漏的 Store 引用。插件停止后，旧 View 的 `get/subscribe` 会拒绝使用并切断对 Store 的引用；新实例会获得新 View。View 的公开 `get/subscribe` 由只持有可撤销 binding 的窄 Handle 提供，不能用在 Store 方法作用域中创建的箭头函数暗中捕获 Store。这个边界与旧 Service 闭包的处理不同：Service 是一次解析出的普通值，ContributionView 则会持续观察运行时。
+ContributionView 是 Plugin Lifetime 拥有的 live capability，而不是可永久泄漏的 Store 引用。Instance 停止后，旧 View 的 `get/subscribe` 会拒绝使用并切断对 Store 的引用；新 Instance 会获得新 View。View 的公开 `get/subscribe` 由只持有可撤销 binding 的窄 facade 提供，不能用在 Store 方法作用域中创建的箭头函数暗中捕获 Store。这个边界与旧 Service 闭包的处理不同：Service 是一次解析出的普通值，ContributionView 则持续观察已提交贡献。
 
-后续订阅者抛错进入 Host `onError`，不能破坏产生通知的运行时命令；首次读取与插件自己的同步 `rebuild()` 错误仍正常使 setup 失败。
+后续订阅者抛错进入 Host `onError`，不能破坏产生通知的 Host 命令；首次读取与 Plugin 自己的同步 `rebuild()` 错误仍正常使 setup 失败。
 
 ### 7.3 高层组合
 
@@ -409,7 +411,7 @@ ExtensionPoint<Middleware> + orderBy(order) + reduceRight    → Middleware Pipe
 ExtensionPoint<Theme> + keyOf(theme.id) + stack policy       → ThemeCatalog Service
 ```
 
-这些组合器可以提供更适合领域的 API，但其输入必须是公开 ContributionView，生命周期必须使用公开 cleanup/subscribe，不能访问内部 ExtensionStore。
+这些组合器可以提供更适合领域的 API，但其输入必须是公开 ContributionView，生命周期必须使用公开 cleanup/subscribe，不能访问内部 ContributionStore。
 
 ## 八、Event
 
@@ -437,7 +439,7 @@ Event 是事实而不是状态，因此一次 `emit()` 本身不可回滚。setu
 
 ## 九、Lifetime 与 Disposable
 
-每个插件实例天然拥有一个根 Lifetime。所有通过 Context 创建的监听、贡献、订阅、任务、子 Lifetime 和 cleanup 都自动归它所有。
+每个 Instance 天然拥有一个根 Lifetime。所有通过 Context 创建的监听、贡献、订阅、任务、子 Lifetime 和 cleanup 都自动归它所有。
 
 统一资源协议：
 
@@ -449,15 +451,15 @@ interface Disposable {
 }
 ```
 
-资源句柄统一叫 `dispose()`；插件安装句柄从计划中删除统一叫 `remove()`。两者不能混用。
+所有资源统一用 `dispose()` 释放；Installation 从计划中删除统一用 `remove()`。两者不能混用。
 
 `dispose()` 是资源释放的 canonical API；`Symbol.dispose` / `Symbol.asyncDispose` 只是同一操作对 JavaScript `using` 语法的协议投影，不拥有第二套状态机或错误语义。
 
 ### 9.1 cleanup
 
 ```ts
-const handle = ctx.cleanup(() => server.close())
-await handle.dispose() // 可提前释放，幂等
+const cleanup = ctx.cleanup(() => server.close())
+await cleanup.dispose() // 可提前释放，幂等
 ```
 
 cleanup 按注册逆序执行；某项失败不会跳过更早资源。一个失败原样抛出，多个失败聚合。
@@ -479,9 +481,9 @@ await session.dispose()
 - 提前释放的子级从父拥有集合中脱离；
 - `dispose()` 幂等；
 - 父 Context 与子 Lifetime 使用相同资源 API。
-- `label` 是必填、非空且首尾无空白的诊断描述，不参与运行时查找或身份判定；同级重名合法。
+- `label` 是必填、非空且首尾无空白的诊断描述，不参与执行查找或身份判定；同级重名合法。
 - 主动释放 Lifetime 或 Task 会用冻结的 `AbortError` 取消其 signal；父级取消仍显式转发父 signal 的 reason。调用方按 `signal.aborted` 与 reason 类型分类，不依赖 reason 对象身份。
-- 释放进行中的重复 `dispose()` 共享同一个完成 Promise；进入终态后的重复调用只是已完成的无操作。发起释放的调用方仍收到原始失败，但终态 Handle 不继续保存已拒绝 Promise 或错误栈。Lifetime 完成释放后以一个新的、同 reason 的 aborted signal 表达终态，从而切断旧 signal 上的监听器闭包。
+- 释放进行中的重复 `dispose()` 共享同一个完成 Promise；进入终态后的重复调用只是已完成的无操作。发起释放的调用方仍收到原始失败，但终态资源不继续保存已拒绝 Promise 或错误栈。Lifetime 完成释放后以一个新的、同 reason 的 aborted signal 表达终态，从而切断旧 signal 上的监听器闭包。
 
 ### 9.3 spawn
 
@@ -491,13 +493,13 @@ await task.result
 await task.dispose()
 ```
 
-释放任务先 abort，再等待结果 settle。未被调用方同步处理的后台失败通过 Host `onError` 上报；Abort 后的失败视为取消结果，不重复上报。
+释放任务先 abort，再等待结果 settle。未被调用方同步处理的后台失败通过 Host `onError` 上报。只有与 `signal.reason` 相同的拒绝值或明确的 `AbortError` 才分类为取消；仅仅发生在 abort 之后的其他失败仍会上报，避免把取消期间的真实收尾故障静默吞掉。
 
 任务自然 settle 后会立即从父 Lifetime 的拥有集合和 AbortSignal 监听器中脱离；之后调用该 Task 的 `dispose()` 只是幂等完成，不会追溯性 abort 已结束任务的 signal。已完成任务不会在长生命周期中按历史次数累积；父释放仍会 abort 并等待当时尚未 settle 的全部任务。
 
 ### 9.4 停止顺序
 
-插件停止时顺序固定，不依赖注册巧合：
+Instance 停止时顺序固定，不依赖注册巧合：
 
 ```text
 拒绝新 Context 工作
@@ -531,9 +533,9 @@ await host.start()
 await database.ready()
 ```
 
-`install()` 同步返回稳定 Handle，并把单项 ChangeSet 排入 Host 命令队列。定义形状错误同步抛出；提交或启动错误由 `ready()` / `start()` 暴露。
+`install()` 同步返回稳定 `Installation`，并把单项 ChangeSet 排入 Host 命令队列。Plugin 形状错误同步抛出；提交或启动错误由 `ready()` / `start()` 暴露。
 
-`ready()` 的屏障位于整笔命令之后：候选图验证、运行实例切换和 ExtensionPoint 批次发布全部结束后才 settle。调用方在 `await handle.ready()` 后立即读取 ContributionView 时只能得到已提交快照，不需要额外等待一个 tick。
+`ready()` 的屏障位于整笔命令之后：候选图验证、Instance 切换和 ExtensionPoint 批次发布全部结束后才 settle。调用方在 `await installation.ready()` 后立即读取 ContributionView 时只能得到已提交快照，不需要额外等待一个 tick。
 
 命令队列线性化 install、update、remove、start 和 stop。一次失败不会破坏后续命令排队能力。
 
@@ -545,24 +547,24 @@ const result = commands.run(operation) // 调用方收到自己的值或错误
 await commands.settled                 // 等待读取时已经排入的全部操作
 ```
 
-`run()` 无论前一项成功还是失败都会继续执行下一项；内部 tail 只记录完成边界且永不 reject，单项原始结果只返回给对应调用方。它是宿主和高层编排器共享的命令串行协议，不拥有 Host、事务或错误分类状态。
+`run()` 无论前一项成功还是失败都会继续执行下一项；内部 tail 只记录完成边界且永不 reject，单项原始结果只返回给对应调用方。它是 Host 和高层编排器共享的命令串行协议，不拥有 Host、事务或错误分类状态。
 
 ### 10.2 Installation
 
 ```ts
-handle.status
-handle.ready()
-handle.update({ plugin })
-handle.update({ config })
-handle.update({ plugin, config })
-handle.remove()
+installation.status
+installation.ready()
+installation.update({ plugin })
+installation.update({ config })
+installation.update({ plugin, config })
+installation.remove()
 ```
 
-`update()` 同时覆盖配置更新和定义替换，参数必须至少包含 `plugin` 或 `config` 之一，不提供 `replace/reload/restart`。定义更新不能改变插件 name；Handle 和 installation ID 始终稳定。
+`update()` 同时覆盖配置与 Plugin 声明替换，参数必须至少包含 `plugin` 或 `config` 之一，不提供 `replace/reload/restart`。Plugin 更新不能改变 name；Installation 及其 ID 保持稳定，活动 Instance 被替换。
 
-Handle 进入 `removed` 后撤销对 Host 的控制引用并释放插件定义与配置。终态 `remove()` 幂等成功，`update()` 以 `INSTALLATION_REMOVED` 拒绝；保留一个已删除 Handle 不会反向保活 Host。
+Installation 进入 `removed` 后撤销对 Host 的控制引用并释放 Plugin 声明与配置。终态 `remove()` 幂等成功，`update()` 以 `INSTALLATION_REMOVED` 拒绝；保留一个已删除 Installation 不会反向保活 Host。
 
-安装在提交前失败时，已经等待 `ready()` 的调用方仍收到原始 `Error`；非 `Error` 的 reject reason 在进入稳定失败状态时明确分类为 `INSTALLATION_UNAVAILABLE`。实例脱离 Host 后，Handle 只保留错误的 `name/message/code` 纯数据摘要，后续 `ready()` 在调用边界重建错误。JavaScript `Error` 的调用栈可能保留整个编排对象图，不能成为终态句柄的隐藏所有权边。仍属于活动 Host 的失败实例继续保留原始错误，供诊断和重试语义使用。Platform 的终态 Registration 遵守相同规则。
+Installation 在提交前失败时，已经等待 `ready()` 的调用方仍收到原始 `Error`；setup 或配置校验器抛出非 `Error` 值时，首次公开命令与稳定失败状态共享同一个 `INSTALLATION_UNAVAILABLE` 错误，原值保存在 `cause`。Installation 脱离 Host 后，只保留错误的 `name/message/code` 纯数据摘要，后续 `ready()` 在调用边界重建错误。JavaScript `Error` 的调用栈可能保留整个编排对象图，不能成为终态 Installation 的隐藏所有权边。仍附着于活动 Host 的失败 Installation 继续保留原始错误，供诊断和重试语义使用。Platform 的终态 Registration 遵守相同规则。
 
 ### 10.3 canonical ChangeSet
 
@@ -580,20 +582,20 @@ await change.commit()
 - one-shot；首次 `commit()` 后封口；
 - commit 幂等，重复调用返回同一 Promise；
 - 空 ChangeSet 是无副作用的已提交 no-op，不制造伪 `changing` 状态或诊断 revision；
-- 同一 Handle 在一份 ChangeSet 中只能出现一次；
-- 拒绝其他 Host 的 Handle；
+- 同一 Installation 在一份 ChangeSet 中只能出现一次；
+- 拒绝其他 Host 的 Installation；
 - 候选依赖图和全部受影响配置在停止任何实例前完成校验；
 - 执行期间 Host 为 `changing`，应用代码的 Service 读取关闭；
 - active 变更只重建目标和新旧图中受影响的传递消费者；
 - 多项变更共用一份停止、启动、回滚与 ExtensionPoint 通知边界。
 
-`change.install()` 返回的是该 ChangeSet 拥有的 draft Handle。调用 `commit()` 时它才获得 Host 控制权限；commit 前直接调用其 `update/remove` 会以 `INSTALLATION_UNAVAILABLE` 拒绝，不能暗中排入第二份 ChangeSet。`host.install()` 之所以返回即可控制，是因为该语法糖在返回前已经同步提交了内部单项 ChangeSet。
+`change.install()` 返回的是该 ChangeSet 拥有的 draft Installation。调用 `commit()` 时它才获得 Host 控制权限；commit 前直接调用其 `update/remove` 会以 `INSTALLATION_UNAVAILABLE` 拒绝，不能暗中排入第二份 ChangeSet。`host.install()` 之所以返回即可控制的 Installation，是因为该语法糖在返回前已经同步提交了内部单项 ChangeSet。
 
-变更 setup 失败时，Core 释放部分新运行时并恢复旧图。若旧资源无法停止、新运行时无法清理或旧图无法恢复，Host fail closed 到 idle，不谎报 active。
+变更 setup 失败时，Core 释放部分 activation 并恢复旧图。若旧资源无法停止、部分 activation 无法清理或旧图无法恢复，Host fail closed 到 idle，不谎报 active。
 
 ### 10.4 stop
 
-`host.stop()` 按依赖逆序停止。停止后安装计划仍在，Handle 回到 pending；再次 `start()` 会按当前定义和配置重新创建实例。`remove()` 才会从计划删除。
+`host.stop()` 按依赖逆序停止。停止后安装计划仍在，Installation 回到 `pending`；再次 `start()` 会按当前 Plugin 声明和配置创建新 Instance。`remove()` 才会从计划删除。
 
 ## 十一、Group
 
@@ -620,17 +622,17 @@ Group 的规则：
 - configure 内全部安装共享一次提交；
 - `ready()` 等待 configure 产生的安装越过 ready barrier；
 - `remove()` 用一次 Core 事务删除整棵子树；
-- Group ChangeSet 只能修改自身子树的 Handle；
-- GroupHandle 与 Installation 共享 `status/ready/remove`，只有 Installation 增加 `update`；
+- Group ChangeSet 只能修改自身子树的 Installation；
+- Group 与 Installation 共享 `status/ready/remove`，只有 Installation 增加 `update`；
 - Group 不改变能力可见性：Service、ExtensionPoint 和 Event 都属于整个 Host。
 
 嵌套 Group configure 共享同一个显式配置会话。任一子级失败都会把整份会话置为 `failed`，即使调用方在外层捕获了该异常，也不能继续向已经失败的草稿追加声明或提交部分配置。非 `Error` 的失败值在配置和运行事务边界统一分类为 `GROUP_UNAVAILABLE`；`ready()` 失败后 Group 状态必须是 `failed`，不能因为失败值恰好为 `undefined` 而呈现为健康。
 
 每个 Group 只保留一份当前 readiness barrier。尚未成功建立的 Group 在提交失败后保持 `failed`，后续成功变更会替换旧 barrier 并建立 Group；已经建立的 Group 若变更失败且 Core 恢复了原提交状态，则继续保持健康。`status` 与 `ready()` 始终读取同一份生命周期状态。
 
-删除 Group 会同时撤销整棵子树的 Handle 权限。终态 GroupHandle 只保留身份和 `removed` 状态，`remove()` 幂等；它不再持有 Host、配置会话或历史失败调用栈，也不能创建安装、子 Group 或 ChangeSet。
+删除 Group 会同时撤销整棵子树的权限，包括删除前已经创建但尚未提交的 ChangeSet；这些旧草稿提交时统一以 `GROUP_REMOVED` 拒绝，不能越过 Group 边界进入 Host。终态 Group 只保留身份和 `removed` 状态，`remove()` 幂等；它不再持有 Host、配置会话或历史失败调用栈，也不能创建 Installation、子 Group 或 ChangeSet。
 
-需要工作区或租户区分时，根据语义选择：固定且需要独立依赖图的少量实例使用显式 Contract family；运行期按请求选择的数据使用带 tenant/workspace 参数的 Service；完全独立的能力图使用多个 Host；安全隔离使用 Worker/iframe/进程。不要把 Group 冒充解析或安全边界。
+需要工作区或租户区分时，根据语义选择：固定且需要独立依赖图的少量实例使用显式 Contract family；请求期选择的数据使用带 tenant/workspace 参数的 Service；完全独立的能力图使用多个 Host；安全隔离使用 Worker/iframe/进程。不要把 Group 冒充解析或安全边界。
 
 ## 十二、事务发布
 
@@ -679,9 +681,9 @@ snapshots.invalidate()                     // 标记失效并通知
 snapshots.dispose()                        // 固化终态并切断闭包
 ```
 
-`view` 是权限收窄，不是第二套观察 API：读取方只能 `get/subscribe`，拥有方只能通过 Publisher 驱动失效和终止。`dispose()` 会在切断 reader、reporter 与现有订阅前固化最后一份快照；历史 view 因而仍可读取终态，但不能反向保活运行时。Host、Lifetime 与 Platform diagnostics 都走这条路径，高层不得重写订阅注册表和错误边界。
+`view` 是权限收窄，不是第二套观察 API：读取方只能 `get/subscribe`，拥有方只能通过 Publisher 驱动失效和终止。订阅者失败交给显式 reporter 后仍继续通知其余订阅者；若 reporter 自身失败，Publisher 完成整轮通知后用 `AggregateError` 同时保留订阅者错误与 reporter 错误。`dispose()` 会在切断 reader、reporter 与现有订阅前固化最后一份快照；历史 view 因而仍可读取终态，但不能反向保活拥有方。Host、Lifetime 与 Platform diagnostics 都走这条路径，高层不得重写订阅注册表和错误边界。
 
-快照需要 Map 语义时统一使用 `ReadonlyMapSnapshot`。它复制输入并只暴露 `ReadonlyMap` 方法，避免 `Object.freeze(new Map())` 仍可调用 `set/delete/clear` 的伪不可变性；它只保证容器结构不可变，条目值仍应在进入快照时自行冻结。
+快照需要 Map 语义时统一使用 `ReadonlyMapSnapshot`。它只接受类型声明中的 Map 或条目 iterable，复制输入并只暴露 `ReadonlyMap` 方法，避免 `Object.freeze(new Map())` 仍可调用 `set/delete/clear` 的伪不可变性；它只保证容器结构不可变，条目值仍应在进入快照时自行冻结。
 
 `@dougongjs/reactive` 是独立基础包：
 
@@ -706,7 +708,7 @@ observe(ctx, endpoint, (url, lifetime) => {
 })
 ```
 
-`observe()` 只使用公开 `get/subscribe/lifetime/spawn/cleanup`，因此不是 Core 特权或第二套运行时。Core 不依赖 reactive，第三方 Readable 也可结构兼容。
+`observe()` 只使用公开 `get/subscribe/lifetime/spawn/cleanup`，因此不是 Core 特权或第二套执行引擎。Core 不依赖 reactive，第三方 Readable 也可结构兼容。
 
 结构兼容只统一观察协议，不抹平资源来源的所有权边界：Context 注入的 ContributionView 是绑定当前 Lifetime 的 live capability，直接 `subscribe()` 产生的订阅会自动归该 Lifetime 所有；独立 Signal 或第三方 Readable 没有隐含 owner，直接订阅时由调用方持有返回的 Disposable，或交给 `observe(owner, source, observer)` 组合进显式 Lifetime。两者仍只有同一个 `subscribe()` 和同一个 `dispose()`，差异只在是否已经存在明确的结构化 owner。
 
@@ -719,7 +721,7 @@ host.diagnostics.get()
 host.diagnostics.subscribe(notify)
 ```
 
-快照包含 Host name/status/revision、InstallationSnapshot Map 和 GroupSnapshot Map。快照、条目、数组与 Map 都只读；诊断不能控制运行时。
+快照包含 Host name/status/revision、InstallationSnapshot Map 和 GroupSnapshot Map。快照、条目、数组与 Map 都只读；诊断不能控制 Host。
 
 运行中的 `InstallationSnapshot` 还包含一份独立的 `lifetime` 观察视图：
 
@@ -731,7 +733,7 @@ interface LifetimeSnapshot {
   readonly tasks: number
   readonly listeners: number
   readonly contributions: number
-  readonly extensionViews: number
+  readonly contributionViews: number
   readonly subscriptions: number
   readonly children: readonly LifetimeSnapshot[]
 }
@@ -745,24 +747,24 @@ const subscription = lifetime?.subscribe(render)
 
 label 只回答“这组资源为何共同存活”，不是 capability ID、查找 key 或新的 Scope。重复 label 不产生冲突，也不改变释放语义。cleanup、task、listener 等叶资源不各自增加命名重载；只有确实存在共同释放边界时才创建子 Lifetime。Core 不从函数名、调用栈或序号猜测节点，也不为了实现分类计数伪造树层级。
 
-资源变化只更新这份小型视图，不增加 Host revision，也不重建全部 InstallationSnapshot；调用方要观察资源变化就显式订阅嵌套视图。子 Lifetime 终止后立即从树中摘除；插件停止后新的 InstallationSnapshot 不再含 `lifetime`，已经取得的旧视图会停在无子节点、全零计数的 `disposed` 终态，且不再保留 Host。
+资源变化只更新这份小型视图，不增加 Host revision，也不重建全部 InstallationSnapshot；调用方要观察资源变化就显式订阅嵌套视图。子 Lifetime 终止后立即从树中摘除；Instance 停止后新的 InstallationSnapshot 不再含 `lifetime`，已经取得的旧视图会停在无子节点、全零计数的 `disposed` 终态，且不再保留 Host。
 
-公共 Handle 与顶层 Host / Platform 都是冻结窄对象。纯 JavaScript 检查自有属性或原型，也不会看到：
+公共 facade 对象与顶层 Host / Platform 都经过冻结且保持狭窄。纯 JavaScript 检查自有属性或原型，也不会看到：
 
 ```text
 InstallationRecord
 GroupNode
-ExtensionStore
+ContributionStore
 EventHub
 LifetimePort
-ChangeSet host
-ChangeSet discard / Handle attach / revoke
+ChangeSet port
+ChangeSet discard / Installation attach / revoke
 Host 的 Group 编排端口
 staged publication method
-Platform Artifact / Core Handle
+Platform Artifact / Core Installation
 ```
 
-TypeScript 的 `private` 不被当作安全措施；实现使用真正的 `#private` 字段或独立 facade Handle，防止运行时形状泄露。
+TypeScript 的 `private` 不被当作安全措施；实现使用真正的 `#private` 字段或独立 facade 对象，防止 JavaScript 形状泄露。
 
 Context 限制同样不是安全沙箱。同 Realm 插件仍可访问 `globalThis`、DOM 或 fetch。不可信插件必须进入 Worker、iframe、受限 Realm 或独立进程。
 
@@ -778,16 +780,16 @@ Context 限制同样不是安全沙箱。同 Realm 插件仍可访问 `globalThi
 | `SERVICE_MISSING` | 必需 Service 无提供者 |
 | `SERVICE_CYCLE` | Service 依赖环或自依赖 |
 | `SERVICE_NOT_RETURNED` | setup 未返回声明输出 |
-| `SERVICE_UNAVAILABLE` | 外部读取或运行时绑定当前不可用 |
+| `SERVICE_UNAVAILABLE` | 外部读取或 Instance 绑定当前不可用 |
 | `INSTALLATION_REMOVED` | 操作已从计划移除的实例 |
-| `INSTALLATION_UNAVAILABLE` | Handle 无法进入可等待状态 |
+| `INSTALLATION_UNAVAILABLE` | Installation 无法进入可等待状态 |
 | `INSTALLATION_IDENTITY` | update 试图改变插件 name |
 | `GROUP_REMOVED` | 操作已移除的 Group |
 | `GROUP_UNAVAILABLE` | Group 尚未成功建立 |
 
 Event 因定义要求收集全部监听器失败，总是抛 AggregateError。Lifetime 与关停先尝试所有资源：一个失败原样抛出，多个失败聚合。rollback/fail-closed 跨多个阶段时统一使用 AggregateError。
 
-后台任务、订阅者和后续 observe 的错误无法回到原同步调用栈，通过 `onError` 上报。`onError` 自身失败也不得改变正在观察的运行时命令。
+后台任务、订阅者和后续 observe 的错误无法回到原同步调用栈，通过 `onError` 上报。`onError` 自身失败也不得改变正在观察的 Host 命令。
 
 ## 十六、禁止方向
 
@@ -795,11 +797,11 @@ Event 因定义要求收集全部监听器失败，总是抛 AggregateError。Li
 - 装饰器依赖注入与字符串 Service Locator；
 - Proxy Context、原型链 shadow、live Service Proxy；
 - Core 内置 Signal/effect、React、HTTP、Node、文件系统或定时器；
-- `extension.keyed/many/ordered/override` 等领域策略进入 Core；
+- `extensionPoint.keyed/many/ordered/override` 等领域策略进入 Core；
 - Scope 与 Group 混为一谈；
 - lifecycle hook 矩阵；
 - Event 增加 serial/bail/waterfall 等查询模式；
-- 插件任意修改全局插件图；
+- Plugin 任意修改全局 Installation 图；
 - Loader、Manifest、HMR 或权限进入 Core；
 - 用 Context API 限制冒充安全沙箱；
 - 只在类型声明隐藏、但在 JavaScript 对象上泄露内部字段或方法。
@@ -823,7 +825,7 @@ Event 因定义要求收集全部监听器失败，总是抛 AggregateError。Li
 Plugin =
   setup(
     immutable service snapshot,
-    live extension views,
+    live ContributionView,
     config,
     lifetime,
   )

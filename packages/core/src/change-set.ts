@@ -1,14 +1,19 @@
 import type { ChangeSet, Installation, InstallationUpdate } from "./host-api";
-import type { AnyPlugin } from "./installation";
 import type { InstallationRecord } from "./installation";
-import { definePlugin, type Plugin, type Provisions, type Requirements } from "./plugin";
+import {
+  normalizePlugin,
+  type ErasedPlugin,
+  type Plugin,
+  type Provisions,
+  type Requirements,
+} from "./plugin";
 
 type DeclarationUpdate =
-  | { readonly kind: "plugin"; readonly plugin: AnyPlugin }
+  | { readonly kind: "plugin"; readonly plugin: ErasedPlugin }
   | { readonly kind: "config"; readonly config: unknown }
   | {
       readonly kind: "plugin-and-config";
-      readonly plugin: AnyPlugin;
+      readonly plugin: ErasedPlugin;
       readonly config: unknown;
     };
 
@@ -23,41 +28,41 @@ export type ChangeOperation =
 
 interface ChangePort {
   create(
-    plugin: AnyPlugin,
+    plugin: ErasedPlugin,
     config: unknown,
   ): {
-    readonly installation: InstallationRecord;
-    readonly handle: object;
+    readonly record: InstallationRecord;
+    readonly publicInstallation: object;
   };
-  resolve(handle: object): InstallationRecord;
+  resolve(installation: object): InstallationRecord;
   execute(operations: ReadonlyArray<ChangeOperation>): Promise<void>;
   attach(installation: InstallationRecord): void;
   discard(installation: InstallationRecord, error: unknown): void;
 }
 
 type ChangeSetState =
-  | { readonly phase: "open"; readonly host: ChangePort }
+  | { readonly phase: "open"; readonly port: ChangePort }
   | { readonly phase: "committing" }
   | { readonly phase: "submitted"; readonly promise: Promise<void> }
   | { readonly phase: "discarded" };
 
 const draftDiscarders = new WeakMap<ChangeSetDraft, (error: unknown) => void>();
 
-export function discardPluginChangeSetDraft(draft: ChangeSetDraft, error: unknown) {
+export function discardChangeSetDraft(draft: ChangeSetDraft, error: unknown) {
   draftDiscarders.get(draft)?.(error);
 }
 
 /**
  * Rich one-shot draft for the canonical mutation path. It owns target
- * uniqueness, handle authority, sealing and commit idempotency before the
- * application ever sees a candidate graph.
+ * uniqueness, Installation authority, sealing and commit idempotency before
+ * the Host ever sees a candidate graph.
  */
 export class ChangeSetDraft implements ChangeSet {
   readonly #operations = new Map<InstallationRecord, ChangeOperation>();
   #state: ChangeSetState;
 
-  constructor(host: ChangePort) {
-    this.#state = { phase: "open", host };
+  constructor(port: ChangePort) {
+    this.#state = { phase: "open", port };
     draftDiscarders.set(this, (error) => this.#discard(error));
     Object.freeze(this);
   }
@@ -66,33 +71,33 @@ export class ChangeSetDraft implements ChangeSet {
     plugin: Plugin<Config, Requires, Provides, ConfigInput>,
     ...config: [ConfigInput] extends [void] ? [config?: ConfigInput] : [config: ConfigInput]
   ): Installation<Config, Requires, Provides, ConfigInput> {
-    const host = this.#requireOpen();
-    const definition = definePlugin(plugin) as unknown as AnyPlugin;
-    const draft = host.create(definition, config[0]);
-    this.#stage({ kind: "install", installation: draft.installation });
-    return draft.handle as Installation<Config, Requires, Provides, ConfigInput>;
+    const port = this.#requireOpen();
+    const normalized = normalizePlugin(plugin);
+    const draft = port.create(normalized, config[0]);
+    this.#stage({ kind: "install", installation: draft.record });
+    return draft.publicInstallation as Installation<Config, Requires, Provides, ConfigInput>;
   }
 
   update<Config, Requires extends Requirements, Provides extends Provisions, ConfigInput>(
-    handle: Installation<Config, Requires, Provides, ConfigInput>,
+    installation: Installation<Config, Requires, Provides, ConfigInput>,
     update: InstallationUpdate<Config, Requires, Provides, ConfigInput>,
   ) {
-    const host = this.#requireOpen();
+    const port = this.#requireOpen();
     if (!update || typeof update !== "object") {
-      throw new TypeError("Plugin update must be an object");
+      throw new TypeError("Installation update must be an object");
     }
     const hasPlugin = Object.hasOwn(update, "plugin");
     const hasConfig = Object.hasOwn(update, "config");
     if (!hasPlugin && !hasConfig) {
-      throw new TypeError("Plugin update must include 'plugin' or 'config'");
+      throw new TypeError("Installation update must include 'plugin' or 'config'");
     }
 
-    const installation = host.resolve(handle);
-    let plugin: AnyPlugin | undefined;
+    const record = port.resolve(installation);
+    let plugin: ErasedPlugin | undefined;
     if (hasPlugin) {
       const replacement = update.plugin;
-      if (!replacement) throw new TypeError("Plugin update 'plugin' must be a plugin definition");
-      plugin = definePlugin(replacement) as unknown as AnyPlugin;
+      if (!replacement) throw new TypeError("Installation update 'plugin' must be a Plugin");
+      plugin = normalizePlugin(replacement);
     }
     let declaration: DeclarationUpdate;
     if (plugin && hasConfig) {
@@ -102,16 +107,16 @@ export class ChangeSetDraft implements ChangeSet {
     } else {
       declaration = { kind: "config", config: update.config };
     }
-    const operation: ChangeOperation = { kind: "update", installation, declaration };
+    const operation: ChangeOperation = { kind: "update", installation: record, declaration };
     this.#stage(operation);
     return this;
   }
 
   remove<Config, Requires extends Requirements, Provides extends Provisions, ConfigInput>(
-    handle: Installation<Config, Requires, Provides, ConfigInput>,
+    installation: Installation<Config, Requires, Provides, ConfigInput>,
   ) {
-    const host = this.#requireOpen();
-    this.#stage({ kind: "remove", installation: host.resolve(handle) });
+    const port = this.#requireOpen();
+    this.#stage({ kind: "remove", installation: port.resolve(installation) });
     return this;
   }
 
@@ -119,21 +124,21 @@ export class ChangeSetDraft implements ChangeSet {
     const state = this.#state;
     if (state.phase === "submitted") return state.promise;
     if (state.phase === "discarded") {
-      throw new TypeError("Cannot commit a discarded ChangeSet");
+      throw new Error("Cannot commit a discarded ChangeSet");
     }
     if (state.phase === "committing") {
-      throw new TypeError("Core ChangeSet commit is already being prepared");
+      throw new Error("Core ChangeSet commit is already being prepared");
     }
     this.#state = { phase: "committing" };
     const operations = Object.freeze([...this.#operations.values()]);
-    const host = state.host;
+    const port = state.port;
     try {
       for (const operation of operations) {
-        if (operation.kind === "install") host.attach(operation.installation);
+        if (operation.kind === "install") port.attach(operation.installation);
       }
     } catch (error) {
       for (const operation of operations) {
-        if (operation.kind === "install") host.discard(operation.installation, error);
+        if (operation.kind === "install") port.discard(operation.installation, error);
       }
       return this.#submit(Promise.reject(error));
     }
@@ -142,7 +147,7 @@ export class ChangeSetDraft implements ChangeSet {
     }
     let promise: Promise<void>;
     try {
-      promise = host.execute(operations);
+      promise = port.execute(operations);
     } catch (error) {
       promise = Promise.reject(error);
     }
@@ -156,7 +161,7 @@ export class ChangeSetDraft implements ChangeSet {
     const operations = [...this.#operations.values()];
     this.#releaseOperations();
     for (const operation of operations) {
-      if (operation.kind === "install") state.host.discard(operation.installation, error);
+      if (operation.kind === "install") state.port.discard(operation.installation, error);
     }
   }
 
@@ -174,7 +179,7 @@ export class ChangeSetDraft implements ChangeSet {
     if (state.phase !== "open") {
       throw new TypeError(`Cannot modify a ${state.phase} ChangeSet`);
     }
-    return state.host;
+    return state.port;
   }
 
   #submit(promise: Promise<void>) {

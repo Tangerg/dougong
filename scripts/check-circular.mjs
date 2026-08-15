@@ -3,7 +3,7 @@
 // allowlist. Allowlist entries are full file-sets of a known, benign cycle.
 //
 // Cycles matter more here than in an app: every package ships as a library, and
-// a runtime cycle between two modules of `@dougongjs/core` would surface as a
+// a value-level cycle between two modules of `@dougongjs/core` would surface as a
 // partially-initialised binding in a consumer's bundler, not in our tests.
 
 import { execFileSync } from "node:child_process";
@@ -64,7 +64,7 @@ if (unexpected.length > 0) {
     console.error("  " + cycle.join(" > ") + " > " + cycle[0]);
   }
   console.error("");
-  console.error("If a new cycle is intentional (type-only, no runtime hazard),");
+  console.error("If a new cycle is intentional (type-only, no initialization hazard),");
   console.error("add it to ALLOWED in scripts/check-circular.mjs with a comment.");
   process.exit(1);
 }

@@ -5,19 +5,24 @@
 //
 // Package rule: Core and reactive are independent foundations; Platform only
 // depends on Core, the facade may re-export all three, and examples is the
-// outermost consumer that no runtime package may import.
+// outermost consumer that no published library package may import.
 //
 // Module rules inside @dougongjs/core and @dougongjs/platform are one-way and
 // strictly increasing. Their tables below are exhaustive by design.
 //
-// Every invariant below is either stated in docs/architecture.zh-CN.md or was a
+// Every invariant below is either stated in docs/reference/architecture.md or was a
 // deliberate narrowing that the compiler would happily let us undo.
 
 import { execFileSync } from "node:child_process";
+import { createRequire } from "node:module";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { retiredVocabulary } from "./vocabulary.mjs";
 
-// madge reports paths relative to `packages/`, e.g. `core/src/application.ts`.
+const ts = createRequire(import.meta.url)("typescript");
+const retiredTerms = new Set(retiredVocabulary);
+
+// madge reports paths relative to `packages/`, e.g. `core/src/host.ts`.
 const PACKAGES_DIR = "packages";
 
 // Package layers
@@ -63,24 +68,24 @@ const CORE_MODULE_LAYERS = {
   "core/src/contract-registry.ts": 1,
   "core/src/event-hub.ts": 1,
   "core/src/snapshot-view.ts": 1,
-  // Live extension stores and Lifetime diagnostics share the snapshot protocol.
-  "core/src/extension-store.ts": 2,
+  // Live contribution stores and Lifetime diagnostics share the snapshot protocol.
+  "core/src/contribution-store.ts": 2,
   "core/src/lifetime-diagnostics.ts": 2,
   // Resource ownership, built from the leaf services and its diagnostic projection.
   "core/src/lifetime.ts": 3,
   // Plugin shape, declared in terms of lifetime operations.
   "core/src/plugin.ts": 4,
-  // Stable installation identity and its runtime state machine.
+  // Stable Installation identity and its Instance state machine.
   "core/src/installation.ts": 5,
   // Derived graphs and immutable operational read models.
   "core/src/diagnostics.ts": 6,
   "core/src/group-lifecycle.ts": 6,
-  "core/src/plugin-graph.ts": 6,
+  "core/src/installation-graph.ts": 6,
   // Public protocols, then the canonical ChangeSet implementation.
   "core/src/host-api.ts": 7,
   "core/src/change-set.ts": 8,
-  // Structural Group orchestration and the committed runtime are orthogonal.
-  "core/src/runtime.ts": 9,
+  // Structural Group orchestration and the committed Engine are orthogonal.
+  "core/src/engine.ts": 9,
   "core/src/group-coordinator.ts": 9,
   // The Host serializes public commands over both collaborators.
   "core/src/host.ts": 10,
@@ -95,7 +100,7 @@ const PLATFORM_MODULE_LAYERS = {
   "platform/src/diagnostics.ts": 2,
   "platform/src/permissions.ts": 2,
   "platform/src/platform-api.ts": 3,
-  // Artifact declarations compile into validated Core plugin definitions.
+  // Artifact declarations compile into validated Core Plugins.
   "platform/src/artifact.ts": 4,
   "platform/src/registration.ts": 4,
   "platform/src/platform-change-set.ts": 5,
@@ -111,7 +116,9 @@ const MODULE_LAYERS = { ...CORE_MODULE_LAYERS, ...PLATFORM_MODULE_LAYERS };
 // Source-text invariants
 
 const SOURCE_RE = /^(?:reactive|core|platform|dougong)\/src\//;
+const WORKSPACE_SOURCE_RE = /^(?:reactive|core|platform|dougong|examples)\/src\//;
 const TEST_RE = /\.(test|spec)\.ts$/;
+const CONTRACT_FACTORIES = new Set(["service", "extensionPoint", "event"]);
 
 // Checks that run over the text of every source file under a package's `src`.
 const SOURCE_RULES = [
@@ -156,7 +163,7 @@ const FILE_RULES = [
   },
   {
     matches: (file) => file === "dougong/src/index.ts",
-    // A pure facade. Logic here would be a second runtime path living outside
+    // A pure facade. Logic here would be a second execution path living outside
     // core, which is exactly what the one-canonical-API rule forbids.
     test: (source) =>
       source
@@ -181,10 +188,20 @@ const FILE_RULES = [
     message: "Host command serialization must use Core SerialQueue",
   },
   {
+    matches: (file) => file === "core/src/group-coordinator.ts",
+    test: (source) => /\.groupId\b/.test(source),
+    message: "Group ownership must use GroupNode identity, not encoded groupId prefixes",
+  },
+  {
     matches: (file) =>
       file === "platform/src/platform.ts" || file === "platform/src/registration.ts",
     test: (source) => !/new\s+SerialQueue\s*\(/.test(source),
     message: "Platform command serialization must use Core SerialQueue",
+  },
+  {
+    matches: (file) => file === "platform/src/platform.ts",
+    test: (source) => /#changeQueue\.settled\.then\s*\(/.test(source),
+    message: "Platform disposal must be a terminal SerialQueue command, not a tail observer",
   },
   {
     matches: (file) => file === "platform/src/diagnostics.ts",
@@ -231,9 +248,96 @@ try {
 
 const violations = [];
 const architectureViolations = [];
+const fixedContractDeclarations = new Map();
+
+for (const file of Object.keys(MODULE_LAYERS)) {
+  if (!Object.hasOwn(graph, file)) {
+    architectureViolations.push(`${file}: stale module rank has no corresponding source file`);
+  }
+}
 
 for (const [file, deps] of Object.entries(graph)) {
   if (TEST_RE.test(file)) continue; // tests may reach across layers for fixtures
+
+  if (WORKSPACE_SOURCE_RE.test(file)) {
+    const sourceText = readFileSync(join(PACKAGES_DIR, file), "utf8");
+    const sourceFile = ts.createSourceFile(
+      file,
+      sourceText,
+      ts.ScriptTarget.Latest,
+      true,
+      ts.ScriptKind.TS,
+    );
+    // Identifiers and exact error-code strings share the vocabulary guard.
+    // AST matching avoids rejecting prose such as the current "extension-point" label.
+    const retiredUses = new Set();
+    const findRetiredUses = (node) => {
+      if ((ts.isIdentifier(node) || ts.isStringLiteralLike(node)) && retiredTerms.has(node.text)) {
+        retiredUses.add(node.text);
+      }
+      ts.forEachChild(node, findRetiredUses);
+    };
+    findRetiredUses(sourceFile);
+    for (const term of retiredUses) {
+      architectureViolations.push(`${file}: uses retired source term '${term}'`);
+    }
+    const localFactories = new Set();
+    const contractNamespaces = new Set();
+    for (const statement of sourceFile.statements) {
+      if (!ts.isImportDeclaration(statement) || !ts.isStringLiteral(statement.moduleSpecifier)) {
+        continue;
+      }
+      const moduleName = statement.moduleSpecifier.text;
+      if (
+        moduleName !== "@dougongjs/core" &&
+        moduleName !== "dougong" &&
+        moduleName !== "./contracts" &&
+        !moduleName.endsWith("/contracts")
+      ) {
+        continue;
+      }
+      const bindings = statement.importClause?.namedBindings;
+      if (bindings && ts.isNamespaceImport(bindings)) {
+        contractNamespaces.add(bindings.name.text);
+      } else if (bindings && ts.isNamedImports(bindings)) {
+        for (const element of bindings.elements) {
+          const importedName = element.propertyName?.text ?? element.name.text;
+          if (CONTRACT_FACTORIES.has(importedName)) localFactories.add(element.name.text);
+        }
+      }
+    }
+    const visit = (node) => {
+      if (ts.isCallExpression(node)) {
+        const isDirectFactory =
+          ts.isIdentifier(node.expression) && localFactories.has(node.expression.text);
+        const isNamespacedFactory =
+          ts.isPropertyAccessExpression(node.expression) &&
+          ts.isIdentifier(node.expression.expression) &&
+          contractNamespaces.has(node.expression.expression.text) &&
+          CONTRACT_FACTORIES.has(node.expression.name.text);
+        if (
+          !(isDirectFactory || isNamespacedFactory) ||
+          !ts.isStringLiteralLike(node.arguments[0])
+        ) {
+          ts.forEachChild(node, visit);
+          return;
+        }
+        const id = node.arguments[0].text;
+        const previous = fixedContractDeclarations.get(id);
+        if (previous) {
+          const position = sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile));
+          architectureViolations.push(
+            `${file}:${position.line + 1}: fixed Contract ID '${id}' was already declared at ${previous}`,
+          );
+        } else {
+          const position = sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile));
+          fixedContractDeclarations.set(id, `${file}:${position.line + 1}`);
+        }
+      }
+      ts.forEachChild(node, visit);
+    };
+    visit(sourceFile);
+  }
 
   const from = packageOf(file);
   const forbidden = FORBIDDEN_PACKAGES[from] ?? [];
@@ -277,7 +381,7 @@ for (const [file, deps] of Object.entries(graph)) {
 // `new Lifetime(...)` is ownership creation. Only the orchestrator (one root
 // lifetime per plugin installation) and Lifetime itself (children) may do it;
 // anywhere else produces a resource tree nobody disposes.
-const LIFETIME_CONSTRUCTORS = new Set(["core/src/runtime.ts", "core/src/lifetime.ts"]);
+const LIFETIME_CONSTRUCTORS = new Set(["core/src/engine.ts", "core/src/lifetime.ts"]);
 for (const file of Object.keys(graph)) {
   if (!SOURCE_RE.test(file) || TEST_RE.test(file)) continue;
   if (LIFETIME_CONSTRUCTORS.has(file)) continue;
@@ -288,7 +392,8 @@ for (const file of Object.keys(graph)) {
 }
 
 if (violations.length > 0 || architectureViolations.length > 0) {
-  console.error(`[check-layers] Found ${violations.length} layer-boundary violation(s):`);
+  const total = violations.length + architectureViolations.length;
+  console.error(`[check-layers] Found ${total} architecture violation(s):`);
   for (const v of violations) {
     console.error(`  ${v.from} -> ${v.to}:  ${v.file}  ->  ${v.dep}`);
   }

@@ -25,30 +25,30 @@ function buildCandidateGraph<Reference>(
 ) {
   const candidate = new Map<string, Candidate<Reference>>(
     [...current].map((registration) => [
-      registration.name,
+      registration.manifestName,
       { registration, artifact: registration.artifact },
     ]),
   );
 
   for (const operation of operations) {
     if (operation.kind === "register") {
-      if (candidate.has(operation.registration.name)) {
+      if (candidate.has(operation.registration.manifestName)) {
         throw new PlatformError(
-          "PLUGIN_DUPLICATE",
-          `Plugin '${operation.registration.name}' is already registered`,
+          "REGISTRATION_DUPLICATE",
+          `Registration '${operation.registration.manifestName}' already exists`,
         );
       }
-      candidate.set(operation.registration.name, {
+      candidate.set(operation.registration.manifestName, {
         registration: operation.registration,
         artifact: operation.artifact,
       });
     } else if (operation.kind === "update") {
-      candidate.set(operation.registration.name, {
+      candidate.set(operation.registration.manifestName, {
         registration: operation.registration,
         artifact: operation.artifact,
       });
     } else {
-      candidate.delete(operation.registration.name);
+      candidate.delete(operation.registration.manifestName);
     }
   }
   return candidate;
@@ -61,8 +61,8 @@ function assertAcyclic<Reference>(candidate: ReadonlyMap<string, Candidate<Refer
   const visit = (name: string, path: ReadonlyArray<string>) => {
     if (visiting.has(name)) {
       throw new PlatformError(
-        "PLUGIN_CYCLE",
-        `Plugin dependency cycle: ${[...path, name].join(" -> ")}`,
+        "REGISTRATION_CYCLE",
+        `Registration dependency cycle: ${[...path, name].join(" -> ")}`,
       );
     }
     if (visited.has(name)) return;
@@ -89,20 +89,20 @@ function assertActivatedDependencies<Reference>(
       const dependency = candidate.get(name);
       if (!dependency) {
         throw new PlatformError(
-          "PLUGIN_DEPENDENCY_MISSING",
-          `Activated plugin '${registration.name}' requires missing plugin '${name}'`,
+          "REGISTRATION_DEPENDENCY_MISSING",
+          `Activated Registration '${registration.manifestName}' requires missing Registration '${name}'`,
         );
       }
       if (!matchesVersion(dependency.artifact.manifest.version, range)) {
         throw new PlatformError(
-          "PLUGIN_DEPENDENCY_INCOMPATIBLE",
-          `Plugin '${registration.name}' requires '${name}' ${range}, found ${dependency.artifact.manifest.version}`,
+          "REGISTRATION_DEPENDENCY_INCOMPATIBLE",
+          `Registration '${registration.manifestName}' requires Registration '${name}' ${range}, found ${dependency.artifact.manifest.version}`,
         );
       }
       if (dependency.registration.status !== "activated") {
         throw new PlatformError(
-          "PLUGIN_DEPENDENCY_INACTIVE",
-          `Activated plugin '${registration.name}' requires plugin '${name}' to be activated`,
+          "REGISTRATION_DEPENDENCY_INACTIVE",
+          `Activated Registration '${registration.manifestName}' requires Registration '${name}' to be activated`,
         );
       }
     }

@@ -82,7 +82,7 @@ describe("host composition scenarios", () => {
     const platform = createPlatform({
       installer: host,
       apiVersion: "1.0.0",
-      permissions: new PermissionSet(["network"]),
+      authorizer: new PermissionSet(["network"]),
       loader: new MemoryLoader(new Map([["remote-provider", { default: remoteProvider }]])),
     });
     const provider = await platform.register({
@@ -174,15 +174,15 @@ describe("host composition scenarios", () => {
     const host = createHost({ name: "lynx" });
     host.install(filesystemAdapter);
     host.install(rootShell);
-    const workspace = host.group("workspace", (plugins) => {
-      plugins.install(workspaceShell);
+    const workspace = host.group("workspace", (group) => {
+      group.install(workspaceShell);
     });
     await host.start();
 
     const platform = createPlatform({
       installer: workspace,
       apiVersion: "1.0.0",
-      permissions: new PermissionSet(["filesystem:read"]),
+      authorizer: new PermissionSet(["filesystem:read"]),
       loader: new MemoryLoader(new Map([["explorer", { default: explorer }]])),
     });
     await platform.register({

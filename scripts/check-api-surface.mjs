@@ -1,17 +1,17 @@
 #!/usr/bin/env node
 // Public declaration guard. Complements check-layers.mjs (import direction) and
-// the runtime `api-surface.test.ts` (which can only see values): this one reads
-// the *built* `dist/index.d.ts` of every published package and asserts the exact
+// the value-level `api-surface.test.ts` (which cannot see type-only exports):
+// this one reads the *built* `dist/index.d.ts` of every published package and asserts the exact
 // exported vocabulary, values and types alike.
 //
 // Two independent assertions per package:
 //
 //   1. The exported identifiers equal the allowlist exactly. A new export is a
 //      deliberate decision, not a side effect of an `export *`.
-//   2. No retired identifier reappears anywhere on the public surface. The
+//   2. No retired identifier reappears in a package entry declaration. The
 //      banlist holds whole tokens, never patterns, so `Plugin`, `PluginContext`,
-//      `PluginMeta`, `definePlugin` and the `PLUGIN_*` error codes stay legal
-//      while `PluginHandle` and friends cannot come back.
+//      `InstanceMeta`, `definePlugin` and other valid Plugin-related names
+//      stay legal while `PluginHandle` and friends cannot come back.
 //
 // Symbols are resolved through the TypeScript checker rather than matched as
 // text, so `export *` re-exports are seen as the final surface a consumer gets.
@@ -22,15 +22,18 @@
 import { createRequire } from "node:module";
 import { existsSync, globSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
+import { retiredVocabulary } from "./vocabulary.mjs";
 
 const ts = createRequire(import.meta.url)("typescript");
+const retiredIdentifiers = new Set(retiredVocabulary);
 
 // The vocabulary. One name per lifecycle stage:
 //
 //   Manifest + Reference -> Artifact -> Registration   (Platform: external code)
-//   Plugin -> Installation -> Runtime                  (Core: installed code)
+//   Plugin -> Installation                             (Core: stable public identity)
+//             \-> Instance                             (internal active execution)
 //
-// Host is the runtime boundary Dougong owns. The code that embeds Dougong is
+// Host is the execution boundary Dougong owns. The code that embeds Dougong is
 // "application code"; the JavaScript environment is the "runtime". Neither is
 // called a host on this surface.
 const PACKAGES = {
@@ -61,6 +64,7 @@ const PACKAGES = {
       "definePlugin",
       "event",
       "extensionPoint",
+      "isLogger",
       "optional",
       "service",
     ],
@@ -77,16 +81,17 @@ const PACKAGES = {
       "Awaitable",
       "Plugin",
       "PluginContext",
-      "PluginMeta",
+      "InstanceMeta",
       "ProvidedServices",
       "Provisions",
       "Requirements",
       "ResolvedRequirement",
       "ResolvedRequirements",
-      // The runtime boundary and what lives inside it.
+      // The execution boundary and what lives inside it.
       "ChangeSet",
       "Group",
       "GroupSnapshot",
+      "GroupStatus",
       "Host",
       "HostOptions",
       "HostSnapshot",
@@ -152,45 +157,6 @@ const PACKAGES = {
   },
 };
 
-// Identifiers retired by the vocabulary rebuild. Whole tokens only.
-const RETIRED = [
-  // Core: the runtime boundary was called an Application.
-  "Application",
-  "ApplicationSnapshot",
-  "ApplicationStatus",
-  "CreateAppOptions",
-  "createApp",
-  // Core: an installation was an untyped handle, a plugin was a "definition".
-  "InstallationHandle",
-  "PluginChangeSet",
-  "PluginContainer",
-  "PluginDefinition",
-  "PluginGroup",
-  "PluginHandle",
-  "PluginSnapshot",
-  "PluginUpdate",
-  // Core: an extension point was an "extension"; its view was over the point.
-  "Extension",
-  "ExtensionRequirementView",
-  "ExtensionView",
-  "extension",
-  // Platform: every stage was called a plugin.
-  "CreatePlatformOptions",
-  "ImportPluginLoader",
-  "ManagedPlugin",
-  "ManagedPluginSnapshot",
-  "ManagedPluginStatus",
-  "MemoryPluginLoader",
-  "PermissionAuthorizer",
-  "PluginArtifact",
-  "PluginLoader",
-  "PluginManifest",
-  "PluginManifestInput",
-  "PluginPlatform",
-  "PluginPlatformSnapshot",
-  "PluginPlatformStatus",
-];
-
 function surfaceOf(distPath) {
   const file = resolve(distPath);
   const program = ts.createProgram([file], {
@@ -209,6 +175,7 @@ function surfaceOf(distPath) {
 
   const values = new Set();
   const types = new Set();
+  const retired = new Set();
   for (const exported of checker.getExportsOfModule(moduleSymbol)) {
     const symbol =
       exported.flags & ts.SymbolFlags.Alias ? checker.getAliasedSymbol(exported) : exported;
@@ -218,7 +185,12 @@ function surfaceOf(distPath) {
     else if (symbol.flags & ts.SymbolFlags.Type) types.add(exported.name);
     else throw new Error(`${distPath} exports '${exported.name}' with no value or type meaning`);
   }
-  return { values: [...values].sort(), types: [...types].sort() };
+  const visit = (node) => {
+    if (ts.isIdentifier(node) && retiredIdentifiers.has(node.text)) retired.add(node.text);
+    ts.forEachChild(node, visit);
+  };
+  visit(source);
+  return { values: [...values].sort(), types: [...types].sort(), retired: [...retired].sort() };
 }
 
 function difference(actual, expected) {
@@ -256,12 +228,8 @@ for (const [name, spec] of Object.entries(PACKAGES)) {
     }
   }
 
-  for (const kind of ["values", "types"]) {
-    for (const item of surface[kind]) {
-      if (RETIRED.includes(item)) {
-        failures.push(`${name}: retired identifier '${item}' is public again`);
-      }
-    }
+  for (const item of surface.retired) {
+    failures.push(`${name}: retired identifier '${item}' appears in its declaration surface`);
   }
 }
 
@@ -272,44 +240,62 @@ const core = surfaces.get("@dougongjs/core");
 const platform = surfaces.get("@dougongjs/platform");
 const reactive = surfaces.get("@dougongjs/reactive");
 if (facade && core && platform && reactive) {
-  const upstream = new Set([
-    ...core.values,
-    ...core.types,
-    ...platform.values,
-    ...platform.types,
-    ...reactive.values,
-    ...reactive.types,
-  ]);
+  const expectedFacade = {
+    values: [...new Set([...core.values, ...platform.values, ...reactive.values])].sort(),
+    types: [...new Set([...core.types, ...platform.types, ...reactive.types])].sort(),
+  };
   for (const kind of ["values", "types"]) {
-    for (const item of facade[kind]) {
-      if (!upstream.has(item)) {
-        failures.push(`dougong: facade declares '${item}' that no upstream package exports`);
-      }
+    const { added, missing } = difference(facade[kind], expectedFacade[kind]);
+    for (const item of added) {
+      failures.push(
+        `dougong: facade declares ${kind.slice(0, -1)} '${item}' with no upstream export`,
+      );
     }
-  }
-  for (const item of [...core.values, ...platform.values]) {
-    if (!facade.values.includes(item)) {
-      failures.push(`dougong: facade does not re-export the value '${item}'`);
-    }
-  }
-  for (const item of [...core.types, ...platform.types]) {
-    if (!facade.types.includes(item)) {
-      failures.push(`dougong: facade does not re-export the type '${item}'`);
+    for (const item of missing) {
+      failures.push(`dougong: facade does not re-export the ${kind.slice(0, -1)} '${item}'`);
     }
   }
 }
 
 // Error codes are public API too, and the only copy of them a consumer reads is
-// the reference table. Derive the real set from source and require both language
-// versions to list exactly it — so "25 stable codes" can never go stale by hand.
-const CODE_RE = /"([A-Z][A-Z_]{3,})"/g;
-const IGNORED_CONSTANTS = new Set(["AbortError"]);
+// the reference table. Derive the real set from error construction sites and
+// require both language versions to list exactly it. Looking at AST context
+// avoids mistaking an unrelated uppercase string constant for an error code.
+const ERROR_CODE_RE = /^[A-Z][A-Z_]{3,}$/;
 const sourceCodes = new Set();
 for (const dir of ["packages/core/src", "packages/platform/src"]) {
   for (const file of globSync(`${dir}/*.ts`)) {
-    for (const [, code] of readFileSync(file, "utf8").matchAll(CODE_RE)) {
-      if (!IGNORED_CONSTANTS.has(code)) sourceCodes.add(code);
-    }
+    const source = ts.createSourceFile(
+      file,
+      readFileSync(file, "utf8"),
+      ts.ScriptTarget.Latest,
+      true,
+      ts.ScriptKind.TS,
+    );
+    const visit = (node) => {
+      if (ts.isStringLiteralLike(node) && ERROR_CODE_RE.test(node.text)) {
+        const parent = node.parent;
+        const isErrorConstruction =
+          ts.isNewExpression(parent) &&
+          parent.arguments?.[0] === node &&
+          ts.isIdentifier(parent.expression) &&
+          (parent.expression.text === "DougongError" || parent.expression.text === "PlatformError");
+        const isErrorSubclass =
+          ts.isCallExpression(parent) &&
+          parent.arguments[0] === node &&
+          parent.expression.kind === ts.SyntaxKind.SuperKeyword;
+        const isFailureNormalization =
+          ts.isCallExpression(parent) &&
+          parent.arguments[1] === node &&
+          ts.isIdentifier(parent.expression) &&
+          parent.expression.text === "normalizeFailure";
+        if (isErrorConstruction || isErrorSubclass || isFailureNormalization) {
+          sourceCodes.add(node.text);
+        }
+      }
+      ts.forEachChild(node, visit);
+    };
+    visit(source);
   }
 }
 // Prose naming a code that no longer exists is worse than prose omitting one, so

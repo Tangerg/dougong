@@ -1,13 +1,15 @@
 import type { StandardSchemaV1 } from "@standard-schema/spec";
 import {
   isContract,
+  type ContractIdentity,
+  type ContractKind,
   type ExtensionPoint,
   type OptionalService,
   type Requirement,
   type Service,
 } from "./contracts";
-import type { ContributionView } from "./extension-store";
-import type { LifetimeOperations, Logger, PluginMeta } from "./lifetime";
+import type { ContributionView } from "./contribution-store";
+import type { InstanceMeta, LifetimeOperations, Logger } from "./lifetime";
 import type { Awaitable } from "./resource";
 
 export type { Awaitable } from "./resource";
@@ -38,7 +40,7 @@ type SetupOutput<T extends Provisions> = keyof T extends never ? void : Provided
 
 export type PluginContext<T extends Requirements = Requirements> = LifetimeOperations &
   ResolvedRequirements<T> & {
-    readonly meta: PluginMeta;
+    readonly meta: InstanceMeta;
     readonly log: Logger;
   };
 
@@ -58,6 +60,9 @@ export interface Plugin<
   ) => Awaitable<SetupOutput<NoInfer<Provides>>>;
 }
 
+/** Execution representation after public generic information has been checked and erased. */
+export type ErasedPlugin = Plugin<unknown, Requirements, Provisions, unknown>;
+
 const reservedContextKeys = new Set([
   "signal",
   "meta",
@@ -70,31 +75,35 @@ const reservedContextKeys = new Set([
   "contribute",
 ]);
 
+interface PluginContractDeclaration {
+  readonly alias: string;
+  readonly kind: ContractKind;
+  readonly role: "requirement" | "provision";
+}
+
 export function definePlugin<
   Config = void,
   Requires extends Requirements = {},
   Provides extends Provisions = {},
   ConfigInput = Config,
 >(
-  definition: Plugin<Config, Requires, Provides, ConfigInput>,
+  plugin: Plugin<Config, Requires, Provides, ConfigInput>,
 ): Plugin<Config, Requires, Provides, ConfigInput> {
-  if (typeof definition?.name !== "string" || !definition.name.trim()) {
+  if (typeof plugin?.name !== "string" || !plugin.name.trim()) {
     throw new TypeError("Plugin name must be a non-empty string");
   }
-  if (definition.name !== definition.name.trim()) {
+  if (plugin.name !== plugin.name.trim()) {
     throw new TypeError("Plugin name cannot start or end with whitespace");
   }
-  if (typeof definition.setup !== "function") {
-    throw new TypeError(`Plugin '${definition.name}' must define setup()`);
+  if (typeof plugin.setup !== "function") {
+    throw new TypeError(`Plugin '${plugin.name}' must define setup()`);
   }
-  if (
-    definition.config !== undefined &&
-    typeof definition.config["~standard"]?.validate !== "function"
-  ) {
-    throw new TypeError(`Plugin '${definition.name}' config must implement Standard Schema`);
+  if (plugin.config !== undefined && typeof plugin.config["~standard"]?.validate !== "function") {
+    throw new TypeError(`Plugin '${plugin.name}' config must implement Standard Schema`);
   }
 
-  for (const [key, requirement] of Object.entries(definition.requires ?? {})) {
+  const contracts = new Map<string, PluginContractDeclaration>();
+  for (const [key, requirement] of Object.entries(plugin.requires ?? {})) {
     if (!key.trim()) throw new TypeError("Plugin requirement alias cannot be empty");
     if (key !== key.trim()) {
       throw new TypeError("Plugin requirement alias cannot start or end with whitespace");
@@ -108,31 +117,83 @@ export function definePlugin<
     }
     if (requirement.kind === "optional") {
       if (!isContract(requirement.service, "service")) {
-        throw new TypeError(`Optional requirement '${key}' must wrap a service contract`);
+        throw new TypeError(`Optional requirement '${key}' must wrap a Service`);
       }
     } else if (!isContract(requirement, "service") && !isContract(requirement, "extensionPoint")) {
-      throw new TypeError(
-        `Plugin requirement '${key}' must be a service or extension-point contract`,
-      );
+      throw new TypeError(`Plugin requirement '${key}' must be a Service or ExtensionPoint`);
     }
+    rememberPluginContract(
+      plugin.name,
+      contracts,
+      "requirement",
+      key,
+      requirement.kind === "optional" ? requirement.service : requirement,
+    );
   }
 
-  for (const [key, provision] of Object.entries(definition.provides ?? {})) {
+  for (const [key, provision] of Object.entries(plugin.provides ?? {})) {
     if (!key.trim()) throw new TypeError("Plugin provision alias cannot be empty");
     if (key !== key.trim()) {
       throw new TypeError("Plugin provision alias cannot start or end with whitespace");
     }
     if (!isContract(provision, "service")) {
-      throw new TypeError(`Plugin provision '${key}' must be a service contract`);
+      throw new TypeError(`Plugin provision '${key}' must be a Service`);
     }
+    rememberPluginContract(plugin.name, contracts, "provision", key, provision);
   }
 
-  const requires = definition.requires ? Object.freeze({ ...definition.requires }) : undefined;
-  const provides = definition.provides ? Object.freeze({ ...definition.provides }) : undefined;
+  const requires = plugin.requires ? Object.freeze({ ...plugin.requires }) : undefined;
+  const provides = plugin.provides ? Object.freeze({ ...plugin.provides }) : undefined;
 
   return Object.freeze({
-    ...definition,
+    ...plugin,
     ...(requires ? { requires } : {}),
     ...(provides ? { provides } : {}),
   });
+}
+
+function rememberPluginContract(
+  pluginName: string,
+  contracts: Map<string, PluginContractDeclaration>,
+  role: PluginContractDeclaration["role"],
+  alias: string,
+  contract: ContractIdentity,
+) {
+  const previous = contracts.get(contract.id);
+  if (!previous) {
+    contracts.set(contract.id, { alias, kind: contract.kind, role });
+    return;
+  }
+  if (previous.kind !== contract.kind) {
+    throw new TypeError(
+      `Plugin '${pluginName}' uses Contract '${contract.id}' as both ${contractLabel(previous.kind)} and ${contractLabel(contract.kind)}`,
+    );
+  }
+  const label = contractLabel(contract.kind);
+  if (previous.role !== role) {
+    throw new TypeError(
+      `Plugin '${pluginName}' cannot both require and provide ${label} '${contract.id}'`,
+    );
+  }
+  throw new TypeError(
+    `Plugin '${pluginName}' ${role} aliases '${previous.alias}' and '${alias}' reference the same ${label} '${contract.id}'`,
+  );
+}
+
+function contractLabel(kind: ContractKind) {
+  if (kind === "extensionPoint") return "ExtensionPoint";
+  if (kind === "event") return "Event";
+  return "Service";
+}
+
+/** The sole boundary that validates a public Plugin and erases authoring-only generics. */
+export function normalizePlugin<
+  Config,
+  Requires extends Requirements,
+  Provides extends Provisions,
+  ConfigInput,
+>(plugin: Plugin<Config, Requires, Provides, ConfigInput>): ErasedPlugin {
+  // Config and alias types are authoring constraints. Core has already checked
+  // the declaration here and deliberately stores the same value type-erased.
+  return definePlugin(plugin) as unknown as ErasedPlugin;
 }

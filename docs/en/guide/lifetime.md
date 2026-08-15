@@ -1,14 +1,14 @@
 # Lifetime and resources
 
-Plugins open database connections, register listeners, start polling tasks and subscribe to collections. Every one of those must be released when the plugin stops — **none missed, none released twice**.
+`setup` opens database connections, registers listeners, starts polling tasks and subscribes to collections. Every one of those must be released when the Instance stops — **none missed, none released twice**.
 
 Dougong solves all of it with one concept: **Lifetime**.
 
 ## One rule
 
-> Everything a plugin takes from `ctx` during `setup` belongs to its root Lifetime, and is released in reverse order when the plugin stops.
+> Everything `setup` takes from `ctx` belongs to the current Instance's root Lifetime and is released in reverse order when the Instance stops.
 
-You do not collect handles, keep a `dispose` array, or worry about exception paths skipping an entry.
+You do not collect resources, keep a `dispose` array, or worry about exception paths skipping an entry.
 
 ```ts
 setup(ctx) {
@@ -29,8 +29,8 @@ setup(ctx) {
 | `cleanups` | `ctx.cleanup(fn)` | runs `fn` in reverse order |
 | `tasks` | `ctx.spawn(fn)` | aborts the signal and awaits completion |
 | `listeners` | `ctx.on(EVENT, fn)` | deregisters from the event hub |
-| `contributions` | `ctx.contribute(EXT, key, v)` | withdraws from the extension store |
-| `extensionViews` | ExtensionPoints in `requires` | closes the view; later reads throw |
+| `contributions` | `ctx.contribute(EXT, key, v)` | withdraws from the contribution set |
+| `contributionViews` | ExtensionPoints in `requires` | closes the view; later reads throw |
 | `subscriptions` | `view.subscribe(fn)` | detaches the listener from the store |
 | `children` | `ctx.lifetime(label)` | recursively releases the subtree |
 
@@ -44,7 +44,7 @@ Property 3 matters in practice: a long-running plugin that repeatedly creates an
 
 ## Releasing early
 
-Every handle implements the same `Disposable` protocol:
+Every releasable resource implements the same `Disposable` protocol:
 
 ```ts
 const subscription = ctx.on(TICK, handler)
@@ -90,7 +90,7 @@ task.dispose()   // abort and await completion
 
 That distinction matters: a polling plugin that ran a hundred thousand iterations does not abort a hundred thousand completed tasks on shutdown.
 
-Exceptions thrown by tasks are never swallowed; they surface through the Host's error reporting channel (`createHost({ onError })` or the logger).
+Exceptions thrown by tasks are never swallowed; they surface through the Host's error reporting channel (`createHost({ onError })` or the logger). Cancellation covers only `signal.reason` or an explicit `AbortError`; another error raised after cancellation is still reported.
 
 ## Child lifetimes
 
@@ -138,14 +138,14 @@ Diagnostics carry a live Lifetime ownership tree:
 
 ```ts
 const snapshot = host.diagnostics.get()
-const lifetime = snapshot.plugins.get(handle.id)?.lifetime
+const lifetime = snapshot.installations.get(installationId)?.lifetime
 
 lifetime.get()
 // {
 //   label: "app.users:1",
 //   phase: "active",
 //   cleanups: 1, tasks: 1, listeners: 2,
-//   contributions: 3, extensionViews: 1, subscriptions: 1,
+//   contributions: 3, contributionViews: 1, subscriptions: 1,
 //   children: [
 //     { label: "conn:wss://a", phase: "active", tasks: 1, ... }
 //   ]
@@ -162,17 +162,17 @@ It is also a separate subscription source from the Host snapshot, so high-freque
 
 An easily overlooked but high-impact property:
 
-> Holding a released handle never keeps an Host, store, callback or payload alive.
+> Holding a released resource never keeps a Host, store, callback or payload alive.
 
 Concretely:
 
 - terminal resources clear their references to owner, store, callback and payload
-- a terminal `InstallationRecord` keeps only an immutable group ID, not the GroupNode
-- a detached Group clears its parent link, so a historical handle cannot reach sibling subtrees through the ownership tree
+- a terminal Installation keeps only immutable identity data, not the GroupNode
+- a detached Group clears its parent link, so a historical Group cannot reach sibling subtrees through the ownership tree
 - **terminal failures keep only a `name` / `message` / `code` data summary** — a JavaScript `Error.stack` can carry the entire orchestration frame that created it, and must not become an invisible ownership edge
 - a historical diagnostic view severs its reporting callback when it closes
 
-Failed instances that still belong to a live Host keep the original error for diagnostics and retry. Callers awaiting `ready()` always receive the original `Error` too — the summary only affects reads made **after** the instance has detached from the Host.
+Failed Installations that remain attached to a live Host keep the original error for diagnostics and retry. Callers awaiting `ready()` always receive the original `Error` too — the summary only affects reads made **after** the Installation has detached from the Host.
 
 ## Common mistakes
 
@@ -202,6 +202,6 @@ setup(ctx) {
 
 ## Next
 
-- [Transactions and change](./transactions.md) — atomic multi-plugin change and rollback
+- [Transactions and change](./transactions.md) — atomic multi-Installation change and rollback
 - [Reactive and observation](./reactive.md) — how `observe()` composes onto a Lifetime
 - [Core API specification](../reference/core-api.md) — exact semantics and edge cases

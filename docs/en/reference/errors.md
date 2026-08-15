@@ -11,9 +11,8 @@ A code names **which object's invariant was violated**, instead of vaguely sayin
 | `SERVICE_*` / `CONTRACT_*` / `CONFIG_*` | Contract identity, the dependency graph, a config declaration | Core |
 | `INSTALLATION_*` | One existing installation | Core |
 | `GROUP_*` | One installation-ownership subtree | Core |
-| `PLUGIN_*` | The Plugin declaration itself, or the plugin dependencies a manifest declares | Platform |
 | `ARTIFACT_*` | One external artifact that disagrees with itself | Platform |
-| `REGISTRATION_*` | One existing registration record | Platform |
+| `REGISTRATION_*` | Registration identity and the registration dependency graph declared by manifests | Platform |
 | `MANIFEST_*` / `MODULE_*` / `API_*` / `PERMISSION_*` / `PLATFORM_*` | The trust and loading boundaries | Platform |
 
 So `INSTALLATION_REMOVED` is a Core installation and `REGISTRATION_REMOVED` is a Platform registration — no need to open the implementation to learn which layer you are in.
@@ -32,7 +31,7 @@ class ConfigValidationError extends DougongError {   // code: "CONFIG_INVALID"
 class PlatformError extends DougongError {}
 
 class PermissionDeniedError extends PlatformError {  // code: "PERMISSION_DENIED"
-  readonly plugin: string
+  readonly manifestName: string
   readonly denied: ReadonlyArray<string>
 }
 ```
@@ -45,14 +44,14 @@ Beyond coded errors, Dougong uses two native types:
 - **`TypeError`** — the caller passed the wrong thing (not a function, not a Contract, a key conflict, an operation on a released object)
 - **`Error`** — an internal invariant broke; that is a framework bug you should never reach in normal use
 
-So you can branch by constructor: a `DougongError` is an expected runtime failure, a `TypeError` is a usage problem.
+So you can branch by constructor: a `DougongError` is an expected operational failure, while a `TypeError` is a usage problem.
 :::
 
 ## Core (`@dougongjs/core`)
 
 ### Graph construction
 
-These are thrown **before any plugin starts**. The running graph has not moved.
+These are thrown **before any Instance starts**. The execution graph has not moved.
 
 | Code | Trigger |
 | --- | --- |
@@ -63,16 +62,16 @@ These are thrown **before any plugin starts**. The running graph has not moved.
 | `CONFIG_INVALID` | Config failed Standard Schema validation. `error.issues` lists the problems per field |
 
 ::: warning Validation precedes shutdown
-Every affected plugin's config is validated in full before any running instance is stopped. One misspelled field cannot leave the application halfway down.
+Every affected Installation's Plugin config is validated in full before any running Instance is stopped. One misspelled field cannot leave the application halfway down.
 :::
 
-### Startup and runtime
+### Startup and active execution
 
 | Code | Trigger |
 | --- | --- |
 | `SERVICE_NOT_RETURNED` | `provides` declared a key that the `setup` return value does not contain |
 | `SERVICE_UNAVAILABLE` | `host.get()` was called outside `active`; or the depended-on Service's installation is not active |
-| `INSTALLATION_UNAVAILABLE` | The installation is `failed`; or setup threw a **non-Error** value (the original is in `cause`); or an operation ran on an uncommitted draft |
+| `INSTALLATION_UNAVAILABLE` | The installation is `failed`; or setup / a config validator threw a **non-Error** value (the original is in `cause`); or an operation ran on an uncommitted draft |
 | `INSTALLATION_REMOVED` | An operation on a removed Installation |
 | `INSTALLATION_IDENTITY` | `update()` tried to change the Plugin name. An update may swap implementation and config, never identity |
 
@@ -80,7 +79,7 @@ Every affected plugin's config is validated in full before any running instance 
 
 | Code | Trigger |
 | --- | --- |
-| `GROUP_REMOVED` | An operation on a removed Group |
+| `GROUP_REMOVED` | An operation on a removed Group, or submission of a stale ChangeSet created before that Group was removed |
 | `GROUP_UNAVAILABLE` | The Group was never established; or a Group operation failed with a non-Error value |
 
 ## Platform (`@dougongjs/platform`)
@@ -91,21 +90,21 @@ Thrown **before** any external module code is loaded.
 
 | Code | Trigger |
 | --- | --- |
-| `MANIFEST_INVALID` | The manifest shape is illegal, or it declares duplicate activation events / permissions / dependencies |
-| `API_INCOMPATIBLE` | The plugin's required `apiVersion` does not satisfy the application version |
+| `MANIFEST_INVALID` | The Manifest shape is illegal, or it declares duplicate activation events / permissions |
+| `API_INCOMPATIBLE` | The Manifest's required `apiVersion` does not satisfy the application version |
 | `PERMISSION_DENIED` | The Authorizer refused. `error.denied` lists the refused permissions |
-| `PLUGIN_DUPLICATE` | Two artifacts declare the same Plugin name |
+| `REGISTRATION_DUPLICATE` | Two artifacts' manifests map to the same registration identity |
 
 ### Manifest dependency resolution
 
-These describe the **plugin dependencies a manifest declares**, so they stay `PLUGIN_*`.
+These errors arise while resolving manifest declarations in the candidate Registration graph. Their codes name the object actually being validated, not a Plugin that may not have loaded yet.
 
 | Code | Trigger |
 | --- | --- |
-| `PLUGIN_DEPENDENCY_MISSING` | A manifest dependency is not registered |
-| `PLUGIN_DEPENDENCY_INCOMPATIBLE` | The dependency is registered but outside the version range |
-| `PLUGIN_DEPENDENCY_INACTIVE` | The dependency exists but could not activate |
-| `PLUGIN_CYCLE` | Manifest dependencies form a cycle. The message carries the real path |
+| `REGISTRATION_DEPENDENCY_MISSING` | A manifest dependency has no Registration |
+| `REGISTRATION_DEPENDENCY_INCOMPATIBLE` | The dependency Registration is outside the version range |
+| `REGISTRATION_DEPENDENCY_INACTIVE` | The dependency Registration exists but is not activated |
+| `REGISTRATION_CYCLE` | Manifest dependencies form a cycle in the candidate Registration graph; the message carries the real path |
 
 ### Loading and activation
 
@@ -115,7 +114,7 @@ These describe the **plugin dependencies a manifest declares**, so they stay `PL
 | `MODULE_INVALID` | The module loaded but exports no valid Plugin |
 | `ARTIFACT_IDENTITY` | One artifact disagrees with itself: the manifest name differs from the placeholder's or the loaded Plugin's name |
 | `REGISTRATION_BUSY` | That Registration already has a change in flight |
-| `REGISTRATION_UNAVAILABLE` | The Registration is unavailable, or an operation ran on an uncommitted registration |
+| `REGISTRATION_UNAVAILABLE` | The Registration is unavailable; activation or admission threw a **non-Error** value (the original is in `cause`); or an operation ran on an uncommitted registration |
 | `REGISTRATION_REMOVED` | An operation on a removed Registration |
 | `REGISTRATION_IDENTITY` | An update's new artifact carries a different manifest name |
 | `PLATFORM_UNAVAILABLE` | The Platform is disposed, or in a state that forbids the operation |
@@ -154,7 +153,7 @@ try {
 }
 ```
 
-### Handle aggregates
+### Process aggregate failures
 
 ```ts
 try {
@@ -168,7 +167,7 @@ try {
 
 ### Receive background errors
 
-Exceptions from background tasks, listeners and diagnostic subscribers never interrupt a runtime command; they arrive through the Host's reporting channel:
+Exceptions from background tasks, listeners and diagnostic subscribers never interrupt a Host command; they arrive through the Host's reporting channel:
 
 ```ts
 const host = createHost({
@@ -178,7 +177,7 @@ const host = createHost({
 })
 ```
 
-The channel is fail-safe: a throwing `onError` falls back to the logger, and a throwing logger falls silent — **observing an error never changes the runtime command being observed**.
+The channel is fail-safe: a throwing `onError` falls back to the logger, and a throwing logger falls silent — **observing an error never changes the Host command being observed**.
 
 ### How much a terminal failure retains
 
@@ -186,7 +185,7 @@ Once an Installation detaches from its Host (removed or discarded), it keeps onl
 
 The reason is that JavaScript's `Error.stack` can carry the whole orchestration call frame from where the error was created, letting one historical object keep an entire Host alive.
 
-**The normal path is unaffected**: a caller awaiting `ready()` always receives the original `Error`, and a failed instance still attached to a live Host keeps its original error too. Only an after-the-fact read of a detached instance whose caller never awaited `ready()` gets the summary — and there subclass data such as `ConfigValidationError.issues` is no longer available.
+**The normal path is unaffected**: a caller awaiting `ready()` always receives the original `Error`, and a failed Installation still attached to a live Host keeps its original error too. Only an after-the-fact read of a detached Installation whose caller never awaited `ready()` gets the summary — and there subclass data such as `ConfigValidationError.issues` is no longer available.
 
 ## Related
 

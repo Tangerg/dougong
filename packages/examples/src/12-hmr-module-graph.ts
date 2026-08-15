@@ -19,14 +19,14 @@ interface View {
 interface ModuleDeclaration {
   readonly id: string;
   readonly imports: ReadonlyArray<string>;
-  /** Plugin name for an entry module; ordinary modules leave this absent. */
-  readonly plugin?: string;
+  /** Registration name for an entry module; ordinary modules leave this absent. */
+  readonly registration?: string;
 }
 
 interface Invalidation {
   readonly changed: ReadonlyArray<string>;
   readonly modules: ReadonlyArray<string>;
-  readonly plugins: ReadonlyArray<string>;
+  readonly registrations: ReadonlyArray<string>;
 }
 
 const VIEWS = extensionPoint<View>("examples/hmr-module-graph/views");
@@ -84,15 +84,15 @@ class ModuleGraph {
       }
     }
 
-    const plugins = new Set<string>();
+    const registrations = new Set<string>();
     for (const id of affected) {
-      const plugin = this.#modules.get(id)?.plugin;
-      if (plugin) plugins.add(plugin);
+      const registration = this.#modules.get(id)?.registration;
+      if (registration) registrations.add(registration);
     }
     return Object.freeze({
       changed: Object.freeze([...new Set(changed)]),
       modules: Object.freeze([...affected]),
-      plugins: Object.freeze([...plugins]),
+      registrations: Object.freeze([...registrations]),
     });
   }
 }
@@ -113,7 +113,7 @@ function artifact(name: string, version: string, reference: string): Artifact<st
   });
 }
 
-/** Explicit module invalidation selects updates; Platform still owns the only plugin transaction. */
+/** Explicit module invalidation selects updates; Platform still owns the only Registration change. */
 export async function hmrModuleGraph(): Promise<ExampleResult> {
   let views!: ContributionView<View>;
   const snapshots: string[] = [];
@@ -149,15 +149,15 @@ export async function hmrModuleGraph(): Promise<ExampleResult> {
   const platform = createPlatform({
     installer: host,
     apiVersion: "1.0.0",
-    permissions: new PermissionSet(),
+    authorizer: new PermissionSet(),
     loader: new MemoryLoader<string>(modules),
   });
 
-  const handles = new Map<string, Registration<string>>();
+  const registrations = new Map<string, Registration<string>>();
   const first = platform.change();
-  handles.set(OUTLINE, first.register(artifact(OUTLINE, "1.0.0", "outline-v1")));
-  handles.set(SEARCH, first.register(artifact(SEARCH, "1.0.0", "search-v1")));
-  handles.set(THEME, first.register(artifact(THEME, "1.0.0", "theme-v1")));
+  registrations.set(OUTLINE, first.register(artifact(OUTLINE, "1.0.0", "outline-v1")));
+  registrations.set(SEARCH, first.register(artifact(SEARCH, "1.0.0", "search-v1")));
+  registrations.set(THEME, first.register(artifact(THEME, "1.0.0", "theme-v1")));
   await first.commit();
   await platform.trigger("startup");
   const before = [...views.get().values()]
@@ -167,10 +167,10 @@ export async function hmrModuleGraph(): Promise<ExampleResult> {
 
   const graph = new ModuleGraph([
     { id: "shared/icons.ts", imports: [] },
-    { id: "outline/entry.ts", imports: ["shared/icons.ts"], plugin: OUTLINE },
+    { id: "outline/entry.ts", imports: ["shared/icons.ts"], registration: OUTLINE },
     { id: "search/query.ts", imports: ["shared/icons.ts"] },
-    { id: "search/entry.ts", imports: ["search/query.ts"], plugin: SEARCH },
-    { id: "theme/entry.ts", imports: [], plugin: THEME },
+    { id: "search/entry.ts", imports: ["search/query.ts"], registration: SEARCH },
+    { id: "theme/entry.ts", imports: [], registration: THEME },
   ]);
   const invalidation = graph.invalidate(["shared/icons.ts"]);
   const replacements = new Map<string, Artifact<string>>([
@@ -179,13 +179,13 @@ export async function hmrModuleGraph(): Promise<ExampleResult> {
     [THEME, artifact(THEME, "2.0.0", "theme-v2")],
   ]);
   const change = platform.change();
-  for (const name of invalidation.plugins) {
-    const handle = handles.get(name);
+  for (const name of invalidation.registrations) {
+    const registration = registrations.get(name);
     const replacement = replacements.get(name);
-    if (!handle || !replacement) {
-      throw new TypeError(`HMR plan is incomplete for plugin '${name}'`);
+    if (!registration || !replacement) {
+      throw new TypeError(`HMR plan is incomplete for Registration '${name}'`);
     }
-    change.update(handle, replacement);
+    change.update(registration, replacement);
   }
   snapshots.length = 0;
   await change.commit();
@@ -201,15 +201,15 @@ export async function hmrModuleGraph(): Promise<ExampleResult> {
 
   return exampleResult({
     id: "12",
-    stage: "hosts",
-    title: "Module-graph invalidation compiled into atomic multi-plugin HMR",
-    introduces: ["module-graph", "invalidation-closure", "multi-plugin-hmr"],
+    stage: "applications",
+    title: "Module-graph invalidation compiled into atomic multi-Registration HMR",
+    introduces: ["module-graph", "invalidation-closure", "multi-registration-hmr"],
     facts: [
-      `Before invalidation the host saw ${before}.`,
+      `Before invalidation the application observed ${before}.`,
       `Changing ${invalidation.changed.join(", ")} invalidated ${invalidation.modules.join(" → ")} by walking importers.`,
-      `Affected plugin entries were ${invalidation.plugins.join(", ")}; the unrelated theme was excluded rather than restarted.`,
+      `Affected Registrations were ${invalidation.registrations.join(", ")}; the unrelated theme was excluded rather than restarted.`,
       `One Platform ChangeSet published ${after}.`,
-      `The observer saw ${publishedSnapshots.length} committed snapshot for two plugin swaps: ${publishedSnapshots.join(", ")} — never a half-updated workbench.`,
+      `The observer saw ${publishedSnapshots.length} committed snapshot for two Registration updates: ${publishedSnapshots.join(", ")} — never a half-updated workbench.`,
       "The graph came from a watcher/bundler adapter; this example owns neither file watching nor the module cache.",
     ],
   });

@@ -27,12 +27,12 @@ export interface PlatformChangePort<Reference> {
   ): NormalizedArtifact<Reference>;
   createRegistration(artifact: NormalizedArtifact<Reference>): RegistrationRecord<Reference>;
   attachRegistration(registration: RegistrationRecord<Reference>): void;
-  resolve(plugin: Registration<Reference>): RegistrationRecord<Reference>;
+  resolve(registration: Registration<Reference>): RegistrationRecord<Reference>;
   execute(operations: ReadonlyArray<PlatformChangeOperation<Reference>>): Promise<void>;
 }
 
 type PlatformChangeSetState<Reference> =
-  | { readonly phase: "open"; readonly host: PlatformChangePort<Reference> }
+  | { readonly phase: "open"; readonly port: PlatformChangePort<Reference> }
   | { readonly phase: "committing" }
   | { readonly phase: "submitted"; readonly promise: Promise<void> };
 
@@ -44,8 +44,8 @@ export class PlatformChangeSetDraft<Reference> implements PlatformChangeSet<Refe
   >();
   #state: PlatformChangeSetState<Reference>;
 
-  constructor(host: PlatformChangePort<Reference>) {
-    this.#state = { phase: "open", host };
+  constructor(port: PlatformChangePort<Reference>) {
+    this.#state = { phase: "open", port };
     Object.freeze(this);
   }
 
@@ -55,11 +55,11 @@ export class PlatformChangeSetDraft<Reference> implements PlatformChangeSet<Refe
     Provides extends Provisions = {},
     ConfigInput = Config,
   >(artifact: Artifact<Reference, Config, Requires, Provides, ConfigInput>) {
-    const host = this.#requireOpen();
-    const normalized = host.normalize(artifact);
-    const registration = host.createRegistration(normalized);
+    const port = this.#requireOpen();
+    const normalized = port.normalize(artifact);
+    const registration = port.createRegistration(normalized);
     this.#stage({ kind: "register", registration, artifact: normalized });
-    return registration.handle;
+    return registration.publicRegistration;
   }
 
   update<
@@ -68,25 +68,25 @@ export class PlatformChangeSetDraft<Reference> implements PlatformChangeSet<Refe
     Provides extends Provisions = {},
     ConfigInput = Config,
   >(
-    plugin: Registration<Reference>,
+    registration: Registration<Reference>,
     artifact: Artifact<Reference, Config, Requires, Provides, ConfigInput>,
   ) {
-    const host = this.#requireOpen();
-    const registration = host.resolve(plugin);
-    const normalized = host.normalize(artifact);
-    if (normalized.manifest.name !== registration.name) {
+    const port = this.#requireOpen();
+    const record = port.resolve(registration);
+    const normalized = port.normalize(artifact);
+    if (normalized.manifest.name !== record.manifestName) {
       throw new PlatformError(
         "REGISTRATION_IDENTITY",
-        `Registration '${registration.name}' cannot change name to '${normalized.manifest.name}'`,
+        `Registration '${record.manifestName}' cannot change name to '${normalized.manifest.name}'`,
       );
     }
-    this.#stage({ kind: "update", registration, artifact: normalized });
+    this.#stage({ kind: "update", registration: record, artifact: normalized });
     return this;
   }
 
-  remove(plugin: Registration<Reference>) {
-    const host = this.#requireOpen();
-    this.#stage({ kind: "remove", registration: host.resolve(plugin) });
+  remove(registration: Registration<Reference>) {
+    const port = this.#requireOpen();
+    this.#stage({ kind: "remove", registration: port.resolve(registration) });
     return this;
   }
 
@@ -94,14 +94,14 @@ export class PlatformChangeSetDraft<Reference> implements PlatformChangeSet<Refe
     const state = this.#state;
     if (state.phase === "submitted") return state.promise;
     if (state.phase === "committing") {
-      throw new TypeError("Platform ChangeSet commit is already being prepared");
+      throw new Error("Platform ChangeSet commit is already being prepared");
     }
     this.#state = { phase: "committing" };
-    const host = state.host;
+    const port = state.port;
     const operations = Object.freeze([...this.#operations.values()]);
     try {
       for (const operation of operations) {
-        if (operation.kind === "register") host.attachRegistration(operation.registration);
+        if (operation.kind === "register") port.attachRegistration(operation.registration);
       }
     } catch (error) {
       for (const operation of operations) {
@@ -114,9 +114,12 @@ export class PlatformChangeSetDraft<Reference> implements PlatformChangeSet<Refe
     }
     let promise: Promise<void>;
     try {
-      promise = host.execute(operations);
+      promise = port.execute(operations);
     } catch (error) {
       promise = Promise.reject(error);
+    }
+    for (const operation of operations) {
+      if (operation.kind === "register") operation.registration.trackAdmission(promise);
     }
     return this.#submit(promise);
   }
@@ -124,7 +127,7 @@ export class PlatformChangeSetDraft<Reference> implements PlatformChangeSet<Refe
   #stage(operation: PlatformChangeOperation<Reference>) {
     if (this.#operations.has(operation.registration)) {
       throw new TypeError(
-        `Plugin '${operation.registration.name}' can only appear once in the same ChangeSet`,
+        `Registration '${operation.registration.manifestName}' can only appear once in the same ChangeSet`,
       );
     }
     this.#operations.set(operation.registration, Object.freeze(operation));
@@ -135,7 +138,7 @@ export class PlatformChangeSetDraft<Reference> implements PlatformChangeSet<Refe
     if (state.phase !== "open") {
       throw new TypeError(`Cannot modify a ${state.phase} ChangeSet`);
     }
-    return state.host;
+    return state.port;
   }
 
   #submit(promise: Promise<void>) {

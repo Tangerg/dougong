@@ -6,25 +6,25 @@ import type {
   Installation,
   InstallationUpdate,
 } from "./host-api";
-import { Runtime, type RuntimeChangeOutcome } from "./runtime";
+import { Engine, type TransitionOutcome } from "./engine";
 import type { ChangeOperation } from "./change-set";
 import type { Service } from "./contracts";
 import { HostDiagnostics, type HostSnapshot, type HostStatus } from "./diagnostics";
 import { DougongError } from "./errors";
 import { GroupCoordinator } from "./group-coordinator";
 import type { GroupNode } from "./group";
-import type { Logger } from "./lifetime";
+import { isLogger, type Logger } from "./lifetime";
 import {
-  type AnyPlugin,
-  createInstallationSpec,
-  type InstallationSpec,
+  createInstallationDeclaration,
+  type InstallationDeclaration,
   InstallationRecord,
 } from "./installation";
-import type { Plugin, Provisions, Requirements } from "./plugin";
+import type { ErasedPlugin, Plugin, Provisions, Requirements } from "./plugin";
 import { SerialQueue } from "./serial-queue";
 import type { SnapshotView } from "./snapshot-view";
 
 export type { InstallationStatus } from "./installation";
+export type { GroupStatus } from "./group";
 export type { HostSnapshot, HostStatus, GroupSnapshot, InstallationSnapshot } from "./diagnostics";
 export type {
   Host,
@@ -39,7 +39,7 @@ export type {
 interface InstallationCapture {
   readonly id: string;
   readonly installation: InstallationRecord;
-  readonly spec: InstallationSpec;
+  readonly declaration: InstallationDeclaration;
 }
 
 const defaultLogger: Logger = console;
@@ -86,7 +86,7 @@ class InstallationImpl<
     installationControls.set(this, {
       attach: (updateRecord, removeRecord) => {
         if (this.#state.phase !== "draft") {
-          throw new TypeError(`Plugin '${this.#installation.id}' control is already sealed`);
+          throw new Error(`Installation '${this.#installation.id}' control is already sealed`);
         }
         this.#state = {
           phase: "attached",
@@ -123,13 +123,7 @@ class InstallationImpl<
     const state = this.#state;
     if (state.phase === "draft") throw this.#notCommitted();
     if (state.phase === "revoked") {
-      throw (
-        this.#installation.error ??
-        new DougongError(
-          "INSTALLATION_REMOVED",
-          `Installation '${this.#installation.id}' has been removed`,
-        )
-      );
+      throw this.#installation.unavailableError();
     }
     await state.update(update);
   }
@@ -154,7 +148,7 @@ class HostImpl implements Host {
 
   readonly #installations = new Map<string, InstallationRecord>();
   readonly #ownedInstallations = new WeakMap<object, InstallationRecord>();
-  readonly #installationImpls = new WeakMap<
+  readonly #publicInstallations = new WeakMap<
     InstallationRecord,
     InstallationImpl<unknown, Requirements, Provisions, unknown>
   >();
@@ -162,7 +156,7 @@ class HostImpl implements Host {
   readonly #logger: Logger;
   readonly #groups: GroupCoordinator;
   readonly #onError: (error: unknown) => void;
-  readonly #runtime: Runtime;
+  readonly #engine: Engine;
 
   #installationSequence = 0;
   #status: HostStatus = "idle";
@@ -172,7 +166,7 @@ class HostImpl implements Host {
     if (!options || typeof options !== "object") {
       throw new TypeError("Host options must be an object");
     }
-    const name = options.name ?? "app";
+    const name = options.name ?? "host";
     if (typeof name !== "string" || !name.trim()) {
       throw new TypeError("Host name must be a non-empty string");
     }
@@ -189,7 +183,7 @@ class HostImpl implements Host {
     this.name = name;
     this.#logger = options.logger ?? defaultLogger;
     this.#onError = options.onError ?? ((error) => this.#logger.error(error));
-    this.#runtime = new Runtime({
+    this.#engine = new Engine({
       hostName: name,
       logger: this.#logger,
       isInstalled: (installationId) => this.#installations.has(installationId),
@@ -198,7 +192,7 @@ class HostImpl implements Host {
     this.#groups = new GroupCoordinator(name, {
       installations: () => this.#installations.values(),
       createDraft: (group, plugin, config) => this.#createDraft(group, plugin, config),
-      resolveHandle: (handle) => this.#resolveHandle(handle),
+      resolveInstallation: (installation) => this.#resolveInstallation(installation),
       executeChanges: (operations) => this.#executeChanges(operations),
       attachInstallation: (installation) => this.#attachInstallation(installation),
       discardInstallation: (installation, error) => {
@@ -221,7 +215,7 @@ class HostImpl implements Host {
 
   get<T>(token: Service<T>): T {
     const availability = this.#status === "active" ? "available" : "unavailable";
-    return this.#runtime.get(token, availability);
+    return this.#engine.get(token, availability);
   }
 
   install<Config, Requires extends Requirements, Provides extends Provisions, ConfigInput>(
@@ -244,8 +238,8 @@ class HostImpl implements Host {
       if (this.#status === "active") return;
       this.#setStatus("starting");
       try {
-        const plan = this.#runtime.buildPlan(this.#installations.values());
-        await this.#runtime.start(plan);
+        const plan = this.#engine.buildPlan(this.#installations.values());
+        await this.#engine.start(plan);
         this.#setStatus("active");
         this.#settleInstallations(plan.order);
       } catch (error) {
@@ -263,14 +257,14 @@ class HostImpl implements Host {
     return this.#commands.run(async () => {
       if (this.#status === "idle") return;
       this.#setStatus("stopping");
-      const errors = await this.#runtime.stop();
+      const errors = await this.#engine.stop();
       this.#setStatus("idle");
       if (errors.length === 1) throw errors[0];
       if (errors.length > 1) throw new AggregateError(errors, "Host shutdown failed");
     });
   }
 
-  #createDraft(group: GroupNode, plugin: AnyPlugin, config: unknown) {
+  #createDraft(group: GroupNode, plugin: ErasedPlugin, config: unknown) {
     group.assertAttached();
     const index = ++this.#installationSequence;
     const id = `${plugin.name}:${index}`;
@@ -278,16 +272,18 @@ class HostImpl implements Host {
       id,
       index,
       group,
-      createInstallationSpec(plugin, config),
+      createInstallationDeclaration(plugin, config),
     );
-    const handle = new InstallationImpl<unknown, Requirements, Provisions, unknown>(installation);
-    this.#ownedInstallations.set(handle, installation);
-    this.#installationImpls.set(installation, handle);
-    return { installation, handle };
+    const publicInstallation = new InstallationImpl<unknown, Requirements, Provisions, unknown>(
+      installation,
+    );
+    this.#ownedInstallations.set(publicInstallation, installation);
+    this.#publicInstallations.set(installation, publicInstallation);
+    return { record: installation, publicInstallation };
   }
 
-  #resolveHandle(handle: object) {
-    const installation = this.#ownedInstallations.get(handle);
+  #resolveInstallation(value: object) {
+    const installation = this.#ownedInstallations.get(value);
     if (!installation) throw new TypeError("Installation belongs to a different Host");
     return installation;
   }
@@ -334,7 +330,7 @@ class HostImpl implements Host {
     this.#settleChanges(operations);
   }
 
-  async #runTransaction(operations: ReadonlyArray<ChangeOperation>): Promise<RuntimeChangeOutcome> {
+  async #runTransaction(operations: ReadonlyArray<ChangeOperation>): Promise<TransitionOutcome> {
     const snapshot = this.#captureInstallations();
     const changed = new Set(operations.map((operation) => operation.installation));
     this.#setStatus("changing");
@@ -342,7 +338,7 @@ class HostImpl implements Host {
     let nextPlan;
     try {
       this.#applyChanges(operations);
-      nextPlan = this.#runtime.buildPlan(this.#installations.values());
+      nextPlan = this.#engine.buildPlan(this.#installations.values());
     } catch (error) {
       this.#restoreInstallations(snapshot);
       this.#setStatus("active");
@@ -350,13 +346,13 @@ class HostImpl implements Host {
     }
 
     try {
-      const outcome = await this.#runtime.transition(nextPlan, changed, () =>
+      const outcome = await this.#engine.transition(nextPlan, changed, () =>
         this.#restoreInstallations(snapshot),
       );
       this.#setStatus("active");
       return outcome;
     } catch (error) {
-      this.#setStatus(this.#runtime.hasCommittedPlan ? "active" : "idle");
+      this.#setStatus(this.#engine.hasCommittedPlan ? "active" : "idle");
       throw error;
     }
   }
@@ -366,7 +362,7 @@ class HostImpl implements Host {
       if (operation.kind === "install") {
         operation.installation.group.assertAttached();
         if (this.#installations.has(operation.installation.id)) {
-          throw new TypeError(`Plugin '${operation.installation.id}' is already installed`);
+          throw new Error(`Installation '${operation.installation.id}' is already installed`);
         }
         continue;
       }
@@ -381,20 +377,17 @@ class HostImpl implements Host {
         continue;
       }
       if (!installed) {
-        throw new DougongError(
-          "INSTALLATION_REMOVED",
-          `Installation '${operation.installation.id}' has been removed`,
-        );
+        throw operation.installation.unavailableError();
       }
       if (
         operation.kind === "update" &&
         operation.declaration.kind !== "config" &&
-        operation.declaration.plugin.name !== operation.installation.spec.plugin.name
+        operation.declaration.plugin.name !== operation.installation.declaration.plugin.name
       ) {
         throw new DougongError(
           "INSTALLATION_IDENTITY",
           `Installation '${operation.installation.id}' cannot change name from ` +
-            `'${operation.installation.spec.plugin.name}' to '${operation.declaration.plugin.name}'`,
+            `'${operation.installation.declaration.plugin.name}' to '${operation.declaration.plugin.name}'`,
         );
       }
     }
@@ -403,12 +396,12 @@ class HostImpl implements Host {
       if (operation.kind === "install") {
         this.#installations.set(operation.installation.id, operation.installation);
       } else if (operation.kind === "update") {
-        const current = operation.installation.spec;
+        const current = operation.installation.declaration;
         const plugin =
           operation.declaration.kind === "config" ? current.plugin : operation.declaration.plugin;
         const config =
           operation.declaration.kind === "plugin" ? current.config : operation.declaration.config;
-        operation.installation.reconfigure(createInstallationSpec(plugin, config));
+        operation.installation.replaceDeclaration(createInstallationDeclaration(plugin, config));
       } else if (this.#installations.get(operation.installation.id) === operation.installation) {
         this.#installations.delete(operation.installation.id);
       }
@@ -431,24 +424,27 @@ class HostImpl implements Host {
   }
 
   #attachInstallation(installation: InstallationRecord) {
-    const handle = this.#installationImpls.get(installation);
-    if (!handle) throw new TypeError(`Plugin '${installation.id}' has no control handle`);
-    const control = installationControls.get(handle);
-    if (!control) throw new TypeError(`Plugin '${installation.id}' has no draft control`);
+    const publicInstallation = this.#publicInstallations.get(installation);
+    if (!publicInstallation) {
+      throw new Error(`Installation '${installation.id}' has no public object`);
+    }
+    const control = installationControls.get(publicInstallation);
+    if (!control) throw new Error(`Installation '${installation.id}' has no draft control`);
     installation.attach(() => this.#publishDiagnostics());
     control.attach(
-      (update) => this.#groups.change(installation.group).update(handle, update).commit(),
-      () => this.#groups.change(installation.group).remove(handle).commit(),
+      (update) =>
+        this.#groups.change(installation.group).update(publicInstallation, update).commit(),
+      () => this.#groups.change(installation.group).remove(publicInstallation).commit(),
     );
   }
 
   #revokeControl(installation: InstallationRecord) {
-    const handle = this.#installationImpls.get(installation);
-    if (handle) {
-      installationControls.get(handle)?.revoke();
-      installationControls.delete(handle);
+    const publicInstallation = this.#publicInstallations.get(installation);
+    if (publicInstallation) {
+      installationControls.get(publicInstallation)?.revoke();
+      installationControls.delete(publicInstallation);
     }
-    this.#installationImpls.delete(installation);
+    this.#publicInstallations.delete(installation);
   }
 
   #settleInstallations(installations: Iterable<InstallationRecord>) {
@@ -459,14 +455,14 @@ class HostImpl implements Host {
     return [...this.#installations].map(([id, installation]) => ({
       id,
       installation,
-      spec: installation.spec,
+      declaration: installation.declaration,
     }));
   }
 
   #restoreInstallations(snapshot: ReadonlyArray<InstallationCapture>) {
     this.#installations.clear();
     for (const item of snapshot) {
-      item.installation.reconfigure(item.spec);
+      item.installation.replaceDeclaration(item.declaration);
       this.#installations.set(item.id, item.installation);
     }
   }
@@ -480,7 +476,7 @@ class HostImpl implements Host {
           new AggregateError([error, reporterError], "Host error reporter failed"),
         );
       } catch {
-        // Error observation must never mutate the runtime command being observed.
+        // Error observation must never mutate the Host command being observed.
       }
     }
   }
@@ -493,14 +489,6 @@ class HostImpl implements Host {
   #publishDiagnostics() {
     this.#diagnosticModel.publish(this.#status, this.#installations.values(), this.#groups.nodes());
   }
-}
-
-function isLogger(value: unknown): value is Logger {
-  if (!value || typeof value !== "object") return false;
-  const candidate = value as Partial<Logger>;
-  return [candidate.debug, candidate.info, candidate.warn, candidate.error].every(
-    (method) => typeof method === "function",
-  );
 }
 
 export function createHost(options?: HostOptions): Host {

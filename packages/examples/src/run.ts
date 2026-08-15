@@ -4,7 +4,7 @@ import { runAllExamples } from "./suite";
 const stages: Record<ExampleStage, string> = {
   atoms: "Stage 1 · Atoms — one primitive at a time",
   composition: "Stage 2 · Composition — the primitives working together",
-  hosts: "Stage 3 · Real hosts — what an application actually looks like",
+  applications: "Stage 3 · Applications — what a complete product actually looks like",
 };
 
 let current: ExampleStage | undefined;

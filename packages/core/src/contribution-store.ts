@@ -9,11 +9,11 @@ export interface Contribution<T> extends Disposable {
 
 export type ContributionView<T> = SnapshotView<ReadonlyMap<string, T>>;
 
-export type ExtensionLeaseKind = "view" | "subscription";
+export type ContributionLeaseKind = "view" | "subscription";
 
 interface ContributionViewBinding<T> {
-  readonly store: ExtensionStore<T>;
-  readonly own: (resource: Disposable, kind: ExtensionLeaseKind) => () => void;
+  readonly store: ContributionStore<T>;
+  readonly own: (resource: Disposable, kind: ContributionLeaseKind) => () => void;
 }
 
 interface ContributionViewState<T> {
@@ -33,7 +33,7 @@ class ContributionViewHandle<T> implements ContributionView<T> {
   }
 
   // The handle retains only revocable binding state. Disposing its lease clears
-  // the Store edge even when downstream code retains the public view.
+  // the ContributionStore edge even when downstream code retains the public view.
   #read() {
     const binding = this.#requireBinding();
     return binding.store.snapshot();
@@ -54,7 +54,7 @@ class ContributionViewHandle<T> implements ContributionView<T> {
 type ContributionState<T> =
   | {
       phase: "staged" | "published";
-      readonly store: ExtensionStore<T>;
+      readonly store: ContributionStore<T>;
       value: T;
       readonly detachFromOwner: (publication: Publication) => void;
     }
@@ -87,7 +87,7 @@ class ContributionRecord<T> implements StagedResource<Contribution<T>> {
   readonly handle: Contribution<T>;
 
   constructor(
-    store: ExtensionStore<T>,
+    store: ContributionStore<T>,
     id: string,
     initialValue: T,
     detachFromOwner: (publication: Publication) => void,
@@ -130,10 +130,10 @@ class ContributionRecord<T> implements StagedResource<Contribution<T>> {
   }
 }
 
-export class ExtensionStore<T> {
-  readonly #invalidate: (store: ExtensionStore<unknown>) => void;
+export class ContributionStore<T> {
+  readonly #invalidate: (store: ContributionStore<unknown>) => void;
   readonly #report: (error: unknown) => void;
-  readonly #releaseIfUnused: (store: ExtensionStore<unknown>) => void;
+  readonly #releaseIfUnused: (store: ContributionStore<unknown>) => void;
   readonly #claims = new Map<string, ContributionRecord<T>>();
   readonly #entries = new Map<string, { contribution: ContributionRecord<T>; value: T }>();
   readonly #listeners = new Set<() => void>();
@@ -141,9 +141,9 @@ export class ExtensionStore<T> {
   #views = 0;
 
   constructor(
-    invalidate: (store: ExtensionStore<unknown>) => void,
+    invalidate: (store: ContributionStore<unknown>) => void,
     report: (error: unknown) => void,
-    releaseIfUnused: (store: ExtensionStore<unknown>) => void,
+    releaseIfUnused: (store: ContributionStore<unknown>) => void,
   ) {
     this.#invalidate = invalidate;
     this.#report = report;
@@ -166,7 +166,9 @@ export class ExtensionStore<T> {
     return contribution;
   }
 
-  view(own: (resource: Disposable, kind: ExtensionLeaseKind) => () => void): ContributionView<T> {
+  view(
+    own: (resource: Disposable, kind: ContributionLeaseKind) => () => void,
+  ): ContributionView<T> {
     this.#views++;
     const state: ContributionViewState<T> = { binding: { store: this, own } };
     let releaseView: (() => void) | undefined;
@@ -197,7 +199,7 @@ export class ExtensionStore<T> {
 
   subscribe(
     listener: () => void,
-    own: (resource: Disposable, kind: ExtensionLeaseKind) => () => void,
+    own: (resource: Disposable, kind: ContributionLeaseKind) => () => void,
   ) {
     if (typeof listener !== "function") {
       throw new TypeError("Contribution subscriber must be a function");
@@ -221,14 +223,14 @@ export class ExtensionStore<T> {
       throw new Error(`Contribution '${id}' is already published`);
     }
     this.#entries.set(id, { contribution, value });
-    this.#invalidate(this as ExtensionStore<unknown>);
+    this.#invalidate(this as ContributionStore<unknown>);
   }
 
   update(id: string, contribution: ContributionRecord<T>, value: T) {
     const entry = this.#entries.get(id);
     if (entry?.contribution !== contribution) return;
     entry.value = value;
-    this.#invalidate(this as ExtensionStore<unknown>);
+    this.#invalidate(this as ContributionStore<unknown>);
   }
 
   removeContribution(
@@ -239,7 +241,7 @@ export class ExtensionStore<T> {
     if (this.#claims.get(id) === contribution) this.#claims.delete(id);
     if (visibility === "published" && this.#entries.get(id)?.contribution === contribution) {
       this.#entries.delete(id);
-      this.#invalidate(this as ExtensionStore<unknown>);
+      this.#invalidate(this as ContributionStore<unknown>);
     }
     this.#notifyIfUnused();
   }
@@ -268,7 +270,7 @@ export class ExtensionStore<T> {
 
   #notifyIfUnused() {
     if (this.#claims.size || this.#entries.size || this.#listeners.size || this.#views) return;
-    this.#releaseIfUnused(this as ExtensionStore<unknown>);
+    this.#releaseIfUnused(this as ContributionStore<unknown>);
   }
 }
 
@@ -301,13 +303,13 @@ class ContributionViewLease<T> implements Disposable {
 class ContributionSubscription<T> implements Disposable {
   #binding:
     | {
-        readonly store: ExtensionStore<T>;
+        readonly store: ContributionStore<T>;
         readonly listener: () => void;
         readonly release: () => void;
       }
     | undefined;
 
-  constructor(store: ExtensionStore<T>, listener: () => void, release: () => void) {
+  constructor(store: ContributionStore<T>, listener: () => void, release: () => void) {
     this.#binding = { store, listener, release };
     Object.freeze(this);
   }
@@ -328,9 +330,9 @@ class ContributionSubscription<T> implements Disposable {
   }
 }
 
-export class ExtensionRegistry {
-  readonly #stores = new Map<string, ExtensionStore<unknown>>();
-  readonly #invalidated = new Set<ExtensionStore<unknown>>();
+export class ContributionRegistry {
+  readonly #stores = new Map<string, ContributionStore<unknown>>();
+  readonly #invalidated = new Set<ContributionStore<unknown>>();
   readonly #report: (error: unknown) => void;
   #batchDepth = 0;
 
@@ -338,10 +340,10 @@ export class ExtensionRegistry {
     this.#report = report;
   }
 
-  get<T>(token: ExtensionPoint<T>): ExtensionStore<T> {
+  get<T>(token: ExtensionPoint<T>): ContributionStore<T> {
     const current = this.#stores.get(token.id);
-    if (current) return current as ExtensionStore<T>;
-    const store = new ExtensionStore<T>(
+    if (current) return current as ContributionStore<T>;
+    const store = new ContributionStore<T>(
       (item) => this.#invalidate(item),
       this.#report,
       (item) => {
@@ -350,7 +352,7 @@ export class ExtensionRegistry {
         this.#stores.delete(token.id);
       },
     );
-    this.#stores.set(token.id, store as ExtensionStore<unknown>);
+    this.#stores.set(token.id, store as ContributionStore<unknown>);
     return store;
   }
 
@@ -359,7 +361,7 @@ export class ExtensionRegistry {
   }
 
   endBatch() {
-    if (!this.#batchDepth) throw new TypeError("Contribution batch is not active");
+    if (!this.#batchDepth) throw new Error("Contribution batch is not active");
     this.#batchDepth--;
     if (this.#batchDepth) return;
     const stores = [...this.#invalidated];
@@ -367,7 +369,7 @@ export class ExtensionRegistry {
     for (const store of stores) store.publishSnapshot();
   }
 
-  #invalidate(store: ExtensionStore<unknown>) {
+  #invalidate(store: ContributionStore<unknown>) {
     this.#invalidated.add(store);
     if (this.#batchDepth) return;
     this.#invalidated.delete(store);

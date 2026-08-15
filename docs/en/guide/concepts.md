@@ -12,14 +12,14 @@ Dougong's model is six atoms. They are **orthogonal** — each solves one thing,
 | **Event** | A transient fact | "What just happened" |
 | **Lifetime** | Structured ownership | "Who owns this resource, and when is it released" |
 | **Plugin** | One setup producing a set of capabilities | "What is this unit of functionality" |
-| **Host** | Graph + transactions + orchestration | "How do these units become one runtime" |
+| **Host** | Graph + transactions + orchestration | "How do these units become one execution system" |
 
 ## Contract: identity before implementation
 
 A Contract is a frozen `{ id, kind }` object binding a **string ID** to a **TypeScript type**:
 
 ```ts
-import { service, extension, event } from "dougong"
+import { service, extensionPoint, event } from "dougong"
 
 const DATABASE = service<Database>("app/database")
 const ROUTES = extensionPoint<Route>("http/routes")
@@ -28,7 +28,7 @@ const USER_CREATED = event<User>("users/created")
 
 The three kinds correspond to the three capability semantics. One ID cannot serve **two kinds** in the same Host; doing so throws `CONTRACT_CONFLICT`.
 
-Contracts hold no runtime state, are reusable across Hosts, and should be exported **once** from a stable module:
+Contracts hold no execution state, are reusable across Hosts, and should be exported **once** from a stable module:
 
 ```ts
 // contracts.ts — both providers and consumers import from here
@@ -45,7 +45,7 @@ export const FOO = service<Logger>("app/foo")
 export const FOO = service<Database>("app/foo")   // same ID, same kind, different type
 ```
 
-TypeScript cannot prevent this and the runtime does not report it — consumers silently receive the wrong type. **A fixed Contract ID should be declared exactly once and exported from a stable module.**
+TypeScript alone cannot prevent this, and a same-kind conflict cannot be recovered from erased generics at execution time — consumers silently receive the wrong type. **A fixed Contract ID should be declared exactly once and exported from a stable module.** Dougong's architecture guard rejects duplicate fixed-string declarations in this repository; codebases using Dougong should enforce the same static rule. Parameterized IDs created by a Contract family are not duplicate fixed declarations.
 :::
 
 ## Service vs ExtensionPoint: one-to-one vs many-to-many
@@ -57,7 +57,7 @@ This is the most common decision. There is a single criterion: **does this capab
 const DATABASE = service<Database>("app/database")
 // Two plugins declaring provides: { db: DATABASE } → SERVICE_CONFLICT
 
-// ExtensionPoint: any number of plugins contribute, and may add or remove at runtime
+// ExtensionPoint: any number of Plugins contribute, including while the Host is active
 const ROUTES = extensionPoint<Route>("http/routes")
 ```
 
@@ -77,7 +77,7 @@ definePlugin({
   setup: (ctx) => { ctx.db.query("...") },     // ctx.db is a Database
 })
 
-// ExtensionPoint — contributors get an updatable, releasable handle
+// ExtensionPoint — contributors get an updatable, releasable Contribution
 definePlugin({
   setup(ctx) {
     const c = ctx.contribute(ROUTES, "users.list", { path: "/users", run })
@@ -101,7 +101,7 @@ The essential differences:
 | | Service | ExtensionPoint |
 | --- | --- | --- |
 | Providers | exactly 1 | 0..n |
-| Consumers receive | an implementation **fixed** for the instance | a **live** view: `get()` / `subscribe()` |
+| Consumers receive | an implementation **fixed** for the Instance | a **live** view: `get()` / `subscribe()` |
 | When the provider changes | the consumer is **rebuilt** | the consumer is notified, not rebuilt |
 | When absent | `SERVICE_MISSING` (unless `optional()`) | an empty map is a valid value |
 
@@ -109,7 +109,7 @@ That last row explains why `optional()` only accepts a Service: an empty Extensi
 
 ### Why the Service snapshot is fixed
 
-The `ctx.db` a consumer receives is the **same object** for the whole instance lifetime — not a live proxy. If the provider is updated or removed, Dougong **rebuilds the consumer** (stops it, then starts it again) rather than quietly swapping the reference it holds.
+The `ctx.db` a consumer receives is the **same object** for the whole Instance lifetime — not a live proxy. If the provider is updated or removed, Dougong **rebuilds the consumer Instance** (stops it, then starts it again) rather than quietly swapping the reference it holds.
 
 That is what makes this safe:
 
@@ -160,7 +160,7 @@ Configuration is state. It belongs in a Service or an ExtensionPoint.
 
 ## Lifetime: who owns what
 
-Every plugin instance has a root Lifetime. Everything the plugin acquires during `setup` belongs to it and is **released in reverse order** when the plugin stops.
+Every Instance has a root Lifetime. Everything acquired during `setup` belongs to that Instance and is **released in reverse order** when the Instance stops.
 
 ```ts
 setup(ctx) {
@@ -176,7 +176,7 @@ setup(ctx) {
 
 The handles returned by `ctx.on()` and `ctx.contribute()` are owned too — you never collect them by hand.
 
-All seven resource kinds (cleanups, tasks, listeners, contributions, extensionViews, subscriptions, childLifetimes) follow **one ownership rule**: early release detaches from the parent, and parent release cleans up every live resource in reverse order, aggregating failures.
+All seven resource kinds (cleanups, tasks, listeners, contributions, contributionViews, subscriptions, childLifetimes) follow **one ownership rule**: early release detaches from the parent, and parent release cleans up every live resource in reverse order, aggregating failures.
 
 See [Lifetime and resources](./lifetime.md).
 
@@ -196,27 +196,27 @@ const plugin = definePlugin({
 
 `setup` may be asynchronous. Its return value must contain every key declared in `provides`, otherwise `SERVICE_NOT_RETURNED`.
 
-**A plugin is a definition; an installation is an instance.** The same definition can be installed multiple times with different configs, each with its own ID and Lifetime.
+**A Plugin is a reusable declaration; an Installation is its stable installed identity; an Instance is one active execution.** The same Plugin can be installed multiple times with different configs. Each Installation has its own ID and owns a fresh Instance and Lifetime whenever active.
 
 ## Host: putting it together
 
 ```ts
 const host = createHost({ name: "my-app" })
 
-const handle = host.install(plugin, config)  // returns a handle
+const installation = host.install(plugin, config)  // returns a stable Installation
 await host.start()                           // build the graph, sort, start layers concurrently
 host.status                                  // "idle" | "starting" | "active" | "changing" | "stopping"
-host.get(SOME_SERVICE)                       // host read (only while active)
-host.diagnostics.get()                       // an immutable runtime snapshot
+host.get(SOME_SERVICE)                       // application-code read (only while active)
+host.diagnostics.get()                       // an immutable execution snapshot
 await host.stop()                            // stop in reverse order
 ```
 
-An Host owns four things:
+A Host owns four things:
 
 1. **The dependency graph** — derived from `requires` / `provides`, detecting cycles (`SERVICE_CYCLE`, reporting the real path) and duplicate providers (`SERVICE_CONFLICT`)
 2. **Transactions** — a change either takes effect entirely or rolls back; see [Transactions and change](./transactions.md)
 3. **Instance orchestration** — layered concurrent start, reverse-order stop, incremental restart of the affected closure
-4. **Diagnostics** — an immutable, subscribable read model of the runtime
+4. **Diagnostics** — an immutable, subscribable read model of committed execution state
 
 ## Why a signal is not on this list
 
@@ -231,17 +231,17 @@ Core does not depend on reactive, and offers no implicit effects. See [Reactive 
 `host.group(name, configure)` builds an **installation ownership tree** — for installing, removing and awaiting a set of plugins together.
 
 ```ts
-const feature = host.group("feature", (plugins) => {
-  plugins.install(a)
-  plugins.install(b)
+const feature = host.group("feature", (group) => {
+  group.install(a)
+  group.install(b)
 })
 await feature.ready()
 await feature.remove()   // removes the whole subtree
 ```
 
-A Group changes **no** visibility: Service resolution and ExtensionPoint/Event visibility are always **application-wide**. It is not a capability scope, not a provider shadow tree, not a permission boundary and not a security sandbox.
+A Group changes **no** visibility: Service resolution and ExtensionPoint/Event visibility are always **Host-wide**. It is not a capability scope, not a provider shadow tree, not a permission boundary and not a security sandbox.
 
-Need several instances of the same shape? Use an explicit Contract family. Need runtime tenant selection? Use an ordinary method parameter. Need security isolation? Use an Host, Worker, iframe or process — a real isolation boundary.
+Need several statically selected variants of one capability? Use an explicit Contract family. Need request-time tenant selection? Use an ordinary method parameter. Need security isolation? Use a Host, Worker, iframe or process — a real isolation boundary.
 
 ## Next
 

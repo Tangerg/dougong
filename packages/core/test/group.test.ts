@@ -1,5 +1,13 @@
 import { describe, expect, it, vi } from "vitest";
-import { createHost, definePlugin, event, extensionPoint, service, type Group } from "../src/index";
+import {
+  createHost,
+  definePlugin,
+  DougongError,
+  event,
+  extensionPoint,
+  service,
+  type Group,
+} from "../src/index";
 
 describe("plugin groups", () => {
   it("groups ownership without creating a second capability namespace", async () => {
@@ -65,7 +73,7 @@ describe("plugin groups", () => {
       });
 
     const host = createHost();
-    const root = host.install(owned("root"));
+    const rootInstallation = host.install(owned("root"));
     let session!: Group;
     const workspace = host.group("workspace", (group) => {
       group.install(owned("workspace"));
@@ -76,7 +84,7 @@ describe("plugin groups", () => {
     await host.start();
 
     await workspace.remove();
-    expect(root.status).toBe("active");
+    expect(rootInstallation.status).toBe("active");
     expect(workspace.status).toBe("removed");
     expect(session.status).toBe("removed");
     expect(() => session.change()).toThrow("has been removed");
@@ -93,6 +101,27 @@ describe("plugin groups", () => {
 
     await host.stop();
     expect(trace.at(-1)).toBe("stop:root");
+  });
+
+  it("revokes ChangeSets created before their Group was removed", async () => {
+    const plugin = definePlugin({ name: "group.stale-change", setup() {} });
+    const host = createHost();
+    const group = host.group("stale", () => {});
+    const installation = group.install(plugin);
+    await host.start();
+
+    const installing = group.change();
+    const draft = installing.install(plugin);
+    const updating = group.change();
+    updating.update(installation, { plugin });
+    await group.remove();
+
+    await expect(installing.commit()).rejects.toMatchObject({ code: "GROUP_REMOVED" });
+    await expect(updating.commit()).rejects.toMatchObject({ code: "GROUP_REMOVED" });
+    expect(draft.status).toBe("failed");
+    await expect(draft.ready()).rejects.toMatchObject({ code: "GROUP_REMOVED" });
+    expect(installation.status).toBe("removed");
+    await host.stop();
   });
 
   it("rolls back a failed live group without stopping unrelated plugins", async () => {
@@ -115,8 +144,8 @@ describe("plugin groups", () => {
     const host = createHost();
     host.install(root);
     await host.start();
-    const group = host.group("broken", (plugins) => {
-      plugins.install(broken);
+    const group = host.group("broken", (group) => {
+      group.install(broken);
     });
 
     await expect(group.ready()).rejects.toThrow("group failed");
@@ -133,8 +162,8 @@ describe("plugin groups", () => {
     const failure: unknown = undefined;
     const host = createHost();
     await host.start();
-    const group = host.group("non-error", (plugins) => {
-      plugins.install(
+    const group = host.group("non-error", (group) => {
+      group.install(
         definePlugin({
           name: "group.non-error",
           setup() {
@@ -151,6 +180,28 @@ describe("plugin groups", () => {
     });
     expect(group.status).toBe("failed");
 
+    await group.remove();
+    await host.stop();
+  });
+
+  it("preserves explicit Error values at the Group boundary", async () => {
+    const failure = new DougongError("INSTALLATION_UNAVAILABLE", "explicit failure", {
+      cause: undefined,
+    });
+    const host = createHost();
+    await host.start();
+    const group = host.group("explicit-error", (group) => {
+      group.install(
+        definePlugin({
+          name: "group.explicit-error",
+          setup() {
+            throw failure;
+          },
+        }),
+      );
+    });
+
+    await expect(group.ready()).rejects.toBe(failure);
     await group.remove();
     await host.stop();
   });
@@ -190,12 +241,12 @@ describe("plugin groups", () => {
       group.install(plugin);
     });
     await Promise.resolve();
-    const handle = host.install(plugin);
+    const installation = host.install(plugin);
 
-    expect(() => left.change().remove(handle)).toThrow("outside ChangeSet group");
+    expect(() => left.change().remove(installation)).toThrow("outside Group");
     expect(() => host.group("left", () => {})).toThrow("already exists");
     expect(() => host.group("bad/name", () => {})).toThrow("cannot contain '/'");
-    expect(handle.groupId).toBe("/");
+    expect(installation.groupId).toBe("/");
     expect(() => host.group("async", (async () => undefined) as unknown as () => void)).toThrow(
       "must be synchronous",
     );
@@ -218,8 +269,8 @@ describe("plugin groups", () => {
   it("replaces a failed creation barrier after a successful recovery", async () => {
     const host = createHost();
     await host.start();
-    const group = host.group("recover", (plugins) => {
-      plugins.install(
+    const group = host.group("recover", (group) => {
+      group.install(
         definePlugin({
           name: "group.initial-failure",
           setup() {
@@ -232,8 +283,10 @@ describe("plugin groups", () => {
     await expect(group.ready()).rejects.toThrow("initial group failure");
     expect(group.status).toBe("failed");
 
-    const recovered = group.install(definePlugin({ name: "group.recovered", setup() {} }));
-    await recovered.ready();
+    const recoveredInstallation = group.install(
+      definePlugin({ name: "group.recovered", setup() {} }),
+    );
+    await recoveredInstallation.ready();
 
     expect(group.status).toBe("active");
     await expect(group.ready()).resolves.toBeUndefined();
@@ -244,8 +297,8 @@ describe("plugin groups", () => {
   it("keeps an established Group healthy after a failed mutation rolls back", async () => {
     const host = createHost();
     await host.start();
-    const group = host.group("stable", (plugins) => {
-      plugins.install(definePlugin({ name: "group.stable", setup() {} }));
+    const group = host.group("stable", (group) => {
+      group.install(definePlugin({ name: "group.stable", setup() {} }));
     });
     await group.ready();
 

@@ -1,4 +1,5 @@
 import type { HostSnapshot, HostStatus } from "./diagnostics";
+import type { GroupStatus } from "./group";
 import type { Logger } from "./lifetime";
 import type { InstallationStatus } from "./installation";
 import type { Plugin, Provisions, Requirements } from "./plugin";
@@ -25,7 +26,7 @@ export type InstallationUpdate<
  * replaced; this identity and its position in the ownership tree may not.
  *
  * Installation and Group state their own capabilities instead of sharing a
- * framework-wide handle interface. Code that wants to treat them uniformly
+ * framework-wide lifecycle interface. Code that wants to treat them uniformly
  * declares the minimum it needs on the consuming side:
  *
  * ```ts
@@ -55,11 +56,11 @@ export interface ChangeSet {
     ...config: [ConfigInput] extends [void] ? [config?: ConfigInput] : [config: ConfigInput]
   ): Installation<Config, Requires, Provides, ConfigInput>;
   update<Config, Requires extends Requirements, Provides extends Provisions, ConfigInput>(
-    handle: Installation<Config, Requires, Provides, ConfigInput>,
+    installation: Installation<Config, Requires, Provides, ConfigInput>,
     update: InstallationUpdate<Config, Requires, Provides, ConfigInput>,
   ): this;
   remove<Config, Requires extends Requirements, Provides extends Provisions, ConfigInput>(
-    handle: Installation<Config, Requires, Provides, ConfigInput>,
+    installation: Installation<Config, Requires, Provides, ConfigInput>,
   ): this;
   commit(): Promise<void>;
 }
@@ -83,7 +84,7 @@ export interface Installer {
 export interface Group extends Installer {
   readonly id: string;
   readonly name: string;
-  readonly status: InstallationStatus;
+  readonly status: GroupStatus;
   ready(): Promise<void>;
   remove(): Promise<void>;
 }

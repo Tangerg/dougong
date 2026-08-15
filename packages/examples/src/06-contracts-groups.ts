@@ -39,20 +39,20 @@ function readerPlugin(name: string, token: Service<WorkspaceStore>, trace: strin
 export async function contractsAndGroups(): Promise<ExampleResult> {
   const trace: string[] = [];
   const host = createHost({ name: "contracts-groups" });
-  let alphaProvider!: Installation<number>;
-  let betaProvider!: Installation<number>;
+  let alphaProviderInstallation!: Installation<number>;
+  let betaProviderInstallation!: Installation<number>;
 
   // A Group owns an installation subtree. It is not a capability scope, not a
   // provider shadow tree and not a permission boundary.
   const alpha = host.group("alpha", (group) => {
-    alphaProvider = group.install(
+    alphaProviderInstallation = group.install(
       storePlugin("examples.workspaces.alpha.store", ALPHA_STORE, "alpha"),
       1,
     );
     group.install(readerPlugin("examples.workspaces.alpha.reader", ALPHA_STORE, trace));
   });
   host.group("beta", (group) => {
-    betaProvider = group.install(
+    betaProviderInstallation = group.install(
       storePlugin("examples.workspaces.beta.store", BETA_STORE, "beta"),
       1,
     );
@@ -66,8 +66,8 @@ export async function contractsAndGroups(): Promise<ExampleResult> {
   // One ChangeSet spanning two Groups: consumers see version 1 or version 2,
   // never one workspace ahead of the other.
   const change = host.change();
-  change.update(alphaProvider, { config: 2 });
-  change.update(betaProvider, { config: 2 });
+  change.update(alphaProviderInstallation, { config: 2 });
+  change.update(betaProviderInstallation, { config: 2 });
   await change.commit();
   const versions = `alpha@${host.get(ALPHA_STORE).version}, beta@${host.get(BETA_STORE).version}`;
 
@@ -87,7 +87,7 @@ export async function contractsAndGroups(): Promise<ExampleResult> {
     title: "One shape, many identities, and who owns which subtree",
     introduces: ["contract-family", "group", "atomic-commit", "group-removal"],
     facts: [
-      `Two identities from one factory resolve to different instances = ${distinct}.`,
+      `Two identities from one factory resolve to different Service values = ${distinct}.`,
       `At startup the readers observed ${atStartup.join(", ")}.`,
       `One ChangeSet moved both Groups together, rebuilding both readers: ${trace.slice(atStartup.length).join(", ")} → ${versions}.`,
       `Removing /alpha removed its installation subtree; ALPHA_STORE available = ${alphaAvailable}.`,

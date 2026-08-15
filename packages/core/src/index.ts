@@ -19,6 +19,7 @@ export {
   type HostStatus,
   type HostOptions,
   type GroupSnapshot,
+  type GroupStatus,
   type ChangeSet,
   type Installer,
   type Group,
@@ -41,6 +42,7 @@ export {
 } from "./plugin";
 
 export {
+  isLogger,
   type BackgroundTask,
   type Cleanup,
   type LifetimeContext,
@@ -48,11 +50,11 @@ export {
   type LifetimePhase,
   type LifetimeSnapshot,
   type Logger,
-  type PluginMeta,
+  type InstanceMeta,
   type Task,
 } from "./lifetime";
 
-export type { Contribution, ContributionView } from "./extension-store";
+export type { Contribution, ContributionView } from "./contribution-store";
 export type { EventListener } from "./event-hub";
 export { ConfigValidationError, DougongError } from "./errors";
 export type { Disposable } from "./resource";

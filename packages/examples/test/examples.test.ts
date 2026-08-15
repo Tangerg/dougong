@@ -28,10 +28,10 @@ describe("the learning path", () => {
       "composition",
       "composition",
       "composition",
-      "hosts",
-      "hosts",
-      "hosts",
-      "hosts",
+      "applications",
+      "applications",
+      "applications",
+      "applications",
     ]);
 
     // The syllabus IS the reading order. Concatenating what each chapter
@@ -80,11 +80,11 @@ describe("the learning path", () => {
     expect(facts.get("11")).toContain("invalid plan was rejected = true");
     expect(facts.get("11")).toContain("running service remained 'hello-v1'");
 
-    // 12 · Invalidation follows importers, and several swaps publish once.
+    // 12 · Invalidation follows importers, and several Registration updates publish once.
     expect(facts.get("12")).toContain(
-      "Affected plugin entries were examples.hmr-module-graph.outline, examples.hmr-module-graph.search",
+      "Affected Registrations were examples.hmr-module-graph.outline, examples.hmr-module-graph.search",
     );
-    expect(facts.get("12")).toContain("saw 1 committed snapshot for two plugin swaps");
+    expect(facts.get("12")).toContain("saw 1 committed snapshot for two Registration updates");
   });
 });
 
@@ -112,7 +112,7 @@ describe("the command entries", () => {
     await import("../src/run");
     const printed = log.mock.calls.map(([message]) => String(message));
     expect(printed.some((line) => line.includes("Stage 1 · Atoms"))).toBe(true);
-    expect(printed.some((line) => line.includes("Stage 3 · Real hosts"))).toBe(true);
+    expect(printed.some((line) => line.includes("Stage 3 · Applications"))).toBe(true);
     expect(printed.some((line) => line.includes("12  Module-graph invalidation"))).toBe(true);
 
     log.mockClear();

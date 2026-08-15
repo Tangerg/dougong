@@ -17,7 +17,7 @@ const plugin = definePlugin({
 
 `name` is a required stable identifier. It is used for diagnostics and installation IDs (`app.hello:1`); it plays no part in dependency resolution — that is what Contracts are for.
 
-`definePlugin` is an identity function whose only purpose is **type inference**. It validates the shape of `name`, `requires` and `provides` at definition time, so mistakes surface where the plugin is written rather than when the app starts.
+`definePlugin` preserves the declared Plugin shape for **type inference**, validates `name`, `requires` and `provides`, and returns an immutable normalized declaration. Mistakes therefore surface where the Plugin is written rather than when the Host starts.
 
 ## Declaring dependencies
 
@@ -29,7 +29,7 @@ definePlugin({
   name: "app.users",
   requires: {
     db: DATABASE,      // Service → ctx.db is a Database
-    routes: ROUTES,    // ExtensionPoint → ctx.routes is an ContributionView<Route>
+    routes: ROUTES,    // ExtensionPoint → ctx.routes is a ContributionView<Route>
   },
   setup(ctx) {
     ctx.db.query("select 1")
@@ -46,6 +46,8 @@ requires: {
   replica: REPLICA_DB,
 }
 ```
+
+Within one Plugin, a Contract ID may appear only once. If two aliases point at the same Contract, or the same Service appears in both `requires` and `provides`, `definePlugin()` rejects immediately; remove the duplicate alias or declare distinct Contract IDs for capabilities with distinct semantics.
 
 ::: tip Reserved names
 `ctx` carries a set of built-in members, and aliases may not collide with them: `signal`, `meta`, `log`, `cleanup`, `lifetime`, `spawn`, `on`, `emit`, `contribute`. Using one throws immediately from `definePlugin`.
@@ -65,7 +67,7 @@ definePlugin({
 })
 ```
 
-With no provider, `ctx.tracer` is `undefined` and the plugin starts normally. If a provider later appears or disappears, this plugin is **rebuilt** — so `ctx.tracer` never changes within one instance lifetime.
+With no provider, `ctx.tracer` is `undefined` and the Installation activates normally. If a provider later appears or disappears, its Instance is **rebuilt** — so `ctx.tracer` never changes within one Instance lifetime.
 
 `optional()` accepts only Services. ExtensionPoints do not need it: an empty map is already valid.
 
@@ -94,7 +96,7 @@ setup() {},        // ❌ Type '() => void' is not assignable to
                    //    '(context, config) => Awaitable<ProvidedServices<...>>'
 ```
 
-Two plugins providing the same Contract throws `SERVICE_CONFLICT` while the graph is built — before any plugin starts.
+Two Plugin declarations providing the same Contract throw `SERVICE_CONFLICT` while the graph is built — before any Instance starts.
 
 ## Contributing to an ExtensionPoint
 
@@ -108,7 +110,7 @@ definePlugin({
 })
 ```
 
-The second argument is a **local key**, unique only within the current plugin instance. The runtime composes the real key:
+The second argument is a **local key**, unique only within the current Instance. Core composes the real key:
 
 ```text
 <escaped installation id>/<escaped local key>
@@ -124,7 +126,7 @@ c.update(nextRoute)   // update in place, notifying subscribers
 c.dispose()           // withdraw early
 ```
 
-Not calling `dispose()` is fine — every contribution is withdrawn when the plugin stops.
+Not calling `dispose()` is fine — every contribution is withdrawn when the Instance stops.
 
 ## Configuration and validation
 
@@ -157,7 +159,7 @@ Validation failure throws `ConfigValidationError` (code `CONFIG_INVALID`) carryi
 
 ```ts
 try {
-  await handle.ready()
+  await installation.ready()
 } catch (e) {
   if (e instanceof ConfigValidationError) {
     e.issues.forEach((i) => console.error(i.path, i.message))
@@ -165,7 +167,7 @@ try {
 }
 ```
 
-**Every affected plugin's config is validated before any running instance is stopped.** One bad config never leaves your application halfway down.
+**Every affected Installation's Plugin config is validated before any running Instance is stopped.** One bad config never leaves your application halfway down.
 
 ## Asynchronous setup
 
@@ -181,7 +183,7 @@ definePlugin({
 })
 ```
 
-Plugins in the same topological layer set up **concurrently**. During startup, `ctx.signal` aborts if any plugin in the same layer fails, so slow work can be cancelled:
+Installations in the same topological layer run setup **concurrently**. During startup, `ctx.signal` aborts if any setup in that layer fails, so slow work can be cancelled:
 
 ```ts
 async setup(ctx) {
@@ -194,17 +196,17 @@ async setup(ctx) {
 
 When setup throws:
 
-1. Every resource the plugin already acquired is **released** (cleanups run in reverse)
+1. Every resource the Instance already acquired is **released** (cleanups run in reverse)
 2. Its staged listeners, contributions and Contract kinds are **never published**
-3. `ctx.signal` aborts for the other plugins in the same layer
-4. The whole change **rolls back** to the previous runtime graph
-5. `handle.ready()` rejects and `handle.status` becomes `"failed"`
+3. `ctx.signal` aborts for the other Instances in the same layer
+4. The whole change **rolls back** to the previous execution graph
+5. `installation.ready()` rejects and `installation.status` becomes `"failed"`
 6. `host.status` returns to its pre-change value — it never stops in an intermediate state
 
 ```ts
-const handle = host.install(brokenPlugin)
-await expect(handle.ready()).rejects.toThrow("setup failed")
-expect(host.status).toBe("active")     // other plugins are untouched
+const installation = host.install(brokenPlugin)
+await expect(installation.ready()).rejects.toThrow("setup failed")
+expect(host.status).toBe("active")     // other Installations are untouched
 ```
 
 Throwing a non-`Error` value (`throw "boom"`) is classified as a `DougongError` with code `INSTALLATION_UNAVAILABLE`, keeping the original value in `cause` — so `undefined` never means both "the failure value" and "no failure".
@@ -212,26 +214,26 @@ Throwing a non-`Error` value (`throw "boom"`) is classified as a `DougongError` 
 ## Update and remove
 
 ```ts
-const handle = host.install(plugin, { hostname: "a" })
+const installation = host.install(plugin, { hostname: "a" })
 
-await handle.update({ config: { hostname: "b" } })   // swap config
-await handle.update({ plugin: nextVersion })     // swap implementation, keep identity
-await handle.remove()
+await installation.update({ config: { hostname: "b" } })   // swap config
+await installation.update({ plugin: nextVersion })     // swap declaration, keep Installation identity
+await installation.remove()
 ```
 
-An update preserves **instance identity**: the ID, the position in diagnostics and the Group membership all stay. Only the affected dependency closure restarts; unrelated plugins are untouched.
+An update preserves **Installation identity**: the ID, the position in diagnostics and the Group membership all stay. The active Instance is replaced, and only the affected dependency closure restarts; unrelated Installations are untouched.
 
 ```ts
-handle.id        // "app.db:1"
-handle.status    // "pending" | "active" | "stopping" | "failed" | "removed"
-handle.groupId   // the owning Group's ID
-await handle.ready()   // resolve when this installation is ready; reject on failure
+installation.id        // "app.db:1"
+installation.status    // "pending" | "active" | "stopping" | "failed" | "removed"
+installation.groupId   // the owning Group's ID
+await installation.ready()   // resolve when this installation is ready; reject on failure
 ```
 
 ## A complete example
 
 ```ts
-import { createHost, definePlugin, extension, optional, service } from "dougong"
+import { createHost, definePlugin, extensionPoint, optional, service } from "dougong"
 import { z } from "zod"
 
 const DATABASE = service<Database>("app/database")

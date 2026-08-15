@@ -135,7 +135,7 @@ Each time `current` changes, Dougong will:
 
 1. release the previous `lifetime` (pausing and clearing the old audio element, aborting the old task)
 2. create a new child Lifetime for the new value
-3. release both the last child and the observation itself when the plugin stops
+3. release both the last child and the observation itself when the Instance stops
 
 You never write "check whether there is a previous one, and if so clean it up first" — **release the old, build the new** is what `observe` means.
 
@@ -172,12 +172,12 @@ Core produces `Readable` in two places:
 ctx.routes.get()                    // ReadonlyMap<string, Route>
 ctx.routes.subscribe(() => ...)
 
-// Diagnostics — runtime state
+// Diagnostics — Host state
 host.diagnostics.get()
 host.diagnostics.subscribe(() => ...)
 
 // A plugin's Lifetime ownership tree
-snapshot.plugins.get(id)?.lifetime.get()
+snapshot.installations.get(id)?.lifetime?.get()
 ```
 
 Both feed straight into `observe()`:

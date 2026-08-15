@@ -23,7 +23,7 @@ export async function serviceBasics(): Promise<ExampleResult> {
     requires: { clock: CLOCK },
     setup(ctx) {
       // `ctx.clock` exists because the line above declared it. Reading anything
-      // undeclared is a compile error, not a runtime surprise.
+      // undeclared is a compile error, not an execution-time surprise.
       trace.push(`plugin:${ctx.clock.now()}`);
     },
   });
@@ -45,7 +45,7 @@ export async function serviceBasics(): Promise<ExampleResult> {
     facts: [
       "The provider started before its consumer even though it was installed second.",
       `Observed ${trace.join(" → ")}.`,
-      "Plugins read declared aliases; host.get() exists only for the host boundary.",
+      "Plugins read declared aliases; host.get() exists only at the Host boundary.",
     ],
   });
 }

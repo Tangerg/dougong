@@ -1,16 +1,22 @@
 import type { StandardSchemaV1 } from "@standard-schema/spec";
 import { ContractRegistry, type ContractRegistryDraft } from "./contract-registry";
 import { assertContract, type Event, type ExtensionPoint, type Service } from "./contracts";
-import { ConfigValidationError, DougongError, type ValidationIssue } from "./errors";
+import {
+  ConfigValidationError,
+  DougongError,
+  isCancellationReason,
+  normalizeFailure,
+  type ValidationIssue,
+} from "./errors";
 import { EventHub, type EventListener } from "./event-hub";
-import { ExtensionRegistry, type ContributionView } from "./extension-store";
-import { Lifetime, type LifetimePort, type Logger, type PluginMeta } from "./lifetime";
-import { PluginGraph } from "./plugin-graph";
-import { type AnyPlugin, type InstallationRecord, type InstallationRuntime } from "./installation";
-import type { PluginContext, Requirements } from "./plugin";
+import { ContributionRegistry, type ContributionView } from "./contribution-store";
+import { Lifetime, type InstanceMeta, type LifetimePort, type Logger } from "./lifetime";
+import { InstallationGraph } from "./installation-graph";
+import type { InstallationRecord, Instance } from "./installation";
+import type { ErasedPlugin, PluginContext, Requirements } from "./plugin";
 import type { Publication } from "./resource";
 
-export type RuntimeChangeOutcome =
+export type TransitionOutcome =
   | { readonly kind: "committed"; readonly affected: ReadonlySet<InstallationRecord> }
   | {
       readonly kind: "rolled-back";
@@ -20,11 +26,11 @@ export type RuntimeChangeOutcome =
 
 interface PreparedActivation {
   readonly installation: InstallationRecord;
-  readonly runtime: InstallationRuntime;
+  readonly instance: Instance;
   readonly services: ReadonlyMap<string, unknown>;
 }
 
-interface ApplicationRuntimeOptions {
+interface EngineOptions {
   readonly hostName: string;
   readonly logger: Logger;
   readonly isInstalled: (installationId: string) => boolean;
@@ -33,14 +39,15 @@ interface ApplicationRuntimeOptions {
 
 type ServiceAvailability = "available" | "unavailable";
 
-class IncompletePluginCleanupError extends AggregateError {}
+class IncompleteActivationCleanupError extends AggregateError {}
 
 /**
- * Owns the committed plugin runtime: contracts, services, events, extensions,
- * Lifetimes and graph transitions. The Host owns declarations and
- * command serialization; neither side duplicates the other's state.
+ * Owns committed execution state: contracts, services, events, contributions,
+ * Lifetimes, Instances and graph transitions. The Host owns Installation
+ * declarations and command serialization; neither side duplicates the other's
+ * state.
  */
-export class Runtime {
+export class Engine {
   readonly #hostName: string;
   readonly #logger: Logger;
   readonly #isInstalled: (installationId: string) => boolean;
@@ -48,17 +55,17 @@ export class Runtime {
   readonly #services = new Map<InstallationRecord, ReadonlyMap<string, unknown>>();
   readonly #contracts = new ContractRegistry();
   readonly #events = new EventHub();
-  readonly #extensions: ExtensionRegistry;
+  readonly #contributions: ContributionRegistry;
 
-  #plan: PluginGraph | undefined;
+  #plan: InstallationGraph | undefined;
   #activationOrder: InstallationRecord[] = [];
 
-  constructor(options: ApplicationRuntimeOptions) {
+  constructor(options: EngineOptions) {
     this.#hostName = options.hostName;
     this.#logger = options.logger;
     this.#isInstalled = options.isInstalled;
     this.#report = options.report;
-    this.#extensions = new ExtensionRegistry(options.report);
+    this.#contributions = new ContributionRegistry(options.report);
   }
 
   get hasCommittedPlan() {
@@ -69,7 +76,7 @@ export class Runtime {
     assertContract(token, "service");
     this.#contracts.assertCompatible(token);
     if (availability === "unavailable") {
-      throw applicationServicesUnavailable();
+      throw hostServicesUnavailable();
     }
     const provider = this.#requirePlan().provider(token.id);
     const services = provider ? this.#services.get(provider) : undefined;
@@ -80,13 +87,13 @@ export class Runtime {
   }
 
   buildPlan(installations: Iterable<InstallationRecord>) {
-    return PluginGraph.build(installations, this.#contracts.kinds);
+    return InstallationGraph.build(installations, this.#contracts.kinds);
   }
 
-  async start(plan: PluginGraph) {
+  async start(plan: InstallationGraph) {
     const contracts = this.#contracts.draft(plan.contractKinds);
     try {
-      await this.#withExtensionBatch(() => this.#activateInitialPlan(plan, contracts));
+      await this.#withContributionBatch(() => this.#activateInitialPlan(plan, contracts));
       this.#plan = plan;
     } catch (error) {
       contracts.discard();
@@ -96,7 +103,7 @@ export class Runtime {
   }
 
   async stop() {
-    const errors = await this.#withExtensionBatch(() =>
+    const errors = await this.#withContributionBatch(() =>
       this.#deactivateInstallations(new Set(this.#activationOrder)),
     );
     this.#plan = undefined;
@@ -104,11 +111,11 @@ export class Runtime {
   }
 
   async transition(
-    nextPlan: PluginGraph,
+    nextPlan: InstallationGraph,
     changed: ReadonlySet<InstallationRecord>,
     restoreDeclarations: () => void,
-  ): Promise<RuntimeChangeOutcome> {
-    return this.#withExtensionBatch(async () => {
+  ): Promise<TransitionOutcome> {
+    return this.#withContributionBatch(async () => {
       const previousPlan = this.#requirePlan();
       const affected = previousPlan.affectedByTransitionTo(nextPlan, changed);
       let nextConfigs: ReadonlyMap<InstallationRecord, unknown>;
@@ -125,8 +132,8 @@ export class Runtime {
 
       const previousConfigs = new Map<InstallationRecord, unknown>();
       for (const installation of affected) {
-        const runtime = installation.runtime;
-        if (runtime) previousConfigs.set(installation, runtime.config);
+        const instance = installation.instance;
+        if (instance) previousConfigs.set(installation, instance.config);
       }
 
       const stopErrors = await this.#deactivateInstallations(affected);
@@ -135,7 +142,7 @@ export class Runtime {
         return this.#failClosed(
           restoreDeclarations,
           stopErrors,
-          "Plugin change could not cleanly stop the affected runtime",
+          "Installation change could not cleanly stop the affected Instances",
         );
       }
 
@@ -148,11 +155,11 @@ export class Runtime {
       } catch (changeError) {
         const nextStopErrors = await this.#deactivateInstallations(affected);
         contracts.discard();
-        if (changeError instanceof IncompletePluginCleanupError || nextStopErrors.length) {
+        if (changeError instanceof IncompleteActivationCleanupError || nextStopErrors.length) {
           return this.#failClosed(
             restoreDeclarations,
             [changeError, ...nextStopErrors],
-            "Plugin change failed and its partial runtime could not be cleanly disposed",
+            "Installation change failed and its partial activation could not be cleanly disposed",
           );
         }
         return this.#rollback(restoreDeclarations, previousPlan, affected, previousConfigs, [
@@ -163,7 +170,7 @@ export class Runtime {
     });
   }
 
-  async #activateInitialPlan(plan: PluginGraph, contracts: ContractRegistryDraft) {
+  async #activateInitialPlan(plan: InstallationGraph, contracts: ContractRegistryDraft) {
     const installations = new Set(plan.order);
     const configs = await this.#resolveConfigs(plan.order);
     this.#services.clear();
@@ -194,11 +201,11 @@ export class Runtime {
 
   async #rollback(
     restoreDeclarations: () => void,
-    previousPlan: PluginGraph,
+    previousPlan: InstallationGraph,
     affected: ReadonlySet<InstallationRecord>,
     previousConfigs: ReadonlyMap<InstallationRecord, unknown>,
     causes: ReadonlyArray<unknown>,
-  ): Promise<RuntimeChangeOutcome> {
+  ): Promise<TransitionOutcome> {
     restoreDeclarations();
     const contracts = this.#contracts.draft(previousPlan.contractKinds);
     try {
@@ -212,24 +219,24 @@ export class Runtime {
       this.#plan = undefined;
       throw new AggregateError(
         [...causes, rollbackError, ...shutdownErrors],
-        "Plugin change failed and the previous application could not be restored",
+        "Installation change failed and the previous Instances could not be restored",
       );
     }
     const error =
-      causes.length === 1 ? causes[0] : new AggregateError(causes, "Plugin change failed");
+      causes.length === 1 ? causes[0] : new AggregateError(causes, "Installation change failed");
     return Object.freeze({ kind: "rolled-back", affected, error });
   }
 
   async #activateInstallations(
-    plan: PluginGraph,
+    plan: InstallationGraph,
     installations: ReadonlySet<InstallationRecord>,
     configs: ReadonlyMap<InstallationRecord, unknown>,
     contracts: ContractRegistryDraft,
   ) {
-    const host = this.#createLifetimePort(contracts);
+    const port = this.#createLifetimePort(contracts);
     for (const layer of plan.layers) {
       const candidates = layer.filter(
-        (installation) => installations.has(installation) && !installation.runtime,
+        (installation) => installations.has(installation) && !installation.instance,
       );
       if (!candidates.length) continue;
 
@@ -240,15 +247,15 @@ export class Runtime {
             const config = configs.has(installation)
               ? configs.get(installation)
               : await this.#resolveConfig(
-                  installation.spec.plugin.config,
-                  installation.spec.config,
+                  installation.declaration.plugin.config,
+                  installation.declaration.config,
                 );
             return await this.#prepareActivation(
               plan,
               installation,
               config,
               controller.signal,
-              host,
+              port,
             );
           } catch (error) {
             controller.abort(error);
@@ -257,9 +264,7 @@ export class Runtime {
         }),
       );
 
-      const errors = results
-        .filter((result): result is PromiseRejectedResult => result.status === "rejected")
-        .map((result) => result.reason);
+      const errors = collectActivationFailures(results, controller.signal);
       const prepared = results
         .filter(
           (result): result is PromiseFulfilledResult<PreparedActivation> =>
@@ -272,34 +277,34 @@ export class Runtime {
         const startupError =
           errors.length === 1
             ? errors[0]
-            : new AggregateError(errors, "Plugin startup layer failed");
+            : new AggregateError(errors, "Installation startup layer failed");
         if (cleanupErrors.length) {
-          throw new IncompletePluginCleanupError(
+          throw new IncompleteActivationCleanupError(
             [startupError, ...cleanupErrors],
-            "Plugin startup layer failed and could not be cleanly disposed",
+            "Installation startup layer failed and could not be cleanly disposed",
           );
         }
         throw startupError;
       }
 
-      for (const candidate of prepared) this.#commitActivation(candidate);
+      this.#commitActivations(prepared);
     }
   }
 
   async #prepareActivation(
-    plan: PluginGraph,
+    plan: InstallationGraph,
     installation: InstallationRecord,
     config: unknown,
     startupSignal: AbortSignal,
-    host: LifetimePort,
+    port: LifetimePort,
   ): Promise<PreparedActivation> {
     installation.deactivate();
-    const plugin = installation.spec.plugin;
-    const lifetime = new Lifetime(host, installation.id, { parentSignal: startupSignal });
+    const plugin = installation.declaration.plugin;
+    const lifetime = new Lifetime(port, installation.id, { parentSignal: startupSignal });
 
     try {
       const requirements = this.#resolveRequirements(plan, installation, plugin, lifetime);
-      const meta: PluginMeta = {
+      const meta: InstanceMeta = {
         hostName: this.#hostName,
         pluginName: plugin.name,
         installationId: installation.id,
@@ -312,7 +317,7 @@ export class Runtime {
         if (typeof output !== "object" || output === null || !Object.hasOwn(output, alias)) {
           throw new DougongError(
             "SERVICE_NOT_RETURNED",
-            `Plugin '${installation.id}' did not return provided service '${alias}'`,
+            `Installation '${installation.id}' did not return provided Service '${alias}'`,
           );
         }
         services.set(token.id, (output as Record<string, unknown>)[alias]);
@@ -320,37 +325,43 @@ export class Runtime {
 
       return Object.freeze({
         installation,
-        runtime: Object.freeze({ plugin, config, lifetime }),
+        instance: Object.freeze({ plugin, config, lifetime }),
         services,
       });
     } catch (error) {
-      installation.fail(error);
+      const failure = installation.fail(error);
       try {
         await lifetime.dispose();
       } catch (cleanupError) {
-        throw new IncompletePluginCleanupError(
-          [error, cleanupError],
-          `Plugin '${installation.id}' failed to start and could not be cleanly disposed`,
+        throw new IncompleteActivationCleanupError(
+          [failure, cleanupError],
+          `Installation '${installation.id}' failed to start and could not be cleanly disposed`,
         );
       }
-      throw error;
+      throw failure;
     }
   }
 
-  #commitActivation(candidate: PreparedActivation) {
-    const { installation, runtime, services } = candidate;
-    this.#services.set(installation, services);
-    runtime.lifetime.publish();
-    runtime.lifetime.detachStartupSignal();
-    installation.activate(runtime);
-    this.#activationOrder.push(installation);
+  #commitActivations(candidates: ReadonlyArray<PreparedActivation>) {
+    // Establish ownership for the complete layer before publishing any of its
+    // resources. If publication exposes an internal invariant failure, reverse
+    // activation cleanup can still find every prepared Instance in the layer.
+    for (const { installation, instance, services } of candidates) {
+      this.#services.set(installation, services);
+      installation.activate(instance);
+      this.#activationOrder.push(installation);
+    }
+    for (const { instance } of candidates) {
+      instance.lifetime.publish();
+      instance.lifetime.detachStartupSignal();
+    }
   }
 
   async #disposePreparedActivations(candidates: ReadonlyArray<PreparedActivation>) {
     const errors: unknown[] = [];
     for (const candidate of [...candidates].reverse()) {
       try {
-        await candidate.runtime.lifetime.dispose();
+        await candidate.instance.lifetime.dispose();
       } catch (error) {
         errors.push(error);
       }
@@ -367,12 +378,12 @@ export class Runtime {
       (installation) => !installations.has(installation),
     );
     for (const installation of order) {
-      const runtime = installation.runtime;
-      if (!runtime) continue;
+      const instance = installation.instance;
+      if (!instance) continue;
       installation.beginStopping();
       this.#services.delete(installation);
       try {
-        await runtime.lifetime.dispose();
+        await instance.lifetime.dispose();
       } catch (error) {
         errors.push(error);
       } finally {
@@ -385,18 +396,29 @@ export class Runtime {
   async #resolveConfigs(installations: ReadonlyArray<InstallationRecord>) {
     const configs = new Map<InstallationRecord, unknown>();
     for (const installation of installations) {
-      configs.set(
-        installation,
-        await this.#resolveConfig(installation.spec.plugin.config, installation.spec.config),
-      );
+      try {
+        configs.set(
+          installation,
+          await this.#resolveConfig(
+            installation.declaration.plugin.config,
+            installation.declaration.config,
+          ),
+        );
+      } catch (error) {
+        throw normalizeFailure(
+          error,
+          "INSTALLATION_UNAVAILABLE",
+          `Installation '${installation.id}' failed with a non-Error value`,
+        );
+      }
     }
     return configs;
   }
 
   #resolveRequirements(
-    plan: PluginGraph,
+    plan: InstallationGraph,
     installation: InstallationRecord,
-    plugin: AnyPlugin,
+    plugin: ErasedPlugin,
     lifetime: Lifetime,
   ): Record<string, unknown> {
     const values: Record<string, unknown> = Object.create(null);
@@ -411,7 +433,7 @@ export class Runtime {
         if (!services?.has(requirement.service.id)) {
           throw new DougongError(
             "SERVICE_UNAVAILABLE",
-            `Optional service '${requirement.service.id}' is not active for plugin '${installation.id}'`,
+            `Optional Service '${requirement.service.id}' is not active for Installation '${installation.id}'`,
           );
         }
         values[alias] = services.get(requirement.service.id);
@@ -421,7 +443,7 @@ export class Runtime {
         if (!provider || !services?.has(requirement.id)) {
           throw new DougongError(
             "SERVICE_UNAVAILABLE",
-            `Service '${requirement.id}' is not active for plugin '${installation.id}'`,
+            `Service '${requirement.id}' is not active for Installation '${installation.id}'`,
           );
         }
         values[alias] = services.get(requirement.id);
@@ -434,7 +456,7 @@ export class Runtime {
 
   #createContext(
     lifetime: Lifetime,
-    meta: PluginMeta,
+    meta: InstanceMeta,
     requirements: Record<string, unknown>,
   ): PluginContext<Requirements> {
     return Object.freeze({
@@ -511,34 +533,56 @@ export class Runtime {
     this.#assertOwner(ownerId);
     assertContract(token, "extensionPoint");
     contracts.remember(token);
-    return this.#extensions.get(token).stage(ownerId, key, value, release);
+    return this.#contributions.get(token).stage(ownerId, key, value, release);
   }
 
   #contributionView<T>(token: ExtensionPoint<T>, lifetime: Lifetime): ContributionView<T> {
-    return this.#extensions.get(token).view((resource, kind) => lifetime.ownLease(resource, kind));
+    return this.#contributions
+      .get(token)
+      .view((resource, kind) => lifetime.ownLease(resource, kind));
   }
 
   #assertOwner(ownerId: string) {
-    if (!this.#isInstalled(ownerId)) throw new TypeError(`Plugin '${ownerId}' is not installed`);
+    if (!this.#isInstalled(ownerId)) {
+      throw new Error(`Installation '${ownerId}' is not installed`);
+    }
   }
 
-  async #withExtensionBatch<T>(operation: () => Promise<T>) {
-    this.#extensions.beginBatch();
+  async #withContributionBatch<T>(operation: () => Promise<T>) {
+    this.#contributions.beginBatch();
     try {
       return await operation();
     } finally {
-      this.#extensions.endBatch();
+      this.#contributions.endBatch();
     }
   }
 
   #requirePlan() {
     if (!this.#plan) {
-      throw applicationServicesUnavailable();
+      throw hostServicesUnavailable();
     }
     return this.#plan;
   }
 }
 
-function applicationServicesUnavailable() {
+function hostServicesUnavailable() {
   return new DougongError("SERVICE_UNAVAILABLE", "Host services are not active");
+}
+
+function collectActivationFailures<T>(
+  results: ReadonlyArray<PromiseSettledResult<T>>,
+  signal: AbortSignal,
+) {
+  const errors: unknown[] = [];
+  let rootObserved = false;
+  for (const result of results) {
+    if (result.status === "fulfilled") continue;
+    if (Object.is(result.reason, signal.reason)) {
+      if (!rootObserved) errors.push(result.reason);
+      rootObserved = true;
+    } else if (!isCancellationReason(signal, result.reason)) {
+      errors.push(result.reason);
+    }
+  }
+  return errors;
 }

@@ -39,7 +39,7 @@ const PLAYER = service<Player>("examples/planet/player");
 const TRACK_CHANGED = event<Track>("examples/planet/track-changed");
 
 /**
- * The first real host shape. Nothing new is imported: it is chapters 01–08
+ * The first complete application shape. Nothing new is imported: it is chapters 01–08
  * arranged the way a desktop media application actually needs them.
  */
 export async function planetScenario(): Promise<ExampleResult> {
@@ -50,7 +50,7 @@ export async function planetScenario(): Promise<ExampleResult> {
   let player!: Player;
 
   const audioAdapter = definePlugin({
-    name: "examples.planet.host.audio",
+    name: "examples.planet.adapter.audio",
     provides: { audio: AUDIO_OUTPUT },
     setup: () => ({
       audio: {
@@ -141,7 +141,7 @@ export async function planetScenario(): Promise<ExampleResult> {
   const host = createHost({ name: "planet-example" });
   host.install(audioAdapter);
   host.install(localSource);
-  const playerHandle = host.install(playerPlugin);
+  const playerInstallation = host.install(playerPlugin);
   host.install(historyPlugin);
   host.install(shellPlugin);
   const providers = host.group("providers", () => undefined);
@@ -150,7 +150,7 @@ export async function planetScenario(): Promise<ExampleResult> {
   const platform = createPlatform({
     installer: providers,
     apiVersion: "1.0.0",
-    permissions: new PermissionSet(["network"]),
+    authorizer: new PermissionSet(["network"]),
     loader: new MemoryLoader(new Map([["remote", { default: remoteSource }]])),
   });
   const remote = await platform.register({
@@ -169,22 +169,22 @@ export async function planetScenario(): Promise<ExampleResult> {
   await remote.remove();
   await player.play("outro");
 
-  const lifetime = host.diagnostics.get().installations.get(playerHandle.id)?.lifetime?.get();
+  const lifetime = host.diagnostics.get().installations.get(playerInstallation.id)?.lifetime?.get();
   await platform.dispose();
   await providers.remove();
   await host.stop();
 
   return exampleResult({
     id: "09",
-    stage: "hosts",
-    title: "Planet: media providers, playback ownership and runtime selection",
-    introduces: ["runtime-selection", "live-provider-swap", "group-scoped-platform"],
+    stage: "applications",
+    title: "Planet: media providers, playback ownership and call-time selection",
+    introduces: ["call-time-selection", "live-provider-swap", "group-bound-platform"],
     facts: [
       `The player picked the best available source each time: ${history.map((track) => track.source).join(" → ")}.`,
       `Audio output received ${audioUris.join(", ")}.`,
       `Providers were added and removed live, yet the player started ${playerStarts} time — an ExtensionPoint is not a dependency edge.`,
       `The shell observed ${shellTracks.join(", ")}; the player kept ${lifetime?.children.length} playback Lifetime, replaced per track.`,
-      "The Platform was scoped to the /providers Group, so removing that Group removed every downloaded provider with it.",
+      "The Platform was bound to the /providers Group, so removing that Group removed every downloaded provider with it.",
     ],
   });
 }

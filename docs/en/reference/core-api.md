@@ -24,7 +24,7 @@ One abstraction layer and one semantic allow exactly one canonical entry point. 
 | --- | --- | --- |
 | Install a plugin | `install()` | `use` / `apply` / `load` |
 | Modify the installation plan | `change()` | a second transaction / batch |
-| Publish a Service | `provides` + the setup return value | `ctx.provide` / `app.provide` |
+| Publish a Service | `provides` + the setup return value | `ctx.provide` / `host.provide` |
 | Contribute to an ExtensionPoint | `contribute()` | `add` / `append` / `register` |
 | Listen to an Event | `on()` | `listen` / `hook` |
 | Emit an Event | `emit()` | `dispatch` / `publish` / `fire` |
@@ -33,11 +33,11 @@ One abstraction layer and one semantic allow exactly one canonical entry point. 
 | Start a background task | `spawn()` | `run` / `fork` / `task` |
 | Read a live value | `get()` | `.value` / a function call / `getSnapshot()` |
 | Subscribe to change | `subscribe()` | `watch` / `listen` / `observeChanges` |
-| Update a plugin | `update()` | `replace` / `reload` / `restart` |
+| Update an Installation | `update()` | `replace` / `reload` / `restart` |
 | Remove an installation | `remove()` | `uninstall` / `delete` |
 | Release a resource | `dispose()` | `close` / `destroy` / `off` |
 
-`host.install()`, `handle.update()` and `handle.remove()` are single-target sugar: internally each creates one one-shot ChangeSet and commits it. They own no second validation, queue or rollback logic.
+`host.install()`, `installation.update()` and `installation.remove()` are single-target sugar: internally each creates one one-shot ChangeSet and commits it. They own no second validation, queue or rollback logic.
 
 ### 1.2 Composition closure
 
@@ -45,9 +45,9 @@ Composing objects of the same kind preserves the original semantics:
 
 ```text
 Lifetime + owned resources → Lifetime
-Plugin installations + Group → Installation
+Plugin + Group → Installation
 ExtensionPoint contributions + an ordinary composer → Catalog / Pipeline
-Core plugins + manifest / loader → a managed external plugin
+Manifest + reference → Artifact → Registration → Core Installation
 ```
 
 A Group expands mechanically onto the canonical ChangeSet; Platform and reactive `observe()` may compose only through public APIs. None of the three may create a second registry or transaction state machine.
@@ -60,7 +60,7 @@ A Group expands mechanically onto the canonical ChangeSet; Platform and reactive
 - A Lifetime manages temporal ownership only; it resolves no dependencies.
 - A Group manages installation ownership only; it creates no capability namespace.
 - A Plugin does not load other plugins; the loader lives in Platform.
-- An Host understands no HTTP, React, database, window or filesystem.
+- A Host understands no HTTP, React, database, window or filesystem.
 
 ### 1.4 Explicit over implicit
 
@@ -71,7 +71,7 @@ Any relationship that changes capability resolution, lifetime ownership or execu
 - Resource ownership comes from the Lifetime that created it; transferring across a boundary must be expressed explicitly through an ordinary parameter or a `Disposable`.
 - Domain configuration is composed through plugin config, method parameters or an explicit adapter Service — never a global interception chain, a proxy shadow or prototype-chain override.
 
-"Convention defaults" may reduce boilerplate but may not change the semantics above. If deleting a declaration still leaves the runtime guessing the relationship from the environment, the abstraction has become too implicit.
+"Convention defaults" may reduce boilerplate but may not change the semantics above. If deleting a declaration still leaves Core guessing the relationship from the environment, the abstraction has become too implicit.
 
 ## 2. The capability algebra
 
@@ -79,14 +79,14 @@ Core has four capability atoms and two orchestration atoms:
 
 ```text
 capability atoms
-├── Service      a stable one-to-one capability
-├── ExtensionPoint    a dynamic open contribution set
-├── Event        a fact that retains no state
-└── Lifetime     resource ownership and cancellation
+├── Service          a stable one-to-one capability
+├── ExtensionPoint   a dynamic open contribution set
+├── Event            a fact that retains no state
+└── Lifetime         resource ownership and cancellation
 
 orchestration atoms
-├── Plugin       a capability producer with one setup
-└── Host  dependency graph, transactions and instance orchestration
+├── Plugin   a capability producer with one setup
+└── Host     dependency graph, transactions and Instance orchestration
 ```
 
 | Atom | Retains current value | Changes dynamically | Behaviour after change |
@@ -107,7 +107,7 @@ import {
   createHost,
   definePlugin,
   service,
-  extension,
+  extensionPoint,
   event,
   optional,
 } from "@dougongjs/core"
@@ -125,17 +125,17 @@ const USER_CREATED = event<User>("users/created")
 
 Uniform rules:
 
-- The first argument is a stable string ID and is the runtime identity; object identity plays no part in matching.
+- The first argument is a stable string ID and is the execution identity; object identity plays no part in matching.
 - The return value is a frozen plain object whose shape is exactly `{ id, kind }`.
-- A Contract holds no runtime state and is reusable across applications.
+- A Contract holds no execution state and is reusable across applications.
 - The ID must be non-empty with no leading or trailing whitespace. It is case-sensitive, and is neither trimmed nor Unicode-normalised.
 - One ID cannot serve two kinds in the same Host; doing so throws `CONTRACT_CONFLICT`.
-- Only successfully committed declarations and runtime use by an active Lifetime register a kind. A failed setup, a rollback and an unmatched host read never occupy a Contract ID.
+- Only successfully committed declarations and use by an active Lifetime register a kind. A failed setup, a rollback and an unmatched application-code read never occupy a Contract ID.
 - `optional()` accepts only a Service. An ExtensionPoint's empty map is already a valid value, and an Event has no notion of a provider.
 
-A fixed Contract ID should be declared exactly once in a codebase and exported from a stable module. TypeScript cannot prevent two modules from writing different type arguments for the same ID.
+A fixed Contract ID should be declared exactly once in a codebase and exported from a stable module. TypeScript alone cannot prevent two modules from writing different type arguments for the same ID, so Dougong's architecture guard rejects duplicate fixed-string declarations in this repository; downstream codebases should enforce the same static rule. Parameterized Contract families are not duplicate fixed declarations.
 
-When one interface needs several static instances, build an explicit Contract family with an ordinary function instead of introducing an implicit scope:
+When one interface needs several statically selected variants, build an explicit Contract family with an ordinary function instead of introducing an implicit scope:
 
 ```ts
 const workspaceStore = (workspace: string) =>
@@ -145,7 +145,7 @@ const ALPHA_STORE = workspaceStore("alpha")
 const BETA_STORE = workspaceStore("beta")
 ```
 
-The family function is the single declaration source: the type and the ID namespace are written once, and repeating the call with the same argument yields an equivalent ID without relying on object identity. Providers and consumers must declare the same concrete token. A Contract ID therefore carries both "what the capability is" and "which one is selected" as a stable identity, so the dependency graph, errors and diagnostics never have to explain a second scope tree. A dynamic tenant chosen per request must not expand the plugin graph without bound; use a Service that explicitly accepts a tenant/workspace parameter instead.
+The family function is the single declaration source: the type and the ID namespace are written once, and repeating the call with the same argument yields an equivalent ID without relying on object identity. Providers and consumers must declare the same concrete token. A Contract ID therefore carries both "what the capability is" and "which one is selected" as a stable identity, so the dependency graph, errors and diagnostics never have to explain a second scope tree. A dynamic tenant chosen per request must not expand the Installation graph without bound; use a Service that explicitly accepts a tenant/workspace parameter instead.
 
 Local configuration layering also uses an explicit Service adapter rather than a general `intercept()`:
 
@@ -165,7 +165,7 @@ const alphaHttpPlugin = definePlugin({
 
 The adapter's input, output and affected closure are all visible in the ordinary dependency graph, and the wrapping policy is decided by domain code that actually understands the `HttpClient` type. Core neither guesses method calls with a proxy nor needs a separate configuration-merging protocol.
 
-Core deliberately does not provide `extension.keyed()`, `extension.many()`, `ordered()` or `override()`. Those are Catalog, Pipeline or domain-specific composition policies, not contribution-set atoms.
+Core deliberately does not provide `extensionPoint.keyed()`, `extensionPoint.many()`, `ordered()` or `override()`. Those are Catalog, Pipeline or domain-specific composition policies, not contribution-set atoms.
 
 ## 4. Plugin
 
@@ -218,6 +218,8 @@ There is no `ctx.get(string)`, service locator, proxy, prototype-chain injection
 
 A Service alias yields a stable value; an ExtensionPoint alias yields a stable `ContributionView` object. The context and `ctx.meta` are shallow-frozen, but a Service value itself is neither proxied nor frozen.
 
+Within one Plugin, each Contract ID may be declared exactly once. Two aliases cannot reference the same capability, and one Contract cannot appear in both `requires` and `provides`; `definePlugin()` rejects these ambiguities immediately with a `TypeError` instead of leaving the dependency graph or setup to guess the caller's intent.
+
 Reserved aliases:
 
 ```text
@@ -235,7 +237,7 @@ setup() {
 }
 ```
 
-A missing declared output throws `SERVICE_NOT_RETURNED`. Even a ready-made value from application code should be wrapped in an ordinary plugin; Core provides no `app.provide()` branch.
+A missing declared output throws `SERVICE_NOT_RETURNED`. Even a ready-made value from application code should be wrapped in an ordinary Plugin; Core provides no `host.provide()` branch.
 
 ### 4.3 Configuration
 
@@ -267,13 +269,13 @@ ctx.lifetime(label)
 ctx.spawn(task)
 ctx.on(event, listener)
 ctx.emit(event, payload)
-ctx.contribute(extension, localKey, value)
+ctx.contribute(point, localKey, value)
 ```
 
-`ctx.signal` is a standard `AbortSignal`. `ctx.meta` is:
+`ctx.signal` is a standard `AbortSignal`. `ctx.meta` is a frozen `InstanceMeta`:
 
 ```ts
-{
+interface InstanceMeta {
   hostName: string
   pluginName: string
   installationId: string
@@ -291,11 +293,11 @@ The context provides no `effect()`, `observe()` or `using()`:
 
 ## 6. Service
 
-A Service is a stable snapshot for the lifetime of a plugin instance:
+A Service is a stable snapshot for the lifetime of an Instance:
 
 ```ts
 const db = ctx.db
-db === ctx.db // always true while this instance lives
+db === ctx.db // always true while this Instance lives
 ```
 
 Live Service proxies are forbidden. When a provider updates, the Host:
@@ -308,7 +310,7 @@ pre-validates the candidate graph and configs
 → rebuilds consumers in dependency order
 ```
 
-`optional(SERVICE)` follows snapshot semantics too. When a provider goes from absent to present or the reverse, the consumer instance is rebuilt; a live context is never mutated.
+`optional(SERVICE)` follows snapshot semantics too. When a provider goes from absent to present or the reverse, the consumer Instance is rebuilt; a live context is never mutated.
 
 Outside the Host and at test boundaries you may read:
 
@@ -316,11 +318,11 @@ Outside the Host and at test boundaries you may read:
 const users = host.get(USERS)
 ```
 
-`host.get()` accepts only a Service, and succeeds only while the Host is active and that Service is running. Inside a plugin, only declared dependencies are available.
+`host.get()` accepts only a Service, and succeeds only while the Host is active and that Service is available. Inside a Plugin, only declared dependencies are available.
 
-The Host caches the validated dependency graph corresponding to the current active runtime; `host.get()` performs provider and Service map lookups without rebuilding the graph. The idle state allows a stepwise, temporarily incomplete plan, so candidate graphs are built only during `start()` or a ChangeSet committed while the Host is active.
+The Host caches the validated dependency graph corresponding to committed execution state; `host.get()` performs provider and Service map lookups without rebuilding the graph. The idle state allows a stepwise, temporarily incomplete plan, so candidate graphs are built only during `start()` or a ChangeSet committed while the Host is active.
 
-Executing a ChangeSet while the Host is active explicitly enters `changing`, and application-code `host.get()` refuses reads for that window. It never poses as a stable active state while the old runtime stops and the new one starts. Only after the transaction succeeds or a rollback completes does it re-enter `active` and switch to the corresponding graph; if recovery is impossible it fails closed to `idle`. Host reads therefore see only "before commit" and "after commit"; candidate graphs and half-rebuilt Service maps never leak.
+Executing a ChangeSet while the Host is active explicitly enters `changing`, and application-code `host.get()` refuses reads for that window. It never poses as a stable active state while old Instances stop and new Instances start. Only after the transaction succeeds or a rollback completes does it re-enter `active` and switch to the corresponding graph; if recovery is impossible it fails closed to `idle`. Application-code reads therefore see only "before commit" and "after commit"; candidate graphs and half-rebuilt Service maps never leak.
 
 ### 6.1 Startup scheduling
 
@@ -343,7 +345,7 @@ Core currently offers no concurrency-limit configuration. It has no second sched
 
 Every ExtensionPoint is:
 
-> A dynamic contribution map owned by plugin installations and identified by stable local keys.
+> A dynamic contribution map owned by an Instance and identified by stable local keys.
 
 ```ts
 const ROUTES = extensionPoint<Route>("http/routes")
@@ -353,22 +355,22 @@ contribution.update(nextRoute)
 contribution.dispose()
 ```
 
-The real key is composed by the runtime:
+The real key is composed by Core:
 
 ```text
-<escaped plugin installation id>/<escaped local key>
+<escaped installation id>/<escaped local key>
 ```
 
 where `%` and `/` become `%25` and `%2F`, so the separator cannot make two different (installation ID, local key) pairs produce the same real key, while common keys stay readable.
 
 Therefore:
 
-- different plugins using the same local key do not conflict
+- different Installations using the same local key do not conflict
 - one installation with one local key may have exactly one live contribution
-- an update must go through the original Contribution handle
+- an update must go through the original `Contribution`
 - `undefined` is a legal contribution value; liveness is determined by the real key and record identity, never by using a value as a terminal sentinel
-- an obsolete handle is checked by record identity and cannot delete a later contribution with the same key
-- stopping a plugin removes all of its contributions
+- an obsolete `Contribution` is checked by record identity and cannot delete a later contribution with the same key
+- stopping an Instance removes all of its contributions
 - a failed setup publishes no contribution
 
 ### 7.2 The unified observation protocol
@@ -391,13 +393,13 @@ rebuild()
 ctx.routes.subscribe(rebuild)
 ```
 
-An ContributionView obtained from the context assigns its subscriptions to the current Lifetime automatically; early release still uses the returned `dispose()`.
+A ContributionView obtained from the context assigns its subscriptions to the current Lifetime automatically; early release still uses the returned `dispose()`.
 
 The snapshot is a genuinely read-only map with no `set/delete/clear`. Object identity is preserved when nothing changes, and a new snapshot is created when a change commits. However many times one ExtensionPoint changes inside a single Core ChangeSet, it notifies exactly once.
 
-An ContributionView is a live capability owned by the plugin Lifetime, not a store reference that can leak permanently. After a plugin stops, the old view's `get/subscribe` refuse to work and sever the store reference; a new instance receives a new view. The view's public `get/subscribe` come from a narrow handle holding only a revocable binding — an arrow function created inside a store method scope must not implicitly capture the store. This boundary differs from the treatment of an old Service closure: a Service is an ordinary value resolved once, while an ContributionView keeps observing the runtime.
+A ContributionView is a live capability owned by the Plugin Lifetime, not a store reference that can leak permanently. After an Instance stops, the old view's `get/subscribe` refuse to work and sever the store reference; a new Instance receives a new view. The view's public `get/subscribe` come from a narrow facade holding only a revocable binding — an arrow function created inside a store method scope must not implicitly capture the store. This boundary differs from the treatment of an old Service closure: a Service is an ordinary value resolved once, while a ContributionView keeps observing committed contributions.
 
-An exception from a later subscriber goes to the Host `onError` and must not damage the runtime command that produced the notification. The first read and the plugin's own synchronous `rebuild()` errors still fail setup normally.
+An exception from a later subscriber goes to the Host `onError` and must not damage the Host command that produced the notification. The first read and the Plugin's own synchronous `rebuild()` errors still fail setup normally.
 
 ### 7.3 Higher-level composition
 
@@ -409,7 +411,7 @@ ExtensionPoint<Middleware> + orderBy(order) + reduceRight    → middleware pipe
 ExtensionPoint<Theme> + keyOf(theme.id) + stack policy       → ThemeCatalog Service
 ```
 
-These composers may expose a more domain-appropriate API, but their input must be the public `ContributionView`, their lifetime must use public cleanup/subscribe, and they may not reach the internal `ExtensionStore`.
+These composers may expose a more domain-appropriate API, but their input must be the public `ContributionView`, their lifetime must use public cleanup/subscribe, and they may not reach the internal `ContributionStore`.
 
 ## 8. Event
 
@@ -437,7 +439,7 @@ An Event is a fact, not state, so an `emit()` is not itself rollback-able. Exter
 
 ## 9. Lifetime and Disposable
 
-Every plugin instance inherently owns a root Lifetime. All listeners, contributions, subscriptions, tasks, child Lifetimes and cleanups created through the context belong to it automatically.
+Every Instance inherently owns a root Lifetime. All listeners, contributions, subscriptions, tasks, child Lifetimes and cleanups created through the context belong to it automatically.
 
 The uniform resource protocol:
 
@@ -449,15 +451,15 @@ interface Disposable {
 }
 ```
 
-Resource handles are uniformly named `dispose()`; removing a plugin installation from the plan is uniformly `remove()`. The two are never interchangeable.
+Resources are uniformly released with `dispose()`; removing an Installation from the plan is uniformly `remove()`. The two are never interchangeable.
 
 `dispose()` is the canonical API for resource release; `Symbol.dispose` / `Symbol.asyncDispose` are only that same operation projected onto JavaScript's `using` syntax, and own no second state machine or error semantics.
 
 ### 9.1 cleanup
 
 ```ts
-const handle = ctx.cleanup(() => server.close())
-await handle.dispose() // may release early; idempotent
+const cleanup = ctx.cleanup(() => server.close())
+await cleanup.dispose() // may release early; idempotent
 ```
 
 Cleanups run in reverse registration order, and one failure never skips earlier resources. A single failure is rethrown as-is; multiple failures aggregate.
@@ -479,9 +481,9 @@ await session.dispose()
 - a child released early detaches from the parent's ownership set
 - `dispose()` is idempotent
 - the parent context and a child Lifetime use the same resource API
-- `label` is a required, non-empty, untrimmed diagnostic description; it takes no part in runtime lookup or identity, and duplicates among siblings are legal
+- `label` is a required, non-empty, untrimmed diagnostic description; it takes no part in execution lookup or identity, and duplicates among siblings are legal
 - actively releasing a Lifetime or task cancels its signal with a frozen `AbortError`, while a parent cancellation forwards the parent signal's reason explicitly. Callers classify by `signal.aborted` and the reason's type, never by the reason's object identity
-- repeated `dispose()` during an in-flight release shares one completion promise; repeated calls after the terminal state are completed no-ops. The caller that initiated the release still receives the original failure, but a terminal handle stops retaining a rejected promise or its error stack. Once released, a Lifetime expresses its terminal state with a fresh already-aborted signal carrying the same reason, severing the listener closures on the old signal
+- repeated `dispose()` during an in-flight release shares one completion promise; repeated calls after the terminal state are completed no-ops. The caller that initiated the release still receives the original failure, but a terminal resource stops retaining a rejected promise or its error stack. Once released, a Lifetime expresses its terminal state with a fresh already-aborted signal carrying the same reason, severing the listener closures on the old signal
 
 ### 9.3 spawn
 
@@ -491,7 +493,7 @@ await task.result
 await task.dispose()
 ```
 
-Releasing a task aborts first, then awaits the result settling. A background failure not handled synchronously by the caller is reported through the Host `onError`; a failure after abort is treated as a cancellation outcome and not reported twice.
+Releasing a task aborts first, then awaits the result settling. A background failure not handled synchronously by the caller is reported through the Host `onError`. Only a rejection identical to `signal.reason` or an explicit `AbortError` is classified as cancellation; another failure merely occurring after abort is still reported, so genuine shutdown failures cannot disappear behind cancellation.
 
 A task that settles naturally immediately detaches from the parent Lifetime's ownership set and from the AbortSignal listeners. A later `dispose()` on that task is an idempotent completion and never retroactively aborts the signal of a finished task. Completed tasks do not accumulate in a long-lived owner proportional to history; releasing a parent still aborts and awaits every task that had not settled at that moment.
 
@@ -502,7 +504,7 @@ A plugin's stop order is fixed and never depends on registration coincidence:
 ```text
 refuse new context work
 → revoke Services
-→ revoke listeners, contributions and extension subscriptions
+→ revoke listeners, contributions and ContributionView subscriptions
 → abort the root signal
 → await background tasks
 → release child lifetimes in reverse order
@@ -531,9 +533,9 @@ await host.start()
 await database.ready()
 ```
 
-`install()` synchronously returns a stable handle and queues a single-item ChangeSet onto the Host command queue. Definition-shape errors throw synchronously; commit and startup errors surface through `ready()` / `start()`.
+`install()` synchronously returns a stable `Installation` and queues a single-item ChangeSet onto the Host command queue. Plugin-shape errors throw synchronously; commit and startup errors surface through `ready()` / `start()`.
 
-`ready()`'s barrier sits after the whole command: it settles only once candidate-graph validation, the runtime instance switch and the ExtensionPoint batch publication have all finished. A caller reading an ContributionView immediately after `await handle.ready()` sees only the committed snapshot and never needs to wait an extra tick.
+`ready()`'s barrier sits after the whole command: it settles only once candidate-graph validation, the Instance switch and the ExtensionPoint batch publication have all finished. A caller reading a ContributionView immediately after `await installation.ready()` sees only the committed snapshot and never needs to wait an extra tick.
 
 The command queue linearises install, update, remove, start and stop. One failure never destroys the ability to queue later commands.
 
@@ -545,24 +547,24 @@ const result = commands.run(operation) // the caller receives its own value or e
 await commands.settled                 // await everything queued at read time
 ```
 
-`run()` continues with the next item whether the previous one succeeded or failed; the internal tail records only completion boundaries and never rejects, and each item's raw result goes only to its own caller. It is the command serialization protocol shared by hosts and higher-level orchestrators, and owns no Host, transaction or error-classification state.
+`run()` continues with the next item whether the previous one succeeded or failed; the internal tail records only completion boundaries and never rejects, and each item's raw result goes only to its own caller. It is the command serialization protocol shared by Hosts and higher-level orchestrators, and owns no Host, transaction or error-classification state.
 
 ### 10.2 Installation
 
 ```ts
-handle.status
-handle.ready()
-handle.update({ plugin })
-handle.update({ config })
-handle.update({ plugin, config })
-handle.remove()
+installation.status
+installation.ready()
+installation.update({ plugin })
+installation.update({ config })
+installation.update({ plugin, config })
+installation.remove()
 ```
 
-`update()` covers both config update and definition replacement. The argument must contain at least one of `plugin` or `config`; there is no `replace/reload/restart`. A definition update may not change the plugin name, and the handle and installation ID stay stable.
+`update()` covers both config and Plugin declaration replacement. The argument must contain at least one of `plugin` or `config`; there is no `replace/reload/restart`. A Plugin update may not change its name; the Installation and its ID stay stable while the active Instance is replaced.
 
-Once a handle reaches `removed` it revokes its control reference to the Host and releases the plugin definition and config. A terminal `remove()` succeeds idempotently and `update()` rejects with `INSTALLATION_REMOVED`; keeping a removed handle never keeps the Host alive.
+Once an Installation reaches `removed` it revokes its control reference to the Host and releases the Plugin declaration and config. A terminal `remove()` succeeds idempotently and `update()` rejects with `INSTALLATION_REMOVED`; keeping a removed Installation never keeps the Host alive.
 
-When an installation fails before commit, a caller already awaiting `ready()` still receives the original `Error`; a non-`Error` rejection reason is explicitly classified as `INSTALLATION_UNAVAILABLE` on entering a stable failure state. After the instance detaches from the Host, the handle keeps only a `name/message/code` data summary and reconstructs an error at the call boundary on a later `ready()`. A JavaScript `Error`'s stack may retain the whole orchestration object graph and must not become a hidden ownership edge on a terminal handle. Failed instances still belonging to an active Host keep the original error for diagnostics and retry semantics. Platform's terminal `Registration` follows the same rule.
+When an Installation fails before commit, a caller already awaiting `ready()` still receives the original `Error`. If setup or a config validator throws a non-`Error` value, the first public command and the stable failure state share the same `INSTALLATION_UNAVAILABLE` error, with the original value in `cause`. After the Installation detaches from the Host, it keeps only a `name/message/code` data summary and reconstructs an error at the call boundary on a later `ready()`. A JavaScript `Error`'s stack may retain the whole orchestration object graph and must not become a hidden ownership edge on a terminal Installation. Failed Installations still attached to an active Host keep the original error for diagnostics and retry semantics. Platform's terminal `Registration` follows the same rule.
 
 ### 10.3 The canonical ChangeSet
 
@@ -580,20 +582,20 @@ Rules:
 - one-shot; sealed after the first `commit()`
 - commit is idempotent; repeated calls return the same promise
 - an empty ChangeSet is a side-effect-free committed no-op that manufactures neither a fake `changing` status nor a diagnostics revision
-- one handle may appear only once per ChangeSet
-- handles from another Host are rejected
-- the candidate dependency graph and every affected config are validated before any instance stops
+- one Installation may appear only once per ChangeSet
+- Installations from another Host are rejected
+- the candidate dependency graph and every affected config are validated before any Instance stops
 - during execution the Host is `changing` and application-code Service reads are closed
 - an active change rebuilds only the targets and the affected transitive consumers in the old and new graphs
 - multiple changes share one stop, start, rollback and ExtensionPoint notification boundary
 
-The handle returned by `change.install()` is a draft owned by that ChangeSet. It gains Host control authority only at `commit()`; calling its `update/remove` before that rejects with `INSTALLATION_UNAVAILABLE`, so it cannot secretly join a second ChangeSet. `host.install()` returns an immediately controllable handle only because that sugar has already synchronously submitted its internal single-item ChangeSet.
+The Installation returned by `change.install()` is a draft owned by that ChangeSet. It gains Host control authority only at `commit()`; calling its `update/remove` before that rejects with `INSTALLATION_UNAVAILABLE`, so it cannot secretly join a second ChangeSet. `host.install()` returns an immediately controllable Installation only because that sugar has already synchronously submitted its internal single-item ChangeSet.
 
-When a change's setup fails, Core releases the partial new runtime and restores the old graph. If old resources cannot be stopped, the new runtime cannot be cleaned up, or the old graph cannot be restored, the Host fails closed to idle rather than falsely reporting active.
+When a change's setup fails, Core releases the partial activation and restores the old graph. If old resources cannot be stopped, the partial activation cannot be cleaned up, or the old graph cannot be restored, the Host fails closed to idle rather than falsely reporting active.
 
 ### 10.4 stop
 
-`host.stop()` stops in reverse dependency order. The installation plan survives and handles return to pending; a later `start()` recreates instances from the current definitions and configs. Only `remove()` deletes from the plan.
+`host.stop()` stops in reverse dependency order. The installation plan survives and Installations return to `pending`; a later `start()` creates new Instances from the current Plugin declarations and configs. Only `remove()` deletes from the plan.
 
 ## 11. Group
 
@@ -620,17 +622,17 @@ Group rules:
 - every installation inside configure shares one commit
 - `ready()` awaits the installations produced by configure crossing the ready barrier
 - `remove()` deletes the whole subtree in one Core transaction
-- a Group ChangeSet may only modify handles in its own subtree
-- `GroupHandle` and `Installation` share `status/ready/remove`; only `Installation` adds `update`
+- a Group ChangeSet may only modify Installations in its own subtree
+- `Group` and `Installation` share `status/ready/remove`; only `Installation` adds `update`
 - a Group changes no capability visibility: Services, ExtensionPoints and Events belong to the whole Host
 
-Nested Group configures share one explicit configuration session. Any child failure marks the entire session `failed`, so even a caller that catches the exception in an outer scope cannot keep appending declarations or commit a partial configuration. Non-`Error` failure values are classified at the configuration and runtime transaction boundaries as `GROUP_UNAVAILABLE`; after a failed `ready()` the Group status must be `failed` and may not appear healthy merely because the failure value happened to be `undefined`.
+Nested Group configures share one explicit configuration session. Any child failure marks the entire session `failed`, so even a caller that catches the exception in an outer scope cannot keep appending declarations or commit a partial configuration. Non-`Error` failure values are classified at the configuration and Host transaction boundaries as `GROUP_UNAVAILABLE`; after a failed `ready()` the Group status must be `failed` and may not appear healthy merely because the failure value happened to be `undefined`.
 
 Each Group keeps exactly one current readiness barrier. A Group that has not yet been established stays `failed` after a failed commit, and a later successful change replaces the old barrier and establishes it. An already-established Group whose change failed and whose previously committed state Core restored stays healthy. `status` and `ready()` always read the same lifecycle state.
 
-Removing a Group revokes handle authority for the whole subtree at once. A terminal `GroupHandle` keeps only its identity and the `removed` status, `remove()` stays idempotent, and it no longer holds the Host, the configuration session or a historical failure stack, nor can it create installations, child Groups or ChangeSets.
+Removing a Group revokes authority for the whole subtree at once, including ChangeSets created before removal but not yet committed. Submitting one of those stale drafts consistently rejects with `GROUP_REMOVED`; it cannot cross the Group boundary into the Host. A terminal `Group` keeps only its identity and the `removed` status, `remove()` stays idempotent, and it no longer holds the Host, the configuration session or a historical failure stack, nor can it create Installations, child Groups or ChangeSets.
 
-When workspace or tenant separation is needed, choose by semantics: a small fixed number of instances needing independent dependency graphs uses an explicit Contract family; data selected per request at runtime uses a Service taking a tenant/workspace parameter; a fully independent capability graph uses multiple Hosts; security isolation uses a Worker, iframe or process. Never pass a Group off as a resolution or security boundary.
+When workspace or tenant separation is needed, choose by semantics: a small fixed number of capability variants uses an explicit Contract family; data selected per request uses a Service taking a tenant/workspace parameter; a fully independent capability graph uses multiple Hosts; security isolation uses a Worker, iframe or process. Never pass a Group off as a resolution or security boundary.
 
 ## 12. Transactional publication
 
@@ -669,7 +671,7 @@ interface Readable<T> {
 }
 ```
 
-Producing such runtime diagnostics uses Core's single write-side primitive, `SnapshotPublisher`:
+Producing such operational diagnostics uses Core's single write-side primitive, `SnapshotPublisher`:
 
 ```ts
 const snapshots = new SnapshotPublisher(readSnapshot, reportError)
@@ -679,9 +681,9 @@ snapshots.invalidate()                     // mark invalid and notify
 snapshots.dispose()                        // freeze the terminal state and sever closures
 ```
 
-`view` is an authority narrowing, not a second observation API: a reader may only `get/subscribe`, and the owner may drive invalidation and termination only through the publisher. `dispose()` freezes the last snapshot before severing the reader, reporter and existing subscriptions, so a historical view can still read the terminal state without keeping the runtime alive. Host, Lifetime and Platform diagnostics all take this path, and no higher layer may rewrite the subscription registry or the error boundary.
+`view` is an authority narrowing, not a second observation API: a reader may only `get/subscribe`, and the owner may drive invalidation and termination only through the publisher. A subscriber failure is handed to the explicit reporter without preventing later subscribers from being notified; if the reporter itself fails, the Publisher finishes the notification pass and then preserves both failures in an `AggregateError`. `dispose()` freezes the last snapshot before severing the reader, reporter and existing subscriptions, so a historical view can still read the terminal state without keeping the owner alive. Host, Lifetime and Platform diagnostics all take this path, and no higher layer may rewrite the subscription registry or the error boundary.
 
-Where a snapshot needs map semantics it uniformly uses `ReadonlyMapSnapshot`. It copies the input and exposes only `ReadonlyMap` methods, avoiding the fake immutability of `Object.freeze(new Map())`, on which `set/delete/clear` still work. It guarantees only the container's structural immutability; entry values should be frozen as they enter the snapshot.
+Where a snapshot needs map semantics it uniformly uses `ReadonlyMapSnapshot`. It accepts only the Map or entry-iterable inputs admitted by its type, copies the input and exposes only `ReadonlyMap` methods, avoiding the fake immutability of `Object.freeze(new Map())`, on which `set/delete/clear` still work. It guarantees only the container's structural immutability; entry values should be frozen as they enter the snapshot.
 
 `@dougongjs/reactive` is an independent foundation package:
 
@@ -706,9 +708,9 @@ observe(ctx, endpoint, (url, lifetime) => {
 })
 ```
 
-`observe()` uses only the public `get/subscribe/lifetime/spawn/cleanup`, so it is neither a Core privilege nor a second runtime. Core does not depend on reactive, and third-party `Readable`s are structurally compatible.
+`observe()` uses only the public `get/subscribe/lifetime/spawn/cleanup`, so it is neither a Core privilege nor a second execution engine. Core does not depend on reactive, and third-party `Readable`s are structurally compatible.
 
-Structural compatibility unifies only the observation protocol; it does not flatten the ownership boundary of a resource's origin. An ContributionView injected through the context is a live capability bound to the current Lifetime, and a subscription created directly on it is owned by that Lifetime automatically. A standalone signal or third-party `Readable` has no implicit owner, so a direct subscriber holds the returned `Disposable` itself, or hands it to `observe(owner, source, observer)` to be composed into an explicit Lifetime. Both still have one `subscribe()` and one `dispose()`; the only difference is whether a clear structural owner already exists.
+Structural compatibility unifies only the observation protocol; it does not flatten the ownership boundary of a resource's origin. A ContributionView injected through the context is a live capability bound to the current Lifetime, and a subscription created directly on it is owned by that Lifetime automatically. A standalone signal or third-party `Readable` has no implicit owner, so a direct subscriber holds the returned `Disposable` itself, or hands it to `observe(owner, source, observer)` to be composed into an explicit Lifetime. Both still have one `subscribe()` and one `dispose()`; the only difference is whether a clear structural owner already exists.
 
 Solid-style bare `effect()`, dependency arrays, deep proxy stores and `watchEffect/autorun/reaction` are not provided. Effect-TS may be used inside a Service or attached through a one-way adapter, but does not enter Core.
 
@@ -719,7 +721,7 @@ host.diagnostics.get()
 host.diagnostics.subscribe(notify)
 ```
 
-A snapshot contains the Host name/status/revision, a `InstallationSnapshot` map and a `GroupSnapshot` map. The snapshot, its entries, arrays and maps are all read-only; diagnostics cannot control the runtime.
+A snapshot contains the Host name/status/revision, an `InstallationSnapshot` map and a `GroupSnapshot` map. The snapshot, its entries, arrays and maps are all read-only; diagnostics cannot control the Host.
 
 A running `InstallationSnapshot` also carries an independent `lifetime` observation view:
 
@@ -731,7 +733,7 @@ interface LifetimeSnapshot {
   readonly tasks: number
   readonly listeners: number
   readonly contributions: number
-  readonly extensionViews: number
+  readonly contributionViews: number
   readonly subscriptions: number
   readonly children: readonly LifetimeSnapshot[]
 }
@@ -745,24 +747,24 @@ The root node's `label` is the stable installation ID, and every `children` entr
 
 A label answers only "why do these resources live together". It is not a capability ID, a lookup key or a new scope. Duplicate labels create no conflict and change no release semantics. Leaf resources such as cleanups, tasks and listeners add no naming overloads of their own; a child Lifetime is created only where a shared release boundary genuinely exists. Core never guesses nodes from function names, call stacks or ordinals, and never fabricates tree levels merely to implement categorised counts.
 
-A resource change updates only this small view: it does not bump the Host revision or rebuild every `InstallationSnapshot`. A caller wanting to observe resource churn subscribes to the nested view explicitly. A child Lifetime detaches from the tree as soon as it terminates; after a plugin stops, new `InstallationSnapshot`s no longer carry `lifetime`, and an already-obtained old view stops at a childless, all-zero `disposed` terminal state without retaining the Host.
+A resource change updates only this small view: it does not bump the Host revision or rebuild every `InstallationSnapshot`. A caller wanting to observe resource churn subscribes to the nested view explicitly. A child Lifetime detaches from the tree as soon as it terminates; after an Instance stops, new `InstallationSnapshot`s no longer carry `lifetime`, and an already-obtained old view stops at a childless, all-zero `disposed` terminal state without retaining the Host.
 
-Public handles and the top-level Host / Platform are frozen narrow objects. Plain JavaScript inspection of own properties or prototypes will not reveal:
+Public facade objects and the top-level Host / Platform are frozen and narrow. Plain JavaScript inspection of own properties or prototypes will not reveal:
 
 ```text
 InstallationRecord
 GroupNode
-ExtensionStore
+ContributionStore
 EventHub
 LifetimePort
 ChangeSet port
-ChangeSet discard / handle attach / revoke
+ChangeSet discard / Installation attach / revoke
 The Host's Group orchestration port
 staged publication methods
-Platform Artifact / Core handle
+Platform Artifact / Core Installation
 ```
 
-TypeScript's `private` is not treated as a security measure; the implementation uses real `#private` fields or separate facade handles to prevent runtime shape leakage.
+TypeScript's `private` is not treated as a security measure; the implementation uses real `#private` fields or separate facade objects to prevent JavaScript shape leakage.
 
 Context restrictions are not a security sandbox either. A same-realm plugin can still reach `globalThis`, the DOM or fetch. Untrusted plugins must go into a Worker, iframe, restricted realm or separate process.
 
@@ -778,16 +780,16 @@ Programming-shape errors use `TypeError`. Decidable model errors use `DougongErr
 | `SERVICE_MISSING` | a required Service has no provider |
 | `SERVICE_CYCLE` | a Service dependency cycle or self-dependency |
 | `SERVICE_NOT_RETURNED` | setup did not return a declared output |
-| `SERVICE_UNAVAILABLE` | an external read or a runtime binding is currently unavailable |
-| `INSTALLATION_REMOVED` | an operation on an instance already removed from the plan |
-| `INSTALLATION_UNAVAILABLE` | the handle cannot enter an awaitable state |
+| `SERVICE_UNAVAILABLE` | an external read or an Instance binding is currently unavailable |
+| `INSTALLATION_REMOVED` | an operation on an Installation already removed from the plan |
+| `INSTALLATION_UNAVAILABLE` | the Installation cannot enter an awaitable state |
 | `INSTALLATION_IDENTITY` | update attempted to change the plugin name |
 | `GROUP_REMOVED` | an operation on a removed Group |
 | `GROUP_UNAVAILABLE` | the Group has not been successfully established |
 
 Because an Event by definition collects every listener failure, it always throws an `AggregateError`. Lifetime and shutdown attempt every resource first: a single failure is rethrown as-is, and multiple failures aggregate. A rollback or fail-closed spanning several phases uses `AggregateError` uniformly.
 
-Errors from background tasks, subscribers and later observes cannot return to the original synchronous stack and are reported through `onError`. A failure inside `onError` itself must not change the runtime command being observed.
+Errors from background tasks, subscribers and later observes cannot return to the original synchronous stack and are reported through `onError`. A failure inside `onError` itself must not change the Host command being observed.
 
 ## 16. Forbidden directions
 
@@ -795,11 +797,11 @@ Errors from background tasks, subscribers and later observes cannot return to th
 - decorator dependency injection and string service locators
 - proxy contexts, prototype-chain shadowing, live Service proxies
 - signals/effects, React, HTTP, Node, filesystem or timers built into Core
-- domain policies such as `extension.keyed/many/ordered/override` entering Core
+- domain policies such as `extensionPoint.keyed/many/ordered/override` entering Core
 - conflating scope with Group
 - a lifecycle hook matrix
 - adding serial/bail/waterfall query modes to Event
-- plugins arbitrarily mutating the global plugin graph
+- a Plugin arbitrarily mutating the global Installation graph
 - loaders, manifests, HMR or permissions entering Core
 - passing context API restrictions off as a security sandbox
 - fields or methods hidden only in type declarations but leaked on the JavaScript object
@@ -823,7 +825,7 @@ The design formula:
 Plugin =
   setup(
     immutable service snapshot,
-    live extension views,
+    live ContributionViews,
     config,
     lifetime,
   )

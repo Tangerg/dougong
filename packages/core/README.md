@@ -14,7 +14,7 @@ npm install @dougongjs/core
 
 ### 六个原子
 
-- **`Service`** —— 稳定的一对一能力。依赖通过 `requires` 显式声明，实例期内不变；提供者变化会重建消费者，不使用 live Proxy。
+- **`Service`** —— 稳定的一对一能力。依赖通过 `requires` 显式声明，Instance 生命周期内不变；提供者变化会重建消费者，不使用 live Proxy。
 - **`ExtensionPoint`** —— 可动态增删的开放贡献集合。Core 只保存原始贡献；排序、领域 key、覆盖和 pipeline 是高层组合策略。
 - **`Event`** —— 不保留状态的瞬时事实。只有一种分发语义：并发广播并等待全部监听器。
 - **`Lifetime`** —— 监听、贡献、任务、子生命周期与清理的结构化所有权。终态资源自动从父级摘除。
@@ -45,7 +45,7 @@ await host.start()
 
 ### 环境要求
 
-Node.js ≥ 22 或等价的 ES2024 宿主。TypeScript 消费者需要
+Node.js ≥ 22 或等价的 ES2024 运行时。TypeScript 消费者需要
 `"lib": ["ES2024", "DOM", "DOM.Iterable", "ESNext.Disposable"]`。
 
 ---
@@ -60,7 +60,7 @@ npm install @dougongjs/core
 
 ### Six atoms
 
-- **`Service`** — a stable one-to-one capability. Dependencies are declared explicitly through `requires` and stay fixed for the instance lifetime; a provider change rebuilds consumers rather than using a live proxy.
+- **`Service`** — a stable one-to-one capability. Dependencies are declared explicitly through `requires` and stay fixed for the Instance lifetime; a provider change rebuilds consumers rather than using a live proxy.
 - **`ExtensionPoint`** — an open contribution set that adds and removes live. Core keeps only raw contributions; ordering, domain keys, override and pipelines are higher-level composition policy.
 - **`Event`** — a transient fact retaining no state, with one dispatch semantic: broadcast concurrently and await every listener.
 - **`Lifetime`** — structured ownership of listeners, contributions, tasks, child lifetimes and cleanups. Terminal resources detach from their parent automatically.
@@ -91,7 +91,7 @@ No service locator, ambient scope, prototype-chain injection or proxy. The only 
 
 ### Requirements
 
-Node.js ≥ 22 or an equivalent ES2024 host. TypeScript consumers need
+Node.js ≥ 22 or an equivalent ES2024 runtime. TypeScript consumers need
 `"lib": ["ES2024", "DOM", "DOM.Iterable", "ESNext.Disposable"]`.
 
 ---

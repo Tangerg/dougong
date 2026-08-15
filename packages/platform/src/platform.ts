@@ -3,17 +3,22 @@ import {
   type Installer,
   type Provisions,
   type Requirements,
+  isLogger,
   SerialQueue,
   type SnapshotView,
 } from "@dougongjs/core";
 import { validate } from "compare-versions";
-import { loadPluginDefinition, normalizeArtifact } from "./artifact";
+import { loadPlugin, normalizeArtifact } from "./artifact";
 import { validateCandidateGraph } from "./candidate-graph";
 import { stageCoreChange } from "./core-change";
 import { PlatformDiagnostics, type PlatformSnapshot } from "./diagnostics";
 import { PlatformError } from "./errors";
 import type { Loader } from "./loader";
-import { RegistrationRecord, type RegistrationRecordOwner } from "./registration";
+import {
+  normalizeRegistrationFailure,
+  RegistrationRecord,
+  type RegistrationPort,
+} from "./registration";
 import { matchesVersion } from "./manifest";
 import {
   PlatformChangeSetDraft,
@@ -21,7 +26,7 @@ import {
   type PlatformChangePort,
 } from "./platform-change-set";
 import type {
-  AnyPlugin,
+  ErasedPlugin,
   PlatformOptions,
   Registration,
   NormalizedArtifact,
@@ -38,7 +43,7 @@ interface PlatformAuthority<Reference> {
 interface PlatformPorts<Reference> {
   readonly installer: Installer;
   readonly loader: Loader<Reference>;
-  readonly permissions: Authorizer;
+  readonly authorizer: Authorizer;
   readonly logger: Logger;
 }
 
@@ -56,7 +61,7 @@ class PlatformImpl<Reference> implements Platform<Reference> {
   readonly #ownedRegistrations = new WeakMap<object, RegistrationRecord<Reference>>();
   readonly #lockedRegistrations = new Set<RegistrationRecord<Reference>>();
   readonly #diagnosticModel: PlatformDiagnostics;
-  readonly #registrationOwner: RegistrationRecordOwner<Reference>;
+  readonly #registrationPort: RegistrationPort<Reference>;
   readonly #changePort: PlatformChangePort<Reference>;
   readonly #authority: PlatformAuthority<Reference>;
   readonly #changeQueue = new SerialQueue();
@@ -80,10 +85,10 @@ class PlatformImpl<Reference> implements Platform<Reference> {
       throw new TypeError("Platform loader must implement load()");
     }
     if (
-      options.permissions !== undefined &&
-      (!options.permissions || typeof options.permissions.authorize !== "function")
+      options.authorizer !== undefined &&
+      (!options.authorizer || typeof options.authorizer.authorize !== "function")
     ) {
-      throw new TypeError("Platform permissions must implement authorize()");
+      throw new TypeError("Platform authorizer must implement authorize()");
     }
     if (options.logger !== undefined && !isLogger(options.logger)) {
       throw new TypeError("Platform logger must implement debug/info/warn/error");
@@ -96,7 +101,7 @@ class PlatformImpl<Reference> implements Platform<Reference> {
       ports: Object.freeze({
         installer: options.installer,
         loader: options.loader,
-        permissions: options.permissions ?? new PermissionSet(),
+        authorizer: options.authorizer ?? new PermissionSet(),
         logger: options.logger ?? console,
       }),
     };
@@ -112,7 +117,7 @@ class PlatformImpl<Reference> implements Platform<Reference> {
       }
     });
     this.diagnostics = this.#diagnosticModel.view;
-    this.#registrationOwner = {
+    this.#registrationPort = {
       change: () => requirePlatform(authority).change(),
       activateRegistration: (registration, stack, signal) => {
         return requirePlatform(authority).#activateRegistration(registration, stack, signal);
@@ -126,7 +131,7 @@ class PlatformImpl<Reference> implements Platform<Reference> {
       createRegistration: (artifact) => requirePlatform(authority).#createRegistration(artifact),
       attachRegistration: (registration) =>
         requirePlatform(authority).#attachRegistration(registration),
-      resolve: (plugin) => requirePlatform(authority).#resolve(plugin),
+      resolve: (registration) => requirePlatform(authority).#resolve(registration),
       execute: (operations) => requirePlatform(authority).#execute(operations),
     };
     Object.freeze(this);
@@ -143,9 +148,9 @@ class PlatformImpl<Reference> implements Platform<Reference> {
     ConfigInput = Config,
   >(artifact: Artifact<Reference, Config, Requires, Provides, ConfigInput>) {
     const change = this.change();
-    const plugin = change.register(artifact);
+    const registration = change.register(artifact);
     await change.commit();
-    return plugin;
+    return registration;
   }
 
   change(): PlatformChangeSet<Reference> {
@@ -176,7 +181,7 @@ class PlatformImpl<Reference> implements Platform<Reference> {
     if (state.phase === "disposing") return state.completion;
     if (state.phase === "disposed") return Promise.resolve();
 
-    const completion = this.#changeQueue.settled.then(() => this.#disposeRegistrations());
+    const completion = this.#changeQueue.run(() => this.#disposeRegistrations());
     this.#state = { phase: "disposing", ports: state.ports, completion };
     this.#changeController?.abort();
     for (const registration of this.#registrations.values()) registration.cancelActivation();
@@ -190,18 +195,19 @@ class PlatformImpl<Reference> implements Platform<Reference> {
 
   #createRegistration(artifact: NormalizedArtifact<Reference>): RegistrationRecord<Reference> {
     const registration: RegistrationRecord<Reference> = new RegistrationRecord(artifact);
-    this.#ownedRegistrations.set(registration.handle, registration);
+    this.#ownedRegistrations.set(registration.publicRegistration, registration);
     return registration;
   }
 
   #attachRegistration(registration: RegistrationRecord<Reference>) {
-    registration.attach(this.#registrationOwner);
+    this.#assertActive();
+    registration.attach(this.#registrationPort);
   }
 
-  #resolve(plugin: Registration<Reference>) {
+  #resolve(value: Registration<Reference>) {
     const registration =
-      plugin && typeof plugin === "object"
-        ? this.#ownedRegistrations.get(plugin as object)
+      value && typeof value === "object"
+        ? this.#ownedRegistrations.get(value as object)
         : undefined;
     if (!registration) {
       throw new TypeError("Registration belongs to a different Platform");
@@ -242,40 +248,40 @@ class PlatformImpl<Reference> implements Platform<Reference> {
     if (this.#lockedRegistrations.has(registration)) {
       throw new PlatformError(
         "REGISTRATION_BUSY",
-        `Registration '${registration.name}' is being changed`,
+        `Registration '${registration.manifestName}' is being changed`,
       );
     }
     if (registration.status === "activated") return;
     if (stack.includes(registration)) {
       throw new PlatformError(
-        "PLUGIN_CYCLE",
-        `Plugin dependency cycle: ${[...stack, registration].map((item) => item.name).join(" -> ")}`,
+        "REGISTRATION_CYCLE",
+        `Registration dependency cycle: ${[...stack, registration]
+          .map((item) => item.manifestName)
+          .join(" -> ")}`,
       );
     }
 
     registration.beginActivation();
     this.#publish();
     try {
-      const { installer, permissions } = this.#requirePorts();
-      await permissions.authorize(registration.manifest, signal);
+      const { installer, authorizer } = this.#requirePorts();
+      await authorizer.authorize(registration.manifest, signal);
       await this.#activateDependencies(registration, [...stack, registration], signal);
-      const definition = await loadPluginDefinition(
-        this.#requirePorts().loader,
-        registration.artifact,
-        signal,
-      );
+      const plugin = await loadPlugin(this.#requirePorts().loader, registration.artifact, signal);
       const change = installer.change();
-      let handle = registration.coreHandle;
-      if (handle)
-        change.update(handle, { plugin: definition, config: registration.artifact.config });
-      else handle = change.install(definition, registration.artifact.config);
+      let installation = registration.installation;
+      if (installation) {
+        change.update(installation, { plugin, config: registration.artifact.config });
+      } else {
+        installation = change.install(plugin, registration.artifact.config);
+      }
       await change.commit();
-      registration.commitActivation(handle);
+      registration.commitActivation(installation);
       this.#publish();
     } catch (error) {
-      registration.fail(error);
+      const failure = registration.fail(error);
       this.#publish();
-      throw error;
+      throw failure;
     }
   }
 
@@ -284,14 +290,17 @@ class PlatformImpl<Reference> implements Platform<Reference> {
     const controller = new AbortController();
     this.#changeController = controller;
     try {
-      const { installer, permissions } = this.#requirePorts();
+      const { installer, authorizer } = this.#requirePorts();
       await Promise.all(targets.map((registration) => registration.whenActivationSettled()));
       controller.signal.throwIfAborted();
       validateCandidateGraph(this.#registrations.values(), operations);
-      await this.#authorizeChanges(operations, permissions, controller.signal);
-      const definitions = await this.#loadUpdatedDefinitions(operations, controller.signal);
-      const coreChange = stageCoreChange(installer, operations, definitions);
-      const commitPlatformChange = this.#prepareChangeCommit(operations, coreChange.artifactStates);
+      await this.#authorizeChanges(operations, authorizer, controller.signal);
+      const loadedPlugins = await this.#loadUpdatedPlugins(operations, controller.signal);
+      const coreChange = stageCoreChange(installer, operations, loadedPlugins);
+      const commitPlatformChange = this.#prepareChangeCommit(
+        operations,
+        coreChange.registrationStates,
+      );
       await coreChange.commit();
       commitPlatformChange();
       this.#publish();
@@ -317,50 +326,54 @@ class PlatformImpl<Reference> implements Platform<Reference> {
 
   async #authorizeChanges(
     operations: ReadonlyArray<PlatformChangeOperation<Reference>>,
-    permissions: Authorizer,
+    authorizer: Authorizer,
     signal: AbortSignal,
   ) {
     for (const operation of operations) {
       if (operation.kind !== "remove") {
-        await permissions.authorize(operation.artifact.manifest, signal);
+        try {
+          await authorizer.authorize(operation.artifact.manifest, signal);
+        } catch (error) {
+          throw normalizeRegistrationFailure(error, operation.artifact.manifest.name);
+        }
       }
     }
   }
 
-  async #loadUpdatedDefinitions(
+  async #loadUpdatedPlugins(
     operations: ReadonlyArray<PlatformChangeOperation<Reference>>,
     signal: AbortSignal,
   ) {
-    const definitions = new Map<RegistrationRecord<Reference>, AnyPlugin>();
+    const loadedPlugins = new Map<RegistrationRecord<Reference>, ErasedPlugin>();
     for (const operation of operations) {
       if (operation.kind === "update" && operation.registration.status === "activated") {
-        definitions.set(
+        loadedPlugins.set(
           operation.registration,
-          await loadPluginDefinition(this.#requirePorts().loader, operation.artifact, signal),
+          await loadPlugin(this.#requirePorts().loader, operation.artifact, signal),
         );
       }
     }
-    return definitions;
+    return loadedPlugins;
   }
 
   #prepareChangeCommit(
     operations: ReadonlyArray<PlatformChangeOperation<Reference>>,
-    artifactStates: ReturnType<typeof stageCoreChange<Reference>>["artifactStates"],
+    registrationStates: ReturnType<typeof stageCoreChange<Reference>>["registrationStates"],
   ) {
-    const artifactCommits = artifactStates.map(({ operation, state }) => ({
+    const registrationCommits = registrationStates.map(({ operation, state }) => ({
       operation,
-      commit: operation.registration.prepareArtifactCommit(operation.artifact, state),
+      commit: operation.registration.prepareCommit(operation.artifact, state),
     }));
     return () => {
       for (const operation of operations) {
         if (operation.kind === "remove") {
-          this.#registrations.delete(operation.registration.name);
+          this.#registrations.delete(operation.registration.manifestName);
           operation.registration.markRemoved();
         }
       }
-      for (const { operation, commit } of artifactCommits) {
+      for (const { operation, commit } of registrationCommits) {
         if (operation.kind === "register") {
-          this.#registrations.set(operation.registration.name, operation.registration);
+          this.#registrations.set(operation.registration.manifestName, operation.registration);
         }
         commit();
       }
@@ -377,21 +390,21 @@ class PlatformImpl<Reference> implements Platform<Reference> {
       const dependency = this.#registrations.get(name);
       if (!dependency) {
         throw new PlatformError(
-          "PLUGIN_DEPENDENCY_MISSING",
-          `Plugin '${registration.name}' requires missing plugin '${name}'`,
+          "REGISTRATION_DEPENDENCY_MISSING",
+          `Registration '${registration.manifestName}' requires missing Registration '${name}'`,
         );
       }
       if (!matchesVersion(dependency.manifest.version, range)) {
         throw new PlatformError(
-          "PLUGIN_DEPENDENCY_INCOMPATIBLE",
-          `Plugin '${registration.name}' requires '${name}' ${range}, found ${dependency.manifest.version}`,
+          "REGISTRATION_DEPENDENCY_INCOMPATIBLE",
+          `Registration '${registration.manifestName}' requires Registration '${name}' ${range}, found ${dependency.manifest.version}`,
         );
       }
       if (stack.includes(dependency)) {
         throw new PlatformError(
-          "PLUGIN_CYCLE",
-          `Plugin dependency cycle: ${[...stack, dependency]
-            .map((item) => item.name)
+          "REGISTRATION_CYCLE",
+          `Registration dependency cycle: ${[...stack, dependency]
+            .map((item) => item.manifestName)
             .join(" -> ")}`,
         );
       }
@@ -402,25 +415,22 @@ class PlatformImpl<Reference> implements Platform<Reference> {
   #assertActive() {
     const status = this.#state.phase;
     if (status !== "active") {
-      throw new PlatformError("PLATFORM_UNAVAILABLE", `Plugin platform is ${status}`);
+      throw new PlatformError("PLATFORM_UNAVAILABLE", `Platform is ${status}`);
     }
   }
 
   #assertRegistered(registration: RegistrationRecord<Reference>) {
     if (
-      this.#registrations.get(registration.name) !== registration ||
+      this.#registrations.get(registration.manifestName) !== registration ||
       registration.status === "removed"
     ) {
-      throw new PlatformError(
-        "REGISTRATION_REMOVED",
-        `Registration '${registration.name}' has been removed`,
-      );
+      throw registration.unavailableError();
     }
   }
 
   #requirePorts() {
     const ports = this.#livePorts();
-    if (!ports) throw new PlatformError("PLATFORM_UNAVAILABLE", "Plugin platform is disposed");
+    if (!ports) throw new PlatformError("PLATFORM_UNAVAILABLE", "Platform is disposed");
     return ports;
   }
 
@@ -444,13 +454,13 @@ class PlatformImpl<Reference> implements Platform<Reference> {
     await Promise.all(registrations.map((registration) => registration.whenActivationSettled()));
 
     try {
-      const handles = registrations.flatMap((registration) => {
-        const handle = registration.coreHandle;
-        return handle && handle.status !== "removed" ? [handle] : [];
+      const installations = registrations.flatMap((registration) => {
+        const installation = registration.installation;
+        return installation && installation.status !== "removed" ? [installation] : [];
       });
-      if (handles.length) {
+      if (installations.length) {
         const change = ports.installer.change();
-        for (const handle of handles) change.remove(handle);
+        for (const installation of installations) change.remove(installation);
         await change.commit();
       }
       this.#registrations.clear();
@@ -473,18 +483,10 @@ export function createPlatform<Reference>(
   return new PlatformImpl(options);
 }
 
-function isLogger(value: unknown): value is Logger {
-  if (!value || typeof value !== "object") return false;
-  const candidate = value as Partial<Logger>;
-  return [candidate.debug, candidate.info, candidate.warn, candidate.error].every(
-    (method) => typeof method === "function",
-  );
-}
-
 function requirePlatform<Reference>(authority: PlatformAuthority<Reference>) {
   const platform = authority.current;
   if (!platform) {
-    throw new PlatformError("PLATFORM_UNAVAILABLE", "Plugin platform is disposed");
+    throw new PlatformError("PLATFORM_UNAVAILABLE", "Platform is disposed");
   }
   return platform;
 }

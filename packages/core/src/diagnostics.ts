@@ -8,7 +8,7 @@ export type HostStatus = "idle" | "starting" | "active" | "changing" | "stopping
 
 export interface InstallationSnapshot {
   readonly id: string;
-  readonly name: string;
+  readonly pluginName: string;
   readonly groupId: string;
   readonly status: InstallationStatus;
   readonly requires: ReadonlyArray<string>;
@@ -66,18 +66,18 @@ export class HostDiagnostics {
     for (const installation of records) {
       const base = {
         id: installation.id,
-        name: installation.spec.plugin.name,
+        pluginName: installation.declaration.plugin.name,
         groupId: installation.groupId,
         status: installation.status,
         requires: Object.freeze(
-          Object.values(installation.spec.plugin.requires ?? {}).map((requirement) => {
+          Object.values(installation.declaration.plugin.requires ?? {}).map((requirement) => {
             return requirement.kind === "optional" ? requirement.service.id : requirement.id;
           }),
         ),
         provides: Object.freeze(
-          Object.values(installation.spec.plugin.provides ?? {}).map((token) => token.id),
+          Object.values(installation.declaration.plugin.provides ?? {}).map((token) => token.id),
         ),
-        ...(installation.runtime ? { lifetime: installation.runtime.lifetime.diagnostics } : {}),
+        ...(installation.instance ? { lifetime: installation.instance.lifetime.diagnostics } : {}),
       };
       const error = installation.error;
       installations.set(

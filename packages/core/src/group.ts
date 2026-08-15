@@ -13,6 +13,8 @@ type GroupConfigurationState<Draft> =
     }
   | { readonly phase: "sealed" };
 
+export type GroupStatus = "pending" | "active" | "stopping" | "failed" | "removed";
+
 /** One explicit transaction shared by every nested Group configure callback. */
 export class GroupConfigurationSession<Draft> {
   #state: GroupConfigurationState<Draft>;
@@ -72,7 +74,7 @@ export class GroupConfigurationSession<Draft> {
 }
 
 function groupConfigurationSealedError() {
-  return new TypeError("Group configuration has been sealed");
+  return new Error("Group configuration has been sealed");
 }
 
 type GroupNodeState =
@@ -81,7 +83,7 @@ type GroupNodeState =
 
 /**
  * A Group is an ownership tree over installations, never a capability scope.
- * Service resolution and ExtensionPoint/Event visibility remain application-wide.
+ * Service resolution and ExtensionPoint/Event visibility remain Host-wide.
  */
 export class GroupNode {
   readonly #children = new Map<string, GroupNode>();
@@ -123,10 +125,12 @@ export class GroupNode {
     return child;
   }
 
-  containsId(candidateId: string) {
-    return this.id === "/"
-      ? candidateId.startsWith("/")
-      : candidateId === this.id || candidateId.startsWith(`${this.id}/`);
+  contains(candidate: GroupNode) {
+    if (candidate === this) return true;
+    for (const child of this.#children.values()) {
+      if (child.contains(candidate)) return true;
+    }
+    return false;
   }
 
   assertAttached() {

@@ -2,7 +2,14 @@
 export class ReadonlyMapSnapshot<Key, Value> implements ReadonlyMap<Key, Value> {
   readonly #values: Map<Key, Value>;
 
-  constructor(values?: ReadonlyMap<Key, Value> | Iterable<readonly [Key, Value]>) {
+  constructor(values: ReadonlyMap<Key, Value> | Iterable<readonly [Key, Value]> = []) {
+    if (
+      !values ||
+      (typeof values !== "object" && typeof values !== "function") ||
+      typeof values[Symbol.iterator] !== "function"
+    ) {
+      throw new TypeError("ReadonlyMapSnapshot values must be an iterable object");
+    }
     this.#values = new Map(values);
     Object.freeze(this);
   }

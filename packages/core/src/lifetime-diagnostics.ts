@@ -10,13 +10,13 @@ export interface LifetimeSnapshot {
   readonly tasks: number;
   readonly listeners: number;
   readonly contributions: number;
-  readonly extensionViews: number;
+  readonly contributionViews: number;
   readonly subscriptions: number;
   readonly children: ReadonlyArray<LifetimeSnapshot>;
 }
 
 export type LifetimeResourceKind =
-  "cleanups" | "tasks" | "listeners" | "contributions" | "extensionViews" | "subscriptions";
+  "cleanups" | "tasks" | "listeners" | "contributions" | "contributionViews" | "subscriptions";
 
 /** Internal state that mirrors a Lifetime without retaining any owned resource. */
 export interface LifetimeDiagnosticNode {
@@ -44,7 +44,7 @@ export class LifetimeDiagnostics {
   }
 
   attach(parent: LifetimeDiagnosticNode, child: LifetimeDiagnosticNode) {
-    if (parent.children.has(child)) throw new TypeError("Lifetime diagnostic node is attached");
+    if (parent.children.has(child)) throw new Error("Lifetime diagnostic node is attached");
     parent.children.add(child);
     this.#source.invalidate();
   }
@@ -56,7 +56,7 @@ export class LifetimeDiagnostics {
 
   change(node: LifetimeDiagnosticNode, kind: LifetimeResourceKind, delta: 1 | -1) {
     const next = node.counts[kind] + delta;
-    if (next < 0) throw new TypeError(`Lifetime '${kind}' count cannot be negative`);
+    if (next < 0) throw new Error(`Lifetime '${kind}' count cannot be negative`);
     node.counts[kind] = next;
     this.#source.invalidate();
   }
@@ -84,7 +84,7 @@ function createDiagnosticNode(label: string): LifetimeDiagnosticNode {
       tasks: 0,
       listeners: 0,
       contributions: 0,
-      extensionViews: 0,
+      contributionViews: 0,
       subscriptions: 0,
     },
     children: new Set(),

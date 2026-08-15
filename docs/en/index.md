@@ -6,7 +6,7 @@ description: A capability composition and structured lifetime kernel for JavaScr
 hero:
   name: Dougong
   text: Compose an application, don't stack frameworks
-  tagline: A small set of orthogonal atoms for capabilities, dependencies, change and resource ownership. No runtime magic.
+  tagline: A small set of orthogonal atoms for capabilities, dependencies, change and resource ownership. No hidden magic.
   actions:
     - theme: brand
       text: Get started
@@ -23,18 +23,18 @@ features:
   - title: One semantic, one path
     details: Every semantic operation has exactly one canonical entry point. Higher-level convenience must compile mechanically onto it and may not own a second state machine.
   - title: Transactions expose only committed state
-    details: Declarations made during setup stay staged until the whole layer validates. A failed change rolls back, and fails closed when it cannot roll back reliably — never a half-built runtime.
+    details: Declarations made during setup stay staged until the whole layer validates. A failed change rolls back, and fails closed when it cannot roll back reliably — never a half-built Instance graph.
   - title: Structured resource ownership
-    details: Listeners, contributions, tasks and child lifetimes all belong to a Lifetime. Terminal resources detach from their owner, so holding a released handle never keeps an Host alive.
+    details: Listeners, contributions, tasks and child lifetimes all belong to a Lifetime. Terminal resources detach from their owner, so holding a released resource never keeps a Host alive.
   - title: Types are the constraint
-    details: Using an undeclared dependency, reading an ExtensionPoint as a Service, declaring provides without returning it — all compile errors, not runtime surprises.
-  - title: No host lock-in
+    details: Using an undeclared dependency, reading an ExtensionPoint as a Service, declaring provides without returning it — all compile errors, never late execution surprises.
+  - title: No environment lock-in
     details: Core knows nothing about Node, the DOM, React, HTTP, the filesystem or bundlers. Plain objects, functions, Promise, AbortSignal and Disposable.
 ---
 
 ## What Dougong is
 
-Dougong (斗拱, the interlocking bracket set of Chinese timber architecture) solves one problem: **when an application's capabilities must be split into independently installable units, how do their dependencies, lifetimes and changes stay reasonable about?**
+Dougong (斗拱, the interlocking bracket set of Chinese timber architecture) solves one problem: **when an application's capabilities must be split into independently installable units, how do their dependencies, lifetimes and changes remain easy to reason about?**
 
 It has two layers:
 
@@ -72,10 +72,10 @@ await host.start()                    // topology derived from declarations, lay
 
 | Fits | Does not fit |
 | --- | --- |
-| Capabilities install, update and roll back at runtime | You just need a small DI container |
+| Capabilities install, update and roll back after startup | You just need a small DI container |
 | Plugins have real dependencies on each other | Plugins are fully independent |
 | A half-loaded state is unacceptable | A long-running service where one broken module must not stop the rest |
-| The host needs an observable runtime model | Runtime diagnostics do not matter |
+| The application needs an observable execution model | Operational diagnostics do not matter |
 | Desktop apps, editor kernels, build toolchains | A simple web page |
 
 That last row deserves a note. Dougong's failure model is **transactional** — a plugin whose setup fails rolls the whole change back. If your scenario values isolation ("one plugin dying must not affect the others") more than consistency, something like [cordis](https://github.com/cordiverse/cordis) fits better. That is a product trade-off, not a quality ranking.
@@ -104,7 +104,7 @@ Three layers, best read in order:
 8. [Core API specification](./reference/core-api.md) — exact semantics and edge cases
 9. [Architecture](./reference/architecture.md) — layering, dependency direction and rationale
 10. [Platform specification](./reference/platform.md) — the external plugin boundary
-11. [Error codes](./reference/errors.md) — all 28 stable codes and what triggers them
+11. [Error codes](./reference/errors.md) — stable codes and what triggers them
 
 </div>
 
