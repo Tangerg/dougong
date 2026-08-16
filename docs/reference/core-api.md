@@ -31,6 +31,7 @@ Dougong Core 的定位是：
 | 注册清理 | `cleanup()` | `using` / `own` / `defer` |
 | 创建子生命周期 | `lifetime(label)` | `child` / `scope` / `fiber` |
 | 启动后台任务 | `spawn()` | `run` / `fork` / `task` |
+| 判定取消结果 | `isCancellationReason()` | 只看 `signal.aborted` / 只匹配错误名 |
 | 读取实时值 | `get()` | `.value` / 函数调用 / `getSnapshot()` |
 | 订阅变化 | `subscribe()` | `watch` / `listen` / `observeChanges` |
 | 更新 Installation | `update()` | `replace` / `reload` / `restart` |
@@ -126,12 +127,12 @@ const USER_CREATED = event<User>("users/created")
 统一规则：
 
 - 第一个参数是稳定字符串 ID，也是执行身份；对象身份不参与匹配。
-- 返回值是冻结普通对象，形状只有 `{ id, kind }`。
+- 运行时返回值是冻结普通对象，形状只有 `{ id, kind }`；TypeScript 类型另带工厂私有的 phantom brand，使普通 `{ id, kind }` 不能在编译期冒充 Contract。该 brand 不参与运行时匹配。
 - Contract 不持有执行状态，可跨应用复用。
 - ID 必须非空且首尾无空白；区分大小写，不做 trim 或 Unicode 规范化。
 - 同一 ID 在一个 Host 中不能同时承担两种 kind，否则抛 `CONTRACT_CONFLICT`。
 - 只有成功提交的声明和 active Lifetime 的使用才登记 kind；失败的 setup、rollback 和未命中的应用代码读取不会占用 Contract ID。
-- `optional()` 只接受 Service；ExtensionPoint 的空 Map 本身就是合法值，Event 没有提供者概念。
+- `optional()` 是 branded OptionalService 的唯一类型化构造入口，且只接受 Service；ExtensionPoint 的空 Map 本身就是合法值，Event 没有提供者概念。
 
 固定 Contract 的同一 ID 应在代码库中只声明一次并从稳定模块导出。TypeScript 本身无法阻止两个模块为同一 ID 写出不同类型参数，因此 Dougong 仓库的架构门禁会拒绝重复的固定字符串声明；下游代码库也应执行同类静态检查。参数化 Contract family 不属于重复的固定声明。
 
@@ -250,10 +251,11 @@ StandardSchemaV1<ConfigInput, Config>
 - `install(plugin, input)` 接收 `ConfigInput`。
 - `setup(ctx, config)` 接收校验或转换后的 `Config`。
 - Schema 可以异步校验。
-- 配置失败抛含冻结 `issues` 的 `ConfigValidationError`。
+- 配置结果只用 own `value` / `issues` 判别成功与失败，不读取原型链；失败抛含冻结 `issues` 的 `ConfigValidationError`。
+- Schema 结果必须是含 `value` 的成功对象，或含数组 `issues` 的失败对象；畸形 issue、message 或 path 会在 setup 前以精确 `TypeError` 拒绝。
 - Core 不克隆或深冻结配置；防御性转换属于 Schema。
 
-`definePlugin()` 在定义期校验结构；ChangeSet 在安装与更新边界重新规范化，防止 JavaScript 调用方绕过工厂。
+`definePlugin()` 在定义期校验并规范化声明。Plugin 本身必须是仅含 `name`、`config`、`requires`、`provides`、`setup` 的普通 record；未知字段、Symbol、隐藏属性和类实例都会被拒绝。配置 Schema 必须完整声明 Standard Schema V1 的 `version`、`vendor` 与 `validate`；`requires` 与 `provides` 也必须是仅含可枚举字符串 own key 的普通 record，不能用数组、Map 或类实例表达声明。ChangeSet 在安装与更新边界重新规范化，防止 JavaScript 调用方绕过工厂。
 
 ## 五、Context API 预算
 
@@ -423,6 +425,8 @@ await ctx.emit(TRACK_CHANGED, track)
 subscription.dispose()
 ```
 
+每次 `on()` 都创建一份独立 Listener 注册；即使复用同一个函数，释放其中一份也不会撤销另一份。
+
 Event 只有一种派发语义：
 
 - 单 payload；复杂参数使用对象；
@@ -482,8 +486,8 @@ await session.dispose()
 - `dispose()` 幂等；
 - 父 Context 与子 Lifetime 使用相同资源 API。
 - `label` 是必填、非空且首尾无空白的诊断描述，不参与执行查找或身份判定；同级重名合法。
-- 主动释放 Lifetime 或 Task 会用冻结的 `AbortError` 取消其 signal；父级取消仍显式转发父 signal 的 reason。调用方按 `signal.aborted` 与 reason 类型分类，不依赖 reason 对象身份。
-- 释放进行中的重复 `dispose()` 共享同一个完成 Promise；进入终态后的重复调用只是已完成的无操作。发起释放的调用方仍收到原始失败，但终态资源不继续保存已拒绝 Promise 或错误栈。Lifetime 完成释放后以一个新的、同 reason 的 aborted signal 表达终态，从而切断旧 signal 上的监听器闭包。
+- 主动释放 Lifetime 或 Task 会用冻结的 `AbortError` 取消其 signal；父级取消仍显式转发父 signal 的 reason。取消判定必须先确认 signal 已 aborted，再接受与 `signal.reason` 相同的值或标准 `AbortError`；不能单独依赖其中任何一项。
+- 释放进行中的重复 `dispose()` 共享同一个完成 Promise；进入终态后的重复调用只是已完成的无操作。发起释放的调用方仍收到原始失败，但终态资源不继续保存已拒绝 Promise 或错误栈。Lifetime 完成释放后以一个新的 aborted signal 和共享的无状态 `AbortError` 表达终态，从而同时切断旧 signal 的监听器闭包与可能携带应用对象的历史 reason。
 
 ### 9.3 spawn
 
@@ -494,6 +498,8 @@ await task.dispose()
 ```
 
 释放任务先 abort，再等待结果 settle。未被调用方同步处理的后台失败通过 Host `onError` 上报。只有与 `signal.reason` 相同的拒绝值或明确的 `AbortError` 才分类为取消；仅仅发生在 abort 之后的其他失败仍会上报，避免把取消期间的真实收尾故障静默吞掉。
+
+`isCancellationReason(signal, error)` 是这条规则唯一的公开判定器，Platform Loader 和下游适配器复用它，而不是各自复制一份“看起来像取消”的启发式逻辑。
 
 任务自然 settle 后会立即从父 Lifetime 的拥有集合和 AbortSignal 监听器中脱离；之后调用该 Task 的 `dispose()` 只是幂等完成，不会追溯性 abort 已结束任务的 signal。已完成任务不会在长生命周期中按历史次数累积；父释放仍会 abort 并等待当时尚未 settle 的全部任务。
 
@@ -522,6 +528,8 @@ const host = createHost({
   onError,
 })
 ```
+
+Host options 是仅含 `name`、`logger`、`onError` 的普通 record；只读取可枚举 own property，未知字段、Symbol、隐藏属性、数组与类实例都会立即拒绝。`logger` 与 `onError` 本身仍是结构化端口，可以由普通对象或类实例实现。
 
 ### 10.1 安装与启动
 
@@ -560,7 +568,7 @@ installation.update({ plugin, config })
 installation.remove()
 ```
 
-`update()` 同时覆盖配置与 Plugin 声明替换，参数必须至少包含 `plugin` 或 `config` 之一，不提供 `replace/reload/restart`。Plugin 更新不能改变 name；Installation 及其 ID 保持稳定，活动 Instance 被替换。
+`update()` 同时覆盖配置与 Plugin 声明替换，参数必须是仅含可枚举 `plugin` / `config` own property 的普通 record，并且至少包含其中之一；未知字段、Symbol、隐藏属性、数组与类实例都会立即拒绝。这里不提供 `replace/reload/restart`。Plugin 更新不能改变 name；Installation 及其 ID 保持稳定，活动 Instance 被替换。
 
 Installation 进入 `removed` 后撤销对 Host 的控制引用并释放 Plugin 声明与配置。终态 `remove()` 幂等成功，`update()` 以 `INSTALLATION_REMOVED` 拒绝；保留一个已删除 Installation 不会反向保活 Host。
 
@@ -581,7 +589,7 @@ await change.commit()
 
 - one-shot；首次 `commit()` 后封口；
 - commit 幂等，重复调用返回同一 Promise；
-- 空 ChangeSet 是无副作用的已提交 no-op，不制造伪 `changing` 状态或诊断 revision；
+- 空 ChangeSet 不制造伪 `changing` 状态或诊断 revision，但仍按提交顺序经过 Host 命令队列与 owner authority 边界；先提交的 Group 删除会使随后提交的旧空草稿以 `GROUP_REMOVED` 拒绝；
 - 同一 Installation 在一份 ChangeSet 中只能出现一次；
 - 拒绝其他 Host 的 Installation；
 - 候选依赖图和全部受影响配置在停止任何实例前完成校验；
@@ -589,7 +597,7 @@ await change.commit()
 - active 变更只重建目标和新旧图中受影响的传递消费者；
 - 多项变更共用一份停止、启动、回滚与 ExtensionPoint 通知边界。
 
-`change.install()` 返回的是该 ChangeSet 拥有的 draft Installation。调用 `commit()` 时它才获得 Host 控制权限；commit 前直接调用其 `update/remove` 会以 `INSTALLATION_UNAVAILABLE` 拒绝，不能暗中排入第二份 ChangeSet。`host.install()` 之所以返回即可控制的 Installation，是因为该语法糖在返回前已经同步提交了内部单项 ChangeSet。
+`change.install()` 返回的是该 ChangeSet 独占的 draft Installation。调用 `commit()` 时它才获得 Host 控制权限；commit 前直接调用其 `update/remove`，或把它作为另一份 ChangeSet 的目标，都会以 `INSTALLATION_UNAVAILABLE` 拒绝。已删除或失败后脱离 Host 的 Installation 同样不能重新进入 ChangeSet。`host.install()` 之所以返回即可控制的 Installation，是因为该语法糖在返回前已经同步提交了内部单项 ChangeSet。
 
 变更 setup 失败时，Core 释放部分 activation 并恢复旧图。若旧资源无法停止、部分 activation 无法清理或旧图无法恢复，Host fail closed 到 idle，不谎报 active。
 
@@ -614,7 +622,7 @@ await backend.ready()
 await backend.remove()
 ```
 
-Host 与 Group 使用同一组 `install/group/change` 动词。首次 configure 必须同步，以便所有声明编译进一份 ChangeSet；返回 thenable 会立即拒绝。
+Host 与 Group 使用同一组 `install/group/change` 动词。供 Platform 等高层组合的 `Installer` 协议则刻意只包含 canonical `change()`；`install()` 与 `group()` 是具体所有者的便利能力，不要求一个事务适配器伪造它们。首次 configure 必须同步，以便所有声明编译进一份 ChangeSet；返回 thenable 会立即拒绝。
 
 Group 的规则：
 
@@ -630,7 +638,7 @@ Group 的规则：
 
 每个 Group 只保留一份当前 readiness barrier。尚未成功建立的 Group 在提交失败后保持 `failed`，后续成功变更会替换旧 barrier 并建立 Group；已经建立的 Group 若变更失败且 Core 恢复了原提交状态，则继续保持健康。`status` 与 `ready()` 始终读取同一份生命周期状态。
 
-删除 Group 会同时撤销整棵子树的权限，包括删除前已经创建但尚未提交的 ChangeSet；这些旧草稿提交时统一以 `GROUP_REMOVED` 拒绝，不能越过 Group 边界进入 Host。终态 Group 只保留身份和 `removed` 状态，`remove()` 幂等；它不再持有 Host、配置会话或历史失败调用栈，也不能创建 Installation、子 Group 或 ChangeSet。
+删除 Group 会同时撤销整棵子树的权限，包括删除前已经创建但尚未提交的 ChangeSet；这些旧草稿的后续 `install/update/remove/commit` 都统一以 `GROUP_REMOVED` 拒绝，不能越过 Group 边界进入 Host。终态 Group 只保留身份和 `removed` 状态，`remove()` 幂等；它不再持有 Host、配置会话或历史失败调用栈，也不能创建 Installation、子 Group 或 ChangeSet。
 
 需要工作区或租户区分时，根据语义选择：固定且需要独立依赖图的少量实例使用显式 Contract family；请求期选择的数据使用带 tenant/workspace 参数的 Service；完全独立的能力图使用多个 Host；安全隔离使用 Worker/iframe/进程。不要把 Group 冒充解析或安全边界。
 
@@ -681,7 +689,7 @@ snapshots.invalidate()                     // 标记失效并通知
 snapshots.dispose()                        // 固化终态并切断闭包
 ```
 
-`view` 是权限收窄，不是第二套观察 API：读取方只能 `get/subscribe`，拥有方只能通过 Publisher 驱动失效和终止。订阅者失败交给显式 reporter 后仍继续通知其余订阅者；若 reporter 自身失败，Publisher 完成整轮通知后用 `AggregateError` 同时保留订阅者错误与 reporter 错误。`dispose()` 会在切断 reader、reporter 与现有订阅前固化最后一份快照；历史 view 因而仍可读取终态，但不能反向保活拥有方。Host、Lifetime 与 Platform diagnostics 都走这条路径，高层不得重写订阅注册表和错误边界。
+`view` 是权限收窄，不是第二套观察 API：读取方只能 `get/subscribe`，拥有方只能通过 `SnapshotPublisher` 驱动失效和终止。每次订阅都有独立身份；释放会立即撤回尚未轮到的通知。订阅者失败交给显式 reporter 后仍继续通知其余订阅者；若 reporter 自身失败，Publisher 完成整轮通知后用 `AggregateError` 同时保留订阅者错误与 reporter 错误。`dispose()` 会在切断 reader、reporter 与现有订阅前固化最后一份快照；历史 view 因而仍可读取终态，但不能反向保活拥有方。Host、Lifetime 与 Platform diagnostics 直接走这条路径；`ContributionStore` 同样组合这一个 Publisher，只在订阅外层增加 Lifetime 所有权，因而重复注册同一个函数仍是两份独立订阅。任何高层都不得重写订阅注册表和错误边界。
 
 快照需要 Map 语义时统一使用 `ReadonlyMapSnapshot`。它只接受类型声明中的 Map 或条目 iterable，复制输入并只暴露 `ReadonlyMap` 方法，避免 `Object.freeze(new Map())` 仍可调用 `set/delete/clear` 的伪不可变性；它只保证容器结构不可变，条目值仍应在进入快照时自行冻结。
 
@@ -721,7 +729,7 @@ host.diagnostics.get()
 host.diagnostics.subscribe(notify)
 ```
 
-快照包含 Host name/status/revision、InstallationSnapshot Map 和 GroupSnapshot Map。快照、条目、数组与 Map 都只读；诊断不能控制 Host。
+快照包含 Host name/status/revision、InstallationSnapshot Map 和 GroupSnapshot Map。若条目含最近失败，其 `error` 精确标注为 `Error`，因为状态机已经在写入诊断前完成非 Error 值的分类。快照、条目、数组与 Map 都只读；诊断不能控制 Host。
 
 运行中的 `InstallationSnapshot` 还包含一份独立的 `lifetime` 观察视图：
 

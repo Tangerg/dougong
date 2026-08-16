@@ -48,7 +48,7 @@ core 与 reactive 互不依赖
 - 跨层共用、失败不污染后续命令的 SerialQueue；
 - 只读诊断投影。
 
-Core 内部也保持同一分工：Host 只拥有 Installation 声明、`SerialQueue` 和状态发布；GroupCoordinator 只拥有结构 Group；Engine 拥有已提交的 Contract、Service、Event、ExtensionPoint、Lifetime、Instance 与图切换。Platform 直接复用 Core 的同一串行原语，不复制失败隔离状态机。事务由 Host 发起，但图切换、rollback 与 fail-closed 只在 Engine 中执行，因此声明状态和活动执行状态各有一个真相源，而不是把全部职责堆进一个总类。
+Core 内部也保持同一分工：Host 在三个平级协作者之上串行化公共命令并发布状态；InstallationRegistry 拥有声明与公共 handle 权限；GroupCoordinator 只拥有结构 Group；Engine 只拥有已提交计划及其 commit、rollback、fail-closed 转换。Engine 下层的 Runtime 只拥有活动 Instance，以及从中可达的 Service、Event、ExtensionPoint 与 Lifetime。Platform 直接复用 Core 的同一串行原语，不复制失败隔离状态机。图切换只在 Engine 中执行，活动执行只在 Runtime 中发生，因此声明状态、事务状态和活动执行状态各有一个真相源，而不是堆进一个总类。
 
 ### `@dougongjs/reactive`
 
@@ -140,8 +140,8 @@ observe(ctx, source, callback)
   = source.get + source.subscribe
   + ctx.lifetime + ctx.spawn + ctx.cleanup
 
-platform.reload(artifact)
-  = installation.update({ plugin, config })
+registration.update(artifact)
+  = platform.change().update(registration, artifact).commit()
 ```
 
 高层可以增加 Schema、默认值、策略和领域错误，但不能绕过所有权、事务或权限。
@@ -239,7 +239,7 @@ Plugin Lifetime
 
 同一规则覆盖全部内部 lease：Listener、Contribution、ContributionView 及其订阅、cleanup 和 Task 在提前终止时都会从父集合摘除；终态对象同时清空 owner、Store、回调、payload 和诊断记账引用。七个资源类别复用同一套活跃资源集合实现，从而获得 O(1) 摘除、幂等 ownership release 与诊断增减。各类别仍使用独立集合表达发布顺序、释放顺序和分类计数，统一机制不混合语义。
 
-主动释放 Lifetime 或 Task 使用模块级冻结 `AbortError` 作为取消原因，父取消则原样转发父 reason。这里共享的只是无状态错误值，不是 ambient scope；它避免每次 `abort()` 自动创建的错误调用栈把终态 `AbortSignal.reason` 变成一条指回 Host 的隐藏保留边。释放完成后，Lifetime 用一个新的同 reason aborted signal 替换活动 signal；终态资源因而不会继续保留旧 signal 的监听器闭包。进行中的释放 Promise 只属于 `disposing` 状态，进入 `disposed` 后同样被结构性丢弃，原始失败仍由已取得该 Promise 的调用方观察。
+主动释放 Lifetime 或 Task 使用模块级冻结 `AbortError` 作为取消原因，父取消在活动阶段原样转发父 reason。这里共享的只是无状态错误值，不是 ambient scope；它避免每次 `abort()` 自动创建的错误调用栈把终态 `AbortSignal.reason` 变成一条指回 Host 的隐藏保留边。释放完成后，Lifetime 用一个携带该共享 `AbortError` 的新 aborted signal 替换活动 signal；终态资源因而既不保留旧 signal 的监听器闭包，也不保留可能携带应用对象的父 reason。进行中的释放 Promise 只属于 `disposing` 状态，进入 `disposed` 后同样被结构性丢弃，原始失败仍由已取得该 Promise 的调用方观察。
 
 父级只拥有仍然存活的资源，保留一个已释放资源不会反向保活整个 Host。ContributionView 使用显式窄 facade，而不是从 Store 方法返回捕获词法 `this` 的箭头函数；清空 binding 后，公开 View 本身也不能成为 Store 的隐藏所有权边。
 
@@ -366,6 +366,8 @@ Effect-TS 与 Core 在 DI、Scope、Fiber 和错误执行模型上高度重叠�
 ```
 
 Platform 的 Loader 可以返回应用代码编写的 RPC Plugin。Core 只看到普通 Service 与 Lifetime，不需要认识传输协议。
+
+Platform 的激活与结构变更是两条正交命令流，但提交状态必须一致。内部 `Activator` 独占依赖激活、`ActivationGate` permit 和变更目标排他；Platform 只串行公共命令并提交结构事务。ChangeSet 开始执行时先固定哪些更新保持 activated，再完成候选图、权限和模块预检，随后通过 Activator 的一次性屏障关闭新激活、取消明确目标并等待既有 permit 释放，最后按同一份计划在稳定状态上复验候选图并提交唯一一份 Core ChangeSet。这样预检失败没有取消副作用，并发激活既不能改变当前变更的含义，也不能在“验证完成、提交尚未发生”的窗口制造悬空依赖。
 
 ## 十二、真实项目映射
 

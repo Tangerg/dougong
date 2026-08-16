@@ -40,7 +40,7 @@ await platform.register({
 await platform.trigger("onLanguage:markdown")
 ```
 
-它把这四个外部关注点——**声明**（Manifest）、**加载**（Loader）、**授权**（Permissions）、**激活**（Activation）——**编译成** Core 的 `install` / `update` / `remove`，不复制注册表、依赖图、事务、资源所有权、观察协议或错误语义。
+它把这四个外部关注点——**声明**（Manifest）、**加载**（Loader）、**授权**（Permissions）、**激活**（Activation）——**编译成一份** canonical Core `ChangeSet`，不复制注册表、依赖图、事务、资源所有权、观察协议或错误语义。
 
 **注册 ≠ 激活。** `register()` 只让 Artifact 进入 Platform，`activate()` 才加载外部 Plugin。可选的 `placeholder`（应用代码编写的 Plugin）让「命令已在菜单里，点击时才加载」成为可能，且两者替换是原子的。
 
@@ -84,7 +84,7 @@ await platform.register({
 await platform.trigger("onLanguage:markdown")
 ```
 
-It compiles four external concerns — **declaration** (manifest), **loading** (loader), **authorization** (permissions) and **activation** — into Core's `install` / `update` / `remove`, duplicating none of Core's registries, dependency graph, transactions, resource ownership, observation protocol or error semantics.
+It compiles four external concerns — **declaration** (manifest), **loading** (loader), **authorization** (permissions) and **activation** — into one canonical Core `ChangeSet`, duplicating none of Core's registries, dependency graph, transactions, resource ownership, observation protocol or error semantics.
 
 **Registration ≠ activation.** `register()` only admits the artifact; `activate()` loads the external implementation. An optional application-authored `placeholder` makes "the command is already in the menu but loads on click" possible, and the swap from placeholder to real implementation is atomic.
 

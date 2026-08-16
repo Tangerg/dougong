@@ -64,6 +64,7 @@ const PACKAGES = {
       "definePlugin",
       "event",
       "extensionPoint",
+      "isCancellationReason",
       "isLogger",
       "optional",
       "service",

@@ -31,13 +31,14 @@ One abstraction layer and one semantic allow exactly one canonical entry point. 
 | Register a cleanup | `cleanup()` | `using` / `own` / `defer` |
 | Create a child lifetime | `lifetime(label)` | `child` / `scope` / `fiber` |
 | Start a background task | `spawn()` | `run` / `fork` / `task` |
+| Classify cancellation | `isCancellationReason()` | checking only `signal.aborted` / matching only an error name |
 | Read a live value | `get()` | `.value` / a function call / `getSnapshot()` |
 | Subscribe to change | `subscribe()` | `watch` / `listen` / `observeChanges` |
 | Update an Installation | `update()` | `replace` / `reload` / `restart` |
 | Remove an installation | `remove()` | `uninstall` / `delete` |
 | Release a resource | `dispose()` | `close` / `destroy` / `off` |
 
-`host.install()`, `installation.update()` and `installation.remove()` are single-target sugar: internally each creates one one-shot ChangeSet and commits it. They own no second validation, queue or rollback logic.
+`host.install()`, `installation.update()` and `installation.remove()` are single-target sugar: internally each creates a one-shot ChangeSet and commits it. They own no second validation, queue or rollback logic.
 
 ### 1.2 Composition closure
 
@@ -126,12 +127,12 @@ const USER_CREATED = event<User>("users/created")
 Uniform rules:
 
 - The first argument is a stable string ID and is the execution identity; object identity plays no part in matching.
-- The return value is a frozen plain object whose shape is exactly `{ id, kind }`.
+- At runtime, the return value is a frozen plain object whose shape is exactly `{ id, kind }`. Its TypeScript type also carries a factory-private phantom brand, so a plain `{ id, kind }` cannot accidentally masquerade as a Contract at compile time. The brand takes no part in runtime matching.
 - A Contract holds no execution state and is reusable across applications.
 - The ID must be non-empty with no leading or trailing whitespace. It is case-sensitive, and is neither trimmed nor Unicode-normalised.
 - One ID cannot serve two kinds in the same Host; doing so throws `CONTRACT_CONFLICT`.
 - Only successfully committed declarations and use by an active Lifetime register a kind. A failed setup, a rollback and an unmatched application-code read never occupy a Contract ID.
-- `optional()` accepts only a Service. An ExtensionPoint's empty map is already a valid value, and an Event has no notion of a provider.
+- `optional()` is the sole typed constructor for its branded OptionalService wrapper and accepts only a Service. An ExtensionPoint's empty map is already a valid value, and an Event has no notion of a provider.
 
 A fixed Contract ID should be declared exactly once in a codebase and exported from a stable module. TypeScript alone cannot prevent two modules from writing different type arguments for the same ID, so Dougong's architecture guard rejects duplicate fixed-string declarations in this repository; downstream codebases should enforce the same static rule. Parameterized Contract families are not duplicate fixed declarations.
 
@@ -250,10 +251,11 @@ StandardSchemaV1<ConfigInput, Config>
 - `install(plugin, input)` receives `ConfigInput`.
 - `setup(ctx, config)` receives the validated or transformed `Config`.
 - Schemas may validate asynchronously.
-- A configuration failure throws `ConfigValidationError` carrying a frozen `issues` list.
+- A configuration result is discriminated only by own `value` / `issues` properties, never through its prototype chain. Failure throws `ConfigValidationError` carrying a frozen `issues` list.
+- A schema result must be either a success object containing `value` or a failure object containing an `issues` array; malformed issues, messages or paths reject with a precise `TypeError` before setup.
 - Core neither clones nor deep-freezes config; defensive transformation belongs to the schema.
 
-`definePlugin()` validates structure at definition time; the ChangeSet re-normalises at the install and update boundaries so a JavaScript caller cannot bypass the factory.
+`definePlugin()` validates and normalizes declarations at definition time. A Plugin must be a plain record containing only `name`, `config`, `requires`, `provides` and `setup`; unknown fields, symbols, hidden properties and class instances are rejected. A config schema must declare the complete Standard Schema V1 `version`, `vendor` and `validate` protocol, while `requires` and `provides` must likewise be plain records containing only enumerable string own keys rather than arrays, Maps or class instances. The ChangeSet re-normalises at install and update boundaries so a JavaScript caller cannot bypass the factory.
 
 ## 5. The context API budget
 
@@ -423,6 +425,8 @@ await ctx.emit(TRACK_CHANGED, track)
 subscription.dispose()
 ```
 
+Every `on()` call creates an independent Listener registration. Reusing the same function does not let disposal of one registration revoke another.
+
 An Event has exactly one dispatch semantic:
 
 - a single payload; use an object for complex arguments
@@ -481,9 +485,9 @@ await session.dispose()
 - a child released early detaches from the parent's ownership set
 - `dispose()` is idempotent
 - the parent context and a child Lifetime use the same resource API
-- `label` is a required, non-empty, untrimmed diagnostic description; it takes no part in execution lookup or identity, and duplicates among siblings are legal
-- actively releasing a Lifetime or task cancels its signal with a frozen `AbortError`, while a parent cancellation forwards the parent signal's reason explicitly. Callers classify by `signal.aborted` and the reason's type, never by the reason's object identity
-- repeated `dispose()` during an in-flight release shares one completion promise; repeated calls after the terminal state are completed no-ops. The caller that initiated the release still receives the original failure, but a terminal resource stops retaining a rejected promise or its error stack. Once released, a Lifetime expresses its terminal state with a fresh already-aborted signal carrying the same reason, severing the listener closures on the old signal
+- `label` is a required, non-empty diagnostic description; leading or trailing whitespace is rejected rather than trimmed. It takes no part in execution lookup or identity, and duplicates among siblings are legal
+- actively releasing a Lifetime or task cancels its signal with a frozen `AbortError`, while a parent cancellation forwards the parent signal's reason explicitly. Classification first requires an aborted signal, then accepts either the exact `signal.reason` or a standard `AbortError`; neither condition is sufficient by itself
+- repeated `dispose()` during an in-flight release shares one completion promise; repeated calls after the terminal state are completed no-ops. The caller that initiated the release still receives the original failure, but a terminal resource stops retaining a rejected promise or its error stack. Once released, a Lifetime expresses its terminal state with a fresh aborted signal and the shared stateless `AbortError`, severing both the old signal's listener closures and any historical reason that might carry application objects
 
 ### 9.3 spawn
 
@@ -494,6 +498,8 @@ await task.dispose()
 ```
 
 Releasing a task aborts first, then awaits the result settling. A background failure not handled synchronously by the caller is reported through the Host `onError`. Only a rejection identical to `signal.reason` or an explicit `AbortError` is classified as cancellation; another failure merely occurring after abort is still reported, so genuine shutdown failures cannot disappear behind cancellation.
+
+`isCancellationReason(signal, error)` is the sole public classifier for that rule. Platform loaders and downstream adapters reuse it instead of copying their own heuristic for what merely looks like cancellation.
 
 A task that settles naturally immediately detaches from the parent Lifetime's ownership set and from the AbortSignal listeners. A later `dispose()` on that task is an idempotent completion and never retroactively aborts the signal of a finished task. Completed tasks do not accumulate in a long-lived owner proportional to history; releasing a parent still aborts and awaits every task that had not settled at that moment.
 
@@ -522,6 +528,8 @@ const host = createHost({
   onError,
 })
 ```
+
+Host options are a plain record containing only `name`, `logger` and `onError`. Only enumerable own properties are read; unknown fields, symbols, hidden properties, arrays and class instances are rejected immediately. The `logger` and `onError` values remain structural ports and may themselves be implemented by ordinary objects or class instances.
 
 ### 10.1 Install and start
 
@@ -560,7 +568,7 @@ installation.update({ plugin, config })
 installation.remove()
 ```
 
-`update()` covers both config and Plugin declaration replacement. The argument must contain at least one of `plugin` or `config`; there is no `replace/reload/restart`. A Plugin update may not change its name; the Installation and its ID stay stable while the active Instance is replaced.
+`update()` covers both config and Plugin declaration replacement. Its argument must be a plain record containing only enumerable `plugin` / `config` own properties and at least one of them; unknown fields, symbols, hidden properties, arrays and class instances are rejected immediately. There is no `replace/reload/restart`. A Plugin update may not change its name; the Installation and its ID stay stable while the active Instance is replaced.
 
 Once an Installation reaches `removed` it revokes its control reference to the Host and releases the Plugin declaration and config. A terminal `remove()` succeeds idempotently and `update()` rejects with `INSTALLATION_REMOVED`; keeping a removed Installation never keeps the Host alive.
 
@@ -581,7 +589,7 @@ Rules:
 
 - one-shot; sealed after the first `commit()`
 - commit is idempotent; repeated calls return the same promise
-- an empty ChangeSet is a side-effect-free committed no-op that manufactures neither a fake `changing` status nor a diagnostics revision
+- an empty ChangeSet manufactures neither a fake `changing` status nor a diagnostics revision, but still crosses the Host command queue and owner-authority boundary in submission order; an earlier Group removal makes a subsequently submitted stale empty draft reject with `GROUP_REMOVED`
 - one Installation may appear only once per ChangeSet
 - Installations from another Host are rejected
 - the candidate dependency graph and every affected config are validated before any Instance stops
@@ -589,7 +597,7 @@ Rules:
 - an active change rebuilds only the targets and the affected transitive consumers in the old and new graphs
 - multiple changes share one stop, start, rollback and ExtensionPoint notification boundary
 
-The Installation returned by `change.install()` is a draft owned by that ChangeSet. It gains Host control authority only at `commit()`; calling its `update/remove` before that rejects with `INSTALLATION_UNAVAILABLE`, so it cannot secretly join a second ChangeSet. `host.install()` returns an immediately controllable Installation only because that sugar has already synchronously submitted its internal single-item ChangeSet.
+The Installation returned by `change.install()` is an exclusive draft of that ChangeSet. It gains Host control authority only at `commit()`; before then, calling its `update/remove` or targeting it from another ChangeSet rejects with `INSTALLATION_UNAVAILABLE`. An Installation detached after removal or failure likewise cannot re-enter a ChangeSet. `host.install()` returns an immediately controllable Installation only because that sugar has already synchronously submitted its internal single-item ChangeSet.
 
 When a change's setup fails, Core releases the partial activation and restores the old graph. If old resources cannot be stopped, the partial activation cannot be cleaned up, or the old graph cannot be restored, the Host fails closed to idle rather than falsely reporting active.
 
@@ -614,7 +622,7 @@ await backend.ready()
 await backend.remove()
 ```
 
-Host and Group share the same `install/group/change` verbs. The first configure must be synchronous so every declaration compiles into one ChangeSet; returning a thenable rejects immediately.
+Host and Group share the same `install/group/change` verbs. The `Installer` protocol consumed by higher layers such as Platform deliberately contains only canonical `change()`; `install()` and `group()` are conveniences of concrete owners, so a transactional adapter never has to fake them. The first configure must be synchronous so every declaration compiles into one ChangeSet; returning a thenable rejects immediately.
 
 Group rules:
 
@@ -630,7 +638,7 @@ Nested Group configures share one explicit configuration session. Any child fail
 
 Each Group keeps exactly one current readiness barrier. A Group that has not yet been established stays `failed` after a failed commit, and a later successful change replaces the old barrier and establishes it. An already-established Group whose change failed and whose previously committed state Core restored stays healthy. `status` and `ready()` always read the same lifecycle state.
 
-Removing a Group revokes authority for the whole subtree at once, including ChangeSets created before removal but not yet committed. Submitting one of those stale drafts consistently rejects with `GROUP_REMOVED`; it cannot cross the Group boundary into the Host. A terminal `Group` keeps only its identity and the `removed` status, `remove()` stays idempotent, and it no longer holds the Host, the configuration session or a historical failure stack, nor can it create Installations, child Groups or ChangeSets.
+Removing a Group revokes authority for the whole subtree at once, including ChangeSets created before removal but not yet committed. Every later `install/update/remove/commit` on one of those stale drafts consistently rejects with `GROUP_REMOVED`; it cannot cross the Group boundary into the Host. A terminal `Group` keeps only its identity and the `removed` status, `remove()` stays idempotent, and it no longer holds the Host, the configuration session or a historical failure stack, nor can it create Installations, child Groups or ChangeSets.
 
 When workspace or tenant separation is needed, choose by semantics: a small fixed number of capability variants uses an explicit Contract family; data selected per request uses a Service taking a tenant/workspace parameter; a fully independent capability graph uses multiple Hosts; security isolation uses a Worker, iframe or process. Never pass a Group off as a resolution or security boundary.
 
@@ -681,7 +689,7 @@ snapshots.invalidate()                     // mark invalid and notify
 snapshots.dispose()                        // freeze the terminal state and sever closures
 ```
 
-`view` is an authority narrowing, not a second observation API: a reader may only `get/subscribe`, and the owner may drive invalidation and termination only through the publisher. A subscriber failure is handed to the explicit reporter without preventing later subscribers from being notified; if the reporter itself fails, the Publisher finishes the notification pass and then preserves both failures in an `AggregateError`. `dispose()` freezes the last snapshot before severing the reader, reporter and existing subscriptions, so a historical view can still read the terminal state without keeping the owner alive. Host, Lifetime and Platform diagnostics all take this path, and no higher layer may rewrite the subscription registry or the error boundary.
+`view` is an authority narrowing, not a second observation API: a reader may only `get/subscribe`, and the owner may drive invalidation and termination only through `SnapshotPublisher`. Every subscription has independent identity; disposal immediately withdraws a notification whose turn has not started. A subscriber failure is handed to the explicit reporter without preventing later subscribers from being notified; if the reporter itself fails, the Publisher finishes the notification pass and then preserves both failures in an `AggregateError`. `dispose()` freezes the last snapshot before severing the reader, reporter and existing subscriptions, so a historical view can still read the terminal state without keeping the owner alive. Host, Lifetime and Platform diagnostics take this path directly; `ContributionStore` composes the same Publisher and adds only Lifetime ownership around each subscription, so registering one function twice still creates two independent subscriptions. No higher layer may rewrite the subscription registry or error boundary.
 
 Where a snapshot needs map semantics it uniformly uses `ReadonlyMapSnapshot`. It accepts only the Map or entry-iterable inputs admitted by its type, copies the input and exposes only `ReadonlyMap` methods, avoiding the fake immutability of `Object.freeze(new Map())`, on which `set/delete/clear` still work. It guarantees only the container's structural immutability; entry values should be frozen as they enter the snapshot.
 
@@ -721,7 +729,7 @@ host.diagnostics.get()
 host.diagnostics.subscribe(notify)
 ```
 
-A snapshot contains the Host name/status/revision, an `InstallationSnapshot` map and a `GroupSnapshot` map. The snapshot, its entries, arrays and maps are all read-only; diagnostics cannot control the Host.
+A snapshot contains the Host name/status/revision, an `InstallationSnapshot` map and a `GroupSnapshot` map. When an entry carries its latest failure, `error` is precisely typed as `Error` because the state machine has already classified non-Error values before publishing diagnostics. The snapshot, its entries, arrays and maps are all read-only; diagnostics cannot control the Host.
 
 A running `InstallationSnapshot` also carries an independent `lifetime` observation view:
 

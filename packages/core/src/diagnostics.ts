@@ -14,7 +14,7 @@ export interface InstallationSnapshot {
   readonly requires: ReadonlyArray<string>;
   readonly provides: ReadonlyArray<string>;
   readonly lifetime?: SnapshotView<LifetimeSnapshot>;
-  readonly error?: unknown;
+  readonly error?: Error;
 }
 
 export interface GroupSnapshot {
@@ -34,17 +34,17 @@ export interface HostSnapshot {
 /** Immutable operational read model; never a service locator or control plane. */
 export class HostDiagnostics {
   readonly #name: string;
-  readonly #source: SnapshotPublisher<HostSnapshot>;
-  #nextSnapshot: HostSnapshot;
+  readonly #publisher: SnapshotPublisher<HostSnapshot>;
+  #snapshot: HostSnapshot;
   #revision = 0;
 
   readonly view: SnapshotView<HostSnapshot>;
 
   constructor(name: string, groups: Iterable<GroupNode>, report: (error: unknown) => void) {
     this.#name = name;
-    this.#nextSnapshot = this.#snapshot("idle", [], groups);
-    this.#source = new SnapshotPublisher(() => this.#nextSnapshot, report);
-    this.view = this.#source.view;
+    this.#snapshot = this.#createSnapshot("idle", [], groups);
+    this.#publisher = new SnapshotPublisher(() => this.#snapshot, report);
+    this.view = this.#publisher.view;
   }
 
   publish(
@@ -53,11 +53,11 @@ export class HostDiagnostics {
     groups: Iterable<GroupNode>,
   ) {
     this.#revision++;
-    this.#nextSnapshot = this.#snapshot(status, installations, groups);
-    this.#source.invalidate();
+    this.#snapshot = this.#createSnapshot(status, installations, groups);
+    this.#publisher.invalidate();
   }
 
-  #snapshot(
+  #createSnapshot(
     status: HostStatus,
     records: Iterable<InstallationRecord>,
     groupNodes: Iterable<GroupNode>,

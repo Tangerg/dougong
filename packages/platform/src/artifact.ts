@@ -1,8 +1,16 @@
-import { definePlugin, type Provisions, type Requirements } from "@dougongjs/core";
+import {
+  definePlugin,
+  isCancellationReason,
+  type Provisions,
+  type Requirements,
+} from "@dougongjs/core";
 import { PlatformError } from "./errors";
 import type { Loader } from "./loader";
 import { defineManifest, matchesVersion, type Manifest } from "./manifest";
 import type { ErasedPlugin, NormalizedArtifact, Artifact } from "./platform-api";
+import { assertPlainRecord } from "./record";
+
+const artifactFields = new Set(["manifest", "reference", "config", "placeholder"]);
 
 /** Normalizes and validates one public Artifact declaration. */
 export function normalizeArtifact<
@@ -15,10 +23,20 @@ export function normalizeArtifact<
   apiVersion: string,
   artifact: Artifact<Reference, Config, Requires, Provides, ConfigInput>,
 ): NormalizedArtifact<Reference> {
-  if (!artifact || typeof artifact !== "object") {
-    throw new TypeError("Artifact must be an object");
+  assertPlainRecord(artifact, "Artifact declaration", { fields: artifactFields });
+  if (!Object.hasOwn(artifact, "manifest")) {
+    throw new TypeError("Artifact declaration must define manifest");
   }
-  const manifest = defineManifest(artifact.manifest);
+  if (!Object.hasOwn(artifact, "reference")) {
+    throw new TypeError("Artifact declaration must define reference");
+  }
+  const declaredManifest = artifact.manifest;
+  const reference = artifact.reference;
+  const config = Object.hasOwn(artifact, "config") ? artifact.config : undefined;
+  const declaredPlaceholder = Object.hasOwn(artifact, "placeholder")
+    ? artifact.placeholder
+    : undefined;
+  const manifest = defineManifest(declaredManifest);
   if (!matchesVersion(apiVersion, manifest.apiVersion)) {
     throw new PlatformError(
       "API_INCOMPATIBLE",
@@ -27,13 +45,13 @@ export function normalizeArtifact<
   }
 
   const placeholder =
-    artifact.placeholder === undefined
+    declaredPlaceholder === undefined
       ? undefined
-      : normalizePlaceholder(manifest, artifact.placeholder);
+      : normalizePlaceholder(manifest, declaredPlaceholder);
   return Object.freeze({
     manifest,
-    reference: artifact.reference,
-    config: artifact.config,
+    reference,
+    config,
     ...(placeholder ? { placeholder } : {}),
   });
 }
@@ -49,7 +67,7 @@ export async function loadPlugin<Reference>(
   try {
     loaded = await loader.load(artifact.reference, signal);
   } catch (error) {
-    if (isLoadCancellation(signal, error)) throw error;
+    if (isCancellationReason(signal, error)) throw error;
     throw new PlatformError(
       "MODULE_LOAD_FAILED",
       `Failed to load module for Manifest '${artifact.manifest.name}'`,
@@ -64,7 +82,9 @@ export async function loadPlugin<Reference>(
     );
   }
 
-  const candidate = (loaded as { default?: unknown }).default;
+  const candidate = Object.hasOwn(loaded, "default")
+    ? (loaded as { readonly default: unknown }).default
+    : undefined;
   let plugin: ErasedPlugin;
   try {
     plugin = normalizePluginCandidate(candidate);
@@ -77,12 +97,6 @@ export async function loadPlugin<Reference>(
   }
   assertArtifactIdentity(artifact.manifest, plugin, "module");
   return plugin;
-}
-
-function isLoadCancellation(signal: AbortSignal, error: unknown) {
-  if (!signal.aborted) return false;
-  if (Object.is(error, signal.reason)) return true;
-  return error instanceof Error && error.name === "AbortError";
 }
 
 function normalizePlaceholder(manifest: Manifest, placeholder: unknown) {

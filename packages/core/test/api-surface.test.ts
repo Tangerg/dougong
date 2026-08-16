@@ -1,7 +1,20 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, expectTypeOf, it } from "vitest";
 import * as core from "../src/index";
 
 describe("public API surface", () => {
+  it("requires Contract values to come through the typed factory boundary", () => {
+    type PlainService = { readonly id: "plain"; readonly kind: "service" };
+    type IsService = PlainService extends core.Service<unknown> ? true : false;
+    type PlainOptional = {
+      readonly kind: "optional";
+      readonly service: core.Service<unknown>;
+    };
+    type IsOptional = PlainOptional extends core.OptionalService<unknown> ? true : false;
+
+    expectTypeOf<IsService>().toEqualTypeOf<false>();
+    expectTypeOf<IsOptional>().toEqualTypeOf<false>();
+  });
+
   it("keeps the Core value-export budget explicit", () => {
     expect(Object.keys(core).sort()).toEqual([
       "ConfigValidationError",
@@ -13,6 +26,7 @@ describe("public API surface", () => {
       "definePlugin",
       "event",
       "extensionPoint",
+      "isCancellationReason",
       "isLogger",
       "optional",
       "service",

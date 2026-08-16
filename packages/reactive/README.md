@@ -27,7 +27,7 @@ double.get() // 42
 ### observe：把值的变化编译成资源的重建
 
 ```ts
-observe(source, owner, (value, lifetime) => {
+observe(owner, source, (value, lifetime) => {
   const socket = new WebSocket(value)
   lifetime.cleanup(() => socket.close())
 })
@@ -64,7 +64,7 @@ double.get() // 42
 ### observe: compiling value change into resource rebuild
 
 ```ts
-observe(source, owner, (value, lifetime) => {
+observe(owner, source, (value, lifetime) => {
   const socket = new WebSocket(value)
   lifetime.cleanup(() => socket.close())
 })

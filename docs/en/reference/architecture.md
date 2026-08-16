@@ -48,7 +48,7 @@ Depends only on standard JavaScript and the Standard Schema type contract. It ow
 - a SerialQueue shared across layers, where one failure does not poison later commands
 - read-only diagnostic projections
 
-Core keeps the same division internally: Host owns only Installation declarations, the `SerialQueue` and status publication; GroupCoordinator owns only structural Groups; Engine owns committed Contracts, Services, Events, ExtensionPoints, Lifetimes, Instances and graph transitions. Platform reuses Core's serialization primitive directly rather than copying its failure-isolation state machine. Transactions are initiated by Host, but graph switching, rollback and fail-closed happen only in Engine — so declaration state and active execution state each have exactly one source of truth, instead of piling every responsibility into one class.
+Core keeps the same division internally: Host serializes public commands and publishes status over three peer collaborators; InstallationRegistry owns declarations and public handle authority; GroupCoordinator owns only structural Groups; Engine owns the committed plan and its commit, rollback and fail-closed transitions. Runtime, beneath Engine, owns live Instances and the Services, Events, ExtensionPoints and Lifetimes reachable from them. Platform reuses Core's serialization primitive directly rather than copying its failure-isolation state machine. Graph switching happens only in Engine and live execution happens only in Runtime — so declaration state, transaction state and active execution state each have exactly one source of truth instead of accumulating in one class.
 
 ### `@dougongjs/reactive`
 
@@ -140,8 +140,8 @@ observe(ctx, source, callback)
   = source.get + source.subscribe
   + ctx.lifetime + ctx.spawn + ctx.cleanup
 
-platform.reload(artifact)
-  = installation.update({ plugin, config })
+registration.update(artifact)
+  = platform.change().update(registration, artifact).commit()
 ```
 
 A higher layer may add schemas, defaults, policy and domain errors, but may not bypass ownership, transactions or permissions.
@@ -239,7 +239,7 @@ A child Lifetime disposed early detaches from the parent's ownership set. A back
 
 The same rule covers every internal lease: listeners, contributions, ContributionViews and their subscriptions, cleanups and tasks all detach from the parent set on early termination, and terminal objects clear their owner, store, callback, payload and diagnostic-accounting references. The seven resource categories reuse one live-resource-set implementation, giving O(1) detachment, idempotent ownership release and diagnostic accounting. They still use separate sets to express publication order, release order and per-category counts — a shared mechanism, not mixed semantics.
 
-Actively releasing a Lifetime or Task uses a module-level frozen `AbortError` as the cancellation reason, while a parent cancellation forwards the parent's reason unchanged. What is shared is only a stateless error value, not an ambient scope; it prevents the stack automatically created by every `abort()` from turning a terminal `AbortSignal.reason` into a hidden retaining edge back to the Host. After release, the Lifetime replaces its active signal with a fresh already-aborted signal carrying the same reason, so a terminal resource does not keep the old signal's listener closures. An in-flight release promise belongs only to the `disposing` state and is structurally dropped on reaching `disposed`; the original failure is still observed by whoever obtained that promise.
+Actively releasing a Lifetime or Task uses a module-level frozen `AbortError` as the cancellation reason, while a parent cancellation forwards the parent's reason unchanged during the active phase. What is shared is only a stateless error value, not an ambient scope; it prevents the stack automatically created by every `abort()` from turning a terminal `AbortSignal.reason` into a hidden retaining edge back to the Host. After release, the Lifetime replaces its active signal with a fresh aborted signal carrying that shared `AbortError`, so a terminal resource keeps neither the old signal's listener closures nor a parent reason that may carry application objects. An in-flight release promise belongs only to the `disposing` state and is structurally dropped on reaching `disposed`; the original failure is still observed by whoever obtained that promise.
 
 A parent owns only what is still alive, so holding a released resource never keeps the whole Host alive. `ContributionView` uses an explicit narrow facade rather than arrow functions returned from store methods that capture lexical `this` — once the binding is cleared, the public view itself cannot become a hidden ownership edge into the store.
 
@@ -366,6 +366,8 @@ untrusted UI          declarative data rendered by application code
 ```
 
 A Platform loader may return an application-authored RPC `Plugin`. Core then sees only ordinary Services and Lifetimes and never needs to know the transport.
+
+Platform activation and structural change are orthogonal command flows, but their committed state must agree. The internal `Activator` exclusively owns dependency activation, `ActivationGate` permits and change-target exclusion; Platform only serializes public commands and commits structural transactions. When a ChangeSet begins execution, it first fixes which updates remain activated, then completes candidate-graph, permission and module preflight. Through Activator's one-shot barrier it closes new activation, cancels explicit targets and awaits existing permits before revalidating stable state against that same plan and committing exactly one Core ChangeSet. A failed preflight therefore has no cancellation side effect, and a concurrent activation can neither change the meaning of the current change nor create a dangling dependency in the gap between validation and commit.
 
 ## 12. Mapping to real projects
 

@@ -7,13 +7,14 @@ import {
 } from "@dougongjs/core";
 import type { Registration, NormalizedArtifact, PlatformChangeSet, Artifact } from "./platform-api";
 import { PlatformError } from "./errors";
+import type { ActivationPermit } from "./activation-gate";
 
 export interface RegistrationPort<Reference> {
   change(): PlatformChangeSet<Reference>;
   activateRegistration(
     registration: RegistrationRecord<Reference>,
-    stack: ReadonlyArray<RegistrationRecord<Reference>>,
     signal: AbortSignal,
+    permit?: ActivationPermit,
   ): Promise<void>;
 }
 
@@ -28,12 +29,17 @@ type RegistrationAuthority<Reference> =
   | { readonly phase: "terminal" };
 
 type TerminalRegistrationFailure =
-  | { readonly name: string; readonly message: string }
   | {
+      readonly category: "coded";
       readonly name: string;
       readonly message: string;
       readonly code: string;
       readonly domain: "core" | "platform";
+    }
+  | {
+      readonly category: "typeError" | "error";
+      readonly name: string;
+      readonly message: string;
     };
 
 type RegistrationFailure =
@@ -142,6 +148,11 @@ export class RegistrationRecord<Reference> {
     return this.#state.phase;
   }
 
+  /** Whether the owning ChangeSet has granted this Registration Platform authority. */
+  get attached() {
+    return this.#authority.phase === "attached";
+  }
+
   get error() {
     const state = this.#state;
     if (state.phase === "failed") {
@@ -189,7 +200,7 @@ export class RegistrationRecord<Reference> {
     return this.#enqueueActivation(async (signal) => {
       if (admission) await admission;
       signal.throwIfAborted();
-      await port.activateRegistration(this, [], signal);
+      await port.activateRegistration(this, signal);
     });
   }
 
@@ -213,11 +224,11 @@ export class RegistrationRecord<Reference> {
     await authority.port.change().remove(this.publicRegistration).commit();
   }
 
-  activateAsDependency(stack: ReadonlyArray<RegistrationRecord<Reference>>) {
+  activateAsDependency(permit: ActivationPermit) {
     const authority = this.#attachedAuthority();
     if (!authority) return Promise.reject(this.unavailableError());
     return this.#enqueueActivation((signal) =>
-      authority.port.activateRegistration(this, stack, signal),
+      authority.port.activateRegistration(this, signal, permit),
     );
   }
 
@@ -337,23 +348,56 @@ export function normalizeRegistrationFailure(error: unknown, manifestName: strin
   );
 }
 
+export function assertCurrentRegistration<Reference>(
+  registrations: ReadonlyMap<string, RegistrationRecord<Reference>>,
+  registration: RegistrationRecord<Reference>,
+) {
+  if (
+    registrations.get(registration.manifestName) !== registration ||
+    registration.status === "removed"
+  ) {
+    throw registration.unavailableError();
+  }
+}
+
 function snapshotFailure(error: Error): TerminalRegistrationFailure {
   if (error instanceof PlatformError) {
-    return { name: error.name, message: error.message, code: error.code, domain: "platform" };
+    return {
+      category: "coded",
+      name: error.name,
+      message: error.message,
+      code: error.code,
+      domain: "platform",
+    };
   }
   if (error instanceof DougongError) {
-    return { name: error.name, message: error.message, code: error.code, domain: "core" };
+    return {
+      category: "coded",
+      name: error.name,
+      message: error.message,
+      code: error.code,
+      domain: "core",
+    };
   }
-  return { name: error.name, message: error.message };
+  return {
+    category: error instanceof TypeError ? "typeError" : "error",
+    name: error.name,
+    message: error.message,
+  };
 }
 
 function restoreFailure(failure: TerminalRegistrationFailure): Error {
   let error: Error;
-  if (!("code" in failure)) error = new Error(failure.message);
-  else if (failure.domain === "platform") {
-    error = new PlatformError(failure.code, failure.message);
+  if (failure.category === "coded") {
+    error =
+      failure.domain === "platform"
+        ? new PlatformError(failure.code, failure.message)
+        : new DougongError(failure.code, failure.message);
   } else {
-    error = new DougongError(failure.code, failure.message);
+    error =
+      failure.category === "typeError"
+        ? new TypeError(failure.message)
+        : new Error(failure.message);
   }
   error.name = failure.name;
   return error;

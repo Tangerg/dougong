@@ -14,7 +14,7 @@ export interface GroupCoordinatorPort {
     config: unknown,
   ): { readonly record: InstallationRecord; readonly publicInstallation: object };
   resolveInstallation(installation: object): InstallationRecord;
-  executeChanges(operations: ReadonlyArray<ChangeOperation>): Promise<void>;
+  executeChanges(group: GroupNode, operations: ReadonlyArray<ChangeOperation>): Promise<void>;
   attachInstallation(installation: InstallationRecord): void;
   discardInstallation(installation: InstallationRecord, error: unknown): void;
   runExclusive(operation: () => Promise<void>): Promise<void>;
@@ -163,9 +163,14 @@ export class GroupCoordinator {
   change(group: GroupNode, tracking: "immediate" | "deferred" = "immediate") {
     this.#requireLifecycle(group);
     return new ChangeSetDraft({
-      create: (plugin, config) => this.#port.createDraft(group, plugin, config),
+      create: (plugin, config) => {
+        this.#requireLifecycle(group);
+        return this.#port.createDraft(group, plugin, config);
+      },
       resolve: (value) => {
+        this.#requireLifecycle(group);
         const installation = this.#port.resolveInstallation(value);
+        if (!installation.attached) throw installation.unavailableError();
         if (!group.contains(installation.group)) {
           throw new TypeError(`Installation '${installation.id}' is outside Group '${group.id}'`);
         }
@@ -173,9 +178,9 @@ export class GroupCoordinator {
       },
       execute: (operations) => {
         this.#requireLifecycle(group);
-        const operation = this.#port.executeChanges(operations);
+        const operation = this.#port.executeChanges(group, operations);
         for (const change of operations) change.installation.trackReadiness(operation);
-        if (tracking === "immediate") this.#track(group, operation);
+        if (operations.length && tracking === "immediate") this.#track(group, operation);
         return operation;
       },
       attach: (installation) => {

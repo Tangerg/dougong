@@ -9,7 +9,7 @@ export interface ContractIdentity {
 
 interface Contract<T, K extends ContractKind> extends ContractIdentity {
   readonly kind: K;
-  readonly [contractType]?: T;
+  readonly [contractType]: T;
 }
 
 export interface Service<T> extends Contract<T, "service"> {}
@@ -19,6 +19,7 @@ export interface Event<T> extends Contract<T, "event"> {}
 export interface OptionalService<T> {
   readonly kind: "optional";
   readonly service: Service<T>;
+  readonly [contractType]: T;
 }
 
 export type Requirement<T = unknown> = Service<T> | ExtensionPoint<T> | OptionalService<T>;
@@ -83,5 +84,5 @@ export function optional<T>(token: Service<T>): OptionalService<T> {
   if (!isContract(token, "service")) {
     throw new TypeError("optional() expects a Service");
   }
-  return Object.freeze({ kind: "optional", service: token });
+  return Object.freeze({ kind: "optional", service: token }) as OptionalService<T>;
 }

@@ -25,7 +25,7 @@ class DougongError extends Error {
 }
 
 class ConfigValidationError extends DougongError {   // code: "CONFIG_INVALID"
-  readonly issues: ReadonlyArray<ValidationIssue>
+  readonly issues: ReadonlyArray<StandardSchemaV1.Issue>
 }
 
 class PlatformError extends DougongError {}
@@ -41,7 +41,7 @@ Several failures are aggregated into a standard `AggregateError`, with every cau
 ::: tip TypeError versus Error
 Beyond coded errors, Dougong uses two native types:
 
-- **`TypeError`** — the caller passed the wrong thing (not a function, not a Contract, a key conflict, an operation on a released object)
+- **`TypeError`** — the caller passed the wrong thing (not a function, not a Contract, a key conflict, or continued using an object whose local capability was revoked)
 - **`Error`** — an internal invariant broke; that is a framework bug you should never reach in normal use
 
 So you can branch by constructor: a `DougongError` is an expected operational failure, while a `TypeError` is a usage problem.
@@ -79,7 +79,7 @@ Every affected Installation's Plugin config is validated in full before any runn
 
 | Code | Trigger |
 | --- | --- |
-| `GROUP_REMOVED` | An operation on a removed Group, or submission of a stale ChangeSet created before that Group was removed |
+| `GROUP_REMOVED` | An operation on a removed Group, or continued use of a stale ChangeSet created before that Group was removed |
 | `GROUP_UNAVAILABLE` | The Group was never established; or a Group operation failed with a non-Error value |
 
 ## Platform (`@dougongjs/platform`)
@@ -113,7 +113,7 @@ These errors arise while resolving manifest declarations in the candidate Regist
 | `MODULE_LOAD_FAILED` | The loader threw. The original error is in `cause` |
 | `MODULE_INVALID` | The module loaded but exports no valid Plugin |
 | `ARTIFACT_IDENTITY` | One artifact disagrees with itself: the manifest name differs from the placeholder's or the loaded Plugin's name |
-| `REGISTRATION_BUSY` | That Registration already has a change in flight |
+| `REGISTRATION_BUSY` | That Registration is changing, or a Platform structural change has closed admission for new root activations |
 | `REGISTRATION_UNAVAILABLE` | The Registration is unavailable; activation or admission threw a **non-Error** value (the original is in `cause`); or an operation ran on an uncommitted registration |
 | `REGISTRATION_REMOVED` | An operation on a removed Registration |
 | `REGISTRATION_IDENTITY` | An update's new artifact carries a different manifest name |
@@ -181,11 +181,13 @@ The channel is fail-safe: a throwing `onError` falls back to the logger, and a t
 
 ### How much a terminal failure retains
 
-Once an Installation detaches from its Host (removed or discarded), it keeps only a plain-data summary of the error — `name` / `message` / `code` — and rebuilds an Error when read.
+Once an Installation detaches from its Host (removed or discarded), it keeps only a plain-data summary: `name`, `message`, the minimal constructor category, and `code` when available. A later read rebuilds the correct `DougongError` or `TypeError`; every other failure becomes a plain `Error`.
 
 The reason is that JavaScript's `Error.stack` can carry the whole orchestration call frame from where the error was created, letting one historical object keep an entire Host alive.
 
 **The normal path is unaffected**: a caller awaiting `ready()` always receives the original `Error`, and a failed Installation still attached to a live Host keeps its original error too. Only an after-the-fact read of a detached Installation whose caller never awaited `ready()` gets the summary — and there subclass data such as `ConfigValidationError.issues` is no longer available.
+
+A terminal Registration follows the same retention rule and records whether a coded error belonged to Core or Platform, so it can rebuild the correct `DougongError` or `PlatformError`. It also preserves the caller-error category of `TypeError`, while subclass-specific fields remain absent from the summary. It never keeps an Installer, Loader or Platform alive merely to preserve a historical `stack` or `cause`.
 
 ## Related
 

@@ -18,7 +18,7 @@
 
 ---
 
-Dougong (斗拱, the interlocking bracket set of Chinese timber architecture) solves one problem: **when an application's capabilities must be split into independently installable units, how do their dependencies, lifetimes and changes stay reasonable about?**
+Dougong (斗拱, the interlocking bracket set of Chinese timber architecture) solves one problem: **when an application's capabilities must be split into independently installable units, how do their dependencies, lifetimes and changes remain easy to reason about?**
 
 ```sh
 npm install dougong
@@ -85,7 +85,7 @@ A signal is not a fifth capability. `@dougongjs/reactive` provides `signal()` / 
 
 ## Packages
 
-| Package | Role | Runtime dependencies |
+| Package | Role | Package dependencies |
 | --- | --- | --- |
 | [`dougong`](./packages/dougong) | Facade re-exporting the three below | the three internal packages |
 | [`@dougongjs/core`](./packages/core) | The six atoms, dependency graph, transactions, Groups, diagnostics | `@standard-schema/spec` |

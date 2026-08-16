@@ -40,6 +40,8 @@ await platform.trigger("command:music.search");
 await registration.ready();
 ```
 
+Platform options 是仅含 `installer`、`apiVersion`、`loader`、`authorizer`、`logger` 的普通 record；只读取可枚举 own property，不接受未知字段或原型链配置。Installer、Loader、Authorizer 与 Logger 本身仍是结构化端口，可以由普通对象或类实例实现。
+
 `register()` 只让 Artifact 进入 Platform；`activate()` 才选择并加载外部 Plugin；`ready()` 等待对应 Core Installation 真正越过 Host / ChangeSet ready barrier。三者不是近义 API。
 
 ## 二、Manifest
@@ -70,7 +72,7 @@ interface Manifest {
 
 - `name`、激活条件、权限名、依赖名和版本范围必须非空且首尾无空白；不做静默 trim。
 - `version` 必须是完整语义版本；`apiVersion` 和每个依赖值必须是受支持的版本范围，`*` 明确表示任意版本。
-- Manifest 是 strict object，未知字段拒绝，而不是悄悄丢弃拼错的配置。
+- Manifest 是仅由可枚举字符串 own property 构成的普通 record，未知字段、Symbol、隐藏属性、数组与类实例都会被拒绝，而不是悄悄丢弃或从原型链读取配置；`dependencies` 使用同一 record 规则。
 - 同一激活条件或权限不得重复。
 - 返回对象、数组和依赖映射都冻结；Manifest 是值，不持有执行状态。
 - `Manifest.name` 是 Registration 身份，也必须与 placeholder 及加载模块的 `Plugin.name` 完全一致。
@@ -85,14 +87,14 @@ interface Loader<Reference> {
 }
 ```
 
-Loader 返回的模块必须以 `default` 导出唯一的 `Plugin`。Platform 在加载后重新走 `definePlugin()` 的结构校验，并核对 name。加载错误统一包装为 `PlatformError` 的 `MODULE_LOAD_FAILED`；模块形状或默认导出错误使用 `MODULE_INVALID`。
+Loader 返回的模块必须以 own `default` 属性导出唯一的 `Plugin`，原型链属性不属于模块导出。Platform 在加载后重新走 `definePlugin()` 的结构校验，并核对 name。加载错误统一包装为 `PlatformError` 的 `MODULE_LOAD_FAILED`；模块形状或默认导出错误使用 `MODULE_INVALID`。
 
 内置实现：
 
 - `ImportLoader`：使用动态 `import()`，用于受信任的同 Realm ESM；明确**不是沙箱**。
 - `MemoryLoader`：复制应用代码提供的只读 Map 并从中取模块，用于嵌入式 bundle、确定性测试和应用内建插件；它拒绝 `null`、数组等类型声明并未接受的输入。
 
-Loader 必须在耗时阶段检查 `AbortSignal`。Platform 也会在 Loader 返回后再次检查，因此一个不合作的 Loader 不能在取消后把模块提交进 Core，但它自身已发生的 I/O 或模块顶层副作用无法撤销。
+Loader 必须在耗时阶段检查 `AbortSignal`。Platform 复用 Core 的 `isCancellationReason()` 判定取消，并在 Loader 返回后再次检查 signal；因此一个不合作的 Loader 不能在取消后把模块提交进 Core，但它自身已发生的 I/O 或模块顶层副作用无法撤销。
 
 不可信 Plugin 应使用 Worker、iframe、独立进程或受限 Realm。相应 Loader 可以返回一个**应用代码编写的 RPC 代理 Plugin**，把获准能力映射成普通 Service；不能先在应用 Realm `import()` 任意代码，再指望 Context 权限把它变安全。
 
@@ -126,6 +128,8 @@ interface Artifact<Reference> {
 }
 ```
 
+Artifact 也是严格的声明值：它必须是仅含 `manifest`、`reference`、`config`、`placeholder` 的普通 record，且 `manifest` 与 `reference` 必须是可枚举的 own property。未知字段、Symbol、隐藏属性、数组与类实例都会在进入 ChangeSet 时立即拒绝；规范化只读取一次自己的字段并返回冻结值，不从原型链猜测声明。
+
 `placeholder` 必须由应用代码信任的代码创建。它适合在懒加载前贡献命令标题、菜单元数据或占位面板。Platform 注册时把它作为普通 Core Plugin 安装；激活时原子更新**同一个 Core Installation**，换成加载所得 Plugin，因此 Installation ID、Group 归属和下游观测身份保持稳定。
 
 `Registration.status`：
@@ -141,7 +145,7 @@ interface Artifact<Reference> {
 
 `activate()` 在 Host 为 `idle` 时也可以完成：它负责把加载所得 Plugin 提交进安装计划，不偷偷启动 Host。此时 `status === "activated"`，但先前或随后调用的 `ready()` 仍会等待 `host.start()`；这明确分开“Registration 已激活”和“Instance 已就绪”。
 
-取消加载时只把 `signal.reason` 或明确的 `AbortError` 识别为取消结果。Loader 仅仅在 signal 已 abort 后抛出的其他错误仍保留为 `MODULE_LOAD_FAILED` 及其 `cause`，不会被竞态中的取消原因覆盖。
+signal 已 aborted 后，取消加载只把与 `signal.reason` 相同的值或明确的 `AbortError` 识别为取消结果。Loader 仅仅在 abort 后抛出的其他错误仍保留为 `MODULE_LOAD_FAILED` 及其 `cause`，不会被竞态中的取消原因覆盖。
 
 `ready()` 在 `pending` / `registered` / `loading` 时等待首次激活及 Core ready barrier；在 `activated` 时委托当前 Core Installation；在 `failed` / `removed` 时立即拒绝。一次失败的等待不会因以后重试自动复活，重试成功后应重新调用 `ready()`。
 
@@ -157,7 +161,7 @@ interface Artifact<Reference> {
 
 注册顺序不需要等于依赖顺序：尚未激活的 Registration 可以暂时引用尚不存在的依赖，方便应用代码先收集一批 Manifest。但一旦所有节点出现，任何闭环都会在注册/变更的候选图阶段立即拒绝，不把 Registration 静默留在永久 pending 状态。
 
-同一个 Registration 的激活串行化；多个消费者并发要求同一依赖时，该依赖只会完成一次有效加载。更新、移除和 Platform dispose 会取消并等待相关激活，不允许加载结果越过变更边界后“复活”旧 Artifact。
+同一个 Registration 的激活串行化；一次根激活及其递归依赖共享同一张内部 permit，多个消费者并发要求同一依赖时，该依赖只会完成一次有效加载。Platform ChangeSet 通过一个激活 gate 与这些 permit 协调：预检失败不取消任何飞行中激活；预检成功后才关闭新根激活入口、取消明确变更目标并等待已经获准的激活树结算。Platform dispose 则进入终态并取消全部激活。加载结果因此不能越过变更边界后“复活”旧 Artifact。
 
 ## 七、Platform ChangeSet
 
@@ -174,23 +178,22 @@ await change.commit();
 
 `platform.register()`、`registration.update()`、`registration.remove()` 都机械退化为单项 Platform ChangeSet。ChangeSet one-shot、commit 幂等、同一目标只允许出现一次，并拒绝其他 Platform 的 Registration。
 
-空 Platform ChangeSet 提交为无副作用 no-op，不触发候选图、Core ChangeSet 或诊断 revision。
+空 Platform ChangeSet 不触发候选图、Core ChangeSet 或诊断 revision，但仍按提交顺序经过同一命令队列并检查 Platform authority；它会等待先前的变更，dispose 前创建的旧空草稿也不能在终态后伪装成成功提交。
 
-`change.register()` 创建的 Registration 在 commit 前只是该 ChangeSet 的 draft，不持有 Platform owner，也不能另行 `activate/update/remove`。commit 时才授予控制权限；注册失败后再次撤销。这样草稿不会绕开候选图，也不会因一个被遗忘的未提交 Registration 反向保活 Platform。
+`change.register()` 创建的 Registration 在 commit 前只是该 ChangeSet 独占的 draft，不持有 Platform owner，不能另行 `activate/update/remove`，也不能作为另一份 ChangeSet 的目标。commit 时才授予控制权限；注册失败或移除后再次撤销。终态句柄的直接 `remove()` 保持幂等，但不能重新作为新 ChangeSet 的目标。这样草稿与旧句柄都不会绕开候选图，也不会反向保活 Platform。
 
 `commit()` 返回后立即调用 `activate()` 也不依赖微任务顺序：Registration 会先等待授权它的同一次提交，提交失败则两者观察到同一失败。
 
 提交顺序：
 
-1. 锁定并取消待更新/删除目标的飞行中激活；
-2. 在当前注册表上一次应用全部操作，形成候选 Registration 图；
-3. 检查重复身份和依赖环；对最终仍为 activated 的 Registration，要求全部依赖存在、版本兼容且已经 activated；
-4. 对新增/更新 Manifest 执行授权；
-5. 预加载所有 activated 目标的新 Plugin，任何失败都尚未触碰 Core；
-6. 把 placeholder 安装、活动 Plugin 更新和删除编译进**一份 Core ChangeSet**并提交；
-7. Core 成功后一次切换 Platform 的 Artifact、Registration 与诊断状态。
+1. 验证全部目标仍属于当前 Platform，快照哪些更新以 activated 身份进入本次事务，并在当前注册表上形成完整候选图；
+2. 按该计划检查重复身份、依赖环和提交后的 activated 依赖，再对新增/更新 Manifest 授权并预加载计划保持 activated 的目标的新 Plugin；此阶段失败不会加锁或取消激活；
+3. 关闭新根激活入口，锁定并取消待更新/删除目标，等待此前已获准的整棵激活树结算；
+4. 在稳定的 Registration 状态上按同一份激活计划重新验证候选图，防止并发激活改变本次更新语义，或在预检与提交之间引入新的已激活依赖；
+5. 把 placeholder 安装、活动 Plugin 更新和删除编译进**一份 Core ChangeSet**并提交；
+6. Core 成功后一次切换 Platform 的 Artifact、Registration 与诊断状态，并重新开放激活入口。
 
-内部实现同样按这条边界拆分：Artifact 编译器只负责 Manifest、placeholder 和加载模块的信任校验；CandidateGraph 只验证完整候选依赖图；CoreChange 编译器只生成一份 Core ChangeSet 及其确定的 Artifact 终态。Platform 协调器在 Core 提交前准备好不会失败的本地提交闭包，因而不会在 Core 已成功后才发现缺失 Installation 或非法 Registration 状态。
+内部实现同样按这条边界拆分：Activator 独占激活树、permit 和变更排他；Artifact 编译器只负责 Manifest、placeholder 和加载模块的信任校验；CandidateGraph 只验证完整候选依赖图；CoreChange 编译器只生成一份 Core ChangeSet 及其确定的 Artifact 终态。Platform 协调器在这些平级协作者之上串行结构命令，并在 Core 提交前准备好不会失败的本地提交闭包，因而不会在 Core 已成功后才发现缺失 Installation 或非法 Registration 状态。
 
 这使提供者 `1.x → 2.x` 与消费者依赖范围 `^1 → ^2` 能在一份变更中完成；分两次 `update()` 时第一份非法候选图会被拒绝。模块 import 的顶层副作用不具备事务性，但安装计划、Core Instance 和 Registration 不会出现半提交状态。
 
@@ -226,7 +229,7 @@ Planet 式媒体源、Lynx Desktop 式命令/菜单/面板分别是 ExtensionPoi
 `platform.diagnostics` 使用与 Core/Signal 相同的 `get() + subscribe()` 只读协议，包含：
 
 - Platform `apiVersion`、`status` 和单调 `revision`；
-- 每个 Registration 的 `manifestName`、`version`、`status`、`activation`、`permissions`、`dependencies` 与最近错误。
+- 每个 Registration 的 `manifestName`、`version`、`status`、`activation`、`permissions`、`dependencies` 与已规范化为 `Error` 的最近失败。
 
 快照、条目和数组冻结，Map 不暴露可变方法。`subscribe()` 只发送未来失效通知，调用方收到后重新 `get()`。诊断订阅者失败经 Platform Logger 上报，不会改变注册或激活结果。
 
@@ -265,11 +268,11 @@ Platform 的可判定错误使用 `PlatformError.code`。`PlatformError extends 
 | `REGISTRATION_DEPENDENCY_INCOMPATIBLE` | 依赖 Registration 的版本不满足 Manifest 范围 |
 | `REGISTRATION_DEPENDENCY_INACTIVE` | activated 候选 Registration 依赖尚未 activated 的 Registration |
 | `REGISTRATION_CYCLE` | 候选 Registration 图中的 Manifest 依赖存在闭环 |
-| `REGISTRATION_BUSY` | 激活与同一目标的声明变更发生竞争 |
+| `REGISTRATION_BUSY` | 目标正在变更，或结构变更已关闭新的根激活入口 |
 | `MODULE_LOAD_FAILED` | Loader 自身失败 |
 | `MODULE_INVALID` | 模块或默认导出不是合法 Plugin |
 | `REGISTRATION_REMOVED` | 对已移除的 Registration 操作 |
 | `REGISTRATION_UNAVAILABLE` | Registration 尚未提交或不可用；activation / admission 抛出非 `Error` 值时，首次公开命令和 `ready()` 使用同一分类。未提交的终态 Registration 只保留错误摘要，因此后续 `ready()` 会重建等价错误而不保留原始 Error stack |
 | `PLATFORM_UNAVAILABLE` | Platform 正在释放或已经释放 |
 
-错误消息用于人读，不是稳定解析协议。编程形状错误、跨 Platform Registration、重复 ChangeSet 目标和 submitted 后继续修改使用 `TypeError`。
+错误消息用于人读，不是稳定解析协议。编程形状错误、跨 Platform Registration、重复 ChangeSet 目标和 submitted 后继续修改使用 `TypeError`；自定义 Installer 以非 `Error` 值拒绝时也会在 Platform 命令边界分类成带原始 `cause` 的 `TypeError`。

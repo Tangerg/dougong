@@ -28,15 +28,15 @@ export interface LifetimeDiagnosticNode {
 
 /** Publishes immutable data snapshots for one root Lifetime ownership tree. */
 export class LifetimeDiagnostics {
-  readonly #source: SnapshotPublisher<LifetimeSnapshot>;
+  readonly #publisher: SnapshotPublisher<LifetimeSnapshot>;
 
   readonly root: LifetimeDiagnosticNode;
   readonly view: SnapshotView<LifetimeSnapshot>;
 
   constructor(rootLabel: string, report: (error: unknown) => void) {
     this.root = createDiagnosticNode(rootLabel);
-    this.#source = new SnapshotPublisher(() => snapshotNode(this.root), report);
-    this.view = this.#source.view;
+    this.#publisher = new SnapshotPublisher(() => snapshotNode(this.root), report);
+    this.view = this.#publisher.view;
   }
 
   createNode(label: string) {
@@ -46,32 +46,32 @@ export class LifetimeDiagnostics {
   attach(parent: LifetimeDiagnosticNode, child: LifetimeDiagnosticNode) {
     if (parent.children.has(child)) throw new Error("Lifetime diagnostic node is attached");
     parent.children.add(child);
-    this.#source.invalidate();
+    this.#publisher.invalidate();
   }
 
   detach(parent: LifetimeDiagnosticNode, child: LifetimeDiagnosticNode) {
     if (!parent.children.delete(child)) return;
-    this.#source.invalidate();
+    this.#publisher.invalidate();
   }
 
   change(node: LifetimeDiagnosticNode, kind: LifetimeResourceKind, delta: 1 | -1) {
     const next = node.counts[kind] + delta;
     if (next < 0) throw new Error(`Lifetime '${kind}' count cannot be negative`);
     node.counts[kind] = next;
-    this.#source.invalidate();
+    this.#publisher.invalidate();
   }
 
   beginDisposing(node: LifetimeDiagnosticNode) {
     if (node.phase !== "active") return;
     node.phase = "disposing";
-    this.#source.invalidate();
+    this.#publisher.invalidate();
   }
 
   finishRoot() {
     if (this.root.phase === "disposed") return;
     this.root.phase = "disposed";
-    this.#source.invalidate();
-    this.#source.dispose();
+    this.#publisher.invalidate();
+    this.#publisher.dispose();
   }
 }
 

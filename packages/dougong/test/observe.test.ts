@@ -443,6 +443,30 @@ describe("observe composition", () => {
     await host.stop();
   });
 
+  it("releases source, observer and value after an observation stops", async () => {
+    const forceGc = (globalThis as typeof globalThis & { gc?: () => void }).gc;
+    if (!forceGc) throw new TypeError("Retention tests require Node.js --expose-gc");
+
+    const fixture = await createStoppedObservationRetentionFixture();
+    try {
+      for (
+        let pass = 0;
+        pass < 8 && [...fixture.references.values()].some((reference) => reference.deref());
+        pass++
+      ) {
+        await tick();
+        forceGc();
+        forceGc();
+      }
+
+      for (const [name, reference] of fixture.references) {
+        expect.soft(reference.deref(), `stopped observation retained ${name}`).toBeUndefined();
+      }
+    } finally {
+      await fixture.host.stop();
+    }
+  });
+
   it("stops when a failed replacement cannot clean its partial resources", async () => {
     const source = new ControlledReadable(1);
     const trace: string[] = [];
@@ -479,3 +503,45 @@ describe("observe composition", () => {
     await host.stop();
   });
 });
+
+async function createStoppedObservationRetentionFixture() {
+  let value: object | undefined = {};
+  let source: ControlledReadable<object | undefined> | undefined = new ControlledReadable(value);
+  let observer: ((value: object | undefined) => void) | undefined = () => undefined;
+  const references = new Map<string, WeakRef<object>>([
+    ["source", new WeakRef(source)],
+    ["observer", new WeakRef(observer)],
+    ["value", new WeakRef(value)],
+  ]);
+  const declaration: {
+    source: ControlledReadable<object | undefined> | undefined;
+    observer: ((value: object | undefined) => void) | undefined;
+  } = { source, observer };
+  const host = createHost({ logger: logger() });
+  host.install(
+    definePlugin({
+      name: "observe.stopped-retention",
+      setup(ctx) {
+        const currentSource = declaration.source;
+        const currentObserver = declaration.observer;
+        if (!currentSource || !currentObserver) throw new Error("Observation fixture was released");
+        observe(ctx, currentSource, currentObserver);
+      },
+    }),
+  );
+  await host.start();
+
+  source.getError = new Error("stop observation");
+  source.notify();
+  await tick();
+  await tick();
+  expect(source.subscriptionsDisposed).toBe(1);
+
+  source.value = undefined;
+  declaration.source = undefined;
+  declaration.observer = undefined;
+  source = undefined;
+  observer = undefined;
+  value = undefined;
+  return { host, references };
+}

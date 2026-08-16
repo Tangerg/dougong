@@ -1,6 +1,7 @@
 import { satisfies, validate } from "compare-versions";
 import { z } from "zod";
 import { PlatformError } from "./errors";
+import { assertPlainRecord } from "./record";
 
 const identifier = z
   .string()
@@ -48,7 +49,7 @@ function isVersionRange(range: string) {
 export type ManifestInput = z.input<typeof manifestSchema>;
 
 export function defineManifest(input: ManifestInput | Manifest): Manifest {
-  const result = manifestSchema.safeParse(input);
+  const result = manifestSchema.safeParse(snapshotManifestDeclaration(input));
   if (!result.success) {
     throw new PlatformError("MANIFEST_INVALID", z.prettifyError(result.error), {
       cause: result.error,
@@ -64,6 +65,25 @@ export function defineManifest(input: ManifestInput | Manifest): Manifest {
     activation: Object.freeze([...manifest.activation]),
     permissions: Object.freeze([...manifest.permissions]),
     dependencies: Object.freeze({ ...manifest.dependencies }),
+  });
+}
+
+function snapshotManifestDeclaration(input: unknown) {
+  assertManifestRecord(input, "Manifest declaration");
+  const declaration: Record<string, unknown> = Object.fromEntries(Object.entries(input));
+  if (Object.hasOwn(declaration, "dependencies") && declaration.dependencies !== undefined) {
+    assertManifestRecord(declaration.dependencies, "Manifest dependencies");
+    declaration.dependencies = Object.fromEntries(Object.entries(declaration.dependencies));
+  }
+  return declaration;
+}
+
+function assertManifestRecord(
+  value: unknown,
+  label: string,
+): asserts value is Record<string, unknown> {
+  assertPlainRecord(value, label, {
+    error: (message) => new PlatformError("MANIFEST_INVALID", message),
   });
 }
 

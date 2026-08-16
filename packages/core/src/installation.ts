@@ -29,11 +29,18 @@ interface InstallationAttachment {
   notifyChanged: (() => void) | undefined;
 }
 
-interface TerminalFailure {
-  readonly name: string;
-  readonly message: string;
-  readonly code?: string;
-}
+type TerminalFailure =
+  | {
+      readonly category: "dougong";
+      readonly name: string;
+      readonly message: string;
+      readonly code: string;
+    }
+  | {
+      readonly category: "typeError" | "error";
+      readonly name: string;
+      readonly message: string;
+    };
 
 type InstallationFailure =
   | { readonly retention: "live"; readonly error: Error }
@@ -89,6 +96,11 @@ export class InstallationRecord {
 
   get status() {
     return this.#state.phase;
+  }
+
+  /** Whether the owning ChangeSet has granted this Installation Host authority. */
+  get attached() {
+    return this.#attachment?.notifyChanged !== undefined;
   }
 
   get instance() {
@@ -264,16 +276,22 @@ export class InstallationRecord {
 
 function snapshotFailure(error: Error): TerminalFailure {
   if (error instanceof DougongError) {
-    return { name: error.name, message: error.message, code: error.code };
+    return { category: "dougong", name: error.name, message: error.message, code: error.code };
   }
-  return { name: error.name, message: error.message };
+  return {
+    category: error instanceof TypeError ? "typeError" : "error",
+    name: error.name,
+    message: error.message,
+  };
 }
 
 function restoreFailure(failure: TerminalFailure): Error {
   const error =
-    failure.code === undefined
-      ? new Error(failure.message)
-      : new DougongError(failure.code, failure.message);
+    failure.category === "dougong"
+      ? new DougongError(failure.code, failure.message)
+      : failure.category === "typeError"
+        ? new TypeError(failure.message)
+        : new Error(failure.message);
   error.name = failure.name;
   return error;
 }

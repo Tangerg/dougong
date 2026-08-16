@@ -61,10 +61,12 @@ const CORE_MODULE_LAYERS = {
   "core/src/contracts.ts": 0,
   "core/src/errors.ts": 0,
   "core/src/group.ts": 0,
+  "core/src/record.ts": 0,
   "core/src/readonly-map.ts": 0,
   "core/src/resource.ts": 0,
   "core/src/serial-queue.ts": 0,
   // Leaf state and fan-out services over standard JavaScript only.
+  "core/src/configuration.ts": 1,
   "core/src/contract-registry.ts": 1,
   "core/src/event-hub.ts": 1,
   "core/src/snapshot-view.ts": 1,
@@ -81,21 +83,27 @@ const CORE_MODULE_LAYERS = {
   "core/src/diagnostics.ts": 6,
   "core/src/group-lifecycle.ts": 6,
   "core/src/installation-graph.ts": 6,
-  // Public protocols, then the canonical ChangeSet implementation.
+  // Public protocols and live execution are orthogonal peers.
   "core/src/host-api.ts": 7,
+  "core/src/runtime.ts": 7,
+  // The canonical ChangeSet implementation.
   "core/src/change-set.ts": 8,
-  // Structural Group orchestration and the committed Engine are orthogonal.
+  // Declaration storage, structural Groups and transactional execution are orthogonal.
   "core/src/engine.ts": 9,
   "core/src/group-coordinator.ts": 9,
-  // The Host serializes public commands over both collaborators.
+  "core/src/installation-registry.ts": 9,
+  // The Host serializes public commands over all three collaborators.
   "core/src/host.ts": 10,
   // Public barrel.
   "core/src/index.ts": 11,
 };
 
 const PLATFORM_MODULE_LAYERS = {
+  // Activation admission is a leaf concurrency primitive over standard promises.
+  "platform/src/activation-gate.ts": 0,
   "platform/src/errors.ts": 0,
   "platform/src/loader.ts": 0,
+  "platform/src/record.ts": 0,
   "platform/src/manifest.ts": 1,
   "platform/src/diagnostics.ts": 2,
   "platform/src/permissions.ts": 2,
@@ -103,6 +111,8 @@ const PLATFORM_MODULE_LAYERS = {
   // Artifact declarations compile into validated Core Plugins.
   "platform/src/artifact.ts": 4,
   "platform/src/registration.ts": 4,
+  // Live activation is orthogonal to structural ChangeSet compilation.
+  "platform/src/activator.ts": 5,
   "platform/src/platform-change-set.ts": 5,
   // Candidate and Core graphs are independent projections of one sealed change.
   "platform/src/candidate-graph.ts": 6,
@@ -188,9 +198,30 @@ const FILE_RULES = [
     message: "Host command serialization must use Core SerialQueue",
   },
   {
+    matches: (file) => file === "core/src/host.ts",
+    test: (source) =>
+      !/new\s+InstallationRegistry\s*\(/.test(source) ||
+      /#(?:ownedInstallations|publicInstallations|installationSequence)\b/.test(source),
+    message:
+      "Host must delegate Installation declaration and facade authority to InstallationRegistry",
+  },
+  {
+    matches: (file) =>
+      file === "core/src/change-set.ts" || file === "platform/src/platform-change-set.ts",
+    // Even a no-op commit crosses its owner authority boundary. Short-circuiting
+    // here would let stale Group or Platform drafts commit after their owner ends.
+    test: (source) => /if\s*\(\s*!operations\.length\s*\)/.test(source),
+    message: "ChangeSet drafts must delegate empty commits to their authority port",
+  },
+  {
     matches: (file) => file === "core/src/group-coordinator.ts",
     test: (source) => /\.groupId\b/.test(source),
     message: "Group ownership must use GroupNode identity, not encoded groupId prefixes",
+  },
+  {
+    matches: (file) => file === "core/src/group-coordinator.ts",
+    test: (source) => /if\s*\(\s*!operations\.length\s*\)\s*return\s+Promise\.resolve/.test(source),
+    message: "empty Group ChangeSets must cross the serialized Host authority boundary",
   },
   {
     matches: (file) =>
@@ -204,9 +235,47 @@ const FILE_RULES = [
     message: "Platform disposal must be a terminal SerialQueue command, not a tail observer",
   },
   {
+    matches: (file) => file === "platform/src/platform.ts",
+    test: (source) =>
+      /if\s*\(\s*!operations\.length\s*\)\s*{\s*this\.#assertActive\(\);\s*return\s+Promise\.resolve/.test(
+        source,
+      ),
+    message: "empty Platform ChangeSets must cross the serialized command boundary",
+  },
+  {
+    matches: (file) => file === "platform/src/platform.ts",
+    // Structural command coordination and live activation are sibling concerns.
+    // Platform may call Activator, but must not reach through it to its gate or
+    // grow another dependency-activation path.
+    test: (source) =>
+      /from\s*["']\.\/activation-gate["']/.test(source) ||
+      /#activateDependencies\s*\(/.test(source),
+    message: "Platform structural coordination must delegate activation to Activator",
+  },
+  {
+    matches: (file) => file === "platform/src/activator.ts",
+    // CandidateGraph is the sole owner of dependency-cycle semantics. The
+    // committed registry is acyclic, so carrying an activation stack would be
+    // a second, unreachable graph implementation.
+    test: (source) => /REGISTRATION_CYCLE|\bactivationStack\b/.test(source),
+    message: "Activator must trust CandidateGraph's canonical cycle invariant",
+  },
+  {
     matches: (file) => file === "platform/src/diagnostics.ts",
     test: (source) => !/new\s+SnapshotPublisher\s*\(/.test(source),
     message: "Platform diagnostics must compile to Core SnapshotPublisher",
+  },
+  {
+    matches: (file) => file === "core/src/contribution-store.ts",
+    test: (source) =>
+      !/new\s+SnapshotPublisher\s*\(/.test(source) || /#listeners\s*=\s*new\s+Set/.test(source),
+    message: "Contribution observation must compose the canonical SnapshotPublisher",
+  },
+  {
+    matches: (file) => file === "platform/src/artifact.ts",
+    test: (source) =>
+      !/\bisCancellationReason\b/.test(source) || /function\s+\w*Cancellation\w*\s*\(/.test(source),
+    message: "Platform load cancellation must reuse Core isCancellationReason",
   },
 ];
 
@@ -378,10 +447,10 @@ for (const [file, deps] of Object.entries(graph)) {
   }
 }
 
-// `new Lifetime(...)` is ownership creation. Only the orchestrator (one root
-// lifetime per plugin installation) and Lifetime itself (children) may do it;
-// anywhere else produces a resource tree nobody disposes.
-const LIFETIME_CONSTRUCTORS = new Set(["core/src/engine.ts", "core/src/lifetime.ts"]);
+// `new Lifetime(...)` is ownership creation. Only Runtime (one root Lifetime
+// per live Instance) and Lifetime itself (children) may do it; anywhere else
+// produces a resource tree nobody disposes.
+const LIFETIME_CONSTRUCTORS = new Set(["core/src/runtime.ts", "core/src/lifetime.ts"]);
 for (const file of Object.keys(graph)) {
   if (!SOURCE_RE.test(file) || TEST_RE.test(file)) continue;
   if (LIFETIME_CONSTRUCTORS.has(file)) continue;

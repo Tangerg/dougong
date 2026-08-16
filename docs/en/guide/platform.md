@@ -19,7 +19,7 @@ Application code → Platform → Artifact / Registration
                      Installer (Host or Group) → Installation
 ```
 
-Platform takes an `Installer` (a Host or a Group) and compiles external Plugins into `install` / `update` / `remove` against it.
+Platform takes an `Installer` (normally a Host or Group) and compiles external Plugins into its canonical `change()`; a minimal adapter implements only that method.
 
 ## A minimal example
 
@@ -147,7 +147,7 @@ Activation can also be event-driven:
 await platform.trigger("onLanguage:markdown")
 ```
 
-`trigger()` activates every Registration declaring that event, **concurrently**, aggregating independent failures into an `AggregateError` — one failed activation does not affect the others.
+`trigger()` activates every Registration declaring that event **concurrently**. One failure is rethrown as-is; multiple independent failures become an `AggregateError`, and one Registration's failure never cancels the others.
 
 ## Manifest dependencies
 
@@ -188,9 +188,9 @@ changes.remove(deprecated)
 await changes.commit()
 ```
 
-It then, in order: awaits in-flight operations on the affected plugins → authorizes every manifest → validates the candidate dependency graph → loads modules → **compiles one Core ChangeSet** → commits.
+When execution begins, the change first fixes which updates remain activated. It then validates the candidate graph → authorizes every Manifest and preloads required modules → closes new activation admission → cancels explicit targets and awaits activation trees admitted earlier → revalidates stable state against the same plan → **compiles one Core ChangeSet** → commits.
 
-If any step fails, Core has not moved at all.
+Failed preflight cancels no in-flight activation. If any later step fails, Core and Platform never expose a half-committed state.
 
 Updates check identity: the new Artifact's Manifest name must match the Registration's, otherwise `REGISTRATION_IDENTITY`. That keeps "update" from quietly becoming "register a different Plugin".
 

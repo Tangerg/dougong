@@ -1,7 +1,7 @@
 import type { ExtensionPoint } from "./contracts";
 import { ReadonlyMapSnapshot } from "./readonly-map";
 import type { Disposable, Publication, StagedResource } from "./resource";
-import type { SnapshotView } from "./snapshot-view";
+import { SnapshotPublisher, type SnapshotView } from "./snapshot-view";
 
 export interface Contribution<T> extends Disposable {
   update(value: T): void;
@@ -101,6 +101,13 @@ class ContributionRecord<T> implements StagedResource<Contribution<T>> {
     const state = this.#state;
     if (state.phase !== "staged") return;
     state.store.insert(this.#id, this, state.value);
+  }
+
+  commitPublication() {
+    const state = this.#state;
+    if (state.phase !== "staged") {
+      throw new Error(`Contribution '${this.#id}' is not staged`);
+    }
     state.phase = "published";
   }
 
@@ -132,13 +139,14 @@ class ContributionRecord<T> implements StagedResource<Contribution<T>> {
 
 export class ContributionStore<T> {
   readonly #invalidate: (store: ContributionStore<unknown>) => void;
-  readonly #report: (error: unknown) => void;
   readonly #releaseIfUnused: (store: ContributionStore<unknown>) => void;
   readonly #claims = new Map<string, ContributionRecord<T>>();
   readonly #entries = new Map<string, { contribution: ContributionRecord<T>; value: T }>();
-  readonly #listeners = new Set<() => void>();
+  readonly #publisher: SnapshotPublisher<ReadonlyMap<string, T>>;
   #snapshot: ReadonlyMap<string, T> = new ReadonlyMapSnapshot();
   #views = 0;
+  #subscriptions = 0;
+  #released = false;
 
   constructor(
     invalidate: (store: ContributionStore<unknown>) => void,
@@ -146,8 +154,8 @@ export class ContributionStore<T> {
     releaseIfUnused: (store: ContributionStore<unknown>) => void,
   ) {
     this.#invalidate = invalidate;
-    this.#report = report;
     this.#releaseIfUnused = releaseIfUnused;
+    this.#publisher = new SnapshotPublisher(() => this.#snapshot, report);
   }
 
   stage(
@@ -194,7 +202,7 @@ export class ContributionStore<T> {
   }
 
   snapshot() {
-    return this.#snapshot;
+    return this.#publisher.view.get();
   }
 
   subscribe(
@@ -204,31 +212,40 @@ export class ContributionStore<T> {
     if (typeof listener !== "function") {
       throw new TypeError("Contribution subscriber must be a function");
     }
+    const publisherSubscription = this.#publisher.view.subscribe(listener);
+    this.#subscriptions++;
     let releaseFromOwner: (() => void) | undefined;
-    const subscription = new ContributionSubscription(this, listener, () => {
+    const subscription = new ContributionSubscription(publisherSubscription, () => {
       const release = releaseFromOwner;
       releaseFromOwner = undefined;
-      release?.();
+      try {
+        release?.();
+      } finally {
+        this.#subscriptions--;
+        this.#notifyIfUnused();
+      }
     });
-    releaseFromOwner = own(subscription, "subscription");
-    this.#listeners.add(listener);
+    try {
+      releaseFromOwner = own(subscription, "subscription");
+    } catch (error) {
+      subscription.dispose();
+      throw error;
+    }
     return subscription;
   }
 
   insert(id: string, contribution: ContributionRecord<T>, value: T) {
-    if (this.#claims.get(id) !== contribution) {
-      throw new Error(`Contribution '${id}' is not the current claim`);
-    }
+    this.#assertCurrentClaim(id, contribution);
     if (this.#entries.has(id)) {
       throw new Error(`Contribution '${id}' is already published`);
     }
+    contribution.commitPublication();
     this.#entries.set(id, { contribution, value });
     this.#invalidate(this as ContributionStore<unknown>);
   }
 
   update(id: string, contribution: ContributionRecord<T>, value: T) {
-    const entry = this.#entries.get(id);
-    if (entry?.contribution !== contribution) return;
+    const entry = this.#requirePublishedEntry(id, contribution);
     entry.value = value;
     this.#invalidate(this as ContributionStore<unknown>);
   }
@@ -238,12 +255,18 @@ export class ContributionStore<T> {
     contribution: ContributionRecord<T>,
     visibility: "staged" | "published",
   ) {
-    if (this.#claims.get(id) === contribution) this.#claims.delete(id);
-    if (visibility === "published" && this.#entries.get(id)?.contribution === contribution) {
-      this.#entries.delete(id);
-      this.#invalidate(this as ContributionStore<unknown>);
+    this.#assertCurrentClaim(id, contribution);
+    if (visibility === "published") this.#requirePublishedEntry(id, contribution);
+
+    try {
+      this.#claims.delete(id);
+      if (visibility === "published") {
+        this.#entries.delete(id);
+        this.#invalidate(this as ContributionStore<unknown>);
+      }
+    } finally {
+      this.#notifyIfUnused();
     }
-    this.#notifyIfUnused();
   }
 
   publishSnapshot() {
@@ -254,23 +277,39 @@ export class ContributionStore<T> {
     if (unchanged) return;
 
     this.#snapshot = new ReadonlyMapSnapshot(nextEntries);
-    for (const listener of [...this.#listeners]) {
-      try {
-        listener();
-      } catch (error) {
-        this.#report(error);
-      }
+    this.#publisher.invalidate();
+  }
+
+  #assertCurrentClaim(id: string, contribution: ContributionRecord<T>) {
+    if (this.#claims.get(id) !== contribution) {
+      throw new Error(`Contribution '${id}' is not the current claim`);
     }
   }
 
-  removeListener(listener: () => void) {
-    this.#listeners.delete(listener);
-    this.#notifyIfUnused();
+  #requirePublishedEntry(id: string, contribution: ContributionRecord<T>) {
+    const entry = this.#entries.get(id);
+    if (entry?.contribution !== contribution) {
+      throw new Error(`Contribution '${id}' is not the published entry`);
+    }
+    return entry;
   }
 
   #notifyIfUnused() {
-    if (this.#claims.size || this.#entries.size || this.#listeners.size || this.#views) return;
-    this.#releaseIfUnused(this as ContributionStore<unknown>);
+    if (
+      this.#released ||
+      this.#claims.size ||
+      this.#entries.size ||
+      this.#subscriptions ||
+      this.#views
+    ) {
+      return;
+    }
+    this.#released = true;
+    try {
+      this.#publisher.dispose();
+    } finally {
+      this.#releaseIfUnused(this as ContributionStore<unknown>);
+    }
   }
 }
 
@@ -300,17 +339,16 @@ class ContributionViewLease<T> implements Disposable {
   }
 }
 
-class ContributionSubscription<T> implements Disposable {
+class ContributionSubscription implements Disposable {
   #binding:
     | {
-        readonly store: ContributionStore<T>;
-        readonly listener: () => void;
+        readonly subscription: Disposable;
         readonly release: () => void;
       }
     | undefined;
 
-  constructor(store: ContributionStore<T>, listener: () => void, release: () => void) {
-    this.#binding = { store, listener, release };
+  constructor(subscription: Disposable, release: () => void) {
+    this.#binding = { subscription, release };
     Object.freeze(this);
   }
 
@@ -319,7 +357,7 @@ class ContributionSubscription<T> implements Disposable {
     if (!binding) return;
     this.#binding = undefined;
     try {
-      binding.store.removeListener(binding.listener);
+      binding.subscription.dispose();
     } finally {
       binding.release();
     }
@@ -366,7 +404,18 @@ export class ContributionRegistry {
     if (this.#batchDepth) return;
     const stores = [...this.#invalidated];
     this.#invalidated.clear();
-    for (const store of stores) store.publishSnapshot();
+    const errors: unknown[] = [];
+    for (const store of stores) {
+      try {
+        store.publishSnapshot();
+      } catch (error) {
+        errors.push(error);
+      }
+    }
+    if (errors.length === 1) throw errors[0];
+    if (errors.length > 1) {
+      throw new AggregateError(errors, "Contribution batch publication failed");
+    }
   }
 
   #invalidate(store: ContributionStore<unknown>) {

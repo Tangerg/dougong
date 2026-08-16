@@ -49,6 +49,22 @@ describe("SnapshotPublisher", () => {
     expect(succeeding).toHaveBeenCalledOnce();
   });
 
+  it("withdraws a disposed subscription before its notification turn", () => {
+    const publisher = new SnapshotPublisher(
+      () => 0,
+      () => undefined,
+    );
+    const listener = vi.fn<() => void>();
+    let subscription = publisher.view.subscribe(listener);
+    publisher.view.subscribe(() => subscription.dispose());
+    subscription.dispose();
+    subscription = publisher.view.subscribe(listener);
+
+    publisher.invalidate();
+
+    expect(listener).not.toHaveBeenCalled();
+  });
+
   it("finishes notification and preserves both failures when error reporting fails", () => {
     const subscriberFailure = new Error("subscriber failed");
     const reporterFailure = new Error("reporter failed");

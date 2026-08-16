@@ -25,7 +25,7 @@ class DougongError extends Error {
 }
 
 class ConfigValidationError extends DougongError {   // code: "CONFIG_INVALID"
-  readonly issues: ReadonlyArray<ValidationIssue>
+  readonly issues: ReadonlyArray<StandardSchemaV1.Issue>
 }
 
 class PlatformError extends DougongError {}
@@ -41,7 +41,7 @@ class PermissionDeniedError extends PlatformError {  // code: "PERMISSION_DENIED
 ::: tip TypeError 与 Error 的分工
 除了带 `code` 的错误，Dougong 还用两种原生类型：
 
-- **`TypeError`** —— 调用者传错了东西（不是函数、不是 Contract、key 冲突、在已释放的对象上操作）
+- **`TypeError`** —— 调用者传错了东西（不是函数、不是 Contract、key 冲突，或继续使用已经撤销其局部能力的对象）
 - **`Error`** —— 内部不变量被违反，属于框架 bug，正常使用碰不到
 
 所以你可以按构造函数分流：`DougongError` 是可预期的操作失败，`TypeError` 是你的用法问题。
@@ -79,7 +79,7 @@ class PermissionDeniedError extends PlatformError {  // code: "PERMISSION_DENIED
 
 | Code | 触发条件 |
 | --- | --- |
-| `GROUP_REMOVED` | 在已移除的 Group 上操作，或提交该 Group 删除前创建的旧 ChangeSet |
+| `GROUP_REMOVED` | 在已移除的 Group 上操作，或继续使用该 Group 删除前创建的旧 ChangeSet |
 | `GROUP_UNAVAILABLE` | Group 尚未成功建立；或 Group 操作失败时抛出的是非 Error 值 |
 
 ## Platform（`@dougongjs/platform`）
@@ -113,7 +113,7 @@ class PermissionDeniedError extends PlatformError {  // code: "PERMISSION_DENIED
 | `MODULE_LOAD_FAILED` | Loader 抛异常。原始错误在 `cause` 里 |
 | `MODULE_INVALID` | 模块加载成功但没有导出合法的 Plugin |
 | `ARTIFACT_IDENTITY` | 同一份 Artifact 内部不自洽：Manifest 名称与 placeholder 或加载出的 Plugin 名称不一致 |
-| `REGISTRATION_BUSY` | 该 Registration 有一笔变更正在进行中 |
+| `REGISTRATION_BUSY` | 该 Registration 正在变更，或 Platform 结构变更已关闭新的根激活入口 |
 | `REGISTRATION_UNAVAILABLE` | Registration 不可用；激活或 admission 抛出了**非 Error** 的值（原值在 `cause` 里）；或在未提交的注册上操作 |
 | `REGISTRATION_REMOVED` | 在已移除的 Registration 上操作 |
 | `REGISTRATION_IDENTITY` | 更新 Registration 时，新 Artifact 的 Manifest 名称与原名称不同 |
@@ -181,11 +181,13 @@ const host = createHost({
 
 ### 终态失败的信息量
 
-Installation 脱离 Host 之后（被移除或丢弃），它只保留错误的 `name` / `message` / `code` 纯数据摘要，读取时重建一个 Error。
+Installation 脱离 Host 之后（被移除或丢弃），它只保留错误的 `name` / `message`，以及最小构造类别和可用的 `code` 纯数据摘要。读取时会重建正确的 `DougongError` 或 `TypeError`；其他错误重建为普通 `Error`。
 
 原因是 JavaScript 的 `Error.stack` 可能携带创建错误时的整个编排调用帧，让一个历史对象反向保活整个 Host。
 
 **这不影响正常路径**：等待 `ready()` 的调用方总是收到原始 `Error`；仍附着于活动 Host 的失败 Installation 也保留原始错误。只有「Installation 已脱离、且调用方没 await 过 ready()」的事后读取会拿到摘要——此时 `ConfigValidationError.issues` 这类子类附加数据不再可用。
+
+终态 Registration 使用同一保留原则，并在摘要中额外记录 coded error 属于 Core 还是 Platform，以便重建正确的 `DougongError` / `PlatformError`；`TypeError` 的调用者错误类别同样保留，子类专有字段则不进入摘要。它不会为了保留历史 `stack` 或 `cause` 而反向保活 Installer、Loader 或 Platform。
 
 ## 相关
 

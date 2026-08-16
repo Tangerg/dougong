@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, expectTypeOf, it, vi } from "vitest";
 import { createHost, definePlugin, DougongError, extensionPoint, service } from "@dougongjs/core";
 import * as platformApi from "../src/index";
 
@@ -15,6 +15,7 @@ type Manifest = platformApi.Manifest;
 
 describe("public API surface", () => {
   it("keeps the Platform value-export budget explicit", () => {
+    expectTypeOf<platformApi.RegistrationSnapshot["error"]>().toEqualTypeOf<Error | undefined>();
     expect(Object.keys(platformApi).sort()).toEqual([
       "ImportLoader",
       "MemoryLoader",
@@ -29,7 +30,37 @@ describe("public API surface", () => {
 
 describe("Platform", () => {
   it("validates constructor ports before creating Platform state", () => {
-    expect(() => createPlatform(null as never)).toThrow("options must be an object");
+    class PlatformOptionsClass {
+      readonly installer = createHost();
+      readonly apiVersion = "1.0.0";
+      readonly loader = new MemoryLoader(new Map());
+    }
+    expect(() => createPlatform(new PlatformOptionsClass())).toThrow(
+      "Platform options must be a plain record",
+    );
+    expect(() =>
+      createPlatform({
+        installer: createHost(),
+        apiVersion: "1.0.0",
+        loader: new MemoryLoader(new Map()),
+        unknown: true,
+      } as never),
+    ).toThrow("Platform options: unknown field 'unknown'");
+    expect(() => createPlatform(null as never)).toThrow("Platform options must be a plain record");
+    expect(() =>
+      createPlatform({
+        installer: createHost(),
+        apiVersion: "not-a-version",
+        loader: new MemoryLoader(new Map()),
+      }),
+    ).toThrow("apiVersion must be a semantic version");
+    expect(() =>
+      createPlatform({
+        installer: {} as never,
+        apiVersion: "1.0.0",
+        loader: new MemoryLoader(new Map()),
+      }),
+    ).toThrow("installer must implement change()");
     expect(() =>
       createPlatform({
         installer: createHost(),
@@ -53,6 +84,42 @@ describe("Platform", () => {
         logger: {} as never,
       }),
     ).toThrow("logger must implement debug/info/warn/error");
+  });
+
+  it("depends only on the canonical Core ChangeSet boundary", async () => {
+    const plugin = definePlugin({ name: "minimal.installer", setup() {} });
+    const host = createHost();
+    const platform = createPlatform({
+      installer: { change: () => host.change() },
+      apiVersion: "1.0.0",
+      loader: new MemoryLoader(new Map()),
+    });
+
+    await platform.register({
+      manifest: { name: "minimal.installer", version: "1.0.0" },
+      reference: "unused",
+      placeholder: plugin,
+    });
+    expect(host.diagnostics.get().installations.size).toBe(1);
+
+    await platform.dispose();
+    expect(host.diagnostics.get().installations.size).toBe(0);
+  });
+
+  it("validates activation event names before dispatch", async () => {
+    const platform = createPlatform({
+      installer: createHost(),
+      apiVersion: "1.0.0",
+      loader: new MemoryLoader(new Map()),
+    });
+
+    await expect(platform.trigger(null as never)).rejects.toThrow(
+      "Activation event must be a non-empty string",
+    );
+    await expect(platform.trigger(" event")).rejects.toThrow(
+      "Activation event cannot start or end with whitespace",
+    );
+    await platform.dispose();
   });
 
   it("keeps Registrations and ChangeSets opaque to JavaScript reflection", async () => {
@@ -93,10 +160,9 @@ describe("Platform", () => {
       code: "REGISTRATION_UNAVAILABLE",
     });
     await expect(registration.remove()).rejects.toMatchObject({ code: "REGISTRATION_UNAVAILABLE" });
-    const unrelatedChange = platform.change().remove(registration);
-    await expect(unrelatedChange.commit()).rejects.toMatchObject({
-      code: "REGISTRATION_UNAVAILABLE",
-    });
+    expect(() => platform.change().remove(registration)).toThrowError(
+      expect.objectContaining({ code: "REGISTRATION_UNAVAILABLE" }),
+    );
     expect(registration.status).toBe("pending");
     const before = platform.diagnostics.get();
     await platform.change().commit();
@@ -112,6 +178,7 @@ describe("Platform", () => {
       loader: new MemoryLoader(new Map()),
     });
     const change = platform.change();
+    const empty = platform.change();
     const registration = change.register({
       manifest: { name: "stale.draft", version: "1.0.0" },
       reference: "missing",
@@ -121,6 +188,7 @@ describe("Platform", () => {
     const committing = change.commit();
     expect(change.commit()).toBe(committing);
     await expect(committing).rejects.toMatchObject({ code: "PLATFORM_UNAVAILABLE" });
+    await expect(empty.commit()).rejects.toMatchObject({ code: "PLATFORM_UNAVAILABLE" });
     expect(registration.status).toBe("failed");
     await expect(registration.activate()).rejects.toMatchObject({ code: "PLATFORM_UNAVAILABLE" });
   });
@@ -153,6 +221,69 @@ describe("Platform", () => {
     expect(() => new MemoryLoader([] as never)).toThrowError(
       new TypeError("MemoryLoader modules must be a ReadonlyMap"),
     );
+  });
+
+  it("validates Artifacts and loaded modules at their JavaScript trust boundaries", async () => {
+    const inheritedDefault = Object.create({
+      default: definePlugin({ name: "invalid.inherited-default", setup() {} }),
+    });
+    const platform = createPlatform({
+      installer: createHost(),
+      apiVersion: "1.0.0",
+      loader: new MemoryLoader(
+        new Map<string, unknown>([
+          ["empty", null],
+          ["invalid-default", { default: {} }],
+          ["inherited-default", inheritedDefault],
+        ]),
+      ),
+    });
+
+    class ArtifactClass {
+      readonly manifest = { name: "invalid.artifact-class", version: "1.0.0" };
+      readonly reference = "empty";
+    }
+    expect(() => platform.change().register(new ArtifactClass())).toThrowError(
+      new TypeError("Artifact declaration must be a plain record"),
+    );
+    expect(() =>
+      platform.change().register({
+        manifest: { name: "invalid.artifact-field", version: "1.0.0" },
+        reference: "empty",
+        refernce: "typo",
+      } as never),
+    ).toThrow("Artifact declaration: unknown field 'refernce'");
+    expect(() => platform.change().register(null as never)).toThrowError(
+      new TypeError("Artifact declaration must be a plain record"),
+    );
+    const empty = await platform.register({
+      manifest: { name: "invalid.empty-module", version: "1.0.0" },
+      reference: "empty",
+    });
+    const invalidDefault = await platform.register({
+      manifest: { name: "invalid.default-export", version: "1.0.0" },
+      reference: "invalid-default",
+    });
+    const inherited = await platform.register({
+      manifest: { name: "invalid.inherited-default", version: "1.0.0" },
+      reference: "inherited-default",
+    });
+
+    await expect(empty.activate()).rejects.toMatchObject({
+      code: "MODULE_INVALID",
+      message: "Artifact 'invalid.empty-module' did not load a module",
+    });
+    await expect(invalidDefault.activate()).rejects.toMatchObject({
+      code: "MODULE_INVALID",
+      message: "Module 'invalid.default-export' does not default-export a valid Plugin",
+      cause: expect.any(TypeError),
+    });
+    await expect(inherited.activate()).rejects.toMatchObject({
+      code: "MODULE_INVALID",
+      message: "Module 'invalid.inherited-default' does not default-export a valid Plugin",
+    });
+
+    await platform.dispose();
   });
 
   it("does not retain Platform ports through a terminal Registration", async () => {
@@ -250,6 +381,22 @@ describe("Platform", () => {
   });
 
   it("normalizes and freezes manifests at the trust boundary", () => {
+    class ManifestClass {
+      readonly name = "demo.class";
+      readonly version = "1.2.3";
+    }
+    expect(() => defineManifest(new ManifestClass())).toThrow(
+      "Manifest declaration must be a plain record",
+    );
+    const hiddenDependency = Object.defineProperty({}, "hidden", { value: "*" });
+    expect(() =>
+      defineManifest({
+        name: "demo.hidden-dependency",
+        version: "1.2.3",
+        dependencies: hiddenDependency,
+      } as never),
+    ).toThrow("Manifest dependencies keys must be enumerable strings");
+
     const manifest = defineManifest({ name: "demo", version: "1.2.3" });
     expect(manifest).toEqual({
       name: "demo",
@@ -292,7 +439,7 @@ describe("Platform", () => {
         reference: "missing",
         placeholder: null,
       } as never),
-    ).toThrow("Plugin name must be a non-empty string");
+    ).toThrow("Plugin declaration must be a plain record");
   });
 
   it("reports which Artifact candidate disagrees with its Manifest identity", async () => {
@@ -589,6 +736,80 @@ describe("Platform", () => {
     await platform.dispose();
   });
 
+  it("classifies non-Error failures from a custom Installer boundary", async () => {
+    const placeholder = definePlugin({ name: "installer.non-error", setup() {} });
+    const platform = createPlatform({
+      installer: {
+        change() {
+          return {
+            install() {
+              throw undefined;
+            },
+          } as never;
+        },
+      } as never,
+      apiVersion: "1.0.0",
+      loader: new MemoryLoader(new Map()),
+    });
+
+    const change = platform.change();
+    const registration = change.register({
+      manifest: { name: "installer.non-error", version: "1.0.0" },
+      reference: "unused",
+      placeholder,
+    });
+    const failure = await change.commit().catch((error: unknown) => error);
+
+    expect(failure).toBeInstanceOf(TypeError);
+    expect(failure).toMatchObject({
+      message: "Platform change failed with a non-Error value",
+      cause: undefined,
+    });
+    await expect(registration.ready()).rejects.toBeInstanceOf(TypeError);
+  });
+
+  it("restores an active Platform after a custom Installer rejects disposal", async () => {
+    const plugin = definePlugin({ name: "installer.disposal", setup() {} });
+    const host = createHost();
+    let failDisposal = false;
+    const platform = createPlatform({
+      installer: {
+        change() {
+          if (!failDisposal) return host.change();
+          return {
+            remove() {
+              return this;
+            },
+            commit() {
+              return Promise.reject(undefined);
+            },
+          } as never;
+        },
+      },
+      apiVersion: "1.0.0",
+      loader: new MemoryLoader(new Map()),
+    });
+    const registration = await platform.register({
+      manifest: { name: "installer.disposal", version: "1.0.0" },
+      reference: "unused",
+      placeholder: plugin,
+    });
+    failDisposal = true;
+
+    const failure = await platform.dispose().catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(TypeError);
+    expect(failure).toMatchObject({
+      message: "Platform disposal failed with a non-Error value",
+      cause: undefined,
+    });
+    expect(platform.status).toBe("active");
+    expect(registration.status).toBe("registered");
+
+    failDisposal = false;
+    await platform.dispose();
+    expect(registration.status).toBe("removed");
+  });
+
   it("updates an active plugin through the existing Core Installation", async () => {
     const trace: string[] = [];
     const v1 = definePlugin({
@@ -725,6 +946,24 @@ describe("Platform", () => {
       code: "REGISTRATION_DEPENDENCY_MISSING",
     });
     await missing.remove();
+
+    const incompatibleDependency = await platform.register({
+      manifest: { name: "demo.b", version: "2.0.0" },
+      reference: "b",
+    });
+    const incompatibleConsumer = await platform.register({
+      manifest: {
+        name: "demo.a",
+        version: "1.0.0",
+        dependencies: { "demo.b": "^1.0.0" },
+      },
+      reference: "a",
+    });
+    await expect(incompatibleConsumer.activate()).rejects.toMatchObject({
+      code: "REGISTRATION_DEPENDENCY_INCOMPATIBLE",
+    });
+    await incompatibleConsumer.remove();
+    await incompatibleDependency.remove();
 
     const first = await platform.register({
       manifest: {
@@ -1126,6 +1365,322 @@ describe("Platform", () => {
     await Promise.all([first.dispose(), second.dispose()]);
   });
 
+  it("validates every change target before locking any Registration", async () => {
+    const firstPlugin = definePlugin({ name: "change.lock-first", setup() {} });
+    const secondPlugin = definePlugin({ name: "change.lock-second", setup() {} });
+    const platform = createPlatform({
+      installer: createHost(),
+      apiVersion: "1.0.0",
+      loader: new MemoryLoader(
+        new Map([
+          ["first", { default: firstPlugin }],
+          ["second", { default: secondPlugin }],
+        ]),
+      ),
+    });
+    const first = await platform.register({
+      manifest: { name: "change.lock-first", version: "1.0.0" },
+      reference: "first",
+    });
+    const second = await platform.register({
+      manifest: { name: "change.lock-second", version: "1.0.0" },
+      reference: "second",
+    });
+    const stale = platform.change();
+    stale.update(first, {
+      manifest: { name: "change.lock-first", version: "1.1.0" },
+      reference: "first",
+    });
+    stale.update(second, {
+      manifest: { name: "change.lock-second", version: "1.1.0" },
+      reference: "second",
+    });
+
+    await second.remove();
+    await expect(stale.commit()).rejects.toMatchObject({ code: "REGISTRATION_REMOVED" });
+    await expect(first.activate()).resolves.toBeUndefined();
+
+    await platform.dispose();
+  });
+
+  it("serializes an empty ChangeSet behind an earlier Platform change", async () => {
+    let beginAuthorization!: () => void;
+    const authorizing = new Promise<void>((resolve) => {
+      beginAuthorization = resolve;
+    });
+    let finishAuthorization!: () => void;
+    const authorization = new Promise<void>((resolve) => {
+      finishAuthorization = resolve;
+    });
+    const platform = createPlatform({
+      installer: createHost(),
+      apiVersion: "1.0.0",
+      loader: new MemoryLoader(new Map()),
+      authorizer: {
+        authorize() {
+          beginAuthorization();
+          return authorization;
+        },
+      },
+    });
+    const registering = platform.register({
+      manifest: { name: "change.empty-order", version: "1.0.0" },
+      reference: "unused",
+    });
+    await authorizing;
+
+    let emptySettled = false;
+    const empty = platform
+      .change()
+      .commit()
+      .then(() => {
+        emptySettled = true;
+      });
+    await Promise.resolve();
+    expect(emptySettled).toBe(false);
+
+    finishAuthorization();
+    await registering;
+    await empty;
+    await platform.dispose();
+  });
+
+  it("keeps in-flight activation untouched when change preflight fails", async () => {
+    const plugin = definePlugin({ name: "change.preflight-loading", setup() {} });
+    let markLoading!: () => void;
+    const loading = new Promise<void>((resolve) => {
+      markLoading = resolve;
+    });
+    let releaseLoad: (() => void) | undefined;
+    const platform = createPlatform({
+      installer: createHost(),
+      apiVersion: "1.0.0",
+      loader: {
+        load(_reference: string, signal: AbortSignal) {
+          markLoading();
+          return new Promise<{ default: typeof plugin }>((resolve, reject) => {
+            releaseLoad = () => resolve({ default: plugin });
+            signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+          });
+        },
+      },
+    });
+    const registration = await platform.register({
+      manifest: { name: "change.preflight-loading", version: "1.0.0" },
+      reference: "plugin",
+    });
+    const activation = registration.activate();
+    await loading;
+
+    const invalid = platform.change();
+    invalid.update(registration, {
+      manifest: {
+        name: "change.preflight-loading",
+        version: "1.1.0",
+        dependencies: { "change.preflight-loading": "*" },
+      },
+      reference: "plugin",
+    });
+
+    try {
+      await expect(invalid.commit()).rejects.toMatchObject({ code: "REGISTRATION_CYCLE" });
+      expect(registration.status).toBe("loading");
+      releaseLoad?.();
+      await expect(activation).resolves.toBeUndefined();
+      expect(registration.status).toBe("activated");
+      expect(registration.manifest.version).toBe("1.0.0");
+    } finally {
+      releaseLoad?.();
+      await activation.catch(() => undefined);
+      await platform.dispose();
+    }
+  });
+
+  it("stabilizes activation state before committing a dependency change", async () => {
+    const dependencyPlugin = definePlugin({ name: "change.stable-dependency", setup() {} });
+    const consumerPlugin = definePlugin({ name: "change.stable-consumer", setup() {} });
+    let markConsumerLoading!: () => void;
+    const consumerLoading = new Promise<void>((resolve) => {
+      markConsumerLoading = resolve;
+    });
+    let releaseConsumer: (() => void) | undefined;
+    const platform = createPlatform({
+      installer: createHost(),
+      apiVersion: "1.0.0",
+      loader: {
+        load(reference: "dependency" | "consumer", signal: AbortSignal) {
+          if (reference === "dependency") return { default: dependencyPlugin };
+          markConsumerLoading();
+          return new Promise<{ default: typeof consumerPlugin }>((resolve, reject) => {
+            releaseConsumer = () => resolve({ default: consumerPlugin });
+            signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+          });
+        },
+      },
+    });
+    const dependency = await platform.register({
+      manifest: { name: "change.stable-dependency", version: "1.0.0" },
+      reference: "dependency",
+    });
+    const consumer = await platform.register({
+      manifest: {
+        name: "change.stable-consumer",
+        version: "1.0.0",
+        dependencies: { "change.stable-dependency": "*" },
+      },
+      reference: "consumer",
+    });
+    await dependency.activate();
+    const activation = consumer.activate();
+    await consumerLoading;
+
+    const removal = dependency.remove();
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+
+    try {
+      expect(dependency.status).toBe("activated");
+      releaseConsumer?.();
+      await expect(activation).resolves.toBeUndefined();
+      await expect(removal).rejects.toMatchObject({ code: "REGISTRATION_DEPENDENCY_MISSING" });
+      expect(dependency.status).toBe("activated");
+      expect(consumer.status).toBe("activated");
+    } finally {
+      releaseConsumer?.();
+      await activation.catch(() => undefined);
+      await removal.catch(() => undefined);
+      await platform.dispose();
+    }
+  });
+
+  it("keeps an update's activation intent stable throughout asynchronous preflight", async () => {
+    const plugin = definePlugin({ name: "change.activation-intent", setup() {} });
+    let markLoading!: () => void;
+    const loading = new Promise<void>((resolve) => {
+      markLoading = resolve;
+    });
+    let finishLoad!: () => void;
+    let markAuthorizing!: () => void;
+    const authorizing = new Promise<void>((resolve) => {
+      markAuthorizing = resolve;
+    });
+    let finishAuthorization!: () => void;
+    const updateAuthorized = new Promise<void>((resolve) => {
+      finishAuthorization = resolve;
+    });
+    const loadedReferences: Array<"initial" | "updated"> = [];
+    const load = (reference: "initial" | "updated", signal: AbortSignal) => {
+      loadedReferences.push(reference);
+      if (reference === "updated") return { default: plugin };
+      markLoading();
+      return new Promise<{ default: typeof plugin }>((resolve, reject) => {
+        finishLoad = () => resolve({ default: plugin });
+        signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+      });
+    };
+    const platform = createPlatform({
+      installer: createHost(),
+      apiVersion: "1.0.0",
+      loader: { load },
+      authorizer: {
+        authorize(manifest) {
+          if (manifest.version !== "2.0.0") return;
+          markAuthorizing();
+          return updateAuthorized;
+        },
+      },
+    });
+    const registration = await platform.register({
+      manifest: { name: "change.activation-intent", version: "1.0.0" },
+      reference: "initial",
+    });
+    const activation = registration.activate();
+    await loading;
+
+    const updating = registration.update({
+      manifest: {
+        name: "change.activation-intent",
+        version: "2.0.0",
+        dependencies: { "not-yet-registered": "*" },
+      },
+      reference: "updated",
+    });
+    await authorizing;
+    finishLoad();
+    await activation;
+    finishAuthorization();
+
+    await expect(updating).resolves.toBeUndefined();
+    expect(registration.status).toBe("registered");
+    expect(registration.manifest.version).toBe("2.0.0");
+    expect(loadedReferences).toEqual(["initial"]);
+
+    await platform.dispose();
+  });
+
+  it("distinguishes a changed target from roots excluded by a committing change", async () => {
+    const blockerPlugin = definePlugin({ name: "change.busy-blocker", setup() {} });
+    const targetPlugin = definePlugin({ name: "change.busy-target", setup() {} });
+    const observerPlugin = definePlugin({ name: "change.busy-observer", setup() {} });
+    let markBlockerLoading!: () => void;
+    const blockerLoading = new Promise<void>((resolve) => {
+      markBlockerLoading = resolve;
+    });
+    let releaseBlocker!: () => void;
+    const platform = createPlatform({
+      installer: createHost(),
+      apiVersion: "1.0.0",
+      loader: {
+        load(reference: "blocker" | "target" | "observer", signal: AbortSignal) {
+          if (reference === "target") return { default: targetPlugin };
+          if (reference === "observer") return { default: observerPlugin };
+          markBlockerLoading();
+          return new Promise<{ default: typeof blockerPlugin }>((resolve, reject) => {
+            releaseBlocker = () => resolve({ default: blockerPlugin });
+            signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+          });
+        },
+      },
+    });
+    const blocker = await platform.register({
+      manifest: { name: "change.busy-blocker", version: "1.0.0" },
+      reference: "blocker",
+    });
+    const target = await platform.register({
+      manifest: { name: "change.busy-target", version: "1.0.0" },
+      reference: "target",
+    });
+    const observer = await platform.register({
+      manifest: { name: "change.busy-observer", version: "1.0.0" },
+      reference: "observer",
+    });
+    const activation = blocker.activate();
+    await blockerLoading;
+
+    const updating = target.update({
+      manifest: { name: "change.busy-target", version: "1.1.0" },
+      reference: "target",
+    });
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+
+    try {
+      await expect(target.activate()).rejects.toMatchObject({
+        code: "REGISTRATION_BUSY",
+        message: "Registration 'change.busy-target' is being changed",
+      });
+      await expect(observer.activate()).rejects.toMatchObject({
+        code: "REGISTRATION_BUSY",
+        message:
+          "Registration 'change.busy-observer' cannot activate while a Platform change is committing",
+      });
+      releaseBlocker();
+      await expect(Promise.all([activation, updating])).resolves.toEqual([undefined, undefined]);
+    } finally {
+      releaseBlocker();
+      await Promise.all([activation.catch(() => undefined), updating.catch(() => undefined)]);
+      await platform.dispose();
+    }
+  });
+
   it("cancels in-flight activation before removing its stable identity", async () => {
     let entered!: () => void;
     const loading = new Promise<void>((resolve) => {
@@ -1156,9 +1711,10 @@ describe("Platform", () => {
     await removal;
 
     expect(registration.status).toBe("removed");
-    const repeated = platform.change();
-    repeated.remove(registration);
-    await expect(repeated.commit()).resolves.toBeUndefined();
+    await expect(registration.remove()).resolves.toBeUndefined();
+    expect(() => platform.change().remove(registration)).toThrowError(
+      expect.objectContaining({ code: "REGISTRATION_REMOVED" }),
+    );
     expect(host.diagnostics.get().installations.size).toBe(0);
     await platform.dispose();
   });

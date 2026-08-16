@@ -1,5 +1,6 @@
 import type { ChangeSet, Installation, InstallationUpdate } from "./host-api";
 import type { InstallationRecord } from "./installation";
+import { assertPlainRecord } from "./record";
 import {
   normalizePlugin,
   type ErasedPlugin,
@@ -16,6 +17,8 @@ type DeclarationUpdate =
       readonly plugin: ErasedPlugin;
       readonly config: unknown;
     };
+
+const installationUpdateFields = new Set(["plugin", "config"]);
 
 export type ChangeOperation =
   | { readonly kind: "install"; readonly installation: InstallationRecord }
@@ -83,9 +86,7 @@ export class ChangeSetDraft implements ChangeSet {
     update: InstallationUpdate<Config, Requires, Provides, ConfigInput>,
   ) {
     const port = this.#requireOpen();
-    if (!update || typeof update !== "object") {
-      throw new TypeError("Installation update must be an object");
-    }
+    assertPlainRecord(update, "Installation update", { fields: installationUpdateFields });
     const hasPlugin = Object.hasOwn(update, "plugin");
     const hasConfig = Object.hasOwn(update, "config");
     if (!hasPlugin && !hasConfig) {
@@ -141,9 +142,6 @@ export class ChangeSetDraft implements ChangeSet {
         if (operation.kind === "install") port.discard(operation.installation, error);
       }
       return this.#submit(Promise.reject(error));
-    }
-    if (!operations.length) {
-      return this.#submit(Promise.resolve());
     }
     let promise: Promise<void>;
     try {

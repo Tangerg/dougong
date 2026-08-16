@@ -1,27 +1,17 @@
-import type {
-  Host,
-  HostOptions,
-  ChangeSet,
-  Group,
-  Installation,
-  InstallationUpdate,
-} from "./host-api";
+import type { Host, HostOptions, ChangeSet, Group } from "./host-api";
 import { Engine, type TransitionOutcome } from "./engine";
 import type { ChangeOperation } from "./change-set";
 import type { Service } from "./contracts";
 import { HostDiagnostics, type HostSnapshot, type HostStatus } from "./diagnostics";
-import { DougongError } from "./errors";
 import { GroupCoordinator } from "./group-coordinator";
 import type { GroupNode } from "./group";
+import { groupRemovedError } from "./group-lifecycle";
+import { InstallationRegistry } from "./installation-registry";
 import { isLogger, type Logger } from "./lifetime";
-import {
-  createInstallationDeclaration,
-  type InstallationDeclaration,
-  InstallationRecord,
-} from "./installation";
-import type { ErasedPlugin, Plugin, Provisions, Requirements } from "./plugin";
+import type { Plugin, Provisions, Requirements } from "./plugin";
 import { SerialQueue } from "./serial-queue";
 import type { SnapshotView } from "./snapshot-view";
+import { assertPlainRecord } from "./record";
 
 export type { InstallationStatus } from "./installation";
 export type { GroupStatus } from "./group";
@@ -36,153 +26,52 @@ export type {
   InstallationUpdate,
 } from "./host-api";
 
-interface InstallationCapture {
-  readonly id: string;
-  readonly installation: InstallationRecord;
-  readonly declaration: InstallationDeclaration;
-}
-
 const defaultLogger: Logger = console;
-
-type UnknownInstallationUpdate = InstallationUpdate<unknown, Requirements, Provisions, unknown>;
-
-interface InstallationControl {
-  attach(
-    update: (change: UnknownInstallationUpdate) => Promise<void>,
-    remove: () => Promise<void>,
-  ): void;
-  revoke(): void;
-}
-
-type InstallationImplState<
-  Config,
-  Requires extends Requirements,
-  Provides extends Provisions,
-  ConfigInput,
-> =
-  | { readonly phase: "draft" }
-  | {
-      readonly phase: "attached";
-      readonly update: (
-        change: InstallationUpdate<Config, Requires, Provides, ConfigInput>,
-      ) => Promise<void>;
-      readonly remove: () => Promise<void>;
-    }
-  | { readonly phase: "revoked" };
-
-const installationControls = new WeakMap<object, InstallationControl>();
-
-class InstallationImpl<
-  Config,
-  Requires extends Requirements,
-  Provides extends Provisions,
-  ConfigInput,
-> implements Installation<Config, Requires, Provides, ConfigInput> {
-  readonly #installation: InstallationRecord;
-  #state: InstallationImplState<Config, Requires, Provides, ConfigInput> = { phase: "draft" };
-
-  constructor(installation: InstallationRecord) {
-    this.#installation = installation;
-    installationControls.set(this, {
-      attach: (updateRecord, removeRecord) => {
-        if (this.#state.phase !== "draft") {
-          throw new Error(`Installation '${this.#installation.id}' control is already sealed`);
-        }
-        this.#state = {
-          phase: "attached",
-          update: updateRecord as (
-            update: InstallationUpdate<Config, Requires, Provides, ConfigInput>,
-          ) => Promise<void>,
-          remove: removeRecord,
-        };
-      },
-      revoke: () => {
-        this.#state = { phase: "revoked" };
-      },
-    });
-    Object.freeze(this);
-  }
-
-  get id() {
-    return this.#installation.id;
-  }
-
-  get groupId() {
-    return this.#installation.groupId;
-  }
-
-  get status() {
-    return this.#installation.status;
-  }
-
-  ready() {
-    return this.#installation.ready();
-  }
-
-  async update(update: InstallationUpdate<Config, Requires, Provides, ConfigInput>) {
-    const state = this.#state;
-    if (state.phase === "draft") throw this.#notCommitted();
-    if (state.phase === "revoked") {
-      throw this.#installation.unavailableError();
-    }
-    await state.update(update);
-  }
-
-  async remove() {
-    const state = this.#state;
-    if (state.phase === "draft") throw this.#notCommitted();
-    if (state.phase === "attached") await state.remove();
-  }
-
-  #notCommitted() {
-    return new DougongError(
-      "INSTALLATION_UNAVAILABLE",
-      `Installation '${this.#installation.id}' has not been committed`,
-    );
-  }
-}
+const hostOptionFields = new Set(["name", "logger", "onError"]);
 
 class HostImpl implements Host {
   readonly name: string;
   readonly diagnostics: SnapshotView<HostSnapshot>;
 
-  readonly #installations = new Map<string, InstallationRecord>();
-  readonly #ownedInstallations = new WeakMap<object, InstallationRecord>();
-  readonly #publicInstallations = new WeakMap<
-    InstallationRecord,
-    InstallationImpl<unknown, Requirements, Provisions, unknown>
-  >();
+  readonly #installations: InstallationRegistry;
   readonly #diagnosticModel: HostDiagnostics;
   readonly #logger: Logger;
   readonly #groups: GroupCoordinator;
   readonly #onError: (error: unknown) => void;
   readonly #engine: Engine;
 
-  #installationSequence = 0;
   #status: HostStatus = "idle";
   readonly #commands = new SerialQueue();
 
   constructor(options: HostOptions = {}) {
-    if (!options || typeof options !== "object") {
-      throw new TypeError("Host options must be an object");
-    }
-    const name = options.name ?? "host";
+    assertPlainRecord(options, "Host options", { fields: hostOptionFields });
+    const configuredName = Object.hasOwn(options, "name") ? options.name : undefined;
+    const configuredLogger = Object.hasOwn(options, "logger") ? options.logger : undefined;
+    const configuredOnError = Object.hasOwn(options, "onError") ? options.onError : undefined;
+    const name = configuredName ?? "host";
     if (typeof name !== "string" || !name.trim()) {
       throw new TypeError("Host name must be a non-empty string");
     }
     if (name !== name.trim()) {
       throw new TypeError("Host name cannot start or end with whitespace");
     }
-    if (options.onError !== undefined && typeof options.onError !== "function") {
+    if (configuredOnError !== undefined && typeof configuredOnError !== "function") {
       throw new TypeError("Host onError must be a function");
     }
-    if (options.logger !== undefined && !isLogger(options.logger)) {
+    if (configuredLogger !== undefined && !isLogger(configuredLogger)) {
       throw new TypeError("Host logger must implement debug/info/warn/error");
     }
 
     this.name = name;
-    this.#logger = options.logger ?? defaultLogger;
-    this.#onError = options.onError ?? ((error) => this.#logger.error(error));
+    this.#logger = configuredLogger ?? defaultLogger;
+    this.#onError = configuredOnError ?? ((error) => this.#logger.error(error));
+    this.#installations = new InstallationRegistry({
+      notifyChanged: () => this.#publishDiagnostics(),
+      update: (installation, facade, update) =>
+        this.#groups.change(installation.group).update(facade, update).commit(),
+      remove: (installation, facade) =>
+        this.#groups.change(installation.group).remove(facade).commit(),
+    });
     this.#engine = new Engine({
       hostName: name,
       logger: this.#logger,
@@ -191,13 +80,12 @@ class HostImpl implements Host {
     });
     this.#groups = new GroupCoordinator(name, {
       installations: () => this.#installations.values(),
-      createDraft: (group, plugin, config) => this.#createDraft(group, plugin, config),
-      resolveInstallation: (installation) => this.#resolveInstallation(installation),
-      executeChanges: (operations) => this.#executeChanges(operations),
-      attachInstallation: (installation) => this.#attachInstallation(installation),
-      discardInstallation: (installation, error) => {
-        this.#discardInstallation(installation, error);
-      },
+      createDraft: (group, plugin, config) => this.#installations.create(group, plugin, config),
+      resolveInstallation: (installation) => this.#installations.resolve(installation),
+      executeChanges: (group, operations) => this.#executeChanges(group, operations),
+      attachInstallation: (installation) => this.#installations.attach(installation),
+      discardInstallation: (installation, error) =>
+        this.#installations.discard(installation, error),
       runExclusive: (operation) => this.#commands.run(operation),
       removeInstallations: (operations) => this.#removeInstallations(operations),
       notifyChanged: () => this.#publishDiagnostics(),
@@ -241,13 +129,13 @@ class HostImpl implements Host {
         const plan = this.#engine.buildPlan(this.#installations.values());
         await this.#engine.start(plan);
         this.#setStatus("active");
-        this.#settleInstallations(plan.order);
+        this.#installations.settleReadiness(plan.order);
       } catch (error) {
         this.#setStatus("idle");
         for (const installation of this.#installations.values()) {
           if (installation.status !== "active") installation.fail(error);
         }
-        this.#settleInstallations(this.#installations.values());
+        this.#installations.settleReadiness(this.#installations.values());
         throw error;
       }
     });
@@ -264,31 +152,7 @@ class HostImpl implements Host {
     });
   }
 
-  #createDraft(group: GroupNode, plugin: ErasedPlugin, config: unknown) {
-    group.assertAttached();
-    const index = ++this.#installationSequence;
-    const id = `${plugin.name}:${index}`;
-    const installation = new InstallationRecord(
-      id,
-      index,
-      group,
-      createInstallationDeclaration(plugin, config),
-    );
-    const publicInstallation = new InstallationImpl<unknown, Requirements, Provisions, unknown>(
-      installation,
-    );
-    this.#ownedInstallations.set(publicInstallation, installation);
-    this.#publicInstallations.set(installation, publicInstallation);
-    return { record: installation, publicInstallation };
-  }
-
-  #resolveInstallation(value: object) {
-    const installation = this.#ownedInstallations.get(value);
-    if (!installation) throw new TypeError("Installation belongs to a different Host");
-    return installation;
-  }
-
-  #executeChanges(operations: ReadonlyArray<ChangeOperation>) {
+  #executeChanges(group: GroupNode, operations: ReadonlyArray<ChangeOperation>) {
     const installed = operations
       .filter((operation): operation is Extract<ChangeOperation, { kind: "install" }> => {
         return operation.kind === "install";
@@ -297,17 +161,20 @@ class HostImpl implements Host {
 
     return this.#commands.run(async () => {
       try {
+        if (!group.attached) throw groupRemovedError(group);
+        if (!operations.length) return;
         if (this.#status === "active") {
           await this.#transact(operations);
         } else {
-          this.#applyChanges(operations);
-          this.#settleChanges(operations);
+          this.#installations.apply(operations);
+          this.#installations.settleChanges(operations, false);
         }
         this.#publishDiagnostics();
       } catch (error) {
         for (const installation of installed) {
-          if (this.#installations.get(installation.id) !== installation)
-            this.#discardInstallation(installation, error);
+          if (!this.#installations.contains(installation)) {
+            this.#installations.discard(installation, error);
+          }
         }
         throw error;
       }
@@ -318,152 +185,42 @@ class HostImpl implements Host {
     if (operations.length && this.#status === "active") {
       await this.#transact(operations);
     } else {
-      this.#applyChanges(operations);
-      this.#settleChanges(operations);
+      this.#installations.apply(operations);
+      this.#installations.settleChanges(operations, false);
     }
   }
 
   async #transact(operations: ReadonlyArray<ChangeOperation>) {
     const outcome = await this.#runTransaction(operations);
-    this.#settleInstallations(outcome.affected);
+    this.#installations.settleReadiness(outcome.affected);
     if (outcome.kind === "rolled-back") throw outcome.error;
-    this.#settleChanges(operations);
+    this.#installations.settleChanges(operations, true);
   }
 
   async #runTransaction(operations: ReadonlyArray<ChangeOperation>): Promise<TransitionOutcome> {
-    const snapshot = this.#captureInstallations();
+    const snapshot = this.#installations.capture();
     const changed = new Set(operations.map((operation) => operation.installation));
     this.#setStatus("changing");
 
     let nextPlan;
     try {
-      this.#applyChanges(operations);
+      this.#installations.apply(operations);
       nextPlan = this.#engine.buildPlan(this.#installations.values());
     } catch (error) {
-      this.#restoreInstallations(snapshot);
+      this.#installations.restore(snapshot);
       this.#setStatus("active");
       throw error;
     }
 
     try {
       const outcome = await this.#engine.transition(nextPlan, changed, () =>
-        this.#restoreInstallations(snapshot),
+        this.#installations.restore(snapshot),
       );
       this.#setStatus("active");
       return outcome;
     } catch (error) {
       this.#setStatus(this.#engine.hasCommittedPlan ? "active" : "idle");
       throw error;
-    }
-  }
-
-  #applyChanges(operations: ReadonlyArray<ChangeOperation>) {
-    for (const operation of operations) {
-      if (operation.kind === "install") {
-        operation.installation.group.assertAttached();
-        if (this.#installations.has(operation.installation.id)) {
-          throw new Error(`Installation '${operation.installation.id}' is already installed`);
-        }
-        continue;
-      }
-
-      const installed =
-        this.#installations.get(operation.installation.id) === operation.installation;
-      if (
-        operation.kind === "remove" &&
-        !installed &&
-        operation.installation.status === "removed"
-      ) {
-        continue;
-      }
-      if (!installed) {
-        throw operation.installation.unavailableError();
-      }
-      if (
-        operation.kind === "update" &&
-        operation.declaration.kind !== "config" &&
-        operation.declaration.plugin.name !== operation.installation.declaration.plugin.name
-      ) {
-        throw new DougongError(
-          "INSTALLATION_IDENTITY",
-          `Installation '${operation.installation.id}' cannot change name from ` +
-            `'${operation.installation.declaration.plugin.name}' to '${operation.declaration.plugin.name}'`,
-        );
-      }
-    }
-
-    for (const operation of operations) {
-      if (operation.kind === "install") {
-        this.#installations.set(operation.installation.id, operation.installation);
-      } else if (operation.kind === "update") {
-        const current = operation.installation.declaration;
-        const plugin =
-          operation.declaration.kind === "config" ? current.plugin : operation.declaration.plugin;
-        const config =
-          operation.declaration.kind === "plugin" ? current.config : operation.declaration.config;
-        operation.installation.replaceDeclaration(createInstallationDeclaration(plugin, config));
-      } else if (this.#installations.get(operation.installation.id) === operation.installation) {
-        this.#installations.delete(operation.installation.id);
-      }
-    }
-  }
-
-  #settleChanges(operations: ReadonlyArray<ChangeOperation>) {
-    for (const operation of operations) {
-      if (operation.kind === "remove") {
-        operation.installation.remove();
-        operation.installation.settleReady();
-        this.#revokeControl(operation.installation);
-      } else if (this.#status !== "active") operation.installation.deactivate();
-    }
-  }
-
-  #discardInstallation(installation: InstallationRecord, error: unknown) {
-    installation.discard(error);
-    this.#revokeControl(installation);
-  }
-
-  #attachInstallation(installation: InstallationRecord) {
-    const publicInstallation = this.#publicInstallations.get(installation);
-    if (!publicInstallation) {
-      throw new Error(`Installation '${installation.id}' has no public object`);
-    }
-    const control = installationControls.get(publicInstallation);
-    if (!control) throw new Error(`Installation '${installation.id}' has no draft control`);
-    installation.attach(() => this.#publishDiagnostics());
-    control.attach(
-      (update) =>
-        this.#groups.change(installation.group).update(publicInstallation, update).commit(),
-      () => this.#groups.change(installation.group).remove(publicInstallation).commit(),
-    );
-  }
-
-  #revokeControl(installation: InstallationRecord) {
-    const publicInstallation = this.#publicInstallations.get(installation);
-    if (publicInstallation) {
-      installationControls.get(publicInstallation)?.revoke();
-      installationControls.delete(publicInstallation);
-    }
-    this.#publicInstallations.delete(installation);
-  }
-
-  #settleInstallations(installations: Iterable<InstallationRecord>) {
-    for (const installation of installations) installation.settleReady();
-  }
-
-  #captureInstallations(): InstallationCapture[] {
-    return [...this.#installations].map(([id, installation]) => ({
-      id,
-      installation,
-      declaration: installation.declaration,
-    }));
-  }
-
-  #restoreInstallations(snapshot: ReadonlyArray<InstallationCapture>) {
-    this.#installations.clear();
-    for (const item of snapshot) {
-      item.installation.replaceDeclaration(item.declaration);
-      this.#installations.set(item.id, item.installation);
     }
   }
 

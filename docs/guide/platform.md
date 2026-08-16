@@ -19,7 +19,7 @@ Platform 把这四件事编译成 Core 的操作。它**不复制** Core 的注�
                Installer（Host 或 Group）→ Installation
 ```
 
-Platform 拿一个 `Installer`（Host 或 Group），把外部插件编译成对它的 `install` / `update` / `remove`。
+Platform 拿一个 `Installer`（通常是 Host 或 Group），把外部插件编译进它的 canonical `change()`；最小适配器只需实现这一项。
 
 ## 最小例子
 
@@ -147,7 +147,7 @@ registration.status      // "activated"
 await platform.trigger("onLanguage:markdown")
 ```
 
-`trigger()` 会激活所有声明了该事件的 Registration，**并发**执行，独立失败被聚合成 `AggregateError`——一次激活失败不影响其他 Registration。
+`trigger()` 会激活所有声明了该事件的 Registration，**并发**执行；一次失败原样抛出，多次独立失败聚合成 `AggregateError`，而一个 Registration 的失败不取消其他 Registration。
 
 ## Manifest 依赖
 
@@ -188,9 +188,9 @@ changes.remove(deprecated)
 await changes.commit()
 ```
 
-它会依次：等待相关插件的在途操作结束 → 授权全部 manifest → 校验候选依赖图 → 加载模块 → **编译成一笔 Core ChangeSet** → 提交。
+变更命令开始执行时先固定哪些更新保持 activated，然后依次：校验候选依赖图 → 授权全部 Manifest 并预加载所需模块 → 关闭新激活入口 → 取消明确目标并等待此前已进入的激活树 → 按同一计划复验稳定候选图 → **编译成一笔 Core ChangeSet** → 提交。
 
-任何一步失败，Core 那边一动没动。
+预检失败不会取消任何在途激活；任何一步失败，Core 与 Platform 都不会呈现半提交状态。
 
 更新时会检查身份：新 Artifact 的 Manifest 名字必须与 Registration 一致，否则 `REGISTRATION_IDENTITY`。这保证「更新」不会偷偷变成「注册另一个 Plugin」。
 

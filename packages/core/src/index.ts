@@ -56,7 +56,7 @@ export {
 
 export type { Contribution, ContributionView } from "./contribution-store";
 export type { EventListener } from "./event-hub";
-export { ConfigValidationError, DougongError } from "./errors";
+export { ConfigValidationError, DougongError, isCancellationReason } from "./errors";
 export type { Disposable } from "./resource";
 export { ReadonlyMapSnapshot } from "./readonly-map";
 export { SerialQueue } from "./serial-queue";

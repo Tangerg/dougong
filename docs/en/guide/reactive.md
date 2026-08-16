@@ -60,7 +60,7 @@ batch(() => {
 ```ts
 batch(async () => { ... })            // ✗ TypeError: Reactive batches must be synchronous
 computed(async () => { ... })         // ✗ TypeError: Computed signal calculations must be synchronous
-observe(source, async () => { ... })  // ✗ TypeError: Observers must be synchronous
+observe(owner, source, async () => { ... }) // ✗ TypeError: Observers must be synchronous
 ```
 
 Synchronous tracking and batch boundaries cannot survive an `await` — once they do, dependency collection captures the wrong set and the batch flushes before the async work finishes. Rather than produce a silently wrong result, these throw immediately.
@@ -74,6 +74,8 @@ Asynchronous work belongs in `lifetime.spawn()`.
 const subscription = count.subscribe(() => console.log("changed"))
 subscription.dispose()
 ```
+
+Every `subscribe()` call creates an independent subscription that can be disposed on its own, even when the same function is passed more than once. Disposal immediately withdraws a notification whose turn has not started. `batch()` still coalesces duplicate work by callback identity within that batch.
 
 Both `Signal` and `ReadonlySignal` implement the structural `Readable<T>` protocol:
 
@@ -93,15 +95,15 @@ Core's `ContributionView` and `diagnostics` use the **same protocol**, so any ob
 ```ts
 import { observe } from "dougong"
 
-observe(source, owner, (value, lifetime) => {
+observe(owner, source, (value, lifetime) => {
   // On each change: release the previous lifetime, then build a new one from the new value
 })
 ```
 
 Three parameters:
 
-- `source` — any `Readable<T>`: a signal, an `ContributionView`, `diagnostics`, or your own object
 - `owner` — anything providing `cleanup` / `lifetime` / `spawn`; a plugin's `ctx` fits exactly
+- `source` — any `Readable<T>`: a signal, a `ContributionView`, `diagnostics`, or your own object
 - `observer` — receives the current value and a dedicated child Lifetime
 
 ### A typical use
@@ -113,7 +115,7 @@ definePlugin({
   name: "player.audio",
   requires: { current: CURRENT_TRACK },
   setup(ctx) {
-    observe(ctx.current, ctx, (track, lifetime) => {
+    observe(ctx, ctx.current, (track, lifetime) => {
       if (!track) return
 
       const element = new Audio(track.url)
@@ -151,7 +153,7 @@ interface ObservationOwner {
 }
 ```
 
-A plugin's `ctx` happens to satisfy that shape, so `observe(source, ctx, ...)` just works — by **structural match**, not inheritance or registration.
+A plugin's `ctx` happens to satisfy that shape, so `observe(ctx, source, ...)` works by **structural match**, not inheritance or registration.
 
 The result is a dependency direction that stays one-way: `reactive` does not depend on `core`, and `core` does not depend on `reactive`. You can use either alone.
 
@@ -159,9 +161,12 @@ The result is a dependency direction that stays one-way: `reactive` does not dep
 
 `observe` has explicit error semantics:
 
-- the observer throws → reported through the owner's task result; the observation stays alive and retries on the next change
+- the initial observer throws → `observe()` releases resources created so far and rejects construction directly
+- a later observer throws → its child Lifetime is released, the failure is reported through the owner's task result, and the observation stops permanently
 - releasing the previous child Lifetime fails → the observation **stops permanently** and releases its subscription, because whether the old resources were released cannot be confirmed
 - a change arrives while the previous one is still being handled → coalesced into a single rebuild with the latest value
+
+Permanent stop is a real terminal state: the observation immediately revokes its references to the source, observer and last value. The cleanup left in the owner retains only an inert terminal shell, so a stopped dataflow does not stay alive until the whole Instance ends.
 
 ## Two observation sources
 
@@ -183,7 +188,7 @@ snapshot.installations.get(id)?.lifetime?.get()
 Both feed straight into `observe()`:
 
 ```ts
-observe(ctx.routes, ctx, (routes, lifetime) => {
+observe(ctx, ctx.routes, (routes, lifetime) => {
   const router = buildRouter(routes)
   lifetime.cleanup(() => router.close())
 })

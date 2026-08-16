@@ -17,7 +17,7 @@ const plugin = definePlugin({
 
 `name` is a required stable identifier. It is used for diagnostics and installation IDs (`app.hello:1`); it plays no part in dependency resolution — that is what Contracts are for.
 
-`definePlugin` preserves the declared Plugin shape for **type inference**, validates `name`, `requires` and `provides`, and returns an immutable normalized declaration. Mistakes therefore surface where the Plugin is written rather than when the Host starts.
+`definePlugin` preserves the declared Plugin shape for **type inference** while normalizing it at the boundary into an immutable plain record containing only `name`, `config`, `requires`, `provides` and `setup`. Declarations cannot use symbols, hidden properties, class instances or unknown fields; `requires` and `provides` must likewise be plain records containing only enumerable string own keys. Mistakes therefore surface where the Plugin is written rather than when the Host starts.
 
 ## Declaring dependencies
 

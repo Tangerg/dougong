@@ -82,7 +82,7 @@ Signal 不是第五种能力。`@dougongjs/reactive` 提供 `signal()` / `comput
 
 ## 包结构
 
-| 包 | 说明 | 运行时依赖 |
+| 包 | 说明 | 包依赖 |
 | --- | --- | --- |
 | [`dougong`](./packages/dougong) | 门面，re-export 下面三个 | 三个内部包 |
 | [`@dougongjs/core`](./packages/core) | 六个原子、依赖图、事务、Group、诊断 | `@standard-schema/spec` |

@@ -12,7 +12,7 @@ export interface RegistrationSnapshot {
   readonly activation: ReadonlyArray<string>;
   readonly permissions: ReadonlyArray<string>;
   readonly dependencies: Readonly<Record<string, string>>;
-  readonly error?: unknown;
+  readonly error?: Error;
 }
 
 export interface PlatformSnapshot {
@@ -25,13 +25,13 @@ export interface PlatformSnapshot {
 export interface DiagnosableRegistration {
   readonly manifest: Manifest;
   readonly status: RegistrationStatus;
-  readonly error: unknown;
+  readonly error: Error | undefined;
 }
 
 /** Immutable operational read model compiled to Core's snapshot protocol. */
 export class PlatformDiagnostics {
   readonly #apiVersion: string;
-  readonly #source: SnapshotPublisher<PlatformSnapshot>;
+  readonly #publisher: SnapshotPublisher<PlatformSnapshot>;
   #revision = 0;
   #snapshot: PlatformSnapshot;
 
@@ -40,18 +40,18 @@ export class PlatformDiagnostics {
   constructor(apiVersion: string, report: (error: unknown) => void) {
     this.#apiVersion = apiVersion;
     this.#snapshot = this.#createSnapshot("active", []);
-    this.#source = new SnapshotPublisher(() => this.#snapshot, report);
-    this.view = this.#source.view;
+    this.#publisher = new SnapshotPublisher(() => this.#snapshot, report);
+    this.view = this.#publisher.view;
   }
 
   publish(status: PlatformStatus, registrations: Iterable<DiagnosableRegistration>) {
     this.#revision++;
     this.#snapshot = this.#createSnapshot(status, registrations);
-    this.#source.invalidate();
+    this.#publisher.invalidate();
   }
 
   dispose() {
-    this.#source.dispose();
+    this.#publisher.dispose();
   }
 
   #createSnapshot(status: PlatformStatus, registrations: Iterable<DiagnosableRegistration>) {

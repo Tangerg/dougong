@@ -40,6 +40,8 @@ await platform.trigger("command:music.search");
 await registration.ready();
 ```
 
+Platform options are a plain record containing only `installer`, `apiVersion`, `loader`, `authorizer` and `logger`. Only enumerable own properties are read, and neither unknown fields nor prototype-chain configuration is accepted. Installer, Loader, Authorizer and Logger remain structural ports and may themselves be implemented by ordinary objects or class instances.
+
 `register()` only admits the Artifact into the Platform; `activate()` selects and loads its external Plugin; `ready()` waits for the corresponding Core Installation to cross the Host / ChangeSet ready barrier. These three are not synonyms.
 
 ## 2. Manifest
@@ -70,7 +72,7 @@ Rules:
 
 - `name`, activation conditions, permission names, dependency names and version ranges must be non-empty with no leading or trailing whitespace. Nothing is silently trimmed.
 - `version` must be a complete semantic version. `apiVersion` and every dependency value must be a supported range; `*` explicitly means any version.
-- A manifest is a strict object: unknown fields are rejected rather than silently dropping a misspelled option.
+- A Manifest is a plain record made only of enumerable string own properties. Unknown fields, symbols, hidden properties, arrays and class instances are rejected rather than silently dropped or read through the prototype chain; `dependencies` follows the same record rule.
 - No activation condition or permission may repeat.
 - The returned object, arrays and dependency map are frozen. A Manifest is a value; it holds no execution state.
 - `Manifest.name` is the Registration identity and must match the `Plugin.name` of both the placeholder and the loaded module exactly.
@@ -85,14 +87,14 @@ interface Loader<Reference> {
 }
 ```
 
-A loaded module must expose exactly one `Plugin` as its `default` export. Platform re-runs `definePlugin()`'s structural validation after loading and verifies the name. Loader failures are wrapped as `PlatformError` with `MODULE_LOAD_FAILED`; a bad module shape or default export uses `MODULE_INVALID`.
+A loaded module must expose exactly one `Plugin` as its own `default` export; inherited properties are not module exports. Platform re-runs `definePlugin()`'s structural validation after loading and verifies the name. Loader failures are wrapped as `PlatformError` with `MODULE_LOAD_FAILED`; a bad module shape or default export uses `MODULE_INVALID`.
 
 Built-in implementations:
 
 - `ImportLoader` — dynamic `import()`, for trusted same-realm ESM. Explicitly **not a sandbox**.
 - `MemoryLoader` — copies and reads an application-supplied read-only Map, for embedded bundles, deterministic tests and application built-in plugins; it rejects `null`, arrays and other inputs its type does not admit.
 
-A loader must check its `AbortSignal` during expensive phases. Platform also re-checks after the loader returns, so an uncooperative loader cannot commit a module into Core after cancellation — but the I/O and module top-level side effects it already performed cannot be undone.
+A loader must check its `AbortSignal` during expensive phases. Platform reuses Core's `isCancellationReason()` classifier and checks the signal again after the loader returns, so an uncooperative loader cannot commit a module into Core after cancellation — but the I/O and module top-level side effects it already performed cannot be undone.
 
 Untrusted Plugins belong in a Worker, iframe, separate process or restricted realm. The corresponding Loader can return an **application-authored RPC proxy `Plugin`** that maps granted capabilities onto ordinary Services. What you cannot do is `import()` arbitrary code into the application's realm first and then expect Context permissions to make it safe.
 
@@ -126,6 +128,8 @@ interface Artifact<Reference> {
 }
 ```
 
+An Artifact is also a strict declaration value. It must be a plain record containing only `manifest`, `reference`, `config` and `placeholder`, with `manifest` and `reference` present as enumerable own properties. Unknown fields, symbols, hidden properties, arrays and class instances are rejected when the Artifact enters a ChangeSet. Normalization reads each own field once and returns a frozen value instead of guessing declarations from the prototype chain.
+
 A `placeholder` must be created by application-trusted code. It suits contributing command titles, menu metadata or a stand-in panel before lazy loading. Platform installs it as an ordinary Core Plugin at registration; on activation it atomically updates the **same Core Installation** to the loaded Plugin, so the Installation ID, Group membership and downstream observation identity stay stable.
 
 `Registration.status`:
@@ -141,7 +145,7 @@ A `placeholder` must be created by application-trusted code. It suits contributi
 
 `activate()` can complete while the Host is `idle`: it commits the loaded Plugin into the installation plan and does not secretly start the Host. `status` becomes `"activated"`, but a `ready()` called before or after still waits for `host.start()`. This deliberately separates "the Registration is activated" from "the Instance is ready".
 
-During cancellation, only `signal.reason` or an explicit `AbortError` is classified as a cancellation outcome. Another Loader error that merely occurs after the signal has aborted remains a `MODULE_LOAD_FAILED` with its original `cause`; a racing cancellation reason never overwrites it.
+After the signal is aborted, only the exact `signal.reason` or an explicit `AbortError` is classified as a cancellation outcome. Another Loader error that merely occurs after abort remains a `MODULE_LOAD_FAILED` with its original `cause`; a racing cancellation reason never overwrites it.
 
 `ready()` waits for the first activation and the Core ready barrier while `pending` / `registered` / `loading`; delegates to the current Core Installation while `activated`; and rejects immediately while `failed` / `removed`. A failed wait is not revived by a later retry — call `ready()` again after a successful retry.
 
@@ -157,7 +161,7 @@ Before activating a Registration, Platform activates its Manifest-declared depen
 
 Registration order need not match dependency order: a not-yet-activated Registration may temporarily reference an absent dependency, which lets application code collect a batch of Manifests first. But once every node is present, any closed loop is rejected immediately at the candidate-graph stage of registration or change — Registrations are never left silently pending forever.
 
-Activation of one Registration is serialized. When several consumers concurrently require the same dependency, that dependency completes exactly one effective load. Update, removal and Platform disposal cancel and await the relevant activations, so a load result can never "revive" an old Artifact across a change boundary.
+Activation of one Registration is serialized. One root activation and its recursive dependencies share an internal permit, so when several consumers concurrently require the same dependency, that dependency completes exactly one effective load. A Platform ChangeSet coordinates with those permits through an activation gate: a failed preflight cancels no in-flight activation; only a successful preflight closes admission for new roots, cancels explicit change targets and awaits already-admitted activation trees. Platform disposal instead becomes terminal and cancels every activation. A load result therefore cannot "revive" an old Artifact across a change boundary.
 
 ## 7. Platform ChangeSet
 
@@ -174,23 +178,22 @@ await change.commit();
 
 `platform.register()`, `registration.update()` and `registration.remove()` all degenerate mechanically into a single-item Platform ChangeSet. A ChangeSet is one-shot, its commit is idempotent, a target may appear only once, and Registrations from another Platform are rejected.
 
-An empty Platform ChangeSet commits as a side-effect-free no-op: no candidate graph, no Core ChangeSet, no diagnostics revision.
+An empty Platform ChangeSet creates no candidate graph, Core ChangeSet or diagnostics revision, but it still crosses the same command queue in submission order and validates Platform authority. It waits for earlier changes, and an old empty draft created before disposal cannot pretend to commit after the Platform is terminal.
 
-A Registration created by `change.register()` is only that ChangeSet's draft until commit. It holds no Platform owner and cannot separately `activate` / `update` / `remove`. Control authority is granted at commit and revoked again if registration fails. This keeps drafts from bypassing the candidate graph, and keeps a forgotten uncommitted Registration from keeping the Platform alive.
+A Registration created by `change.register()` is an exclusive draft of that ChangeSet until commit. It holds no Platform owner, cannot separately `activate` / `update` / `remove`, and cannot be targeted by another ChangeSet. Control authority is granted at commit and revoked again after failure or removal. Direct `remove()` remains idempotent on a terminal handle, but that handle cannot become the target of a new ChangeSet. This keeps both drafts and stale handles from bypassing the candidate graph or retaining the Platform.
 
 Calling `activate()` immediately after `commit()` returns does not depend on microtask order: the Registration first awaits the same admission commit that granted its authority, and both calls observe the same failure if that commit fails.
 
 Commit order:
 
-1. Lock and cancel in-flight activations for targets being updated or removed.
-2. Apply all operations once against the current registry to form the candidate Registration graph.
-3. Check duplicate identity and dependency cycles; for Registrations that remain activated in the end, require every dependency to exist, be version-compatible and already be activated.
-4. Authorize new and updated manifests.
-5. Preload new Plugins for all activated targets — any failure here has still not touched Core.
-6. Compile placeholder installs, active Plugin updates and removals into **one Core ChangeSet** and commit it.
-7. After Core succeeds, switch Platform's Artifacts, Registrations and diagnostic state in one step.
+1. Validate that every target still belongs to this Platform, snapshot which updates enter this transaction as activated, and form the complete candidate graph against the current registry.
+2. Against that plan, check duplicate identity, cycles and post-commit activated dependencies, then authorize new or updated Manifests and preload new Plugins for targets planned to remain activated; failure in this phase takes no lock and cancels no activation.
+3. Close admission for new root activations, lock and cancel targets being updated or removed, and await every activation tree admitted earlier.
+4. Revalidate the candidate against stable Registration state and the same activation plan, so an activation completing during preflight can neither change this update's meaning nor introduce a new activated dependency.
+5. Compile placeholder installs, active Plugin updates and removals into **one Core ChangeSet** and commit it.
+6. After Core succeeds, switch Platform's Artifacts, Registrations and diagnostic state in one step, then reopen activation admission.
 
-The internal implementation is split along the same boundary: the Artifact compiler owns trust validation of the Manifest, placeholder and loaded module; CandidateGraph validates only the complete candidate dependency graph; the CoreChange compiler produces only one Core ChangeSet and its determined final Artifact state. The Platform coordinator prepares an infallible local commit closure before Core commits, so it can never discover a missing Installation or illegal Registration state after Core has already succeeded.
+The internal implementation is split along the same boundary: Activator exclusively owns activation trees, permits and change exclusion; the Artifact compiler owns trust validation of the Manifest, placeholder and loaded module; CandidateGraph validates only the complete candidate dependency graph; the CoreChange compiler produces only one Core ChangeSet and its determined final Artifact state. Above those peer collaborators, the Platform coordinator serializes structural commands and prepares an infallible local commit closure before Core commits, so it can never discover a missing Installation or illegal Registration state after Core has already succeeded.
 
 This is what lets a provider go `1.x → 2.x` while a consumer's dependency range goes `^1 → ^2` in a single change; done as two separate `update()` calls, the first illegal candidate graph is rejected. Top-level module import side effects are not transactional, but the installation plan, Core Instances and Registrations never end up half-committed.
 
@@ -226,7 +229,7 @@ Planet-style media sources and Lynx Desktop-style commands, menus and panels are
 `platform.diagnostics` uses the same read-only `get() + subscribe()` protocol as Core and signals, and contains:
 
 - Platform `apiVersion`, `status` and a monotonic `revision`
-- per Registration: `manifestName`, `version`, `status`, `activation`, `permissions`, `dependencies` and the most recent error
+- per Registration: `manifestName`, `version`, `status`, `activation`, `permissions`, `dependencies` and the latest failure, already normalized to `Error`
 
 The snapshot, entries and arrays are frozen, and the Map exposes no mutating methods. `subscribe()` only delivers future invalidation notices; the caller re-reads with `get()`. A failing diagnostics subscriber is reported through the Platform logger and never changes a registration or activation outcome.
 
@@ -265,11 +268,11 @@ Platform's decidable errors use `PlatformError.code`. `PlatformError extends Dou
 | `REGISTRATION_DEPENDENCY_INCOMPATIBLE` | A dependency Registration does not satisfy the manifest version range |
 | `REGISTRATION_DEPENDENCY_INACTIVE` | An activated candidate Registration depends on a Registration that is not activated |
 | `REGISTRATION_CYCLE` | Manifest dependencies form a cycle in the candidate Registration graph |
-| `REGISTRATION_BUSY` | Activation raced a declaration change on the same target |
+| `REGISTRATION_BUSY` | The target is changing, or a structural change has closed admission for new root activations |
 | `MODULE_LOAD_FAILED` | The loader itself failed |
 | `MODULE_INVALID` | The module or its default export is not a valid Plugin |
 | `REGISTRATION_REMOVED` | An operation on a removed Registration |
 | `REGISTRATION_UNAVAILABLE` | The Registration is uncommitted or unavailable; when activation / admission throws a non-`Error` value, the first public command and `ready()` use the same classification. An uncommitted terminal Registration keeps only an error summary, so a later `ready()` reconstructs an equivalent error without retaining the original Error stack |
 | `PLATFORM_UNAVAILABLE` | The Platform is disposing or already disposed |
 
-Error messages are for humans; they are not a stable parsing protocol. Programming-shape errors, cross-Platform Registrations, duplicate ChangeSet targets and modification after submission use `TypeError`.
+Error messages are for humans; they are not a stable parsing protocol. Programming-shape errors, cross-Platform Registrations, duplicate ChangeSet targets and modification after submission use `TypeError`; a custom Installer rejecting with a non-`Error` value is also classified at the Platform command boundary as a `TypeError` carrying the original `cause`.

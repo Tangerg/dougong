@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, expectTypeOf, it, vi } from "vitest";
 import type { StandardSchemaV1 } from "@standard-schema/spec";
 import {
   ConfigValidationError,
@@ -9,6 +9,7 @@ import {
   optional,
   service,
   type Contribution,
+  type InstallationSnapshot,
   type Plugin,
   type Service,
 } from "../src/index";
@@ -37,7 +38,14 @@ async function within<T>(promise: Promise<T>, milliseconds = 500) {
 describe("Host", () => {
   it("validates Host options at the JavaScript trust boundary", () => {
     expect(createHost().name).toBe("host");
-    expect(() => createHost(null as never)).toThrow("options must be an object");
+    class HostOptionsClass {
+      readonly name = "class-host";
+    }
+    expect(() => createHost(new HostOptionsClass())).toThrow("Host options must be a plain record");
+    expect(() => createHost({ unknown: true } as never)).toThrow(
+      "Host options: unknown field 'unknown'",
+    );
+    expect(() => createHost(null as never)).toThrow("Host options must be a plain record");
     expect(() => createHost({ logger: {} as never })).toThrow(
       "logger must implement debug/info/warn/error",
     );
@@ -60,8 +68,120 @@ describe("Host", () => {
     expect(Object.isFrozen(error.issues[0]!.path![1])).toBe(true);
   });
 
+  it("rejects malformed config validation issues at the public boundary", () => {
+    const sparseIssues: unknown[] = [];
+    sparseIssues.length = 1;
+    const sparsePath: unknown[] = [];
+    sparsePath.length = 1;
+
+    expect(() => new ConfigValidationError(null as never)).toThrow(
+      "Config validation issues must be an array",
+    );
+    expect(() => new ConfigValidationError([null] as never)).toThrow(
+      "Config validation issue at index 0 must be an object",
+    );
+    expect(() => new ConfigValidationError(sparseIssues as never)).toThrow(
+      "Config validation issue at index 0 must be an object",
+    );
+    expect(() => new ConfigValidationError([{ message: 1 }] as never)).toThrow(
+      "Config validation issue at index 0 message must be a string",
+    );
+    expect(() => new ConfigValidationError([{ message: "bad", path: "field" }] as never)).toThrow(
+      "Config validation issue at index 0 path must be an array",
+    );
+    expect(
+      () => new ConfigValidationError([{ message: "bad", path: [{ key: null }] }] as never),
+    ).toThrow("Config validation issue at index 0 path segment 0 must contain a property key");
+    expect(
+      () => new ConfigValidationError([{ message: "bad", path: sparsePath }] as never),
+    ).toThrow("Config validation issue at index 0 path segment 0 must be a property key");
+  });
+
   it("validates JavaScript definitions at every installation boundary", () => {
     const TOKEN = service<string>("test/plugin-boundary");
+    class PluginClass {
+      readonly name = "test.plugin-class";
+      setup() {}
+    }
+    expect(() => definePlugin(new PluginClass())).toThrow(
+      "Plugin declaration must be a plain record",
+    );
+    expect(() =>
+      definePlugin({
+        name: "test.unknown-plugin-field",
+        setup() {},
+        unknown: true,
+      } as never),
+    ).toThrow("Plugin declaration: unknown field 'unknown'");
+
+    const inheritedSetup = Object.getOwnPropertyDescriptor(Object.prototype, "setup");
+    Object.defineProperty(Object.prototype, "setup", {
+      configurable: true,
+      value() {},
+    });
+    try {
+      expect(() => definePlugin({ name: "test.inherited-setup" } as never)).toThrow(
+        "Plugin 'test.inherited-setup' must define setup()",
+      );
+    } finally {
+      if (inheritedSetup) Object.defineProperty(Object.prototype, "setup", inheritedSetup);
+      else delete (Object.prototype as { setup?: unknown }).setup;
+    }
+
+    expect(() =>
+      definePlugin({
+        name: "test.bad-requires",
+        requires: 1 as never,
+        setup() {},
+      }),
+    ).toThrow("Plugin 'test.bad-requires' requires must be a plain record");
+    expect(() =>
+      definePlugin({
+        name: "test.bad-provides",
+        provides: new Map() as unknown as {},
+        setup() {},
+      }),
+    ).toThrow("Plugin 'test.bad-provides' provides must be a plain record");
+    expect(() =>
+      definePlugin({
+        name: "test.symbol-requirement",
+        requires: { [Symbol("hidden")]: TOKEN } as never,
+        setup() {},
+      }),
+    ).toThrow("Plugin 'test.symbol-requirement' requires keys must be enumerable strings");
+    const hiddenProvision = Object.defineProperty({}, "hidden", { value: TOKEN });
+    expect(() =>
+      definePlugin({
+        name: "test.hidden-provision",
+        provides: hiddenProvision,
+        setup() {},
+      }),
+    ).toThrow("Plugin 'test.hidden-provision' provides keys must be enumerable strings");
+    expect(() =>
+      definePlugin({
+        name: "test.bad-schema",
+        config: null as never,
+        setup() {},
+      }),
+    ).toThrow("Plugin 'test.bad-schema' config must implement Standard Schema V1");
+    expect(() =>
+      definePlugin({
+        name: "test.bad-schema-version",
+        config: {
+          "~standard": { version: 2, vendor: "test", validate: () => ({ value: undefined }) },
+        } as never,
+        setup() {},
+      }),
+    ).toThrow("Plugin 'test.bad-schema-version' config must implement Standard Schema V1");
+    expect(() =>
+      definePlugin({
+        name: "test.bad-schema-vendor",
+        config: {
+          "~standard": { version: 1, vendor: null, validate: () => ({ value: undefined }) },
+        } as never,
+        setup() {},
+      }),
+    ).toThrow("Plugin 'test.bad-schema-vendor' config must implement Standard Schema V1");
     expect(() =>
       definePlugin({
         name: "test.bad-alias",
@@ -642,6 +762,37 @@ describe("Host", () => {
     await host.stop();
   });
 
+  it("treats repeated Event listeners as independent registrations", async () => {
+    const NOTICE = event<void>("test/repeated-event-listener");
+    const listener = vi.fn<() => void>();
+    let first!: { dispose(): void | Promise<void> };
+    let second!: { dispose(): void | Promise<void> };
+    let emit!: () => Promise<void>;
+    const plugin = definePlugin({
+      name: "test.repeated-event-listener",
+      setup(ctx) {
+        first = ctx.on(NOTICE, listener);
+        second = ctx.on(NOTICE, listener);
+        emit = () => ctx.emit(NOTICE, undefined);
+      },
+    });
+    const host = createHost();
+    host.install(plugin);
+    await host.start();
+
+    await emit();
+    expect(listener).toHaveBeenCalledTimes(2);
+
+    await first.dispose();
+    await emit();
+    expect(listener).toHaveBeenCalledTimes(3);
+
+    await second.dispose();
+    await emit();
+    expect(listener).toHaveBeenCalledTimes(3);
+    await host.stop();
+  });
+
   it("restores the previous Instances when an update fails", async () => {
     const WORKER = service<{ readonly failed: boolean }>("test/rollback-worker");
     const starts: boolean[] = [];
@@ -900,6 +1051,63 @@ describe("Host", () => {
     await host.stop();
   });
 
+  it("accepts an explicit undefined issues field in a successful Standard Schema result", async () => {
+    const schema: StandardSchemaV1<string, number> = {
+      "~standard": {
+        version: 1,
+        vendor: "test",
+        validate: (value) => ({ value: Number(value), issues: undefined }),
+      },
+    };
+    let received: number | undefined;
+    const host = createHost();
+    host.install(
+      definePlugin({
+        name: "test.explicit-undefined-issues",
+        config: schema,
+        setup(_ctx, config) {
+          received = config;
+        },
+      }),
+      "42",
+    );
+
+    await host.start();
+    expect(received).toBe(42);
+    await host.stop();
+  });
+
+  it("uses only own Standard Schema result fields as success and failure discriminants", async () => {
+    const schema: StandardSchemaV1<string, number> = {
+      "~standard": {
+        version: 1,
+        vendor: "test",
+        validate(value) {
+          return Object.assign(
+            Object.create({ issues: [{ message: "inherited failure" }] }) as object,
+            { value: Number(value) },
+          ) as never;
+        },
+      },
+    };
+    let received: number | undefined;
+    const host = createHost();
+    host.install(
+      definePlugin({
+        name: "test.own-schema-result",
+        config: schema,
+        setup(_ctx, config) {
+          received = config;
+        },
+      }),
+      "42",
+    );
+
+    await host.start();
+    expect(received).toBe(42);
+    await host.stop();
+  });
+
   it("classifies non-Error config validator failures at the command boundary", async () => {
     const schema: StandardSchemaV1<unknown, unknown> = {
       "~standard": {
@@ -930,6 +1138,81 @@ describe("Host", () => {
       code: "INSTALLATION_UNAVAILABLE",
     });
     expect(stableFailure).toBe(commandFailure);
+  });
+
+  it("rejects a malformed Standard Schema result before setup", async () => {
+    let setupRan = false;
+    const schema: StandardSchemaV1<unknown, unknown> = {
+      "~standard": {
+        version: 1,
+        vendor: "test",
+        validate: () => ({}) as never,
+      },
+    };
+    const host = createHost();
+    host.install(
+      definePlugin({
+        name: "test.malformed-validator-result",
+        config: schema,
+        setup() {
+          setupRan = true;
+        },
+      }),
+      undefined,
+    );
+
+    await expect(host.start()).rejects.toThrow(
+      "Installation 'test.malformed-validator-result:1' config validator returned neither value nor issues",
+    );
+    expect(setupRan).toBe(false);
+
+    const malformedIssueSchema: StandardSchemaV1<unknown, unknown> = {
+      "~standard": {
+        version: 1,
+        vendor: "test",
+        validate: () => ({ issues: [null] }) as never,
+      },
+    };
+    const malformedIssueHost = createHost();
+    malformedIssueHost.install(
+      definePlugin({
+        name: "test.malformed-validator-issue",
+        config: malformedIssueSchema,
+        setup() {
+          setupRan = true;
+        },
+      }),
+      undefined,
+    );
+
+    await expect(malformedIssueHost.start()).rejects.toThrow(
+      "Config validation issue at index 0 must be an object",
+    );
+    expect(setupRan).toBe(false);
+  });
+
+  it("preserves TypeError classification after a failed Installation becomes terminal", async () => {
+    const schema: StandardSchemaV1<unknown, unknown> = {
+      "~standard": {
+        version: 1,
+        vendor: "test",
+        validate: () => ({}) as never,
+      },
+    };
+    const host = createHost();
+    await host.start();
+    const installation = host.install(
+      definePlugin({
+        name: "test.terminal-type-error",
+        config: schema,
+        setup() {},
+      }),
+      undefined,
+    );
+
+    await expect(installation.ready()).rejects.toBeInstanceOf(TypeError);
+    await expect(installation.ready()).rejects.toBeInstanceOf(TypeError);
+    await host.stop();
   });
 
   it("requires an explicit new start after startup fails", async () => {
@@ -1278,6 +1561,15 @@ describe("Host", () => {
     expect(() => foreign.remove(installation)).toThrow("different Host");
 
     const change = first.change();
+    class InstallationUpdateClass {
+      readonly config = undefined;
+    }
+    expect(() => change.update(installation, new InstallationUpdateClass())).toThrow(
+      "Installation update must be a plain record",
+    );
+    expect(() =>
+      change.update(installation, { config: undefined, configuration: undefined } as never),
+    ).toThrow("Installation update: unknown field 'configuration'");
     expect(() => change.update(installation, {} as never)).toThrow(
       "must include 'plugin' or 'config'",
     );
@@ -1320,10 +1612,9 @@ describe("Host", () => {
     });
     await expect(installation.remove()).rejects.toMatchObject({ code: "INSTALLATION_UNAVAILABLE" });
 
-    const unrelatedChange = host.change().remove(installation);
-    await expect(unrelatedChange.commit()).rejects.toMatchObject({
-      code: "INSTALLATION_UNAVAILABLE",
-    });
+    expect(() => host.change().remove(installation)).toThrowError(
+      expect.objectContaining({ code: "INSTALLATION_UNAVAILABLE" }),
+    );
     expect(installation.status).toBe("pending");
 
     const commit = change.commit();
@@ -1332,6 +1623,18 @@ describe("Host", () => {
     await host.start();
     expect(received).toEqual([2]);
     await host.stop();
+  });
+
+  it("rejects terminal Installations before staging a ChangeSet operation", async () => {
+    const plugin = definePlugin({ name: "test.terminal-change-target", setup() {} });
+    const host = createHost();
+    const installation = host.install(plugin);
+    await installation.remove();
+
+    expect(() => host.change().remove(installation)).toThrowError(
+      expect.objectContaining({ code: "INSTALLATION_REMOVED" }),
+    );
+    await expect(installation.remove()).resolves.toBeUndefined();
   });
 
   it("freezes context metadata as part of the public read-only boundary", async () => {
@@ -1356,6 +1659,7 @@ describe("Host", () => {
   });
 
   it("publishes an immutable, composable diagnostics read model", async () => {
+    expectTypeOf<InstallationSnapshot["error"]>().toEqualTypeOf<Error | undefined>();
     const CLOCK = service<{ now(): number }>("test/diagnostic-clock");
     const provider = definePlugin({
       name: "test.diagnostic-provider",

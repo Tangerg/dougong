@@ -33,6 +33,24 @@ describe("signal", () => {
     );
   });
 
+  it("treats repeated listener functions as independent subscriptions", () => {
+    const count = signal(0);
+    const listener = vi.fn<() => void>();
+    const first = count.subscribe(listener);
+    const second = count.subscribe(listener);
+
+    count.set(1);
+    expect(listener).toHaveBeenCalledTimes(2);
+
+    first.dispose();
+    count.set(2);
+    expect(listener).toHaveBeenCalledTimes(3);
+
+    second.dispose();
+    count.set(3);
+    expect(listener).toHaveBeenCalledTimes(3);
+  });
+
   it("batches notifications through one subscriber path", () => {
     const left = signal(1);
     const right = signal(2);
@@ -48,6 +66,43 @@ describe("signal", () => {
     });
 
     expect(listener).toHaveBeenCalledTimes(1);
+  });
+
+  it("withdraws a disposed subscription before the batch flush", () => {
+    const count = signal(0);
+    const listener = vi.fn<() => void>();
+    const subscription = count.subscribe(listener);
+
+    batch(() => {
+      count.set(1);
+      subscription.dispose();
+    });
+
+    expect(listener).not.toHaveBeenCalled();
+  });
+
+  it("withdraws a disposed subscription before its notification turn", () => {
+    const immediate = signal(0);
+    const immediateListener = vi.fn<() => void>();
+    let immediateSubscription = immediate.subscribe(immediateListener);
+    immediate.subscribe(() => immediateSubscription.dispose());
+    immediateSubscription.dispose();
+    immediateSubscription = immediate.subscribe(immediateListener);
+
+    immediate.set(1);
+
+    const deferred = signal(0);
+    const deferredListener = vi.fn<() => void>();
+    let deferredSubscription = deferred.subscribe(deferredListener);
+    deferred.subscribe(() => deferredSubscription.dispose());
+    deferredSubscription.dispose();
+    deferredSubscription = deferred.subscribe(deferredListener);
+
+    batch(() => deferred.set(1));
+    expect({
+      immediate: immediateListener.mock.calls.length,
+      deferred: deferredListener.mock.calls.length,
+    }).toEqual({ immediate: 0, deferred: 0 });
   });
 
   it("notifies every subscriber before surfacing their failures", () => {
@@ -122,6 +177,25 @@ describe("computed", () => {
     expect(selected.get()).toBe(5);
 
     subscription.dispose();
+  });
+
+  it("keeps repeated listener functions independently disposable", () => {
+    const source = signal(0);
+    const derived = computed(() => source.get());
+    const listener = vi.fn<() => void>();
+    const first = derived.subscribe(listener);
+    const second = derived.subscribe(listener);
+
+    source.set(1);
+    expect(listener).toHaveBeenCalledTimes(2);
+    expect(derived.get()).toBe(1);
+
+    first.dispose();
+    source.set(2);
+    expect(listener).toHaveBeenCalledTimes(3);
+    expect(derived.get()).toBe(2);
+
+    second.dispose();
   });
 
   it("is lazy and cached while it has no subscribers", () => {

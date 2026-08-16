@@ -109,9 +109,6 @@ export class PlatformChangeSetDraft<Reference> implements PlatformChangeSet<Refe
       }
       return this.#submit(Promise.reject(error));
     }
-    if (!operations.length) {
-      return this.#submit(Promise.resolve());
-    }
     let promise: Promise<void>;
     try {
       promise = port.execute(operations);

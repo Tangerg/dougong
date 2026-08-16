@@ -71,13 +71,9 @@ export interface HostOptions {
   readonly onError?: (error: unknown) => void;
 }
 
+/** Minimal target for higher layers that compile work into one Core ChangeSet. */
 export interface Installer {
-  install<Config, Requires extends Requirements, Provides extends Provisions, ConfigInput>(
-    plugin: Plugin<Config, Requires, Provides, ConfigInput>,
-    ...config: [ConfigInput] extends [void] ? [config?: ConfigInput] : [config: ConfigInput]
-  ): Installation<Config, Requires, Provides, ConfigInput>;
   change(): ChangeSet;
-  group(name: string, configure: (group: Group) => void): Group;
 }
 
 /** Installation ownership only: never a capability scope or a permission boundary. */
@@ -85,6 +81,11 @@ export interface Group extends Installer {
   readonly id: string;
   readonly name: string;
   readonly status: GroupStatus;
+  install<Config, Requires extends Requirements, Provides extends Provisions, ConfigInput>(
+    plugin: Plugin<Config, Requires, Provides, ConfigInput>,
+    ...config: [ConfigInput] extends [void] ? [config?: ConfigInput] : [config: ConfigInput]
+  ): Installation<Config, Requires, Provides, ConfigInput>;
+  group(name: string, configure: (group: Group) => void): Group;
   ready(): Promise<void>;
   remove(): Promise<void>;
 }
@@ -93,6 +94,11 @@ export interface Host extends Installer {
   readonly name: string;
   readonly status: HostStatus;
   readonly diagnostics: SnapshotView<HostSnapshot>;
+  install<Config, Requires extends Requirements, Provides extends Provisions, ConfigInput>(
+    plugin: Plugin<Config, Requires, Provides, ConfigInput>,
+    ...config: [ConfigInput] extends [void] ? [config?: ConfigInput] : [config: ConfigInput]
+  ): Installation<Config, Requires, Provides, ConfigInput>;
+  group(name: string, configure: (group: Group) => void): Group;
   get<T>(token: Service<T>): T;
   start(): Promise<void>;
   stop(): Promise<void>;

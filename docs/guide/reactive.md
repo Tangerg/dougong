@@ -60,7 +60,7 @@ batch(() => {
 ```ts
 batch(async () => { ... })            // ✗ TypeError: Reactive batches must be synchronous
 computed(async () => { ... })         // ✗ TypeError: Computed signal calculations must be synchronous
-observe(source, async () => { ... })  // ✗ TypeError: Observers must be synchronous
+observe(owner, source, async () => { ... }) // ✗ TypeError: Observers must be synchronous
 ```
 
 原因是同步追踪和批次边界不能跨越 `await`——一旦跨过去，依赖收集会收到错误的集合，批次会在异步工作完成前就 flush。与其产生静默的错误结果，不如立刻抛错。
@@ -74,6 +74,8 @@ observe(source, async () => { ... })  // ✗ TypeError: Observers must be synchr
 const subscription = count.subscribe(() => console.log("changed"))
 subscription.dispose()
 ```
+
+每次 `subscribe()` 都创建一份独立、可单独释放的订阅；即使传入同一个函数也不会按函数身份合并。释放会立即撤回尚未轮到的通知。`batch()` 仍会按回调身份合并同一批次中的重复工作。
 
 `Signal` 和 `ReadonlySignal` 都实现结构化的 `Readable<T>` 协议：
 
@@ -93,15 +95,15 @@ Core 的 `ContributionView` 和 `diagnostics` 用的是**同一个协议**。这
 ```ts
 import { observe } from "dougong"
 
-observe(source, owner, (value, lifetime) => {
+observe(owner, source, (value, lifetime) => {
   // 每次 source 变化：先释放上一个 lifetime，再用新值建一个新的
 })
 ```
 
 三个参数：
 
-- `source` —— 任何 `Readable<T>`：Signal、`ContributionView`、`diagnostics`，甚至你自己写的对象
 - `owner` —— 任何提供 `cleanup` / `lifetime` / `spawn` 的东西，插件的 `ctx` 正好符合
+- `source` —— 任何 `Readable<T>`：Signal、`ContributionView`、`diagnostics`，甚至你自己写的对象
 - `observer` —— 拿到当前值和一个专属子 Lifetime
 
 ### 典型用法
@@ -113,7 +115,7 @@ definePlugin({
   name: "player.audio",
   requires: { current: CURRENT_TRACK },
   setup(ctx) {
-    observe(ctx.current, ctx, (track, lifetime) => {
+    observe(ctx, ctx.current, (track, lifetime) => {
       if (!track) return
 
       const element = new Audio(track.url)
@@ -151,7 +153,7 @@ interface ObservationOwner {
 }
 ```
 
-插件的 `ctx` 恰好满足这个形状，所以 `observe(source, ctx, ...)` 直接能用——但这是**结构匹配**，不是继承或注册。
+插件的 `ctx` 恰好满足这个形状，所以 `observe(ctx, source, ...)` 直接能用——但这是**结构匹配**，不是继承或注册。
 
 结果是依赖方向保持单向：`reactive` 不依赖 `core`，`core` 也不依赖 `reactive`。你可以只用其中一个。
 
@@ -159,9 +161,12 @@ interface ObservationOwner {
 
 `observe` 的错误语义是明确的：
 
-- observer 抛异常 → 通过 owner 的任务结果上报，观察保持存活，下次变化会重试
+- 首次 observer 抛异常 → `observe()` 释放已创建资源并直接拒绝构造
+- 后续 observer 抛异常 → 释放本次子 Lifetime，通过 owner 的任务结果上报，并永久停止观察
 - 释放旧子 Lifetime 失败 → 观察**永久停止**并释放订阅，因为无法确认旧资源是否真的释放了
 - 变化通知在观察还在处理上一次时到达 → 合并，只用最新值重建一次
+
+永久停止也是一个真正的终态：观察会立即撤销对 source、observer 与最后值的引用。owner 中留下的 cleanup 只持有一个无状态终态壳，不会把已经停止的数据流保活到整个 Instance 结束。
 
 ## 两个观察源，两种用法
 
@@ -183,7 +188,7 @@ snapshot.installations.get(id)?.lifetime?.get()
 它们都能直接喂给 `observe()`：
 
 ```ts
-observe(ctx.routes, ctx, (routes, lifetime) => {
+observe(ctx, ctx.routes, (routes, lifetime) => {
   const router = buildRouter(routes)
   lifetime.cleanup(() => router.close())
 })

@@ -124,6 +124,39 @@ describe("plugin groups", () => {
     await host.stop();
   });
 
+  it("revokes every operation on an open ChangeSet when its Group is removed", async () => {
+    const plugin = definePlugin({ name: "group.revoked-draft", setup() {} });
+    const host = createHost();
+    const group = host.group("revoked-draft", () => {});
+    const installation = group.install(plugin);
+    await host.start();
+    const change = group.change();
+
+    await group.remove();
+
+    expect(() => change.install(plugin)).toThrowError(
+      expect.objectContaining({ code: "GROUP_REMOVED" }),
+    );
+    expect(() => change.update(installation, { plugin })).toThrowError(
+      expect.objectContaining({ code: "GROUP_REMOVED" }),
+    );
+    await expect(change.commit()).rejects.toMatchObject({ code: "GROUP_REMOVED" });
+    await host.stop();
+  });
+
+  it("serializes an empty ChangeSet behind an earlier Group removal", async () => {
+    const host = createHost();
+    const group = host.group("empty-after-removal", () => {});
+    const stale = group.change();
+
+    const removal = group.remove();
+    const committing = stale.commit();
+
+    await expect(committing).rejects.toMatchObject({ code: "GROUP_REMOVED" });
+    await removal;
+    expect(group.status).toBe("removed");
+  });
+
   it("rolls back a failed live group without stopping unrelated plugins", async () => {
     let rootStarts = 0;
     let rootStops = 0;

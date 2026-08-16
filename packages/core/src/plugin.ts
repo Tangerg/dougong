@@ -11,6 +11,7 @@ import {
 import type { ContributionView } from "./contribution-store";
 import type { InstanceMeta, LifetimeOperations, Logger } from "./lifetime";
 import type { Awaitable } from "./resource";
+import { assertPlainRecord } from "./record";
 
 export type { Awaitable } from "./resource";
 
@@ -74,6 +75,7 @@ const reservedContextKeys = new Set([
   "emit",
   "contribute",
 ]);
+const pluginFields = new Set(["name", "config", "requires", "provides", "setup"]);
 
 interface PluginContractDeclaration {
   readonly alias: string;
@@ -89,21 +91,31 @@ export function definePlugin<
 >(
   plugin: Plugin<Config, Requires, Provides, ConfigInput>,
 ): Plugin<Config, Requires, Provides, ConfigInput> {
-  if (typeof plugin?.name !== "string" || !plugin.name.trim()) {
+  assertPluginRecord(plugin);
+  const name = Object.hasOwn(plugin, "name") ? plugin.name : undefined;
+  const config = Object.hasOwn(plugin, "config") ? plugin.config : undefined;
+  const declaredRequirements = Object.hasOwn(plugin, "requires") ? plugin.requires : undefined;
+  const declaredProvisions = Object.hasOwn(plugin, "provides") ? plugin.provides : undefined;
+  const setup = Object.hasOwn(plugin, "setup") ? plugin.setup : undefined;
+  if (typeof name !== "string" || !name.trim()) {
     throw new TypeError("Plugin name must be a non-empty string");
   }
-  if (plugin.name !== plugin.name.trim()) {
+  if (name !== name.trim()) {
     throw new TypeError("Plugin name cannot start or end with whitespace");
   }
-  if (typeof plugin.setup !== "function") {
-    throw new TypeError(`Plugin '${plugin.name}' must define setup()`);
+  if (typeof setup !== "function") {
+    throw new TypeError(`Plugin '${name}' must define setup()`);
   }
-  if (plugin.config !== undefined && typeof plugin.config["~standard"]?.validate !== "function") {
-    throw new TypeError(`Plugin '${plugin.name}' config must implement Standard Schema`);
+  if (config !== undefined && !isStandardSchemaV1(config)) {
+    throw new TypeError(`Plugin '${name}' config must implement Standard Schema V1`);
   }
+  assertContractRecord(declaredRequirements, name, "requires");
+  assertContractRecord(declaredProvisions, name, "provides");
+  const requires = declaredRequirements ? Object.freeze({ ...declaredRequirements }) : undefined;
+  const provides = declaredProvisions ? Object.freeze({ ...declaredProvisions }) : undefined;
 
   const contracts = new Map<string, PluginContractDeclaration>();
-  for (const [key, requirement] of Object.entries(plugin.requires ?? {})) {
+  for (const [key, requirement] of Object.entries(requires ?? {})) {
     if (!key.trim()) throw new TypeError("Plugin requirement alias cannot be empty");
     if (key !== key.trim()) {
       throw new TypeError("Plugin requirement alias cannot start or end with whitespace");
@@ -123,7 +135,7 @@ export function definePlugin<
       throw new TypeError(`Plugin requirement '${key}' must be a Service or ExtensionPoint`);
     }
     rememberPluginContract(
-      plugin.name,
+      name,
       contracts,
       "requirement",
       key,
@@ -131,7 +143,7 @@ export function definePlugin<
     );
   }
 
-  for (const [key, provision] of Object.entries(plugin.provides ?? {})) {
+  for (const [key, provision] of Object.entries(provides ?? {})) {
     if (!key.trim()) throw new TypeError("Plugin provision alias cannot be empty");
     if (key !== key.trim()) {
       throw new TypeError("Plugin provision alias cannot start or end with whitespace");
@@ -139,17 +151,41 @@ export function definePlugin<
     if (!isContract(provision, "service")) {
       throw new TypeError(`Plugin provision '${key}' must be a Service`);
     }
-    rememberPluginContract(plugin.name, contracts, "provision", key, provision);
+    rememberPluginContract(name, contracts, "provision", key, provision);
   }
 
-  const requires = plugin.requires ? Object.freeze({ ...plugin.requires }) : undefined;
-  const provides = plugin.provides ? Object.freeze({ ...plugin.provides }) : undefined;
-
   return Object.freeze({
-    ...plugin,
+    name,
+    ...(config === undefined ? {} : { config }),
     ...(requires ? { requires } : {}),
     ...(provides ? { provides } : {}),
+    setup,
   });
+}
+
+function assertPluginRecord(value: unknown): asserts value is Record<string, unknown> {
+  assertPlainRecord(value, "Plugin declaration", { fields: pluginFields });
+}
+
+function isStandardSchemaV1(value: unknown): value is StandardSchemaV1 {
+  if (!value || (typeof value !== "object" && typeof value !== "function")) return false;
+  const standard = (value as { readonly "~standard"?: unknown })["~standard"];
+  if (!standard || typeof standard !== "object") return false;
+  const candidate = standard as {
+    readonly version?: unknown;
+    readonly vendor?: unknown;
+    readonly validate?: unknown;
+  };
+  return (
+    candidate.version === 1 &&
+    typeof candidate.vendor === "string" &&
+    typeof candidate.validate === "function"
+  );
+}
+
+function assertContractRecord(value: unknown, pluginName: string, field: "requires" | "provides") {
+  if (value === undefined) return;
+  assertPlainRecord(value, `Plugin '${pluginName}' ${field}`);
 }
 
 function rememberPluginContract(

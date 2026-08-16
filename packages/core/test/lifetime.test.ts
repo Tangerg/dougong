@@ -4,12 +4,32 @@ import {
   definePlugin,
   event,
   extensionPoint,
+  isCancellationReason,
   type Contribution,
   type LifetimeContext,
   type Task,
 } from "../src/index";
 
 describe("structured lifetime", () => {
+  it("classifies only canonical cancellation reasons after the signal aborts", () => {
+    const controller = new AbortController();
+    const reason = new Error("cancelled");
+
+    expect(() => isCancellationReason(null as never, reason)).toThrow(
+      "Cancellation classifier expects an AbortSignal",
+    );
+    expect(() => isCancellationReason({ aborted: false } as never, reason)).toThrow(
+      "Cancellation classifier expects an AbortSignal",
+    );
+    expect(isCancellationReason(controller.signal, reason)).toBe(false);
+    controller.abort(reason);
+    expect(isCancellationReason(controller.signal, reason)).toBe(true);
+    expect(isCancellationReason(controller.signal, new DOMException("late", "AbortError"))).toBe(
+      true,
+    );
+    expect(isCancellationReason(controller.signal, new Error("late failure"))).toBe(false);
+  });
+
   it("detaches settled tasks while still aborting and awaiting live tasks", async () => {
     let completed!: Task;
     let completedSignal!: AbortSignal;

@@ -41,7 +41,7 @@ host.install(database)
 await host.start()
 ```
 
-不使用 Service Locator、环境作用域、原型链注入或 Proxy。运行时依赖只有 `@standard-schema/spec`（类型契约）。
+不使用 Service Locator、环境作用域、原型链注入或 Proxy。唯一包依赖 `@standard-schema/spec` 只提供类型契约，不进入运行时 bundle。
 
 ### 环境要求
 
@@ -87,7 +87,7 @@ host.install(database)
 await host.start()
 ```
 
-No service locator, ambient scope, prototype-chain injection or proxy. The only runtime dependency is `@standard-schema/spec` (a type contract).
+No service locator, ambient scope, prototype-chain injection or proxy. The only package dependency, `@standard-schema/spec`, supplies types and does not enter the runtime bundle.
 
 ### Requirements
 

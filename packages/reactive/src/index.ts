@@ -23,6 +23,9 @@ export {
 } from "./observe";
 
 type Listener = () => void;
+interface ListenerSlot {
+  listener: Listener | undefined;
+}
 type ReactiveNode = {
   readonly version: number;
   refresh(): void;
@@ -35,7 +38,7 @@ type Dependency = {
 };
 
 let batchDepth = 0;
-let pendingListeners: Set<Listener> | undefined;
+let pendingSlots: Set<ListenerSlot> | undefined;
 let activeCollector: ((source: ReadonlySignal<unknown>) => void) | undefined;
 const nodes = new WeakMap<ReadonlySignal<unknown>, ReactiveNode>();
 
@@ -65,31 +68,37 @@ class ReactiveSubscription implements Disposable {
 function flushPendingListeners() {
   const errors: unknown[] = [];
 
-  while (pendingListeners?.size) {
-    const listeners = pendingListeners;
-    pendingListeners = new Set();
+  while (pendingSlots?.size) {
+    const slots = pendingSlots;
+    pendingSlots = new Set();
 
-    collectListenerFailures(listeners, errors);
+    // A batch coalesces work by callback, but each slot remains the authority
+    // to withdraw its subscription until that callback's notification turn.
+    notifySlots(slots, errors, true);
   }
 
-  pendingListeners = undefined;
+  pendingSlots = undefined;
   throwListenerFailures(errors);
 }
 
-function publish(listeners: ReadonlySet<Listener>) {
+function publish(slots: ReadonlySet<ListenerSlot>) {
   if (batchDepth) {
-    const pending = (pendingListeners ??= new Set());
-    for (const listener of listeners) pending.add(listener);
+    const pending = (pendingSlots ??= new Set());
+    for (const slot of slots) pending.add(slot);
     return;
   }
 
   const errors: unknown[] = [];
-  collectListenerFailures([...listeners], errors);
+  notifySlots(slots, errors, false);
   throwListenerFailures(errors);
 }
 
-function collectListenerFailures(listeners: Iterable<Listener>, errors: unknown[]) {
-  for (const listener of listeners) {
+function notifySlots(slots: Iterable<ListenerSlot>, errors: unknown[], coalesce: boolean) {
+  const notified = coalesce ? new Set<Listener>() : undefined;
+  for (const slot of slots) {
+    const listener = slot.listener;
+    if (!listener || notified?.has(listener)) continue;
+    notified?.add(listener);
     try {
       listener();
     } catch (error) {
@@ -142,7 +151,7 @@ export function batch<T>(callback: () => T): T {
 export function signal<T>(initialValue: T): Signal<T> {
   let value = initialValue;
   let version = 0;
-  const listeners = new Set<Listener>();
+  const listeners = new Set<ListenerSlot>();
 
   const source = {
     get() {
@@ -160,8 +169,12 @@ export function signal<T>(initialValue: T): Signal<T> {
 
     subscribe(listener) {
       assertListener(listener);
-      listeners.add(listener);
-      return createSubscription(() => listeners.delete(listener));
+      const slot: ListenerSlot = { listener };
+      listeners.add(slot);
+      return createSubscription(() => {
+        slot.listener = undefined;
+        listeners.delete(slot);
+      });
     },
   } as Signal<T>;
 
@@ -185,7 +198,7 @@ type ComputedValue<T> =
 
 class ComputedNode<T> implements ReactiveNode {
   readonly #calculate: () => T;
-  readonly #listeners = new Set<Listener>();
+  readonly #listeners = new Set<ListenerSlot>();
   readonly #dependencies = new Map<ReadonlySignal<unknown>, Dependency>();
   #value: ComputedValue<T> = { phase: "uninitialized" };
   #evaluating = false;
@@ -218,22 +231,24 @@ class ComputedNode<T> implements ReactiveNode {
 
   #subscribe(listener: Listener) {
     assertListener(listener);
+    const slot: ListenerSlot = { listener };
     const wasUnobserved = this.#listeners.size === 0;
-    this.#listeners.add(listener);
+    this.#listeners.add(slot);
 
     if (wasUnobserved) {
       try {
         this.#dirty = true;
         this.#evaluate();
       } catch (error) {
-        this.#listeners.delete(listener);
+        this.#listeners.delete(slot);
         if (!this.#listeners.size) this.#detachDependencies();
         throw error;
       }
     }
 
     return createSubscription(() => {
-      this.#listeners.delete(listener);
+      slot.listener = undefined;
+      this.#listeners.delete(slot);
       if (!this.#listeners.size) this.#detachDependencies();
     });
   }

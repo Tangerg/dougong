@@ -21,39 +21,48 @@ export type Observer<T, Child extends ObservationLifetime> = (value: T, lifetime
 
 type ObservedValue<T> = { readonly present: false } | { readonly present: true; readonly value: T };
 
+interface ObservationBinding<T, Child extends ObservationLifetime> {
+  readonly owner: ObservationOwner<Child>;
+  readonly source: Readable<T>;
+  readonly observer: Observer<T, Child>;
+}
+
+type ObservationState<T, Child extends ObservationLifetime> =
+  | {
+      readonly phase: "active";
+      readonly binding: ObservationBinding<T, Child>;
+    }
+  | { readonly phase: "stopped" | "disposed" };
+
 class Observation<T, Child extends ObservationLifetime> implements Disposable {
-  readonly #owner: ObservationOwner<Child>;
-  readonly #source: Readable<T>;
-  readonly #observer: Observer<T, Child>;
+  #state: ObservationState<T, Child>;
   #subscription: Disposable | undefined;
   #current: Child | undefined;
   #observed: ObservedValue<T> = { present: false };
   #dirty = false;
-  #phase: "active" | "stopped" | "disposed" = "active";
   #drainTask: ObservationTask | undefined;
   #wakeDrain: (() => void) | undefined;
   #disposePromise: Promise<void> | undefined;
 
   constructor(owner: ObservationOwner<Child>, source: Readable<T>, observer: Observer<T, Child>) {
-    this.#owner = owner;
-    this.#source = source;
-    this.#observer = observer;
+    this.#state = { phase: "active", binding: { owner, source, observer } };
   }
 
   start() {
-    const value = this.#source.get();
-    const current = this.#owner.lifetime("observation");
+    const { owner, source } = this.#requireBinding();
+    const value = source.get();
+    const current = owner.lifetime("observation");
     assertObservationLifetime(current);
     this.#current = current;
 
-    const subscription = this.#source.subscribe(() => this.#invalidate());
+    const subscription = source.subscribe(() => this.#invalidate());
     assertDisposable(subscription, "Readable.subscribe()");
     this.#subscription = subscription;
 
     this.#invokeObserver(value, current);
     this.#observed = { present: true, value };
 
-    const runner = this.#owner.spawn((signal) => this.#drain(signal));
+    const runner = owner.spawn((signal) => this.#drain(signal));
     assertObservationTask(runner);
     this.#drainTask = runner;
     void runner.result.then(
@@ -66,7 +75,7 @@ class Observation<T, Child extends ObservationLifetime> implements Disposable {
     if (this.#disposePromise) return this.#disposePromise;
     const completion = Promise.withResolvers<void>();
     this.#disposePromise = completion.promise;
-    this.#phase = "disposed";
+    this.#releaseBinding("disposed");
     this.#wakeDrain?.();
     void this.#disposeResources().then(completion.resolve, completion.reject);
     return completion.promise;
@@ -82,28 +91,30 @@ class Observation<T, Child extends ObservationLifetime> implements Disposable {
   }
 
   #invalidate() {
-    if (this.#phase !== "active") return;
+    if (this.#state.phase !== "active") return;
     this.#dirty = true;
     this.#wakeDrain?.();
   }
 
   async #drain(signal: AbortSignal) {
     try {
-      while (this.#phase === "active" && !signal.aborted) {
+      while (this.#state.phase === "active" && !signal.aborted) {
         await this.#waitForInvalidation(signal);
-        while (this.#phase === "active" && !signal.aborted && this.#dirty) {
+        while (this.#state.phase === "active" && !signal.aborted && this.#dirty) {
           this.#dirty = false;
           await this.#replaceCurrent();
         }
       }
     } catch (error) {
-      if (this.#phase === "stopped") throw error;
+      if (this.#state.phase !== "active") throw error;
       await this.#stop([error], "Observation stopped after a replacement failed");
     }
   }
 
   #waitForInvalidation(signal: AbortSignal) {
-    if (this.#dirty || this.#phase !== "active" || signal.aborted) return Promise.resolve();
+    if (this.#dirty || this.#state.phase !== "active" || signal.aborted) {
+      return Promise.resolve();
+    }
     return new Promise<void>((resolve) => {
       const wake = () => {
         signal.removeEventListener("abort", wake);
@@ -112,13 +123,13 @@ class Observation<T, Child extends ObservationLifetime> implements Disposable {
       };
       this.#wakeDrain = wake;
       signal.addEventListener("abort", wake, { once: true });
-      if (this.#dirty || this.#phase !== "active" || signal.aborted) wake();
+      if (this.#dirty || this.#state.phase !== "active" || signal.aborted) wake();
     });
   }
 
   async #replaceCurrent() {
-    if (this.#phase !== "active") return;
-    const value = this.#source.get();
+    if (this.#state.phase !== "active") return;
+    const value = this.#state.binding.source.get();
     if (this.#observed.present && Object.is(value, this.#observed.value)) return;
 
     const previous = this.#takeCurrent();
@@ -126,6 +137,7 @@ class Observation<T, Child extends ObservationLifetime> implements Disposable {
       try {
         await previous.dispose();
       } catch (error) {
+        if (this.#state.phase !== "active") throw error;
         return this.#stop(
           [error],
           "Observation stopped because the previous lifetime could not be disposed",
@@ -133,16 +145,24 @@ class Observation<T, Child extends ObservationLifetime> implements Disposable {
       }
     }
     this.#observed = { present: false };
-    if (this.#phase !== "active") return;
+    if (this.#state.phase !== "active") return;
 
-    const current = this.#owner.lifetime("observation");
+    const current = this.#state.binding.owner.lifetime("observation");
     assertObservationLifetime(current);
+    this.#current = current;
     try {
       this.#invokeObserver(value, current);
     } catch (error) {
+      const failed = this.#takeCurrent();
       try {
-        await current.dispose();
+        if (failed) await failed.dispose();
       } catch (cleanupError) {
+        if (this.#state.phase !== "active") {
+          throw new AggregateError(
+            [error, cleanupError],
+            "Observation callback failed and its resources could not be cleaned up",
+          );
+        }
         return this.#stop(
           [error, cleanupError],
           "Observation callback failed and its resources could not be cleaned up",
@@ -151,12 +171,12 @@ class Observation<T, Child extends ObservationLifetime> implements Disposable {
       throw error;
     }
 
-    this.#current = current;
+    if (this.#state.phase !== "active") return;
     this.#observed = { present: true, value };
   }
 
   #invokeObserver(value: T, lifetime: Child) {
-    const result: unknown = this.#observer(value, lifetime);
+    const result: unknown = this.#requireBinding().observer(value, lifetime);
     assertSynchronous(result, "Observers must be synchronous; use lifetime.spawn() for async work");
   }
 
@@ -183,12 +203,24 @@ class Observation<T, Child extends ObservationLifetime> implements Disposable {
   }
 
   async #stop(errors: unknown[], message: string): Promise<never> {
-    this.#phase = "stopped";
+    this.#releaseBinding("stopped");
     this.#wakeDrain?.();
     await collect(this.#takeSubscription(), errors);
     await collect(this.#takeCurrent(), errors);
     if (errors.length === 1) throw errors[0];
     throw new AggregateError(errors, message);
+  }
+
+  #requireBinding() {
+    const state = this.#state;
+    if (state.phase !== "active") throw new Error("Observation is not active");
+    return state.binding;
+  }
+
+  #releaseBinding(phase: "stopped" | "disposed") {
+    this.#state = { phase };
+    this.#observed = { present: false };
+    this.#dirty = false;
   }
 }
 
