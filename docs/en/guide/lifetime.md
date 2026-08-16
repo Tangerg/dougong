@@ -44,7 +44,7 @@ Property 3 matters in practice: a long-running plugin that repeatedly creates an
 
 ## Releasing early
 
-Every releasable resource implements the same `Disposable` protocol:
+Every releasable resource uses the same `dispose()` operation. Synchronous resources implement `Disposable`; resources that must be awaited implement `AsyncDisposable`:
 
 ```ts
 const subscription = ctx.on(TICK, handler)
@@ -59,12 +59,18 @@ await cleanup.dispose()         // run fn early (exactly once)
 
 `dispose()` is **idempotent**: calling it again neither repeats the cleanup nor throws. Stopping the plugin will not run an already-released item a second time.
 
-`using` works too (requires `ESNext.Disposable`):
+`using` and `await using` work too (requires `ESNext.Disposable`):
 
 ```ts
-setup(ctx) {
-  using subscription = ctx.on(TICK, handler)
-  // disposed at the end of the block
+async function listenDuring(session) {
+  using subscription = session.on(TICK, handler)
+  await session.emit(TICK, undefined)
+  // disposed when the function exits
+}
+
+async function run(ctx) {
+  await using session = ctx.lifetime("session")
+  // fully released before the block exits
 }
 ```
 

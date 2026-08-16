@@ -43,7 +43,7 @@ setup(ctx) {
 
 ## 提前释放
 
-每个可释放资源都实现同一个 `Disposable` 协议：
+每个可释放资源都使用同一个 `dispose()` 操作；同步资源实现 `Disposable`，需要等待的资源实现 `AsyncDisposable`：
 
 ```ts
 const subscription = ctx.on(TICK, handler)
@@ -58,12 +58,18 @@ await cleanup.dispose()         // 提前执行 fn（只会执行一次）
 
 `dispose()` 是**幂等**的：重复调用不会重复执行清理，也不会抛错。Instance 停止时不会再执行一遍已经释放的项。
 
-同时支持 `using` 语法（需要 `ESNext.Disposable`）：
+同时支持 `using` / `await using` 语法（需要 `ESNext.Disposable`）：
 
 ```ts
-setup(ctx) {
-  using subscription = ctx.on(TICK, handler)
-  // 块结束时自动 dispose
+async function listenDuring(session) {
+  using subscription = session.on(TICK, handler)
+  await session.emit(TICK, undefined)
+  // 函数结束时自动 dispose
+}
+
+async function run(ctx) {
+  await using session = ctx.lifetime("session")
+  // 块结束时等待 session 完整释放
 }
 ```
 

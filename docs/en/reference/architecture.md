@@ -61,7 +61,7 @@ A zero-dependency value layer providing:
 
 Core does not import reactive. The two compose through the structural `get()/subscribe()` protocol and the Lifetime object protocol, which also lets third-party observables plug in.
 
-Minimal protocols such as `Disposable` are declared separately in both foundation packages. They carry no state or implementation, and TypeScript makes them interoperate structurally. This is deliberate duplication of a protocol declaration, traded for zero dependencies in both directions. The single-path principle forbids duplicated state machines and execution semantics, not shared type sources between independent foundation packages.
+Minimal protocols such as `Disposable` / `AsyncDisposable` are declared separately in both foundation packages. They carry no state or implementation, and TypeScript makes them interoperate structurally. This is deliberate duplication of a protocol declaration, traded for zero dependencies in both directions. The single-path principle forbids duplicated state machines and execution semantics, not shared type sources between independent foundation packages.
 
 ### `@dougongjs/platform`
 
@@ -397,22 +397,17 @@ Changing provider contributions never restarts the player; the player subscribes
 
 Group removal handles installation ownership; a workspace ID inside domain values handles data selection. Two clear responsibilities, no implicit scope.
 
-## 13. The dependency-direction gate
+## 13. These constraints are enforced by the gate
 
-`scripts/check-layers.mjs` turns the following rules into CI failures:
+An architectural constraint that exists only in prose degrades into a suggestion within months. Every relationship this document describes — layering direction, single path, ownership, vocabulary — has a matching mechanical check, and `pnpm check` aborts on the first of its ten steps to fail.
 
-- core and reactive never import each other
-- platform is never depended on in reverse by core or reactive
-- the facade may only re-export
-- examples may only be the outermost consumer; no package may depend on it in reverse
-- modules inside Core/Platform may only import strictly lower ranks
-- Core/Platform sources import no Node built-ins
-- source code reads no hidden clock or entropy
-- diagnostics never call console directly
-- a Lifetime may only be constructed by Engine and Lifetime itself
-- no circular dependencies
+Three families are worth naming here, because they map directly onto the arguments above:
 
-An architectural constraint that exists only in prose degrades into a suggestion within months. Dougong hands the mechanically decidable part to tooling.
+- **Import direction** (section 2) — package-level direction plus the module rank table, checked in both directions: a new module without a rank fails, and a rank without a source file fails too.
+- **Single path** (section 4.2) — a set of **inverted rules**. Not "do not write X" but "**you must** write X". Host and Platform command serialization must use the same `SerialQueue`; Platform diagnostics must compile to `SnapshotPublisher`; Platform declaration validation must reuse `assertPlainRecord`. An absence means somebody started a second state machine.
+- **Ownership** (section 7) — `new Lifetime(...)` may appear only in `Runtime` and in `Lifetime` itself; anywhere else produces a resource tree nobody disposes.
+
+For the complete list, what each rule prevents, and the three-step procedure for adding a guard (write the gate first → watch it fail → reverse-verify), see [Mechanical guards](./guards.md).
 
 ## 14. Long-term criteria
 

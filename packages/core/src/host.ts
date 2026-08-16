@@ -13,8 +13,7 @@ import { SerialQueue } from "./serial-queue";
 import type { SnapshotView } from "./snapshot-view";
 import { assertPlainRecord } from "./record";
 
-export type { InstallationStatus } from "./installation";
-export type { GroupStatus } from "./group";
+export type { LifecycleStatus } from "./lifecycle-status";
 export type { HostSnapshot, HostStatus, GroupSnapshot, InstallationSnapshot } from "./diagnostics";
 export type {
   Host,

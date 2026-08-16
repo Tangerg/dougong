@@ -1,7 +1,7 @@
 import type { Disposable, Readable } from "./protocol";
 import { assertSynchronous } from "./sync-result";
 
-export type { Disposable, Readable } from "./protocol";
+export type { AsyncDisposable, Disposable, Readable } from "./protocol";
 
 declare const dougongSignal: unique symbol;
 
@@ -72,9 +72,7 @@ function flushPendingListeners() {
     const slots = pendingSlots;
     pendingSlots = new Set();
 
-    // A batch coalesces work by callback, but each slot remains the authority
-    // to withdraw its subscription until that callback's notification turn.
-    notifySlots(slots, errors, true);
+    notifySlots(slots, errors);
   }
 
   pendingSlots = undefined;
@@ -89,16 +87,14 @@ function publish(slots: ReadonlySet<ListenerSlot>) {
   }
 
   const errors: unknown[] = [];
-  notifySlots(slots, errors, false);
+  notifySlots(slots, errors);
   throwListenerFailures(errors);
 }
 
-function notifySlots(slots: Iterable<ListenerSlot>, errors: unknown[], coalesce: boolean) {
-  const notified = coalesce ? new Set<Listener>() : undefined;
+function notifySlots(slots: Iterable<ListenerSlot>, errors: unknown[]) {
   for (const slot of slots) {
     const listener = slot.listener;
-    if (!listener || notified?.has(listener)) continue;
-    notified?.add(listener);
+    if (!listener) continue;
     try {
       listener();
     } catch (error) {

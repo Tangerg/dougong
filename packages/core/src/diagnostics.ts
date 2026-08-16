@@ -1,6 +1,7 @@
 import type { GroupNode } from "./group";
+import type { InstallationRecord } from "./installation";
 import type { LifetimeSnapshot } from "./lifetime";
-import type { InstallationRecord, InstallationStatus } from "./installation";
+import type { LifecycleStatus } from "./lifecycle-status";
 import { ReadonlyMapSnapshot } from "./readonly-map";
 import { SnapshotPublisher, type SnapshotView } from "./snapshot-view";
 
@@ -10,7 +11,7 @@ export interface InstallationSnapshot {
   readonly id: string;
   readonly pluginName: string;
   readonly groupId: string;
-  readonly status: InstallationStatus;
+  readonly status: LifecycleStatus;
   readonly requires: ReadonlyArray<string>;
   readonly provides: ReadonlyArray<string>;
   readonly lifetime?: SnapshotView<LifetimeSnapshot>;

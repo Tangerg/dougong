@@ -138,13 +138,13 @@ TypeScript 消费者的 `tsconfig.json` 需要：
 
 ```sh
 pnpm install
-pnpm check      # 9 步验证门禁
+pnpm check      # 10 步验证门禁
 pnpm docs:dev   # 本地文档站
 ```
 
-`pnpm check` 依次执行：类型检查 → lint → 格式检查 → 测试与覆盖率 → 死代码检查 → 循环依赖检查 → 架构层级检查 → 发布构建 → 文档构建。
+`pnpm check` 依次执行：类型检查 → lint → 格式检查 → 测试与覆盖率 → 死代码检查 → 循环依赖检查 → 架构层级检查 → 发布构建 → 公共声明面检查 → 文档构建。
 
-架构约束不只写在文档里：`scripts/check-layers.mjs` 把包依赖方向、模块层级、"Platform 必须复用 Core 的观察协议"等规则变成 CI 失败。
+架构约束不只写在文档里。包依赖方向、模块 rank、固定 Contract ID 唯一性、退役词汇，以及一组**反向规则**（例如「Platform 命令串行化必须用 Core 的 `SerialQueue`」——缺了就说明有人另起了一条状态机）都会变成 CI 失败。完整清单见[机械守卫](https://tangerg.github.io/dougong/reference/guards)。
 
 ## 状态
 

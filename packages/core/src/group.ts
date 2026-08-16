@@ -13,8 +13,6 @@ type GroupConfigurationState<Draft> =
     }
   | { readonly phase: "sealed" };
 
-export type GroupStatus = "pending" | "active" | "stopping" | "failed" | "removed";
-
 /** One explicit transaction shared by every nested Group configure callback. */
 export class GroupConfigurationSession<Draft> {
   #state: GroupConfigurationState<Draft>;

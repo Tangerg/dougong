@@ -231,6 +231,8 @@ Planet 式媒体源、Lynx Desktop 式命令/菜单/面板分别是 ExtensionPoi
 - Platform `apiVersion`、`status` 和单调 `revision`；
 - 每个 Registration 的 `manifestName`、`version`、`status`、`activation`、`permissions`、`dependencies` 与已规范化为 `Error` 的最近失败。
 
+相关公开类型各有一个职责：`Platform` 是控制协议，`PlatformOptions` 是构造边界，`PlatformChangeSet` 是一次性结构变更；`PlatformStatus` / `PlatformSnapshot` 描述整体状态与诊断，`RegistrationStatus` / `RegistrationSnapshot` 描述单个稳定 Registration。它们不暴露 Activator、候选图或 Core Installation。
+
 快照、条目和数组冻结，Map 不暴露可变方法。`subscribe()` 只发送未来失效通知，调用方收到后重新 `get()`。诊断订阅者失败经 Platform Logger 上报，不会改变注册或激活结果。
 
 Platform 不实现另一套观察器；它把不可变 PlatformSnapshot 提交给 Core 的 `SnapshotPublisher`。Platform 成功释放后，已经取得的历史 view 停在 `disposed` 终态，现有订阅被摘除，且 reader、Logger 和 Platform owner 都被切断。

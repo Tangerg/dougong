@@ -32,6 +32,7 @@ One abstraction layer and one semantic allow exactly one canonical entry point. 
 | Create a child lifetime | `lifetime(label)` | `child` / `scope` / `fiber` |
 | Start a background task | `spawn()` | `run` / `fork` / `task` |
 | Classify cancellation | `isCancellationReason()` | checking only `signal.aborted` / matching only an error name |
+| Validate declaration records | `assertPlainRecord()` | copied prototype / own-key checks in higher layers |
 | Read a live value | `get()` | `.value` / a function call / `getSnapshot()` |
 | Subscribe to change | `subscribe()` | `watch` / `listen` / `observeChanges` |
 | Update an Installation | `update()` | `replace` / `reload` / `restart` |
@@ -39,6 +40,8 @@ One abstraction layer and one semantic allow exactly one canonical entry point. 
 | Release a resource | `dispose()` | `close` / `destroy` / `off` |
 
 `host.install()`, `installation.update()` and `installation.remove()` are single-target sugar: internally each creates a one-shot ChangeSet and commits it. They own no second validation, queue or rollback logic.
+
+`assertPlainRecord(value, label, { fields, createError })` is the shared declaration boundary for Core and higher layers. It accepts only records whose prototype is `Object.prototype` or `null`, never reads inherited properties, and rejects arrays, symbol keys, non-enumerable own keys and fields outside `fields`. It throws `TypeError` by default; a higher layer with a structured error taxonomy may use `createError(message)` to preserve its own error type without copying the validation algorithm.
 
 ### 1.2 Composition closure
 
@@ -73,6 +76,26 @@ Any relationship that changes capability resolution, lifetime ownership or execu
 - Domain configuration is composed through plugin config, method parameters or an explicit adapter Service — never a global interception chain, a proxy shadow or prototype-chain override.
 
 "Convention defaults" may reduce boilerplate but may not change the semantics above. If deleting a declaration still leaves Core guessing the relationship from the environment, the abstraction has become too implicit.
+
+### 1.5 Public protocols and utility types
+
+Public types exist for downstream composition, not as implementation residue:
+
+| Export | Precise responsibility |
+| --- | --- |
+| `Service`, `ExtensionPoint`, `Event`, `OptionalService`, `Requirement` | the three Contract identities and optional Service dependencies |
+| `ContractKind`, `ContractValue` | the Contract-kind union and value-type extraction |
+| `Plugin`, `PluginContext`, `Awaitable` | Plugin declaration, setup context and sync/async return boundary |
+| `Requirements`, `ResolvedRequirement`, `ResolvedRequirements` | declared dependency maps and their resolved value types |
+| `Provisions`, `ProvidedServices` | Service provision declarations and setup return types |
+| `Host`, `HostOptions`, `HostStatus`, `HostSnapshot` | execution boundary, construction options, status and diagnostic snapshot |
+| `ChangeSet`, `Group`, `InstallationUpdate`, `LifecycleStatus` | transactions, structural ownership, installation updates and the shared Group/Installation lifecycle |
+| `GroupSnapshot`, `SnapshotView` | structural diagnostic entries and the unified read-only observation protocol |
+| `LifetimeContext`, `LifetimeOperations`, `LifetimePhase` | the full Lifetime context, its composable operations and diagnostic phase |
+| `Task`, `BackgroundTask`, `Cleanup` | owned tasks, task callbacks and cleanup callbacks |
+| `Disposable`, `AsyncDisposable` | strict synchronous and asynchronous release protocols for `using` and `await using` |
+| `EventListener` | the Event listener signature |
+| `Logger`, `isLogger` | the diagnostic output port and its sole runtime classifier |
 
 ## 2. The capability algebra
 
@@ -445,19 +468,23 @@ An Event is a fact, not state, so an `emit()` is not itself rollback-able. Exter
 
 Every Instance inherently owns a root Lifetime. All listeners, contributions, subscriptions, tasks, child Lifetimes and cleanups created through the context belong to it automatically.
 
-The uniform resource protocol:
+Release has one operation, `dispose()`, while two strict protocols make its timing explicit:
 
 ```ts
 interface Disposable {
-  dispose(): void | Promise<void>
-  [Symbol.dispose]?(): void
-  [Symbol.asyncDispose]?(): Promise<void>
+  dispose(): void
+  [Symbol.dispose](): void
+}
+
+interface AsyncDisposable {
+  dispose(): Promise<void>
+  [Symbol.asyncDispose](): Promise<void>
 }
 ```
 
 Resources are uniformly released with `dispose()`; removing an Installation from the plan is uniformly `remove()`. The two are never interchangeable.
 
-`dispose()` is the canonical API for resource release; `Symbol.dispose` / `Symbol.asyncDispose` are only that same operation projected onto JavaScript's `using` syntax, and own no second state machine or error semantics.
+Synchronous resources work with `using`; Lifetimes, Tasks and cleanups that must be awaited work with `await using`. The symbol method is the required projection of the same `dispose()` operation onto JavaScript syntax, not an optional decoration or a second state machine.
 
 ### 9.1 cleanup
 
@@ -704,7 +731,7 @@ observe(lifetimeOwner, source, observer)
 
 - a signal holds the current value
 - computed auto-tracking applies only to synchronous, pure, lazy, cached computation
-- batch accepts only a synchronous callback and coalesces the notifications inside it
+- batch accepts only a synchronous callback and coalesces repeated notifications per subscription identity
 - observe is a higher-level Lifetime combinator: it explicitly reads one source, creates a child Lifetime for the current value, and on change releases the old child before creating the new one. The observer must be synchronous, and a failed later replacement stops the observation and releases the subscription and the current child Lifetime
 
 ```ts

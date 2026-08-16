@@ -1,9 +1,10 @@
 import type { Group, Installation } from "./host-api";
 import { discardChangeSetDraft, ChangeSetDraft, type ChangeOperation } from "./change-set";
 import { normalizeFailure } from "./errors";
-import { GroupConfigurationSession, GroupNode, type GroupStatus } from "./group";
+import { GroupConfigurationSession, GroupNode } from "./group";
 import { groupRemovedError, GroupLifecycle } from "./group-lifecycle";
 import type { InstallationRecord } from "./installation";
+import type { LifecycleStatus } from "./lifecycle-status";
 import type { ErasedPlugin, Plugin, Provisions, Requirements } from "./plugin";
 
 export interface GroupCoordinatorPort {
@@ -249,7 +250,7 @@ export class GroupCoordinator {
     });
   }
 
-  status(group: GroupNode): GroupStatus {
+  status(group: GroupNode): LifecycleStatus {
     if (!group.attached) return "removed";
     return this.#requireLifecycle(group).status(this.#contentsStatus(group));
   }
@@ -283,7 +284,7 @@ export class GroupCoordinator {
     );
   }
 
-  #contentsStatus(group: GroupNode): GroupStatus {
+  #contentsStatus(group: GroupNode): LifecycleStatus {
     const installations = this.#installationsIn(group);
     if (installations.some((installation) => installation.status === "failed")) return "failed";
     if (installations.some((installation) => installation.status === "stopping")) {

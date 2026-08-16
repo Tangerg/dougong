@@ -38,9 +38,10 @@ code, comments, error messages and documentation:
 - **runtime** — the JavaScript environment (Node, a browser, a WebView). Never called a host.
 - **`*Port`** — an internal collaborator protocol (`LifetimePort`, `ChangePort`). Never called a host either.
 
-Retired names must not return. `scripts/check-api-surface.mjs` holds the banlist
-and reads the built `dist/index.d.ts` of every package, so an `export *` cannot
-smuggle one back in.
+Retired names must not return. `scripts/vocabulary.mjs` holds the banlist;
+`check-layers.mjs` checks source tokens, while `check-api-surface.mjs` checks
+built declarations and code-shaped Markdown, so neither an `export *` nor stale
+documentation can smuggle one back in.
 
 ## Project philosophy
 

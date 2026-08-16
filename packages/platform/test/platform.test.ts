@@ -106,6 +106,21 @@ describe("Platform", () => {
     expect(host.diagnostics.get().installations.size).toBe(0);
   });
 
+  it("supports await using as its terminal ownership boundary", async () => {
+    const host = createHost();
+
+    {
+      await using platform = createPlatform({
+        installer: host,
+        apiVersion: "1.0.0",
+        loader: new MemoryLoader(new Map()),
+      });
+      expect(platform.status).toBe("active");
+    }
+
+    expect(host.diagnostics.get().installations.size).toBe(0);
+  });
+
   it("validates activation event names before dispatch", async () => {
     const platform = createPlatform({
       installer: createHost(),
@@ -142,10 +157,11 @@ describe("Platform", () => {
     expect(Object.isFrozen(registration)).toBe(true);
     expect(Object.isFrozen(platform)).toBe(true);
     expect(registration.status).toBe("pending");
-    const diagnosticSubscription = platform.diagnostics.subscribe(() => undefined);
-    expect("notify" in diagnosticSubscription).toBe(false);
-    expect("close" in diagnosticSubscription).toBe(false);
-    diagnosticSubscription[Symbol.dispose]?.();
+    {
+      using diagnosticSubscription = platform.diagnostics.subscribe(() => undefined);
+      expect("notify" in diagnosticSubscription).toBe(false);
+      expect("close" in diagnosticSubscription).toBe(false);
+    }
     for (const internal of [
       "createRegistration",
       "attachRegistration",

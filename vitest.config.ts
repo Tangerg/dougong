@@ -47,14 +47,14 @@ export default defineConfig({
       // Thresholds follow the measured package floors. A package cannot hide a
       // regression behind stronger coverage elsewhere in the workspace.
       thresholds: {
-        "packages/core/src/**": { statements: 89, functions: 91, branches: 77, lines: 93 },
+        "packages/core/src/**": { statements: 92, functions: 96, branches: 83, lines: 95 },
         "packages/platform/src/**": {
-          statements: 91,
-          functions: 97,
-          branches: 81,
-          lines: 93,
+          statements: 97,
+          functions: 100,
+          branches: 90,
+          lines: 98,
         },
-        "packages/reactive/src/**": { statements: 94, functions: 100, branches: 85, lines: 97 },
+        "packages/reactive/src/**": { statements: 95, functions: 100, branches: 87, lines: 98 },
       },
     },
   },

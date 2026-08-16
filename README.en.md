@@ -141,13 +141,13 @@ TypeScript consumers need this in `tsconfig.json`:
 
 ```sh
 pnpm install
-pnpm check      # the 9-step verification gate
+pnpm check      # the 10-step verification gate
 pnpm docs:dev   # the documentation site locally
 ```
 
-`pnpm check` runs, in order: type check → lint → format check → tests and coverage → dead-code check → circular-dependency check → architecture layer check → release build → documentation build.
+`pnpm check` runs, in order: type check → lint → format check → tests and coverage → dead-code check → circular-dependency check → architecture layer check → release build → public declaration check → documentation build.
 
-Architectural constraints do not live only in prose: `scripts/check-layers.mjs` turns package dependency direction, module ranks and rules such as "Platform must reuse Core's observation protocol" into CI failures.
+Architectural constraints do not live only in prose. Package dependency direction, module ranks, fixed Contract ID uniqueness, retired vocabulary and a set of **inverted rules** (such as "Platform command serialization must use Core's `SerialQueue`" — an absence means somebody started a second state machine) all become CI failures. The full list is in [Mechanical guards](https://tangerg.github.io/dougong/en/reference/guards).
 
 ## Status
 

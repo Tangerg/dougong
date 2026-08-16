@@ -19,14 +19,13 @@ export {
   type HostStatus,
   type HostOptions,
   type GroupSnapshot,
-  type GroupStatus,
   type ChangeSet,
   type Installer,
   type Group,
   type Installation,
   type InstallationSnapshot,
-  type InstallationStatus,
   type InstallationUpdate,
+  type LifecycleStatus,
 } from "./host";
 
 export {
@@ -57,7 +56,8 @@ export {
 export type { Contribution, ContributionView } from "./contribution-store";
 export type { EventListener } from "./event-hub";
 export { ConfigValidationError, DougongError, isCancellationReason } from "./errors";
-export type { Disposable } from "./resource";
+export type { AsyncDisposable, Disposable } from "./resource";
+export { assertPlainRecord } from "./record";
 export { ReadonlyMapSnapshot } from "./readonly-map";
 export { SerialQueue } from "./serial-queue";
 export { SnapshotPublisher, type SnapshotView } from "./snapshot-view";

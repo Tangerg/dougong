@@ -61,7 +61,7 @@ Core 内部也保持同一分工：Host 在三个平级协作者之上串行化�
 
 Core 不导入 reactive。二者通过结构化 `get()/subscribe()` 和 Lifetime 对象协议组合，因此第三方 Observable 也能接入。
 
-`Disposable` 等极小协议会在两个基础包中分别声明。它们不携带状态或实现，TypeScript 依靠结构类型互通。这是有意的协议声明重复，用来换取双向零依赖；单路径原则禁止的是重复状态机和执行语义，不是要求独立基础包共享一个类型来源。
+`Disposable` / `AsyncDisposable` 等极小协议会在两个基础包中分别声明。它们不携带状态或实现，TypeScript 依靠结构类型互通。这是有意的协议声明重复，用来换取双向零依赖；单路径原则禁止的是重复状态机和执行语义，不是要求独立基础包共享一个类型来源。
 
 ### `@dougongjs/platform`
 
@@ -397,22 +397,17 @@ Platform 的激活与结构变更是两条正交命令流，但提交状态必�
 
 Group 删除负责安装所有权；领域值中的 workspace ID 负责数据选择。二者职责清楚，不依赖隐式 Scope。
 
-## 十三、依赖方向门禁
+## 十三、这些约束由门禁保证
 
-`scripts/check-layers.mjs` 把以下规则变成 CI 失败：
+架构约束如果只存在于文字里，几个月后就会退化成建议。本文写下的每条关系——分层方向、单路径、所有权、词汇——都有对应的机械检查，`pnpm check` 十步中任一失败即中止。
 
-- core 与 reactive 互不导入；
-- platform 不被 core/reactive 反向依赖；
-- facade 只能 re-export；
-- examples 只能作为最外层消费者，其他包不得反向依赖；
-- Core/Platform 内部模块只能向更低 rank 导入；
-- Core/Platform 源码不导入 Node built-in；
-- 源码不读取隐藏 clock/entropy；
-- 诊断不直接调用 console；
-- Lifetime 只能由 Engine 和 Lifetime 自身构造；
-- 无循环依赖。
+三类值得在这里点明，因为它们直接对应前面几节的论证：
 
-架构约束如果只存在于文字里，几个月后就会退化成建议；Dougong 把可以机械判断的部分交给工具。
+- **依赖方向**（第二节）——包级方向 + 模块 rank 表，rank 表两个方向都查：新模块没有 rank 会失败，rank 没有对应文件也会失败。
+- **单路径**（4.2 节）——一组**反向规则**：不是"不许写 X"，而是"**必须**写 X"。Host 与 Platform 的命令串行化必须用同一个 `SerialQueue`，Platform 诊断必须编译到 `SnapshotPublisher`，Platform 声明校验必须复用 `assertPlainRecord`。缺了就说明有人另起了一条状态机。
+- **所有权**（第七节）——`new Lifetime(...)` 只允许出现在 `Runtime` 和 `Lifetime` 自身；别处构造会产生无人释放的资源树。
+
+完整清单、每条规则防的是什么、以及新增守卫的三步流程（先写门禁 → 看它失败 → 反向验证），见[机械守卫](./guards.md)。
 
 ## 十四、长期判断标准
 

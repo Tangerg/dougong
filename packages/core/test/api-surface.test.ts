@@ -13,6 +13,8 @@ describe("public API surface", () => {
 
     expectTypeOf<IsService>().toEqualTypeOf<false>();
     expectTypeOf<IsOptional>().toEqualTypeOf<false>();
+    expectTypeOf<core.Group["status"]>().toEqualTypeOf<core.LifecycleStatus>();
+    expectTypeOf<core.Installation["status"]>().toEqualTypeOf<core.LifecycleStatus>();
   });
 
   it("keeps the Core value-export budget explicit", () => {
@@ -22,6 +24,7 @@ describe("public API surface", () => {
       "ReadonlyMapSnapshot",
       "SerialQueue",
       "SnapshotPublisher",
+      "assertPlainRecord",
       "createHost",
       "definePlugin",
       "event",

@@ -32,6 +32,7 @@ Dougong Core 的定位是：
 | 创建子生命周期 | `lifetime(label)` | `child` / `scope` / `fiber` |
 | 启动后台任务 | `spawn()` | `run` / `fork` / `task` |
 | 判定取消结果 | `isCancellationReason()` | 只看 `signal.aborted` / 只匹配错误名 |
+| 校验声明 record | `assertPlainRecord()` | 各高层复制 prototype / own-key 校验 |
 | 读取实时值 | `get()` | `.value` / 函数调用 / `getSnapshot()` |
 | 订阅变化 | `subscribe()` | `watch` / `listen` / `observeChanges` |
 | 更新 Installation | `update()` | `replace` / `reload` / `restart` |
@@ -39,6 +40,8 @@ Dougong Core 的定位是：
 | 释放资源 | `dispose()` | `close` / `destroy` / `off` |
 
 `host.install()`、`installation.update()` 和 `installation.remove()` 是单目标语法糖，内部只创建一份 one-shot ChangeSet 并提交。它们不拥有第二套校验、队列或回滚逻辑。
+
+`assertPlainRecord(value, label, { fields, createError })` 是 Core 与高层共享的声明边界：它只接受 `Object.prototype` 或 `null` prototype 的 record，不读取继承属性，并拒绝数组、Symbol key、不可枚举 own key 与 `fields` 之外的字段。默认错误是 `TypeError`；拥有结构化错误体系的高层可用 `createError(message)` 保留自己的错误类型，而不复制校验算法。
 
 ### 2. 组合闭包
 
@@ -73,6 +76,26 @@ Group 机械展开到 canonical ChangeSet；Platform 和 reactive `observe()` �
 - 领域配置通过插件配置、方法参数或显式适配器 Service 组合，不使用全局拦截链、Proxy shadow 或原型链覆盖。
 
 “约定默认值”可以减少样板，但不能改变上述语义。若删除一段声明后 Core 仍会从环境中猜出关系，说明抽象已经过度隐式。
+
+### 5. 公共协议与辅助类型
+
+公开类型服务于下游组合，不是实现残留：
+
+| 导出 | 精确职责 |
+| --- | --- |
+| `Service`、`ExtensionPoint`、`Event`、`OptionalService`、`Requirement` | 三种 Contract 身份与可选 Service 依赖 |
+| `ContractKind`、`ContractValue` | Contract kind 联合与值类型提取 |
+| `Plugin`、`PluginContext`、`Awaitable` | Plugin 声明、setup Context 与同步/异步返回边界 |
+| `Requirements`、`ResolvedRequirement`、`ResolvedRequirements` | 声明依赖表及其解析后值类型 |
+| `Provisions`、`ProvidedServices` | Service 提供声明及 setup 返回值类型 |
+| `Host`、`HostOptions`、`HostStatus`、`HostSnapshot` | 执行边界、构造选项、状态与诊断快照 |
+| `ChangeSet`、`Group`、`InstallationUpdate`、`LifecycleStatus` | 事务、结构所有权、安装更新和 Group/Installation 共享生命周期状态 |
+| `GroupSnapshot`、`SnapshotView` | 结构诊断条目与统一只读观察协议 |
+| `LifetimeContext`、`LifetimeOperations`、`LifetimePhase` | Lifetime 的完整 Context、可组合操作协议与诊断阶段 |
+| `Task`、`BackgroundTask`、`Cleanup` | 被拥有任务、任务回调与清理回调 |
+| `Disposable`、`AsyncDisposable` | 分别供 `using` 与 `await using` 使用的同步/异步释放协议 |
+| `EventListener` | Event 监听器签名 |
+| `Logger`、`isLogger` | 诊断输出端口及其唯一运行时判定器 |
 
 ## 二、能力代数
 
@@ -445,19 +468,23 @@ Event 是事实而不是状态，因此一次 `emit()` 本身不可回滚。setu
 
 每个 Instance 天然拥有一个根 Lifetime。所有通过 Context 创建的监听、贡献、订阅、任务、子 Lifetime 和 cleanup 都自动归它所有。
 
-统一资源协议：
+释放操作统一为 `dispose()`，时序则由两个严格协议显式区分：
 
 ```ts
 interface Disposable {
-  dispose(): void | Promise<void>
-  [Symbol.dispose]?(): void
-  [Symbol.asyncDispose]?(): Promise<void>
+  dispose(): void
+  [Symbol.dispose](): void
+}
+
+interface AsyncDisposable {
+  dispose(): Promise<void>
+  [Symbol.asyncDispose](): Promise<void>
 }
 ```
 
 所有资源统一用 `dispose()` 释放；Installation 从计划中删除统一用 `remove()`。两者不能混用。
 
-`dispose()` 是资源释放的 canonical API；`Symbol.dispose` / `Symbol.asyncDispose` 只是同一操作对 JavaScript `using` 语法的协议投影，不拥有第二套状态机或错误语义。
+同步资源可用于 `using`，需要等待的 Lifetime、Task 与 cleanup 可用于 `await using`。Symbol 方法是同一 `dispose()` 操作对 JavaScript 语法的必需协议投影，不拥有第二套状态机或错误语义；它们不是可选装饰。
 
 ### 9.1 cleanup
 
@@ -704,7 +731,7 @@ observe(lifetimeOwner, source, observer)
 
 - Signal 保存当前值；
 - computed 自动追踪仅用于同步、纯、懒、缓存计算；
-- batch 只接受同步 callback，并合并 callback 内的通知；
+- batch 只接受同步 callback，并按订阅身份合并 callback 内的重复通知；
 - observe 是更高层的 Lifetime 组合器：显式读取一个 source，为当前值创建子 Lifetime，变化时先释放旧子级再创建新子级；observer 必须同步，后续替换失败会停止观察并释放订阅与当前子 Lifetime。
 
 ```ts

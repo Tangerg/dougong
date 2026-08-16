@@ -1,9 +1,8 @@
 import { DougongError, normalizeFailure } from "./errors";
 import type { Lifetime } from "./lifetime";
+import type { LifecycleStatus } from "./lifecycle-status";
 import type { ErasedPlugin } from "./plugin";
 import type { GroupNode } from "./group";
-
-export type InstallationStatus = "pending" | "active" | "stopping" | "failed" | "removed";
 
 export interface InstallationDeclaration {
   readonly plugin: ErasedPlugin;
@@ -94,7 +93,7 @@ export class InstallationRecord {
     attachment.notifyChanged = notifyChanged;
   }
 
-  get status() {
+  get status(): LifecycleStatus {
     return this.#state.phase;
   }
 

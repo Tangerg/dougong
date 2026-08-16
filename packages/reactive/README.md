@@ -22,7 +22,7 @@ batch(() => count.set(21))
 double.get() // 42
 ```
 
-`computed` 是惰性的，依赖动态追踪。`batch` 合并回调内的全部通知。三者都拒绝异步回调——同步追踪和批次边界不能跨越 `await`，与其产生静默的错误结果，不如立刻抛错。
+`computed` 是惰性的，依赖动态追踪。`batch` 按订阅身份合并回调内的重复通知。三者都拒绝异步回调——同步追踪和批次边界不能跨越 `await`，与其产生静默的错误结果，不如立刻抛错。
 
 ### observe：把值的变化编译成资源的重建
 
@@ -59,7 +59,7 @@ batch(() => count.set(21))
 double.get() // 42
 ```
 
-`computed` is lazy with dynamic dependency tracking. `batch` coalesces every notification inside the callback. All three reject asynchronous callbacks — synchronous tracking and batch boundaries cannot survive an `await`, and throwing immediately beats producing a silently wrong result.
+`computed` is lazy with dynamic dependency tracking. `batch` coalesces repeated notifications per subscription identity. All three reject asynchronous callbacks — synchronous tracking and batch boundaries cannot survive an `await`, and throwing immediately beats producing a silently wrong result.
 
 ### observe: compiling value change into resource rebuild
 

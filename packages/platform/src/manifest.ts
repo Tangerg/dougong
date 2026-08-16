@@ -1,7 +1,7 @@
 import { satisfies, validate } from "compare-versions";
 import { z } from "zod";
+import { assertPlainRecord } from "@dougongjs/core";
 import { PlatformError } from "./errors";
-import { assertPlainRecord } from "./record";
 
 const identifier = z
   .string()
@@ -83,7 +83,7 @@ function assertManifestRecord(
   label: string,
 ): asserts value is Record<string, unknown> {
   assertPlainRecord(value, label, {
-    error: (message) => new PlatformError("MANIFEST_INVALID", message),
+    createError: (message) => new PlatformError("MANIFEST_INVALID", message),
   });
 }
 

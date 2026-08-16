@@ -13,21 +13,22 @@ describe("signal", () => {
   it("stores values and only notifies changes", () => {
     const count = signal(0);
     const listener = vi.fn<() => void>();
-    const subscription = count.subscribe(listener);
 
-    count.set(0);
-    count.set(1);
-    count.set(1);
+    {
+      using subscription = count.subscribe(listener);
 
-    expect(count.get()).toBe(1);
-    expect(listener).toHaveBeenCalledTimes(1);
+      count.set(0);
+      count.set(1);
+      count.set(1);
 
-    subscription[Symbol.dispose]?.();
-    subscription.dispose();
+      expect(count.get()).toBe(1);
+      expect(listener).toHaveBeenCalledTimes(1);
+      expect(Object.isFrozen(subscription)).toBe(true);
+    }
+
     count.set(2);
     expect(listener).toHaveBeenCalledTimes(1);
     expect(Object.isFrozen(count)).toBe(true);
-    expect(Object.isFrozen(subscription)).toBe(true);
     expect(() => count.subscribe(undefined as never)).toThrow(
       "Signal subscriber must be a function",
     );
@@ -51,13 +52,14 @@ describe("signal", () => {
     expect(listener).toHaveBeenCalledTimes(3);
   });
 
-  it("batches notifications through one subscriber path", () => {
+  it("coalesces writes per subscription without merging subscription identities", () => {
     const left = signal(1);
     const right = signal(2);
     const listener = vi.fn<() => void>();
 
     left.subscribe(listener);
     right.subscribe(listener);
+    left.subscribe(listener);
 
     batch(() => {
       left.set(3);
@@ -65,7 +67,7 @@ describe("signal", () => {
       left.set(5);
     });
 
-    expect(listener).toHaveBeenCalledTimes(1);
+    expect(listener).toHaveBeenCalledTimes(3);
   });
 
   it("withdraws a disposed subscription before the batch flush", () => {

@@ -820,6 +820,49 @@ describe("Host", () => {
     await host.stop();
   });
 
+  it("fails closed when the previous Instances cannot be restored", async () => {
+    const WORKER = service<string>("test/failed-rollback-worker");
+    const changeFailure = new Error("replacement failed");
+    const rollbackFailure = new Error("previous worker could not restart");
+    let previousStarts = 0;
+    const previous = definePlugin({
+      name: "test.failed-rollback-worker",
+      provides: { worker: WORKER },
+      setup() {
+        previousStarts++;
+        if (previousStarts > 1) throw rollbackFailure;
+        return { worker: "previous" };
+      },
+    });
+    const replacement = definePlugin({
+      name: "test.failed-rollback-worker",
+      provides: { worker: WORKER },
+      setup() {
+        throw changeFailure;
+      },
+    });
+
+    const host = createHost();
+    const installation = host.install(previous);
+    await host.start();
+    expect(host.get(WORKER)).toBe("previous");
+
+    const failure = await installation.update({ plugin: replacement }).then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+
+    expect(failure).toBeInstanceOf(AggregateError);
+    expect(failure).toMatchObject({
+      message: "Installation change failed and the previous Instances could not be restored",
+      errors: [changeFailure, rollbackFailure],
+    });
+    expect(previousStarts).toBe(2);
+    expect(host.status).toBe("idle");
+    expect(installation.status).toBe("failed");
+    expect(() => host.get(WORKER)).toThrow("Host services are not active");
+  });
+
   it("fails the whole Host closed when affected Instances cannot be cleaned up", async () => {
     let workerStarts = 0;
     let unrelatedStops = 0;

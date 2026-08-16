@@ -1,7 +1,6 @@
 import type { HostSnapshot, HostStatus } from "./diagnostics";
-import type { GroupStatus } from "./group";
 import type { Logger } from "./lifetime";
-import type { InstallationStatus } from "./installation";
+import type { LifecycleStatus } from "./lifecycle-status";
 import type { Plugin, Provisions, Requirements } from "./plugin";
 import type { Service } from "./contracts";
 import type { SnapshotView } from "./snapshot-view";
@@ -44,7 +43,7 @@ export interface Installation<
 > {
   readonly id: string;
   readonly groupId: string;
-  readonly status: InstallationStatus;
+  readonly status: LifecycleStatus;
   ready(): Promise<void>;
   update(update: InstallationUpdate<Config, Requires, Provides, ConfigInput>): Promise<void>;
   remove(): Promise<void>;
@@ -80,7 +79,7 @@ export interface Installer {
 export interface Group extends Installer {
   readonly id: string;
   readonly name: string;
-  readonly status: GroupStatus;
+  readonly status: LifecycleStatus;
   install<Config, Requires extends Requirements, Provides extends Provisions, ConfigInput>(
     plugin: Plugin<Config, Requires, Provides, ConfigInput>,
     ...config: [ConfigInput] extends [void] ? [config?: ConfigInput] : [config: ConfigInput]

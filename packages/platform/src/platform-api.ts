@@ -1,4 +1,5 @@
 import type {
+  AsyncDisposable,
   Logger,
   Installer,
   Plugin,
@@ -73,7 +74,7 @@ export interface PlatformChangeSet<Reference> {
   commit(): Promise<void>;
 }
 
-export interface Platform<Reference> {
+export interface Platform<Reference> extends AsyncDisposable {
   readonly apiVersion: string;
   readonly status: PlatformStatus;
   readonly diagnostics: SnapshotView<PlatformSnapshot>;
@@ -87,8 +88,6 @@ export interface Platform<Reference> {
   ): Promise<Registration<Reference>>;
   change(): PlatformChangeSet<Reference>;
   trigger(event: string): Promise<void>;
-  dispose(): Promise<void>;
-  [Symbol.asyncDispose](): Promise<void>;
 }
 
 export interface PlatformOptions<Reference> {

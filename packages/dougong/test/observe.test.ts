@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import type { Disposable } from "@dougongjs/core";
+import type { AsyncDisposable, Disposable } from "@dougongjs/core";
 import {
   createHost,
   definePlugin,
@@ -11,6 +11,14 @@ import {
 } from "../src/index";
 
 const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+function disposable(dispose: () => void): Disposable {
+  return { dispose, [Symbol.dispose]: dispose };
+}
+
+function asyncDisposable(dispose: () => Promise<void>): AsyncDisposable {
+  return { dispose, [Symbol.asyncDispose]: dispose };
+}
 
 class ControlledReadable<T> implements Readable<T> {
   readonly #listeners = new Set<() => void>();
@@ -36,14 +44,12 @@ class ControlledReadable<T> implements Readable<T> {
     if (this.subscribeError !== undefined) throw this.subscribeError;
     this.#listeners.add(listener);
     let active = true;
-    return {
-      dispose: () => {
-        if (!active) return;
-        active = false;
-        this.subscriptionsDisposed++;
-        this.#listeners.delete(listener);
-      },
-    };
+    return disposable(() => {
+      if (!active) return;
+      active = false;
+      this.subscriptionsDisposed++;
+      this.#listeners.delete(listener);
+    });
   }
 
   notify() {
@@ -67,13 +73,12 @@ function manualOwner(
   return {
     cleanup(dispose) {
       let active = true;
-      return {
-        dispose() {
-          if (!active) return;
-          active = false;
-          return dispose() as void | Promise<void>;
-        },
+      const release = async () => {
+        if (!active) return;
+        active = false;
+        await dispose();
       };
+      return asyncDisposable(release);
     },
     lifetime: (label) => {
       onLifetime(label);
@@ -82,23 +87,27 @@ function manualOwner(
     spawn: (task) => {
       const controller = new AbortController();
       const result = Promise.resolve().then(() => task(controller.signal));
+      const dispose = () => {
+        controller.abort();
+        return result.then(
+          () => undefined,
+          () => undefined,
+        );
+      };
       return {
         result,
-        dispose() {
-          controller.abort();
-          return result.then(
-            () => undefined,
-            () => undefined,
-          );
-        },
+        ...asyncDisposable(dispose),
       };
     },
   };
 }
 
 function manualLifetime(dispose: () => void | Promise<void>): ObservationLifetime {
+  const release = async () => {
+    await dispose();
+  };
   const lifetime: ObservationLifetime = {
-    dispose,
+    ...asyncDisposable(release),
     cleanup: () => {
       throw new Error("Unexpected cleanup registration");
     },
@@ -119,7 +128,7 @@ describe("observe composition", () => {
 
     const source: Readable<number> = {
       get: () => 1,
-      subscribe: () => ({ dispose() {} }),
+      subscribe: () => disposable(() => undefined),
     };
     expect(() => observe(unusedOwner, source, undefined as never)).toThrow(
       "Observer must be a function",
@@ -130,7 +139,7 @@ describe("observe composition", () => {
     expect(() =>
       observe(
         {
-          cleanup: () => ({}) as Disposable,
+          cleanup: () => ({}) as unknown as AsyncDisposable,
           lifetime: (_label) => manualLifetime(() => undefined),
           spawn: () => {
             throw new Error("Unexpected background task");
@@ -139,14 +148,15 @@ describe("observe composition", () => {
         source,
         () => {},
       ),
-    ).toThrow("ObservationOwner.cleanup() must return a Disposable");
+    ).toThrow("ObservationOwner.cleanup() must return an AsyncDisposable");
     expect(() =>
       observe(
         {
-          cleanup: (dispose) => ({
-            dispose: () => dispose() as void | Promise<void>,
-          }),
-          lifetime: (_label) => ({ dispose() {} }) as ObservationLifetime,
+          cleanup: (dispose) =>
+            asyncDisposable(async () => {
+              await dispose();
+            }),
+          lifetime: (_label) => ({ dispose() {} }) as unknown as ObservationLifetime,
           spawn: () => {
             throw new Error("Unexpected background task");
           },
@@ -168,7 +178,10 @@ describe("observe composition", () => {
     // oxlint-disable-next-line unicorn/no-thenable -- Deliberately exercise the runtime protocol guard.
     malformedResult["then"] = true;
     const malformedTaskOwner = {
-      cleanup: (dispose: () => void | Promise<void>) => ({ dispose }),
+      cleanup: (dispose: () => void | Promise<void>) =>
+        asyncDisposable(async () => {
+          await dispose();
+        }),
       lifetime: (_label: string) => manualLifetime(() => undefined),
       spawn: () => ({ dispose() {}, result: malformedResult }),
     } as unknown as ObservationOwner;
@@ -188,11 +201,10 @@ describe("observe composition", () => {
     );
     const source: Readable<number> = {
       get: () => 1,
-      subscribe: () => ({
-        dispose() {
+      subscribe: () =>
+        disposable(() => {
           throw subscriptionFailure;
-        },
-      }),
+        }),
     };
 
     const observation = observe(owner, source, () => {});
@@ -327,13 +339,11 @@ describe("observe composition", () => {
     const owner: ObservationOwner = {
       cleanup(dispose) {
         let active = true;
-        return {
-          dispose() {
-            if (!active) return;
-            active = false;
-            return dispose() as void | Promise<void>;
-          },
-        };
+        return asyncDisposable(async () => {
+          if (!active) return;
+          active = false;
+          await dispose();
+        });
       },
       lifetime(_label: string) {
         const index = childIndex++;
@@ -343,15 +353,16 @@ describe("observe composition", () => {
         spawnCount++;
         const controller = new AbortController();
         const result = Promise.resolve().then(() => task(controller.signal));
+        const dispose = () => {
+          controller.abort();
+          return result.then(
+            () => undefined,
+            () => undefined,
+          );
+        };
         return {
           result,
-          dispose() {
-            controller.abort();
-            return result.then(
-              () => undefined,
-              () => undefined,
-            );
-          },
+          ...asyncDisposable(dispose),
         };
       },
     };

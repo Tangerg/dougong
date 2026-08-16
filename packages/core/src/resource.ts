@@ -1,10 +1,16 @@
 export type Awaitable<T> = T | PromiseLike<T>;
 
 export interface Disposable {
-  dispose(): void | Promise<void>;
-  [Symbol.dispose]?(): void;
-  [Symbol.asyncDispose]?(): Promise<void>;
+  dispose(): void;
+  [Symbol.dispose](): void;
 }
+
+export interface AsyncDisposable {
+  dispose(): Promise<void>;
+  [Symbol.asyncDispose](): Promise<void>;
+}
+
+export type Resource = Disposable | AsyncDisposable;
 
 export interface Publication extends Disposable {
   publish(): void;

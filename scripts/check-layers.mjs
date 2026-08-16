@@ -61,6 +61,7 @@ const CORE_MODULE_LAYERS = {
   "core/src/contracts.ts": 0,
   "core/src/errors.ts": 0,
   "core/src/group.ts": 0,
+  "core/src/lifecycle-status.ts": 0,
   "core/src/record.ts": 0,
   "core/src/readonly-map.ts": 0,
   "core/src/resource.ts": 0,
@@ -103,7 +104,6 @@ const PLATFORM_MODULE_LAYERS = {
   "platform/src/activation-gate.ts": 0,
   "platform/src/errors.ts": 0,
   "platform/src/loader.ts": 0,
-  "platform/src/record.ts": 0,
   "platform/src/manifest.ts": 1,
   "platform/src/diagnostics.ts": 2,
   "platform/src/permissions.ts": 2,
@@ -276,6 +276,11 @@ const FILE_RULES = [
     test: (source) =>
       !/\bisCancellationReason\b/.test(source) || /function\s+\w*Cancellation\w*\s*\(/.test(source),
     message: "Platform load cancellation must reuse Core isCancellationReason",
+  },
+  {
+    matches: (file) => file.startsWith("platform/src/"),
+    test: (source) => /Object\.getPrototypeOf\s*\(/.test(source),
+    message: "Platform declaration validation must reuse Core assertPlainRecord",
   },
 ];
 

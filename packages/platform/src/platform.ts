@@ -1,4 +1,5 @@
 import {
+  assertPlainRecord,
   type Logger,
   type Installer,
   type Provisions,
@@ -36,7 +37,6 @@ import type {
   Platform,
 } from "./platform-api";
 import { PermissionSet, type Authorizer } from "./permissions";
-import { assertPlainRecord } from "./record";
 
 const platformOptionFields = new Set(["installer", "apiVersion", "loader", "authorizer", "logger"]);
 

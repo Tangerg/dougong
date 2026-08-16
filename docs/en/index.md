@@ -105,6 +105,7 @@ Three layers, best read in order:
 9. [Architecture](./reference/architecture.md) — layering, dependency direction and rationale
 10. [Platform specification](./reference/platform.md) — the external plugin boundary
 11. [Error codes](./reference/errors.md) — stable codes and what triggers them
+12. [Mechanical guards](./reference/guards.md) — what each of the ten `pnpm check` steps protects
 
 </div>
 

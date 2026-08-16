@@ -7,7 +7,13 @@ import {
   type LifetimeDiagnosticNode,
   type LifetimeResourceKind,
 } from "./lifetime-diagnostics";
-import type { Disposable, Publication, StagedResource } from "./resource";
+import type {
+  AsyncDisposable,
+  Disposable,
+  Publication,
+  Resource,
+  StagedResource,
+} from "./resource";
 
 export type { LifetimePhase, LifetimeSnapshot } from "./lifetime-diagnostics";
 
@@ -33,7 +39,7 @@ export interface InstanceMeta {
   readonly groupId: string;
 }
 
-export interface Task<T = void> extends Disposable {
+export interface Task<T = void> extends AsyncDisposable {
   readonly result: Promise<T>;
 }
 
@@ -44,7 +50,7 @@ const disposalReason = Object.freeze(new DOMException("Resource disposed", "Abor
 
 export interface LifetimeOperations {
   readonly signal: AbortSignal;
-  cleanup(dispose: Cleanup): Disposable;
+  cleanup(dispose: Cleanup): AsyncDisposable;
   lifetime(label: string): LifetimeContext;
   spawn<T>(task: BackgroundTask<T>): Task<T>;
   on<T>(token: Event<T>, listener: EventListener<T>): Disposable;
@@ -52,7 +58,7 @@ export interface LifetimeOperations {
   contribute<T>(token: ExtensionPoint<T>, key: string, value: T): Contribution<T>;
 }
 
-export interface LifetimeContext extends LifetimeOperations, Disposable {}
+export interface LifetimeContext extends LifetimeOperations, AsyncDisposable {}
 
 export interface LifetimePort {
   stageOn<T>(
@@ -89,7 +95,7 @@ interface LifetimeBinding {
 }
 
 /** One canonical owner for O(1) terminal detachment and diagnostic accounting. */
-class LifetimeResources<T extends Disposable> implements Iterable<T> {
+class LifetimeResources<T extends Resource> implements Iterable<T> {
   readonly #resources = new Set<T>();
   #accounting: LifetimeResourceAccounting | undefined;
 
@@ -147,15 +153,15 @@ type CleanupRecordState =
   | {
       readonly phase: "active";
       readonly cleanup: Cleanup;
-      readonly detachFromParent: (resource: Disposable) => void;
+      readonly detachFromParent: (resource: AsyncDisposable) => void;
     }
   | { readonly phase: "disposing"; readonly completion: Promise<void> }
   | { readonly phase: "disposed" };
 
-class CleanupRecord implements Disposable {
+class CleanupRecord implements AsyncDisposable {
   #state: CleanupRecordState;
 
-  constructor(cleanup: Cleanup, detachFromParent: (resource: Disposable) => void) {
+  constructor(cleanup: Cleanup, detachFromParent: (resource: AsyncDisposable) => void) {
     this.#state = { phase: "active", cleanup, detachFromParent };
     Object.freeze(this);
   }
@@ -191,7 +197,7 @@ type TaskState =
 
 class TaskRecord<T> implements Task<T> {
   #detachParentAbortListener: (() => void) | undefined;
-  #detachFromParent: ((task: Disposable) => void) | undefined;
+  #detachFromParent: ((task: AsyncDisposable) => void) | undefined;
   #state: TaskState;
   readonly result: Promise<T>;
 
@@ -199,7 +205,7 @@ class TaskRecord<T> implements Task<T> {
     parentSignal: AbortSignal,
     task: BackgroundTask<T>,
     report: (error: unknown) => void,
-    detachFromParent: (task: Disposable) => void,
+    detachFromParent: (task: AsyncDisposable) => void,
   ) {
     const controller = new AbortController();
     this.#state = { phase: "running", controller };
@@ -268,9 +274,9 @@ export class Lifetime implements LifetimeContext {
   readonly #contributions: LifetimeResources<Publication>;
   readonly #contributionViews: LifetimeResources<Disposable>;
   readonly #subscriptions: LifetimeResources<Disposable>;
-  readonly #tasks: LifetimeResources<Disposable>;
+  readonly #tasks: LifetimeResources<AsyncDisposable>;
   readonly #children: LifetimeResources<Lifetime>;
-  readonly #cleanups: LifetimeResources<Disposable>;
+  readonly #cleanups: LifetimeResources<AsyncDisposable>;
   readonly #kind: "root" | "child";
   #detachParentAbortListener: (() => void) | undefined;
   #detachFromParent: ((lifetime: Lifetime) => void) | undefined;

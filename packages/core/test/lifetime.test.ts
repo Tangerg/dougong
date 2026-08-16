@@ -6,6 +6,7 @@ import {
   extensionPoint,
   isCancellationReason,
   type Contribution,
+  type Disposable,
   type LifetimeContext,
   type Task,
 } from "../src/index";
@@ -415,20 +416,20 @@ describe("structured lifetime", () => {
     const NOTICE = event<void>("lifetime/disposable-event");
     const ITEMS = extensionPoint<string>("lifetime/disposable-items");
     const listener = vi.fn<() => void>();
+    let subscription!: Disposable;
     let contribution!: Contribution<string>;
+    let emit!: () => Promise<void>;
     const plugin = definePlugin({
       name: "lifetime.disposable",
       setup(ctx) {
-        const subscription = ctx.on(NOTICE, listener);
+        subscription = ctx.on(NOTICE, listener);
         contribution = ctx.contribute(ITEMS, "item", "first");
-        subscription.dispose();
-        contribution.dispose();
       },
     });
     const emitter = definePlugin({
       name: "lifetime.disposable-emitter",
-      async setup(ctx) {
-        await ctx.emit(NOTICE, undefined);
+      setup(ctx) {
+        emit = () => ctx.emit(NOTICE, undefined);
       },
     });
 
@@ -436,9 +437,85 @@ describe("structured lifetime", () => {
     host.install(plugin);
     host.install(emitter);
     await host.start();
-    expect(listener).not.toHaveBeenCalled();
+
+    {
+      using listenerLease = subscription;
+      expect(listenerLease).toBe(subscription);
+      await emit();
+      expect(listener).toHaveBeenCalledOnce();
+    }
+    await emit();
+    expect(listener).toHaveBeenCalledOnce();
+
+    {
+      using contributionLease = contribution;
+      expect(contributionLease).toBe(contribution);
+    }
     expect(() => contribution.update("late")).toThrow("disposed");
     await expect(Promise.resolve(contribution.dispose())).resolves.toBeUndefined();
+    await host.stop();
+  });
+
+  it("supports await using for asynchronous Lifetime ownership", async () => {
+    const trace: string[] = [];
+    let session!: LifetimeContext;
+    const plugin = definePlugin({
+      name: "lifetime.await-using",
+      setup(ctx) {
+        session = ctx.lifetime("session");
+        session.cleanup(async () => {
+          await Promise.resolve();
+          trace.push("closed");
+        });
+      },
+    });
+    const host = createHost();
+    host.install(plugin);
+    await host.start();
+
+    {
+      await using ownedSession = session;
+      trace.push("open");
+      expect(ownedSession.signal.aborted).toBe(false);
+    }
+    trace.push("after-block");
+
+    expect(trace).toEqual(["open", "closed", "after-block"]);
+    await host.stop();
+    expect(trace).toEqual(["open", "closed", "after-block"]);
+  });
+
+  it("owns Event listeners created by a child Lifetime", async () => {
+    const NOTICE = event<string>("lifetime/child-event-owner");
+    const rootListener = vi.fn<(payload: string) => void>();
+    const childListener = vi.fn<(payload: string) => void>();
+    let child!: LifetimeContext;
+    let emitFromRoot!: (payload: string) => Promise<void>;
+    let emitFromChild!: (payload: string) => Promise<void>;
+    const plugin = definePlugin({
+      name: "lifetime.child-event-owner",
+      setup(ctx) {
+        ctx.on(NOTICE, rootListener);
+        child = ctx.lifetime("child");
+        child.on(NOTICE, childListener);
+        emitFromRoot = (payload) => ctx.emit(NOTICE, payload);
+        emitFromChild = (payload) => child.emit(NOTICE, payload);
+      },
+    });
+    const host = createHost();
+    host.install(plugin);
+    await host.start();
+
+    await emitFromChild("before");
+    expect(rootListener).toHaveBeenLastCalledWith("before");
+    expect(childListener).toHaveBeenLastCalledWith("before");
+
+    await child.dispose();
+    expect(() => emitFromChild("disposed")).toThrow("Lifetime is disposing or has been disposed");
+    await emitFromRoot("after");
+
+    expect(rootListener.mock.calls).toEqual([["before"], ["after"]]);
+    expect(childListener.mock.calls).toEqual([["before"]]);
     await host.stop();
   });
 

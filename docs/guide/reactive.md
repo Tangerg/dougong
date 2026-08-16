@@ -54,7 +54,7 @@ batch(() => {
 })   // 订阅者只被通知一次
 ```
 
-`batch` 合并回调内的全部通知。嵌套 `batch` 只在最外层结束时 flush。
+`batch` 按订阅身份合并回调内的重复通知。嵌套 `batch` 只在最外层结束时 flush。
 
 ::: warning 三个入口都拒绝异步
 ```ts
@@ -75,7 +75,7 @@ const subscription = count.subscribe(() => console.log("changed"))
 subscription.dispose()
 ```
 
-每次 `subscribe()` 都创建一份独立、可单独释放的订阅；即使传入同一个函数也不会按函数身份合并。释放会立即撤回尚未轮到的通知。`batch()` 仍会按回调身份合并同一批次中的重复工作。
+每次 `subscribe()` 都创建一份独立、可单独释放的订阅；即使传入同一个函数也不会按函数身份合并。释放会立即撤回尚未轮到的通知。`batch()` 只按每份订阅身份合并同一批次中的重复通知，同一个函数的两次订阅仍各调用一次。
 
 `Signal` 和 `ReadonlySignal` 都实现结构化的 `Readable<T>` 协议：
 
@@ -105,6 +105,8 @@ observe(owner, source, (value, lifetime) => {
 - `owner` —— 任何提供 `cleanup` / `lifetime` / `spawn` 的东西，插件的 `ctx` 正好符合
 - `source` —— 任何 `Readable<T>`：Signal、`ContributionView`、`diagnostics`，甚至你自己写的对象
 - `observer` —— 拿到当前值和一个专属子 Lifetime
+
+第三个参数的精确类型是 `Observer<T, Child>`。`observe()` 返回 `AsyncDisposable`，因此调用方可提前 `await dispose()` 或使用 `await using`；普通 `Readable.subscribe()` 返回的同步 `Disposable` 则使用 `using`。
 
 ### 典型用法
 
@@ -147,7 +149,7 @@ definePlugin({
 
 ```ts
 interface ObservationOwner {
-  cleanup(fn): Disposable
+  cleanup(fn): AsyncDisposable
   lifetime(label): ObservationLifetime
   spawn(fn): ObservationTask
 }

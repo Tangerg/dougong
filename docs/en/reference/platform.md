@@ -231,6 +231,8 @@ Planet-style media sources and Lynx Desktop-style commands, menus and panels are
 - Platform `apiVersion`, `status` and a monotonic `revision`
 - per Registration: `manifestName`, `version`, `status`, `activation`, `permissions`, `dependencies` and the latest failure, already normalized to `Error`
 
+Each related public type has one role: `Platform` is the control protocol, `PlatformOptions` is its construction boundary, and `PlatformChangeSet` is one structural change. `PlatformStatus` / `PlatformSnapshot` describe aggregate state and diagnostics; `RegistrationStatus` / `RegistrationSnapshot` describe one stable Registration. None exposes the Activator, candidate graph or Core Installation.
+
 The snapshot, entries and arrays are frozen, and the Map exposes no mutating methods. `subscribe()` only delivers future invalidation notices; the caller re-reads with `get()`. A failing diagnostics subscriber is reported through the Platform logger and never changes a registration or activation outcome.
 
 Platform implements no second observer. It submits an immutable PlatformSnapshot to Core's `SnapshotPublisher`. After Platform disposes successfully, an already-obtained historical view stops at the terminal `disposed` state, existing subscriptions detach, and the reader, logger and Platform owner are all severed.

@@ -1,18 +1,18 @@
-import type { Disposable, Readable } from "./protocol";
+import type { AsyncDisposable, Disposable, Readable, Resource } from "./protocol";
 import { assertSynchronous, isThenable } from "./sync-result";
 
-export interface ObservationTask<T = void> extends Disposable {
+export interface ObservationTask<T = void> extends AsyncDisposable {
   readonly result: Promise<T>;
 }
 
-export interface ObservationLifetime extends Disposable {
-  cleanup(dispose: () => unknown): Disposable;
+export interface ObservationLifetime extends AsyncDisposable {
+  cleanup(dispose: () => unknown): AsyncDisposable;
   lifetime(label: string): ObservationLifetime;
   spawn<T>(task: (signal: AbortSignal) => T | PromiseLike<T>): ObservationTask<T>;
 }
 
 export interface ObservationOwner<Child extends ObservationLifetime = ObservationLifetime> {
-  cleanup(dispose: () => unknown): Disposable;
+  cleanup(dispose: () => unknown): AsyncDisposable;
   lifetime(label: string): Child;
   spawn<T>(task: (signal: AbortSignal) => T | PromiseLike<T>): ObservationTask<T>;
 }
@@ -34,7 +34,7 @@ type ObservationState<T, Child extends ObservationLifetime> =
     }
   | { readonly phase: "stopped" | "disposed" };
 
-class Observation<T, Child extends ObservationLifetime> implements Disposable {
+class Observation<T, Child extends ObservationLifetime> {
   #state: ObservationState<T, Child>;
   #subscription: Disposable | undefined;
   #current: Child | undefined;
@@ -232,7 +232,7 @@ export function observe<T, Child extends ObservationLifetime>(
   owner: ObservationOwner<Child>,
   source: Readable<T>,
   observer: Observer<T, Child>,
-): Disposable {
+): AsyncDisposable {
   if (!source || typeof source.get !== "function" || typeof source.subscribe !== "function") {
     throw new TypeError("observe() expects a readable source");
   }
@@ -247,7 +247,7 @@ export function observe<T, Child extends ObservationLifetime>(
   }
   const observation = new Observation(owner, source, observer);
   const handle = owner.cleanup(() => observation.dispose());
-  assertDisposable(handle, "ObservationOwner.cleanup()");
+  assertAsyncDisposable(handle, "ObservationOwner.cleanup()");
   try {
     observation.start();
     return handle;
@@ -261,8 +261,22 @@ export function observe<T, Child extends ObservationLifetime>(
 }
 
 function assertDisposable(value: unknown, source: string): asserts value is Disposable {
-  if (!value || typeof (value as Disposable).dispose !== "function") {
+  if (
+    !value ||
+    typeof (value as Disposable).dispose !== "function" ||
+    typeof (value as Disposable)[Symbol.dispose] !== "function"
+  ) {
     throw new TypeError(`${source} must return a Disposable`);
+  }
+}
+
+function assertAsyncDisposable(value: unknown, source: string): asserts value is AsyncDisposable {
+  if (
+    !value ||
+    typeof (value as AsyncDisposable).dispose !== "function" ||
+    typeof (value as AsyncDisposable)[Symbol.asyncDispose] !== "function"
+  ) {
+    throw new TypeError(`${source} must return an AsyncDisposable`);
   }
 }
 
@@ -270,6 +284,7 @@ function assertObservationLifetime(value: unknown): asserts value is Observation
   if (
     !value ||
     typeof (value as ObservationLifetime).dispose !== "function" ||
+    typeof (value as ObservationLifetime)[Symbol.asyncDispose] !== "function" ||
     typeof (value as ObservationLifetime).cleanup !== "function" ||
     typeof (value as ObservationLifetime).lifetime !== "function" ||
     typeof (value as ObservationLifetime).spawn !== "function"
@@ -282,13 +297,14 @@ function assertObservationTask(value: unknown): asserts value is ObservationTask
   if (
     !value ||
     typeof (value as ObservationTask).dispose !== "function" ||
+    typeof (value as ObservationTask)[Symbol.asyncDispose] !== "function" ||
     !isThenable((value as ObservationTask).result)
   ) {
     throw new TypeError("ObservationOwner.spawn() must return an ObservationTask");
   }
 }
 
-async function collect(resource: Disposable | undefined, errors: unknown[]) {
+async function collect(resource: Resource | undefined, errors: unknown[]) {
   if (!resource) return;
   try {
     await resource.dispose();

@@ -54,7 +54,7 @@ batch(() => {
 })   // subscribers are notified once
 ```
 
-`batch` coalesces every notification inside the callback. Nested batches flush only when the outermost one ends.
+`batch` coalesces repeated notifications per subscription identity. Nested batches flush only when the outermost one ends.
 
 ::: warning All three entry points reject async callbacks
 ```ts
@@ -75,7 +75,7 @@ const subscription = count.subscribe(() => console.log("changed"))
 subscription.dispose()
 ```
 
-Every `subscribe()` call creates an independent subscription that can be disposed on its own, even when the same function is passed more than once. Disposal immediately withdraws a notification whose turn has not started. `batch()` still coalesces duplicate work by callback identity within that batch.
+Every `subscribe()` call creates an independent subscription that can be disposed on its own, even when the same function is passed more than once. Disposal immediately withdraws a notification whose turn has not started. `batch()` coalesces repeated notices only per subscription identity; two subscriptions that share one function are still invoked once each.
 
 Both `Signal` and `ReadonlySignal` implement the structural `Readable<T>` protocol:
 
@@ -105,6 +105,8 @@ Three parameters:
 - `owner` — anything providing `cleanup` / `lifetime` / `spawn`; a plugin's `ctx` fits exactly
 - `source` — any `Readable<T>`: a signal, a `ContributionView`, `diagnostics`, or your own object
 - `observer` — receives the current value and a dedicated child Lifetime
+
+The third parameter's precise type is `Observer<T, Child>`. `observe()` returns an `AsyncDisposable`, so a caller may release it with `await dispose()` or `await using`; the synchronous `Disposable` returned by an ordinary `Readable.subscribe()` works with `using`.
 
 ### A typical use
 
@@ -147,7 +149,7 @@ You never write "check whether there is a previous one, and if so clean it up fi
 
 ```ts
 interface ObservationOwner {
-  cleanup(fn): Disposable
+  cleanup(fn): AsyncDisposable
   lifetime(label): ObservationLifetime
   spawn(fn): ObservationTask
 }

@@ -1,4 +1,5 @@
 import {
+  assertPlainRecord,
   definePlugin,
   isCancellationReason,
   type Provisions,
@@ -8,7 +9,6 @@ import { PlatformError } from "./errors";
 import type { Loader } from "./loader";
 import { defineManifest, matchesVersion, type Manifest } from "./manifest";
 import type { ErasedPlugin, NormalizedArtifact, Artifact } from "./platform-api";
-import { assertPlainRecord } from "./record";
 
 const artifactFields = new Set(["manifest", "reference", "config", "placeholder"]);
 

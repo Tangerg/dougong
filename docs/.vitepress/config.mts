@@ -46,6 +46,7 @@ function sidebarZh(): DefaultTheme.SidebarItem[] {
         { text: "整体架构", link: "/reference/architecture" },
         { text: "Platform 规范", link: "/reference/platform" },
         { text: "错误码", link: "/reference/errors" },
+        { text: "机械守卫", link: "/reference/guards" },
       ],
     },
     {
@@ -84,6 +85,7 @@ function sidebarEn(): DefaultTheme.SidebarItem[] {
         { text: "Architecture", link: "/en/reference/architecture" },
         { text: "Platform specification", link: "/en/reference/platform" },
         { text: "Error codes", link: "/en/reference/errors" },
+        { text: "Mechanical guards", link: "/en/reference/guards" },
       ],
     },
     {
