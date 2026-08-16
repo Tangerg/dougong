@@ -1,8 +1,9 @@
 import type { HostSnapshot, HostStatus } from "./diagnostics";
 import type { Logger } from "./lifetime";
 import type { LifecycleStatus } from "./lifecycle-status";
-import type { Plugin, Provisions, Requirements } from "./plugin";
-import type { Service } from "./contracts";
+import type { AnyPlugin, Plugin, Provisions, Requirements } from "./plugin";
+import type { ExtensionPoint, OptionalService, Service } from "./contracts";
+import type { ContributionView } from "./contribution-store";
 import type { SnapshotView } from "./snapshot-view";
 
 export type InstallationUpdate<
@@ -54,13 +55,14 @@ export interface ChangeSet {
     plugin: Plugin<Config, Requires, Provides, ConfigInput>,
     ...config: [ConfigInput] extends [void] ? [config?: ConfigInput] : [config: ConfigInput]
   ): Installation<Config, Requires, Provides, ConfigInput>;
+  install(plugin: AnyPlugin, config?: unknown): Installation;
   update<Config, Requires extends Requirements, Provides extends Provisions, ConfigInput>(
     installation: Installation<Config, Requires, Provides, ConfigInput>,
     update: InstallationUpdate<Config, Requires, Provides, ConfigInput>,
-  ): this;
+  ): void;
   remove<Config, Requires extends Requirements, Provides extends Provisions, ConfigInput>(
     installation: Installation<Config, Requires, Provides, ConfigInput>,
-  ): this;
+  ): void;
   commit(): Promise<void>;
 }
 
@@ -70,8 +72,14 @@ export interface HostOptions {
   readonly onError?: (error: unknown) => void;
 }
 
-/** Minimal target for higher layers that compile work into one Core ChangeSet. */
+/** Capability to install into an ownership position without controlling Host execution. */
 export interface Installer {
+  install<Config, Requires extends Requirements, Provides extends Provisions, ConfigInput>(
+    plugin: Plugin<Config, Requires, Provides, ConfigInput>,
+    ...config: [ConfigInput] extends [void] ? [config?: ConfigInput] : [config: ConfigInput]
+  ): Installation<Config, Requires, Provides, ConfigInput>;
+  install(plugin: AnyPlugin, config?: unknown): Installation;
+  group(name: string, configure: (group: Group) => void): Group;
   change(): ChangeSet;
 }
 
@@ -80,11 +88,6 @@ export interface Group extends Installer {
   readonly id: string;
   readonly name: string;
   readonly status: LifecycleStatus;
-  install<Config, Requires extends Requirements, Provides extends Provisions, ConfigInput>(
-    plugin: Plugin<Config, Requires, Provides, ConfigInput>,
-    ...config: [ConfigInput] extends [void] ? [config?: ConfigInput] : [config: ConfigInput]
-  ): Installation<Config, Requires, Provides, ConfigInput>;
-  group(name: string, configure: (group: Group) => void): Group;
   ready(): Promise<void>;
   remove(): Promise<void>;
 }
@@ -93,12 +96,9 @@ export interface Host extends Installer {
   readonly name: string;
   readonly status: HostStatus;
   readonly diagnostics: SnapshotView<HostSnapshot>;
-  install<Config, Requires extends Requirements, Provides extends Provisions, ConfigInput>(
-    plugin: Plugin<Config, Requires, Provides, ConfigInput>,
-    ...config: [ConfigInput] extends [void] ? [config?: ConfigInput] : [config: ConfigInput]
-  ): Installation<Config, Requires, Provides, ConfigInput>;
-  group(name: string, configure: (group: Group) => void): Group;
   get<T>(token: Service<T>): T;
+  get<T>(token: OptionalService<T>): T | undefined;
+  contributions<T>(token: ExtensionPoint<T>): ContributionView<T>;
   start(): Promise<void>;
   stop(): Promise<void>;
 }

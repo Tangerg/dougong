@@ -30,6 +30,7 @@ export {
 
 export {
   definePlugin,
+  type AnyPlugin,
   type Awaitable,
   type PluginContext,
   type Plugin,
@@ -56,7 +57,12 @@ export {
 export type { Contribution, ContributionView } from "./contribution-store";
 export type { EventListener } from "./event-hub";
 export { ConfigValidationError, DougongError, isCancellationReason } from "./errors";
-export type { AsyncDisposable, Disposable } from "./resource";
+export {
+  asyncDisposeSymbol,
+  disposeSymbol,
+  type AsyncDisposable,
+  type Disposable,
+} from "./resource";
 export { assertPlainRecord } from "./record";
 export { ReadonlyMapSnapshot } from "./readonly-map";
 export { SerialQueue } from "./serial-queue";

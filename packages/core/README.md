@@ -45,7 +45,7 @@ await host.start()
 
 ### 环境要求
 
-Node.js ≥ 22 或等价的 ES2024 运行时。TypeScript 消费者需要
+Node.js ≥ 22；浏览器 / WebView 基线为 Chrome / Edge 119、Firefox 121、Safari 17.4，并提供 `Promise.withResolvers()`。显式 `.dispose()` 在全部基线上可用；`using` / `await using` 还要求运行时原生提供或应用预先 polyfill `Symbol.dispose` / `Symbol.asyncDispose`。Dougong 不修改全局对象。TypeScript 消费者需要
 `"lib": ["ES2024", "DOM", "DOM.Iterable", "ESNext.Disposable"]`。
 
 ---
@@ -91,7 +91,7 @@ No service locator, ambient scope, prototype-chain injection or proxy. The only 
 
 ### Requirements
 
-Node.js ≥ 22 or an equivalent ES2024 runtime. TypeScript consumers need
+Node.js ≥ 22; Chrome / Edge 119, Firefox 121 or Safari 17.4 for browsers and WebViews, with `Promise.withResolvers()`. Explicit `.dispose()` works throughout; `using` / `await using` additionally require native or application-polyfilled `Symbol.dispose` / `Symbol.asyncDispose`. Dougong does not mutate globals. TypeScript consumers need
 `"lib": ["ES2024", "DOM", "DOM.Iterable", "ESNext.Disposable"]`.
 
 ---

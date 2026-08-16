@@ -1,5 +1,12 @@
 import { describe, expect, expectTypeOf, it, vi } from "vitest";
-import { createHost, definePlugin, DougongError, extensionPoint, service } from "@dougongjs/core";
+import {
+  asyncDisposeSymbol,
+  createHost,
+  definePlugin,
+  DougongError,
+  extensionPoint,
+  service,
+} from "@dougongjs/core";
 import * as platformApi from "../src/index";
 
 const {
@@ -16,6 +23,12 @@ type Manifest = platformApi.Manifest;
 describe("public API surface", () => {
   it("keeps the Platform value-export budget explicit", () => {
     expectTypeOf<platformApi.RegistrationSnapshot["error"]>().toEqualTypeOf<Error | undefined>();
+    expectTypeOf<
+      ReturnType<platformApi.PlatformChangeSet<unknown>["update"]>
+    >().toEqualTypeOf<void>();
+    expectTypeOf<
+      ReturnType<platformApi.PlatformChangeSet<unknown>["remove"]>
+    >().toEqualTypeOf<void>();
     expect(Object.keys(platformApi).sort()).toEqual([
       "ImportLoader",
       "MemoryLoader",
@@ -25,6 +38,17 @@ describe("public API surface", () => {
       "createPlatform",
       "defineManifest",
     ]);
+  });
+
+  it("implements Core's canonical asynchronous disposal protocol", async () => {
+    const platform = createPlatform({
+      installer: createHost(),
+      apiVersion: "1.0.0",
+      loader: new MemoryLoader(new Map()),
+    });
+    expect(platform[asyncDisposeSymbol]).toBeTypeOf("function");
+    await platform[asyncDisposeSymbol]();
+    expect(platform.status).toBe("disposed");
   });
 });
 
@@ -1363,10 +1387,12 @@ describe("Platform", () => {
     expect(() => second.change().remove(registration)).toThrow("different Platform");
 
     const change = first.change();
-    change.update(registration, {
-      manifest: { name: "demo.change-owner", version: "1.1.0" },
-      reference: "plugin",
-    });
+    expect(
+      change.update(registration, {
+        manifest: { name: "demo.change-owner", version: "1.1.0" },
+        reference: "plugin",
+      }),
+    ).toBeUndefined();
     expect(() => change.remove(registration)).toThrow("can only appear once");
     const committing = change.commit();
     expect(change.commit()).toBe(committing);

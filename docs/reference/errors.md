@@ -9,6 +9,7 @@ Dougong 的所有结构化错误都带一个稳定的 `code` 字符串。应用�
 | 前缀 | 违反不变量的对象 | 属于 |
 | --- | --- | --- |
 | `SERVICE_*` / `CONTRACT_*` / `CONFIG_*` | Contract 身份、依赖图、配置声明 | Core |
+| `LIFETIME_*` | 结构化资源所有权 | Core |
 | `INSTALLATION_*` | 一次已存在的安装 | Core |
 | `GROUP_*` | 一棵安装所有权子树 | Core |
 | `ARTIFACT_*` | 一份外部制品内部不自洽 | Platform |
@@ -71,6 +72,7 @@ class PermissionDeniedError extends PlatformError {  // code: "PERMISSION_DENIED
 | --- | --- |
 | `SERVICE_NOT_RETURNED` | `provides` 声明了某个 key，但 `setup` 的返回值里没有 |
 | `SERVICE_UNAVAILABLE` | `host.get()` 在非 `active` 状态调用；或依赖的 Service 所属安装未处于活动状态 |
+| `LIFETIME_DISPOSED` | Lifetime 已开始释放，因而拒绝新的监听、贡献、任务、子 Lifetime、cleanup 或 Event 发送 |
 | `INSTALLATION_UNAVAILABLE` | 安装处于 `failed` 状态；或 setup / 配置校验器抛出了**非 Error** 的值（原值在 `cause` 里）；或在未提交的 draft 上操作 |
 | `INSTALLATION_REMOVED` | 在已移除的 Installation 上操作 |
 | `INSTALLATION_IDENTITY` | `update()` 试图更换 Plugin 名称。更新可以换实现和配置，不能换身份 |

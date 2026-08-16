@@ -8,7 +8,7 @@ import type { Authorizer } from "./permissions";
 import { assertCurrentRegistration, type RegistrationRecord } from "./registration";
 
 interface ActivationPorts<Reference> {
-  readonly installer: Installer;
+  readonly installer: Pick<Installer, "change">;
   readonly loader: Loader<Reference>;
   readonly authorizer: Authorizer;
 }

@@ -13,6 +13,8 @@
 ::: warning 浏览器 / WebView 运行时
 `Promise.withResolvers()` 需要 Safari 17.4+（macOS 14.4+）、Chrome 119+、Firefox 121+。
 如果你在 Electron、Tauri 或 Wails 里使用系统 WebView，请先确认目标系统版本。
+
+显式 `.dispose()` 不要求运行时提供 Explicit Resource Management。`using` / `await using` 还要求 `Symbol.dispose` / `Symbol.asyncDispose`；没有原生实现时，由应用在导入 Dougong 前显式 polyfill。Dougong 不修改全局对象。
 :::
 
 ## 安装

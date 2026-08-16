@@ -19,7 +19,7 @@ Platform 把这四件事编译成 Core 的操作。它**不复制** Core 的注�
                Installer（Host 或 Group）→ Installation
 ```
 
-Platform 拿一个 `Installer`（通常是 Host 或 Group），把外部插件编译进它的 canonical `change()`；最小适配器只需实现这一项。
+Platform 消费一个 `Installer` 的 `change()` 能力（通常来自 Host 或 Group），把外部插件编译进 canonical Core ChangeSet。它的内部端口按消费侧收窄为 `Pick<Installer, "change">`，而完整 `Installer` 仍精确表示 `install/group/change`。
 
 ## 最小例子
 
@@ -116,6 +116,8 @@ const authorizer = {
 
 ::: danger 它不是沙箱
 权限检查发生在**执行模块之前**，它决定的是「要不要运行这段代码」，不是「这段代码能碰什么」。
+
+授权发生在 Artifact admission 与激活边界，不会拦截之后的每一次 `contribute()`。某个 ExtensionPoint 若需要逐项 capability 检查，应把权限标签放进领域 value，并由该点的领域组合器或受限 Service 执行策略；Platform 不复制 Core 的贡献注册表。
 
 JavaScript 模块一旦被 `import` 就和应用代码在同一个 realm 里，能访问同样的全局对象。真正的隔离需要 Worker、iframe、进程或独立 Host——Platform 不假装提供它。
 

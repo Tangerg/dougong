@@ -40,7 +40,7 @@ await platform.trigger("command:music.search");
 await registration.ready();
 ```
 
-Platform options 是仅含 `installer`、`apiVersion`、`loader`、`authorizer`、`logger` 的普通 record；只读取可枚举 own property，不接受未知字段或原型链配置。Installer、Loader、Authorizer 与 Logger 本身仍是结构化端口，可以由普通对象或类实例实现。
+Platform options 是仅含 `installer`、`apiVersion`、`loader`、`authorizer`、`logger` 的普通 record；只读取可枚举 own property，不接受未知字段或原型链配置。`installer` 消费 `Pick<Installer, "change">`，Loader、Authorizer 与 Logger 也都是结构化端口；这些协作者可以由普通对象或类实例实现。
 
 `register()` 只让 Artifact 进入 Platform；`activate()` 才选择并加载外部 Plugin；`ready()` 等待对应 Core Installation 真正越过 Host / ChangeSet ready barrier。三者不是近义 API。
 
@@ -114,6 +114,8 @@ interface Authorizer {
 2. 每次真正加载外部模块前再次授权，使可撤销、交互式或随会话变化的策略能够阻止执行。
 
 Authorizer 决定“是否允许继续”，不改写 Context，也不承诺操作系统级隔离。文件系统、网络、窗口等能力仍应由应用代码以最小 Service 接口提供；安全边界由 Loader、执行环境和 Service 实现共同完成。
+
+授权只发生在 Artifact admission 与激活边界，不拦截 Core 中后续的单次 `contribute()`。逐 ExtensionPoint 的权限属于领域组合策略，应基于 contribution value 中的显式标签或受限 Service 实现，不能让 Platform 复制一份贡献注册表。
 
 ## 五、注册、占位与激活
 
@@ -201,7 +203,7 @@ await change.commit();
 
 ## 八、Group 与应用适配
 
-`createPlatform()` 接受 `Installer`，因此既能绑定整个 Host，也能绑定某个 Group：
+`createPlatform()` 通过 `Pick<Installer, "change">` 接受一个安装位置的事务能力，因此既能绑定整个 Host，也能绑定某个 Group：
 
 ```ts
 const workspace = host.group("workspace", () => {});

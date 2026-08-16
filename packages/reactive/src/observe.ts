@@ -1,4 +1,11 @@
-import type { AsyncDisposable, Disposable, Readable, Resource } from "./protocol";
+import {
+  asyncDisposeSymbol,
+  disposeSymbol,
+  type AsyncDisposable,
+  type Disposable,
+  type Readable,
+  type Resource,
+} from "./protocol";
 import { assertSynchronous, isThenable } from "./sync-result";
 
 export interface ObservationTask<T = void> extends AsyncDisposable {
@@ -264,7 +271,7 @@ function assertDisposable(value: unknown, source: string): asserts value is Disp
   if (
     !value ||
     typeof (value as Disposable).dispose !== "function" ||
-    typeof (value as Disposable)[Symbol.dispose] !== "function"
+    typeof (value as Disposable)[disposeSymbol] !== "function"
   ) {
     throw new TypeError(`${source} must return a Disposable`);
   }
@@ -274,7 +281,7 @@ function assertAsyncDisposable(value: unknown, source: string): asserts value is
   if (
     !value ||
     typeof (value as AsyncDisposable).dispose !== "function" ||
-    typeof (value as AsyncDisposable)[Symbol.asyncDispose] !== "function"
+    typeof (value as AsyncDisposable)[asyncDisposeSymbol] !== "function"
   ) {
     throw new TypeError(`${source} must return an AsyncDisposable`);
   }
@@ -284,7 +291,7 @@ function assertObservationLifetime(value: unknown): asserts value is Observation
   if (
     !value ||
     typeof (value as ObservationLifetime).dispose !== "function" ||
-    typeof (value as ObservationLifetime)[Symbol.asyncDispose] !== "function" ||
+    typeof (value as ObservationLifetime)[asyncDisposeSymbol] !== "function" ||
     typeof (value as ObservationLifetime).cleanup !== "function" ||
     typeof (value as ObservationLifetime).lifetime !== "function" ||
     typeof (value as ObservationLifetime).spawn !== "function"
@@ -297,7 +304,7 @@ function assertObservationTask(value: unknown): asserts value is ObservationTask
   if (
     !value ||
     typeof (value as ObservationTask).dispose !== "function" ||
-    typeof (value as ObservationTask)[Symbol.asyncDispose] !== "function" ||
+    typeof (value as ObservationTask)[asyncDisposeSymbol] !== "function" ||
     !isThenable((value as ObservationTask).result)
   ) {
     throw new TypeError("ObservationOwner.spawn() must return an ObservationTask");

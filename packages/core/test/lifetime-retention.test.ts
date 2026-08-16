@@ -34,6 +34,7 @@ const RETAINED_HANDLE_KINDS = [
   "contribution-subscription",
   "task",
   "contribution-view",
+  "context-logger",
 ] as const;
 
 describe("lifetime retention", () => {
@@ -414,9 +415,19 @@ async function createRetainedTerminalResourceHandle(
         }),
       );
       handles.set("contribution-view", ctx.items);
+      handles.set("context-logger", ctx.log);
     },
   });
-  const host = createHost();
+  const loggerPayload = payload("logger-payload");
+  const writeLog = () => void loggerPayload;
+  const host = createHost({
+    logger: {
+      debug: writeLog,
+      info: writeLog,
+      warn: writeLog,
+      error: writeLog,
+    },
+  });
   references.set("host", new WeakRef(host));
   host.install(plugin);
   await host.start();

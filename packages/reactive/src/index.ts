@@ -1,4 +1,4 @@
-import type { Disposable, Readable } from "./protocol";
+import { disposeSymbol, type Disposable, type Readable } from "./protocol";
 import { assertSynchronous } from "./sync-result";
 
 export type { AsyncDisposable, Disposable, Readable } from "./protocol";
@@ -60,7 +60,7 @@ class ReactiveSubscription implements Disposable {
     dispose?.();
   }
 
-  [Symbol.dispose]() {
+  [disposeSymbol]() {
     this.dispose();
   }
 }

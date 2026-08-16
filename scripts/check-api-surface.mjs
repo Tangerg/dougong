@@ -4,7 +4,7 @@
 // this one reads the *built* `dist/index.d.ts` of every published package and asserts the exact
 // exported vocabulary, values and types alike.
 //
-// Three independent assertions per package:
+// Four independent assertions per package:
 //
 //   1. The exported identifiers equal the allowlist exactly. A new export is a
 //      deliberate decision, not a side effect of an `export *`.
@@ -14,6 +14,8 @@
 //      stay legal while `PluginHandle` and friends cannot come back.
 //   3. Every public export appears in the Chinese and English documentation for
 //      its package. Updating the allowlist cannot leave a supported API unexplained.
+//   4. Built declaration files contain no explicit or inferred `any`; source
+//      checks alone cannot see types introduced by declaration emit.
 //
 // Symbols are resolved through the TypeScript checker rather than matched as
 // text, so `export *` re-exports are seen as the final surface a consumer gets.
@@ -63,9 +65,11 @@ const PACKAGES = {
       "ReadonlyMapSnapshot",
       "SerialQueue",
       "SnapshotPublisher",
+      "asyncDisposeSymbol",
       "assertPlainRecord",
       "createHost",
       "definePlugin",
+      "disposeSymbol",
       "event",
       "extensionPoint",
       "isCancellationReason",
@@ -83,6 +87,7 @@ const PACKAGES = {
       "Requirement",
       "Service",
       // The declaration and its context.
+      "AnyPlugin",
       "Awaitable",
       "Plugin",
       "PluginContext",
@@ -210,12 +215,41 @@ function difference(actual, expected) {
 const failures = [];
 const surfaces = new Map();
 
+const workspaceManifest = JSON.parse(readFileSync("package.json", "utf8"));
+for (const packageName of ["core", "platform", "reactive", "dougong"]) {
+  const manifestPath = `packages/${packageName}/package.json`;
+  const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+  for (const field of ["engines", "browserslist"]) {
+    if (JSON.stringify(manifest[field]) !== JSON.stringify(workspaceManifest[field])) {
+      failures.push(`${manifestPath}: ${field} differs from the workspace runtime baseline`);
+    }
+  }
+}
+
 for (const [name, spec] of Object.entries(PACKAGES)) {
   if (!existsSync(resolve(spec.dist))) {
     failures.push(`${name}: ${spec.dist} is missing — run \`pnpm build\` first`);
     continue;
   }
   surfaces.set(name, surfaceOf(spec.dist));
+}
+
+for (const file of globSync("packages/{core,platform,reactive,dougong}/dist/**/*.d.ts")) {
+  const source = ts.createSourceFile(
+    file,
+    readFileSync(file, "utf8"),
+    ts.ScriptTarget.Latest,
+    true,
+    ts.ScriptKind.TS,
+  );
+  const visit = (node) => {
+    if (node.kind === ts.SyntaxKind.AnyKeyword) {
+      const line = source.getLineAndCharacterOfPosition(node.getStart(source)).line + 1;
+      failures.push(`${file}:${line}: declaration surface contains an any type`);
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(source);
 }
 
 for (const [name, spec] of Object.entries(PACKAGES)) {
@@ -313,6 +347,59 @@ const MARKDOWN_FILES = [
   "README.md",
   "README.en.md",
 ];
+
+// The Markdown tree is the navigation source of truth. Every primary page must
+// be reachable from both the locale sidebar and its homepage, and neither
+// navigation may retain a route whose file was removed.
+const navigationSource = readFileSync("docs/.vitepress/config.mts", "utf8");
+const configuredRoutes = [...navigationSource.matchAll(/\blink:\s*"([^"]+)"/g)].map(
+  ([, route]) => route.split("#", 1)[0],
+);
+for (const locale of [
+  {
+    name: "Chinese",
+    prefix: "",
+    home: "docs/index.md",
+    pages: ["docs/guide/*.md", "docs/reference/*.md", "docs/examples.md"],
+  },
+  {
+    name: "English",
+    prefix: "en/",
+    home: "docs/en/index.md",
+    pages: ["docs/en/guide/*.md", "docs/en/reference/*.md", "docs/en/examples.md"],
+  },
+]) {
+  const expected = new Set(
+    locale.pages
+      .flatMap((pattern) => globSync(pattern))
+      .map((file) => `/${file.slice("docs/".length, -".md".length)}`),
+  );
+  const sidebar = new Set(
+    configuredRoutes.filter(
+      (route) =>
+        route.startsWith(`/${locale.prefix}guide/`) ||
+        route.startsWith(`/${locale.prefix}reference/`) ||
+        route === `/${locale.prefix}examples`,
+    ),
+  );
+  const homepage = new Set(
+    [...readFileSync(locale.home, "utf8").matchAll(/\]\(\.\/([^\s)#]+\.md)(?:#[^)]*)?\)/g)].map(
+      ([, target]) => `/${locale.prefix}${target.slice(0, -".md".length)}`,
+    ),
+  );
+  for (const [surface, routes] of [
+    ["sidebar", sidebar],
+    ["homepage", homepage],
+  ]) {
+    for (const route of expected) {
+      if (!routes.has(route)) failures.push(`${locale.name} ${surface}: omits '${route}'`);
+    }
+    for (const route of routes) {
+      if (!expected.has(route)) failures.push(`${locale.name} ${surface}: stale route '${route}'`);
+    }
+  }
+}
+
 const retiredDocPatterns = [...retiredIdentifiers].map((term) => [
   term,
   new RegExp(`(?<![\\w$-])${escapeRegExp(term)}(?![\\w$-])`),
@@ -349,12 +436,15 @@ for (const doc of MARKDOWN_FILES) {
 const GUARD_PAGES = ["docs/reference/guards.md", "docs/en/reference/guards.md"];
 const gateSource = readFileSync("scripts/check-layers.mjs", "utf8");
 const sourceRuleCount = [...gateSource.matchAll(/message:\s*\n?\s*"[^"]+"/g)].length;
-// Prohibitions enforced outside SOURCE_RULES, currently the Lifetime constructor
-// allowlist. Counted from its own marker so the total stays derived.
-const standaloneRuleCount = [...gateSource.matchAll(/^const [A-Z_]+_CONSTRUCTORS\b/gm)].length;
+// Prohibitions enforced outside SOURCE_RULES, currently constructor allowlists
+// and forbidden AST type kinds. Counted from their markers so the total stays derived.
+const standaloneRuleCount = [
+  ...gateSource.matchAll(/^const [A-Z_]+_(?:CONSTRUCTORS|TYPE_KINDS)\b/gm),
+].length;
 const expectedRuleRows = sourceRuleCount + standaloneRuleCount;
 for (const page of GUARD_PAGES) {
-  const documentedRules = [...readFileSync(page, "utf8").matchAll(/^\|.+\|$/gm)]
+  const pageText = readFileSync(page, "utf8");
+  const documentedRules = [...pageText.matchAll(/^\|.+\|$/gm)]
     .map(([row]) => row)
     .filter((row) => !/^\|[\s-:|]+\|$/.test(row)) // separator rows
     // The step table is keyed by a number and the coverage table by a package
@@ -365,6 +455,34 @@ for (const page of GUARD_PAGES) {
     failures.push(
       `${page}: documents ${documentedRules} architecture rules, but check-layers.mjs enforces ${expectedRuleRows}`,
     );
+  }
+}
+
+const coverageSource = readFileSync("vitest.config.ts", "utf8");
+const coverageThresholds = new Map();
+for (const match of coverageSource.matchAll(
+  /"packages\/(core|platform|reactive)\/src\/\*\*":\s*\{([^}]+)\}/g,
+)) {
+  const [, packageName, body] = match;
+  const values = Object.fromEntries(
+    [...body.matchAll(/(statements|branches|functions|lines):\s*(\d+)/g)].map(([, key, value]) => [
+      key,
+      Number(value),
+    ]),
+  );
+  coverageThresholds.set(packageName, values);
+}
+for (const packageName of ["core", "platform", "reactive"]) {
+  const values = coverageThresholds.get(packageName);
+  if (!values || Object.keys(values).length !== 4) {
+    failures.push(`vitest.config.ts: cannot derive ${packageName} coverage thresholds`);
+    continue;
+  }
+  const expectedRow = `| ${packageName} | ${values.statements} | ${values.branches} | ${values.functions} | ${values.lines} |`;
+  for (const page of GUARD_PAGES) {
+    if (!readFileSync(page, "utf8").includes(expectedRow)) {
+      failures.push(`${page}: coverage row for ${packageName} differs from vitest.config.ts`);
+    }
   }
 }
 

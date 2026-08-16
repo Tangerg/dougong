@@ -1,27 +1,28 @@
 import type { Event, ExtensionPoint } from "./contracts";
 import type { Contribution, ContributionLeaseKind } from "./contribution-store";
-import { isCancellationReason } from "./errors";
+import { DougongError, isCancellationReason } from "./errors";
 import type { EventListener } from "./event-hub";
 import {
   LifetimeDiagnostics,
   type LifetimeDiagnosticNode,
   type LifetimeResourceKind,
 } from "./lifetime-diagnostics";
-import type {
-  AsyncDisposable,
-  Disposable,
-  Publication,
-  Resource,
-  StagedResource,
+import {
+  asyncDisposeSymbol,
+  type AsyncDisposable,
+  type Disposable,
+  type Publication,
+  type Resource,
+  type StagedResource,
 } from "./resource";
 
 export type { LifetimePhase, LifetimeSnapshot } from "./lifetime-diagnostics";
 
 export interface Logger {
-  debug(message: unknown, ...details: unknown[]): void;
-  info(message: unknown, ...details: unknown[]): void;
-  warn(message: unknown, ...details: unknown[]): void;
-  error(message: unknown, ...details: unknown[]): void;
+  readonly debug: (message: unknown, ...details: unknown[]) => void;
+  readonly info: (message: unknown, ...details: unknown[]) => void;
+  readonly warn: (message: unknown, ...details: unknown[]) => void;
+  readonly error: (message: unknown, ...details: unknown[]) => void;
 }
 
 export function isLogger(value: unknown): value is Logger {
@@ -45,6 +46,7 @@ export interface Task<T = void> extends AsyncDisposable {
 
 export type Cleanup = () => unknown;
 export type BackgroundTask<T> = (signal: AbortSignal) => T | PromiseLike<T>;
+type EventArguments<T> = [T] extends [void] ? [payload?: T] : [payload: T];
 
 const disposalReason = Object.freeze(new DOMException("Resource disposed", "AbortError"));
 
@@ -54,7 +56,7 @@ export interface LifetimeOperations {
   lifetime(label: string): LifetimeContext;
   spawn<T>(task: BackgroundTask<T>): Task<T>;
   on<T>(token: Event<T>, listener: EventListener<T>): Disposable;
-  emit<T>(token: Event<T>, payload: T): Promise<void>;
+  emit<T>(token: Event<T>, ...payload: EventArguments<T>): Promise<void>;
   contribute<T>(token: ExtensionPoint<T>, key: string, value: T): Contribution<T>;
 }
 
@@ -75,6 +77,12 @@ export interface LifetimePort {
     value: T,
     release: (publication: Publication) => void,
   ): StagedResource<Contribution<T>>;
+  writeLog(
+    level: keyof Logger,
+    message: unknown,
+    meta: InstanceMeta,
+    details: readonly unknown[],
+  ): void;
   report(error: unknown): void;
 }
 
@@ -185,7 +193,7 @@ class CleanupRecord implements AsyncDisposable {
     return completion;
   }
 
-  [Symbol.asyncDispose]() {
+  [asyncDisposeSymbol]() {
     return this.dispose();
   }
 }
@@ -247,7 +255,7 @@ class TaskRecord<T> implements Task<T> {
     return completion;
   }
 
-  [Symbol.asyncDispose]() {
+  [asyncDisposeSymbol]() {
     return this.dispose();
   }
 
@@ -329,6 +337,20 @@ export class Lifetime implements LifetimeContext {
     return this.#requireActive().diagnostics.view;
   }
 
+  /** A facade whose only Runtime edge disappears when this Lifetime terminates. */
+  contextLogger(meta: InstanceMeta): Logger {
+    const write =
+      (level: keyof Logger) =>
+      (message: unknown, ...details: unknown[]) =>
+        this.#requireBinding().port.writeLog(level, message, meta, details);
+    return Object.freeze({
+      debug: write("debug"),
+      info: write("info"),
+      warn: write("warn"),
+      error: write("error"),
+    });
+  }
+
   cleanup(dispose: Cleanup) {
     this.#requireActive();
     if (typeof dispose !== "function") throw new TypeError("Cleanup must be a function");
@@ -379,8 +401,9 @@ export class Lifetime implements LifetimeContext {
     return publication.handle;
   }
 
-  emit<T>(token: Event<T>, payload: T) {
-    return this.#requireActive().port.emit(this.#ownerId, token, payload);
+  async emit<T>(token: Event<T>, ...payload: EventArguments<T>) {
+    const { port } = this.#requireActive();
+    await port.emit(this.#ownerId, token, payload[0] as T);
   }
 
   contribute<T>(token: ExtensionPoint<T>, key: string, value: T) {
@@ -465,7 +488,7 @@ export class Lifetime implements LifetimeContext {
     return completion;
   }
 
-  [Symbol.asyncDispose]() {
+  [asyncDisposeSymbol]() {
     return this.dispose();
   }
 
@@ -531,8 +554,8 @@ class LifetimeHandle implements LifetimeContext {
     return this.#lifetime.on(token, listener);
   }
 
-  emit<T>(token: Event<T>, payload: T) {
-    return this.#lifetime.emit(token, payload);
+  emit<T>(token: Event<T>, ...payload: EventArguments<T>) {
+    return this.#lifetime.emit(token, ...payload);
   }
 
   contribute<T>(token: ExtensionPoint<T>, key: string, value: T) {
@@ -543,7 +566,7 @@ class LifetimeHandle implements LifetimeContext {
     return this.#lifetime.dispose();
   }
 
-  [Symbol.asyncDispose]() {
+  [asyncDisposeSymbol]() {
     return this.dispose();
   }
 }
@@ -558,5 +581,5 @@ function validateLifetimeLabel(label: string) {
 }
 
 function lifetimeDisposedError() {
-  return new TypeError("Lifetime is disposing or has been disposed");
+  return new DougongError("LIFETIME_DISPOSED", "Lifetime is disposing or has been disposed");
 }

@@ -5,6 +5,12 @@
   "engines": {
     "node": ">=22"
   },
+  "browserslist": [
+    "Chrome >= 119",
+    "Edge >= 119",
+    "Firefox >= 121",
+    "Safari >= 17.4"
+  ],
   "sideEffects": false,
   "files": [
     "dist",

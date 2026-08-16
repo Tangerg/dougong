@@ -76,6 +76,11 @@ describe("the learning path", () => {
     // 08 · The placeholder swap is one committed step, never a duplicate key.
     expect(facts.get("08")).toContain("ExtensionPoint held 1 throughout");
 
+    // 09 · Replacing playback cancels in-flight work through structural ownership.
+    expect(facts.get("09")).toContain(
+      "Replacing playback aborted 1 in-flight resolve through its child Lifetime",
+    );
+
     // 11 · A failed plan restores the whole plan, not just the failing entry.
     expect(facts.get("11")).toContain("invalid plan was rejected = true");
     expect(facts.get("11")).toContain("running service remained 'hello-v1'");

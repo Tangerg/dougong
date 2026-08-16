@@ -10,7 +10,7 @@ import {
   signal,
   type ReadonlySignal,
 } from "dougong";
-import { exampleResult, type ExampleResult } from "./example";
+import { exampleResult, whenAborted, type ExampleResult } from "./example";
 
 interface Track {
   readonly query: string;
@@ -46,6 +46,7 @@ export async function planetScenario(): Promise<ExampleResult> {
   const audioUris: string[] = [];
   const history: Track[] = [];
   const shellTracks: string[] = [];
+  let supersededPlaybacks = 0;
   let playerStarts = 0;
   let player!: Player;
 
@@ -87,16 +88,18 @@ export async function planetScenario(): Promise<ExampleResult> {
         player: {
           current,
           async play(query: string) {
-            await playback.dispose();
-            playback = ctx.lifetime("playback");
+            const previous = playback;
+            const currentPlayback = ctx.lifetime("playback");
+            playback = currentPlayback;
+            await previous.dispose();
             const source = [...ctx.sources.get().values()].reduce<MediaSource | undefined>(
               (selected, candidate) =>
                 !selected || candidate.score(query) > selected.score(query) ? candidate : selected,
               undefined,
             );
             if (!source) throw new Error("No media source is available");
-            const uri = await source.resolve(query, playback.signal);
-            await ctx.audio.play(uri, playback.signal);
+            const uri = await source.resolve(query, currentPlayback.signal);
+            await ctx.audio.play(uri, currentPlayback.signal);
             const track = Object.freeze({ query, uri, source: source.id });
             current.set(track);
             await ctx.emit(TRACK_CHANGED, track);
@@ -131,6 +134,9 @@ export async function planetScenario(): Promise<ExampleResult> {
         id: "remote",
         score: () => 100,
         async resolve(query, signal) {
+          if (query === "superseded") {
+            await whenAborted(signal);
+          }
           signal.throwIfAborted();
           return `https://media.example/${encodeURIComponent(query)}`;
         },
@@ -165,7 +171,12 @@ export async function planetScenario(): Promise<ExampleResult> {
 
   await player.play("intro");
   await platform.trigger("media:remote");
+  const superseded = player.play("superseded").catch((error: unknown) => {
+    if (!(error instanceof DOMException) || error.name !== "AbortError") throw error;
+    supersededPlaybacks++;
+  });
   await player.play("album 42");
+  await superseded;
   await remote.remove();
   await player.play("outro");
 
@@ -183,6 +194,7 @@ export async function planetScenario(): Promise<ExampleResult> {
       `The player picked the best available source each time: ${history.map((track) => track.source).join(" → ")}.`,
       `Audio output received ${audioUris.join(", ")}.`,
       `Providers were added and removed live, yet the player started ${playerStarts} time — an ExtensionPoint is not a dependency edge.`,
+      `Replacing playback aborted ${supersededPlaybacks} in-flight resolve through its child Lifetime.`,
       `The shell observed ${shellTracks.join(", ")}; the player kept ${lifetime?.children.length} playback Lifetime, replaced per track.`,
       "The Platform was bound to the /providers Group, so removing that Group removed every downloaded provider with it.",
     ],

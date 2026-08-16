@@ -1,7 +1,7 @@
 import type { Host, HostOptions, ChangeSet, Group } from "./host-api";
 import { Engine, type TransitionOutcome } from "./engine";
 import type { ChangeOperation } from "./change-set";
-import type { Service } from "./contracts";
+import type { ExtensionPoint, OptionalService, Service } from "./contracts";
 import { HostDiagnostics, type HostSnapshot, type HostStatus } from "./diagnostics";
 import { GroupCoordinator } from "./group-coordinator";
 import type { GroupNode } from "./group";
@@ -66,10 +66,16 @@ class HostImpl implements Host {
     this.#onError = configuredOnError ?? ((error) => this.#logger.error(error));
     this.#installations = new InstallationRegistry({
       notifyChanged: () => this.#publishDiagnostics(),
-      update: (installation, facade, update) =>
-        this.#groups.change(installation.group).update(facade, update).commit(),
-      remove: (installation, facade) =>
-        this.#groups.change(installation.group).remove(facade).commit(),
+      update: (installation, facade, update) => {
+        const change = this.#groups.change(installation.group);
+        change.update(facade, update);
+        return change.commit();
+      },
+      remove: (installation, facade) => {
+        const change = this.#groups.change(installation.group);
+        change.remove(facade);
+        return change.commit();
+      },
     });
     this.#engine = new Engine({
       hostName: name,
@@ -100,9 +106,15 @@ class HostImpl implements Host {
     return this.#status;
   }
 
-  get<T>(token: Service<T>): T {
+  get<T>(token: Service<T>): T;
+  get<T>(token: OptionalService<T>): T | undefined;
+  get<T>(token: Service<T> | OptionalService<T>): T | undefined {
     const availability = this.#status === "active" ? "available" : "unavailable";
     return this.#engine.get(token, availability);
+  }
+
+  contributions<T>(token: ExtensionPoint<T>) {
+    return this.#engine.contributions(token);
   }
 
   install<Config, Requires extends Requirements, Provides extends Provisions, ConfigInput>(

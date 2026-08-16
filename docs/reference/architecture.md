@@ -141,7 +141,10 @@ observe(ctx, source, callback)
   + ctx.lifetime + ctx.spawn + ctx.cleanup
 
 registration.update(artifact)
-  = platform.change().update(registration, artifact).commit()
+  ↓
+const change = platform.change()
+change.update(registration, artifact)
+await change.commit()
 ```
 
 高层可以增加 Schema、默认值、策略和领域错误，但不能绕过所有权、事务或权限。

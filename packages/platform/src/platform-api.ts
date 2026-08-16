@@ -69,8 +69,8 @@ export interface PlatformChangeSet<Reference> {
   >(
     registration: Registration<Reference>,
     artifact: Artifact<Reference, Config, Requires, Provides, ConfigInput>,
-  ): this;
-  remove(registration: Registration<Reference>): this;
+  ): void;
+  remove(registration: Registration<Reference>): void;
   commit(): Promise<void>;
 }
 
@@ -91,18 +91,19 @@ export interface Platform<Reference> extends AsyncDisposable {
 }
 
 export interface PlatformOptions<Reference> {
-  readonly installer: Installer;
+  readonly installer: Pick<Installer, "change">;
   readonly apiVersion: string;
   readonly loader: Loader<Reference>;
   readonly authorizer?: Authorizer;
   readonly logger?: Logger;
 }
 
-export type ErasedPlugin = Plugin<unknown, Requirements, Provisions, unknown>;
+/** Platform's validated execution shape after an external module crosses its trust boundary. */
+export type ValidatedPlugin = Plugin<unknown, Requirements, Provisions, unknown>;
 
 export interface NormalizedArtifact<Reference> {
   readonly manifest: Manifest;
   readonly reference: Reference;
   readonly config: unknown;
-  readonly placeholder?: ErasedPlugin;
+  readonly placeholder?: ValidatedPlugin;
 }

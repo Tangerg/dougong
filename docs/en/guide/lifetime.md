@@ -64,7 +64,7 @@ await cleanup.dispose()         // run fn early (exactly once)
 ```ts
 async function listenDuring(session) {
   using subscription = session.on(TICK, handler)
-  await session.emit(TICK, undefined)
+  await session.emit(TICK)
   // disposed when the function exits
 }
 
@@ -128,15 +128,9 @@ A child that is disposed early detaches from its parent; releasing a parent recu
 
 A Lifetime moves through `active` → `disposing` → `disposed`.
 
-```ts
-setup(ctx) {
-  ctx.cleanup(async () => {
-    await ctx.emit(SHUTTING_DOWN, undefined)   // ✓ emit is allowed while disposing
-  })
-}
-```
+Once `disposing` begins, every Context operation is closed, including `emit()`. Stop order first withdraws listeners, contributions, subscriptions and views, then aborts the `signal`, and only then awaits tasks, child Lifetimes and cleanups. Cleanup releases resources; it is not a second fact-broadcast phase.
 
-`emit` remains available during `disposing` because cleanup logic frequently needs to announce "I am going away". Acquiring **new** resources is not allowed — `cleanup` / `spawn` / `on` / `contribute` / `lifetime` all throw — since nothing would be responsible for releasing them.
+At this boundary `emit()` returns a promise rejected with `LIFETIME_DISPOSED` rather than throwing synchronously. Code intentionally absorbing a shutdown race can therefore write `void ctx.emit(STOPPED).catch(report)`. If a stopped state must remain readable, put it in a Service or Signal rather than a cleanup Event.
 
 ## Observing the ownership tree
 

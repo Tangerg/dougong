@@ -9,6 +9,7 @@ A code names **which object's invariant was violated**, instead of vaguely sayin
 | Prefix | The object whose invariant broke | Package |
 | --- | --- | --- |
 | `SERVICE_*` / `CONTRACT_*` / `CONFIG_*` | Contract identity, the dependency graph, a config declaration | Core |
+| `LIFETIME_*` | structured resource ownership | Core |
 | `INSTALLATION_*` | One existing installation | Core |
 | `GROUP_*` | One installation-ownership subtree | Core |
 | `ARTIFACT_*` | One external artifact that disagrees with itself | Platform |
@@ -71,6 +72,7 @@ Every affected Installation's Plugin config is validated in full before any runn
 | --- | --- |
 | `SERVICE_NOT_RETURNED` | `provides` declared a key that the `setup` return value does not contain |
 | `SERVICE_UNAVAILABLE` | `host.get()` was called outside `active`; or the depended-on Service's installation is not active |
+| `LIFETIME_DISPOSED` | A Lifetime has begun disposal and therefore rejects new listeners, contributions, tasks, child Lifetimes, cleanups or Event emission |
 | `INSTALLATION_UNAVAILABLE` | The installation is `failed`; or setup / a config validator threw a **non-Error** value (the original is in `cause`); or an operation ran on an uncommitted draft |
 | `INSTALLATION_REMOVED` | An operation on a removed Installation |
 | `INSTALLATION_IDENTITY` | `update()` tried to change the Plugin name. An update may swap implementation and config, never identity |

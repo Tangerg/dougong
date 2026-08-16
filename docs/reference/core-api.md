@@ -85,15 +85,16 @@ Group 机械展开到 canonical ChangeSet；Platform 和 reactive `observe()` �
 | --- | --- |
 | `Service`、`ExtensionPoint`、`Event`、`OptionalService`、`Requirement` | 三种 Contract 身份与可选 Service 依赖 |
 | `ContractKind`、`ContractValue` | Contract kind 联合与值类型提取 |
-| `Plugin`、`PluginContext`、`Awaitable` | Plugin 声明、setup Context 与同步/异步返回边界 |
+| `Plugin`、`AnyPlugin`、`PluginContext`、`Awaitable` | Plugin 声明、异构集合形状、setup Context 与同步/异步返回边界 |
 | `Requirements`、`ResolvedRequirement`、`ResolvedRequirements` | 声明依赖表及其解析后值类型 |
 | `Provisions`、`ProvidedServices` | Service 提供声明及 setup 返回值类型 |
 | `Host`、`HostOptions`、`HostStatus`、`HostSnapshot` | 执行边界、构造选项、状态与诊断快照 |
-| `ChangeSet`、`Group`、`InstallationUpdate`、`LifecycleStatus` | 事务、结构所有权、安装更新和 Group/Installation 共享生命周期状态 |
+| `Installer`、`ChangeSet`、`Group`、`InstallationUpdate`、`LifecycleStatus` | 安装能力、事务、结构所有权、安装更新和 Group/Installation 共享生命周期状态 |
 | `GroupSnapshot`、`SnapshotView` | 结构诊断条目与统一只读观察协议 |
 | `LifetimeContext`、`LifetimeOperations`、`LifetimePhase` | Lifetime 的完整 Context、可组合操作协议与诊断阶段 |
 | `Task`、`BackgroundTask`、`Cleanup` | 被拥有任务、任务回调与清理回调 |
 | `Disposable`、`AsyncDisposable` | 分别供 `using` 与 `await using` 使用的同步/异步释放协议 |
+| `disposeSymbol`、`asyncDisposeSymbol` | 两种释放协议唯一的跨运行时 key |
 | `EventListener` | Event 监听器签名 |
 | `Logger`、`isLogger` | 诊断输出端口及其唯一运行时判定器 |
 
@@ -223,6 +224,15 @@ const usersPlugin = definePlugin({
 
 不支持函数插件、插件基类、装饰器或 `{ apply() }` 形态。
 
+`Plugin` 保留单份声明的精确 config、requires 与 provides 类型。组合根需要保存不同形状的插件时，使用只擦除作者期泛型的 `AnyPlugin`：
+
+```ts
+const plugins: readonly AnyPlugin[] = [databasePlugin, usersPlugin]
+for (const plugin of plugins) host.install(plugin)
+```
+
+`AnyPlugin` 不是另一种插件，也没有第二条执行路径；它只用于保存已经由 `definePlugin()` 定义好的值，不是原始对象字面量的作者期输入类型。安装边界仍会按同一套规则重新校验并规范化声明。
+
 ### 4.1 `requires`
 
 依赖 alias 成为 Context 的 own property：
@@ -308,6 +318,8 @@ interface InstanceMeta {
 }
 ```
 
+`ctx.log` 仍使用 Host 提供的 Logger，但 Core 会把当前冻结的 `InstanceMeta` 作为第一项 detail 传入，因此日志端无需从消息文本猜归属。它是 Lifetime 可撤销的窄 facade：cleanup 期间仍可记录，Lifetime 终止后会切断 Runtime/Logger 引用并以 `LIFETIME_DISPOSED` 拒绝继续使用。Logger 的四个成员是严格函数属性；会丢弃 `unknown` message 或 rest details 的窄实现不能通过类型检查。
+
 文件系统、网络、窗口、剪贴板、存储、通知和路由器都应声明为 Service，不得成为 Context namespace。
 
 Context 不提供 `effect()`、`observe()` 或 `using()`：
@@ -341,9 +353,10 @@ Host 外部和测试边界可以读取：
 
 ```ts
 const users = host.get(USERS)
+const cache = host.get(optional(CACHE)) // Cache | undefined
 ```
 
-`host.get()` 只接受 Service，并只在 Host 为 active 且该 Service 当前可用时成功；Plugin 内部仍只能使用声明依赖。
+`host.get()` 只接受 Service 或现有的 `optional(Service)` 包装，并且只在 Host 为 active 时读取。必需 Service 当前不可用时抛 `SERVICE_UNAVAILABLE`；optional Service 没有 provider 时返回 `undefined`。Plugin 内部仍只能使用声明依赖。Core 不增加语义重复的 `tryGet()`。
 
 Host 缓存已提交执行状态对应的已验证依赖图；`host.get()` 只做 provider 与 Service Map 查询，不重新构图。idle 状态允许分步安装暂时不完整的计划，因此只在 `start()` 或 Host active 时提交的 ChangeSet 中构造候选图。
 
@@ -388,6 +401,8 @@ contribution.dispose()
 
 其中 `%` 与 `/` 分别转义为 `%25` 与 `%2F`，因此分隔符不会让两组不同的 installation ID / 局部 key 组合产生同一个真实 key，同时常见 key 仍保持可读。
 
+这个 key 只表达所有权身份，不是领域 ID，重装后也会变化。消费者应把命令 ID、排序权重等领域数据放进 value，并显式校验冲突或排序；不能依赖 Map 的真实 key 或插入顺序表达领域策略。
+
 因此：
 
 - 不同插件使用相同局部 key 不冲突；
@@ -419,6 +434,17 @@ ctx.routes.subscribe(rebuild)
 ```
 
 从 Context 获得的 ContributionView 会把订阅自动归当前 Lifetime 所有；提前释放仍使用返回值的 `dispose()`。
+
+应用代码可从同一 committed Store 取得 Host 拥有的稳定视图：
+
+```ts
+const routes = host.contributions(ROUTES)
+const subscription = routes.subscribe(render)
+await host.start()
+render()
+```
+
+该视图可在启动前创建，并跨 stop/start 保持身份；它只呈现已提交快照，订阅的 `Disposable` 由调用方所有。调用同时把 Contract ID 作为 ExtensionPoint 身份登记，因此同一 Host 后续不能用另一种 Contract kind 复用该 ID。Plugin 内部仍只能通过 `requires` 获取受 Lifetime 约束的视图。跨重启的稳定身份也意味着保留该 View 会有意保留所属 Host 的观察链路；应用应让它与 Host 一同退出作用域，而不是把它放进更长寿的全局缓存。
 
 快照是真正只读的 Map，没有 `set/delete/clear`。无变化时保持对象身份；提交变化时创建新快照。一次 Core ChangeSet 内同一 ExtensionPoint 无论改变多少次，只通知一次。
 
@@ -460,7 +486,11 @@ Event 只有一种派发语义：
 - 监听器自动归创建它的 Lifetime 所有；
 - setup 期间注册的监听器在 setup 成功前不可见。
 
+`emit()` 始终以 Promise 报告失败，包括 Lifetime 已停止、Contract 非法等调用边界错误；所以 `void ctx.emit(...).catch(report)` 能同时覆盖派发前与监听器阶段。`Event<void>` 可写成 `ctx.emit(READY)`，无需显式传 `undefined`。
+
 如果需要结果，使用 Service；如果需要有序处理链，使用 ExtensionPoint + 普通函数；如果需要当前状态，使用 Service 暴露 Readable/Signal。
+
+Event 不重放。初始状态必须由 Service getter、Signal/Readable 或 ExtensionPoint 当前快照承载，不能在 setup 中 emit 一个“初值”并依赖其他插件恰好已经提交监听器。
 
 Event 是事实而不是状态，因此一次 `emit()` 本身不可回滚。setup 中产生的外部副作用也应由插件负责补偿；Core 的事务承诺针对框架可见的 Service、Contribution 和 Listener。
 
@@ -484,7 +514,20 @@ interface AsyncDisposable {
 
 所有资源统一用 `dispose()` 释放；Installation 从计划中删除统一用 `remove()`。两者不能混用。
 
-同步资源可用于 `using`，需要等待的 Lifetime、Task 与 cleanup 可用于 `await using`。Symbol 方法是同一 `dispose()` 操作对 JavaScript 语法的必需协议投影，不拥有第二套状态机或错误语义；它们不是可选装饰。
+同步资源可用于 `using`，需要等待的 Lifetime、Task 与 cleanup 可用于 `await using`。Symbol 方法是同一 `dispose()` 操作对 JavaScript 语法的协议投影，不拥有第二套状态机或错误语义。Dougong 会为缺少 well-known Symbol 的运行时选择稳定的协议 key，但不会修改全局对象；因此显式 `dispose()` 始终可用，而 `using` 需要运行时原生支持或由应用预先 polyfill 对应 Symbol。
+
+实现 Dougong 的结构化释放协议时必须使用 Core 导出的 canonical key，不能再次判断运行时：
+
+```ts
+import { asyncDisposeSymbol, type AsyncDisposable } from "@dougongjs/core"
+
+class Session implements AsyncDisposable {
+  async dispose() {}
+  [asyncDisposeSymbol]() { return this.dispose() }
+}
+```
+
+两个值在运行时有原生 well-known Symbol 时直接引用它，否则使用对应的全局 Symbol registry key。Platform 与 Core 资源因此使用同一协议身份；独立且零依赖的 Reactive 包保留自己的等价基础声明。
 
 ### 9.1 cleanup
 
@@ -558,6 +601,8 @@ const host = createHost({
 
 Host options 是仅含 `name`、`logger`、`onError` 的普通 record；只读取可枚举 own property，未知字段、Symbol、隐藏属性、数组与类实例都会立即拒绝。`logger` 与 `onError` 本身仍是结构化端口，可以由普通对象或类实例实现。
 
+`Installer` 精确表示“能安装到一个所有权位置”的能力，包含 `install/group/change`，并由 Host 与 Group 实现。只需要事务入口的高层协作者应在消费侧声明 `Pick<Installer, "change">`，不能把缺少安装能力的窄端口命名为 Installer。
+
 ### 10.1 安装与启动
 
 ```ts
@@ -626,6 +671,8 @@ await change.commit()
 
 `change.install()` 返回的是该 ChangeSet 独占的 draft Installation。调用 `commit()` 时它才获得 Host 控制权限；commit 前直接调用其 `update/remove`，或把它作为另一份 ChangeSet 的目标，都会以 `INSTALLATION_UNAVAILABLE` 拒绝。已删除或失败后脱离 Host 的 Installation 同样不能重新进入 ChangeSet。`host.install()` 之所以返回即可控制的 Installation，是因为该语法糖在返回前已经同步提交了内部单项 ChangeSet。
 
+`install()` 返回需要保留的 draft Installation；`update()` 与 `remove()` 只暂存命令并返回 `void`。ChangeSet 因而刻意不采用半链式 API：逐项写入，再单独 `commit()`。
+
 变更 setup 失败时，Core 释放部分 activation 并恢复旧图。若旧资源无法停止、部分 activation 无法清理或旧图无法恢复，Host fail closed 到 idle，不谎报 active。
 
 ### 10.4 stop
@@ -649,7 +696,7 @@ await backend.ready()
 await backend.remove()
 ```
 
-Host 与 Group 使用同一组 `install/group/change` 动词。供 Platform 等高层组合的 `Installer` 协议则刻意只包含 canonical `change()`；`install()` 与 `group()` 是具体所有者的便利能力，不要求一个事务适配器伪造它们。首次 configure 必须同步，以便所有声明编译进一份 ChangeSet；返回 thenable 会立即拒绝。
+Host 与 Group 使用同一组 `install/group/change` 动词，并共同实现 `Installer`。供 Platform 等只编译事务的高层内部协作者使用消费侧的 `Pick<Installer, "change">`，无需伪造未使用的能力。首次 configure 必须同步，以便所有声明编译进一份 ChangeSet；返回 thenable 会立即拒绝。
 
 Group 的规则：
 

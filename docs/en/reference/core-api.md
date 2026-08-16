@@ -85,15 +85,16 @@ Public types exist for downstream composition, not as implementation residue:
 | --- | --- |
 | `Service`, `ExtensionPoint`, `Event`, `OptionalService`, `Requirement` | the three Contract identities and optional Service dependencies |
 | `ContractKind`, `ContractValue` | the Contract-kind union and value-type extraction |
-| `Plugin`, `PluginContext`, `Awaitable` | Plugin declaration, setup context and sync/async return boundary |
+| `Plugin`, `AnyPlugin`, `PluginContext`, `Awaitable` | Plugin declaration, heterogeneous collection shape, setup context and sync/async return boundary |
 | `Requirements`, `ResolvedRequirement`, `ResolvedRequirements` | declared dependency maps and their resolved value types |
 | `Provisions`, `ProvidedServices` | Service provision declarations and setup return types |
 | `Host`, `HostOptions`, `HostStatus`, `HostSnapshot` | execution boundary, construction options, status and diagnostic snapshot |
-| `ChangeSet`, `Group`, `InstallationUpdate`, `LifecycleStatus` | transactions, structural ownership, installation updates and the shared Group/Installation lifecycle |
+| `Installer`, `ChangeSet`, `Group`, `InstallationUpdate`, `LifecycleStatus` | installation capability, transactions, structural ownership, installation updates and the shared Group/Installation lifecycle |
 | `GroupSnapshot`, `SnapshotView` | structural diagnostic entries and the unified read-only observation protocol |
 | `LifetimeContext`, `LifetimeOperations`, `LifetimePhase` | the full Lifetime context, its composable operations and diagnostic phase |
 | `Task`, `BackgroundTask`, `Cleanup` | owned tasks, task callbacks and cleanup callbacks |
 | `Disposable`, `AsyncDisposable` | strict synchronous and asynchronous release protocols for `using` and `await using` |
+| `disposeSymbol`, `asyncDisposeSymbol` | the sole cross-runtime keys for those two release protocols |
 | `EventListener` | the Event listener signature |
 | `Logger`, `isLogger` | the diagnostic output port and its sole runtime classifier |
 
@@ -223,6 +224,15 @@ const usersPlugin = definePlugin({
 
 Function plugins, plugin base classes, decorators and `{ apply() }` shapes are not supported.
 
+`Plugin` preserves the exact config, requires and provides types of one declaration. When a composition root stores plugins with different shapes, use `AnyPlugin`, which erases only authoring-time generics:
+
+```ts
+const plugins: readonly AnyPlugin[] = [databasePlugin, usersPlugin]
+for (const plugin of plugins) host.install(plugin)
+```
+
+`AnyPlugin` is not another plugin kind and has no second execution path. It is only a storage type for values already defined by `definePlugin()`, not an authoring type for raw object literals. The installation boundary still revalidates and normalises every declaration through the same rules.
+
 ### 4.1 `requires`
 
 Each dependency alias becomes an own property of the context:
@@ -308,6 +318,8 @@ interface InstanceMeta {
 }
 ```
 
+`ctx.log` still uses the Host's Logger, but Core passes the current frozen `InstanceMeta` as the first detail so a sink never has to infer ownership from message text. It is a Lifetime-revocable narrow facade: cleanup may still log, while terminal disposal severs the Runtime/Logger edge and further use throws `LIFETIME_DISPOSED`. The Logger's four members are strict function properties; a narrow implementation that drops an `unknown` message or rest details does not type-check.
+
 Filesystem, network, window, clipboard, storage, notification and router all belong in Services and must never become a context namespace.
 
 The context provides no `effect()`, `observe()` or `using()`:
@@ -341,9 +353,10 @@ Outside the Host and at test boundaries you may read:
 
 ```ts
 const users = host.get(USERS)
+const cache = host.get(optional(CACHE)) // Cache | undefined
 ```
 
-`host.get()` accepts only a Service, and succeeds only while the Host is active and that Service is available. Inside a Plugin, only declared dependencies are available.
+`host.get()` accepts only a Service or the existing `optional(Service)` wrapper, and reads only while the Host is active. A required Service that is unavailable throws `SERVICE_UNAVAILABLE`; an optional Service with no provider returns `undefined`. Inside a Plugin, only declared dependencies are available. Core adds no semantically duplicate `tryGet()`.
 
 The Host caches the validated dependency graph corresponding to committed execution state; `host.get()` performs provider and Service map lookups without rebuilding the graph. The idle state allows a stepwise, temporarily incomplete plan, so candidate graphs are built only during `start()` or a ChangeSet committed while the Host is active.
 
@@ -388,6 +401,8 @@ The real key is composed by Core:
 
 where `%` and `/` become `%25` and `%2F`, so the separator cannot make two different (installation ID, local key) pairs produce the same real key, while common keys stay readable.
 
+This key expresses ownership identity only; it is not a domain ID and changes after reinstall. Put command IDs, ordering weights and other domain data in the value, then validate conflicts or sort explicitly. Never derive domain policy from the map key or insertion order.
+
 Therefore:
 
 - different Installations using the same local key do not conflict
@@ -419,6 +434,17 @@ ctx.routes.subscribe(rebuild)
 ```
 
 A ContributionView obtained from the context assigns its subscriptions to the current Lifetime automatically; early release still uses the returned `dispose()`.
+
+Application code can obtain a Host-owned stable view of the same committed Store:
+
+```ts
+const routes = host.contributions(ROUTES)
+const subscription = routes.subscribe(render)
+await host.start()
+render()
+```
+
+The view may be created before startup and keeps its identity across stop/start. It exposes committed snapshots only, and the caller owns the subscription `Disposable`. The call also records the Contract ID as an ExtensionPoint identity, so another Contract kind cannot later reuse that ID in the same Host. Plugins still obtain Lifetime-bound views only through `requires`. That stable identity across restarts also means retaining the view intentionally retains its Host observation chain; let it leave scope with the Host rather than placing it in a longer-lived global cache.
 
 The snapshot is a genuinely read-only map with no `set/delete/clear`. Object identity is preserved when nothing changes, and a new snapshot is created when a change commits. However many times one ExtensionPoint changes inside a single Core ChangeSet, it notifies exactly once.
 
@@ -460,7 +486,11 @@ An Event has exactly one dispatch semantic:
 - a listener is owned automatically by the Lifetime that created it
 - listeners registered during setup are invisible until setup succeeds
 
+`emit()` always reports failure through its Promise, including call-boundary failures such as a disposed Lifetime or an invalid Contract. Therefore `void ctx.emit(...).catch(report)` covers both pre-dispatch and listener phases. `Event<void>` may be emitted as `ctx.emit(READY)` without an explicit `undefined`.
+
 If you need a result, use a Service. If you need an ordered processing chain, use an ExtensionPoint plus ordinary functions. If you need the current state, use a Service exposing a `Readable`/signal.
+
+Events never replay. Initial state belongs in a Service getter, a Signal/Readable, or an ExtensionPoint's current snapshot; do not emit a “seed” during setup and rely on another plugin's listener already being committed.
 
 An Event is a fact, not state, so an `emit()` is not itself rollback-able. External side effects produced during setup are the plugin's responsibility to compensate; Core's transactional promise covers the framework-visible Services, contributions and listeners.
 
@@ -484,7 +514,20 @@ interface AsyncDisposable {
 
 Resources are uniformly released with `dispose()`; removing an Installation from the plan is uniformly `remove()`. The two are never interchangeable.
 
-Synchronous resources work with `using`; Lifetimes, Tasks and cleanups that must be awaited work with `await using`. The symbol method is the required projection of the same `dispose()` operation onto JavaScript syntax, not an optional decoration or a second state machine.
+Synchronous resources work with `using`; Lifetimes, Tasks and cleanups that must be awaited work with `await using`. The symbol method projects the same `dispose()` operation onto JavaScript syntax and owns no second state machine or error semantics. Dougong selects stable protocol keys when a runtime lacks the well-known symbols but does not mutate globals; explicit `dispose()` therefore remains available, while `using` requires native support or an application-supplied symbol polyfill.
+
+Implementations of Dougong's structural release protocols must use Core's canonical keys rather than deciding against the runtime again:
+
+```ts
+import { asyncDisposeSymbol, type AsyncDisposable } from "@dougongjs/core"
+
+class Session implements AsyncDisposable {
+  async dispose() {}
+  [asyncDisposeSymbol]() { return this.dispose() }
+}
+```
+
+Each value references the native well-known symbol when available and otherwise uses the corresponding global Symbol-registry key. Platform and Core resources therefore share one protocol identity; the independent, zero-dependency Reactive package keeps its equivalent foundation declaration.
 
 ### 9.1 cleanup
 
@@ -558,6 +601,8 @@ const host = createHost({
 
 Host options are a plain record containing only `name`, `logger` and `onError`. Only enumerable own properties are read; unknown fields, symbols, hidden properties, arrays and class instances are rejected immediately. The `logger` and `onError` values remain structural ports and may themselves be implemented by ordinary objects or class instances.
 
+`Installer` precisely means “can install into an ownership position”: it contains `install/group/change` and is implemented by Host and Group. A higher-level collaborator that consumes only the transaction entry point declares `Pick<Installer, "change">` on its side; a narrower port without installation capability must not be named Installer.
+
 ### 10.1 Install and start
 
 ```ts
@@ -626,6 +671,8 @@ Rules:
 
 The Installation returned by `change.install()` is an exclusive draft of that ChangeSet. It gains Host control authority only at `commit()`; before then, calling its `update/remove` or targeting it from another ChangeSet rejects with `INSTALLATION_UNAVAILABLE`. An Installation detached after removal or failure likewise cannot re-enter a ChangeSet. `host.install()` returns an immediately controllable Installation only because that sugar has already synchronously submitted its internal single-item ChangeSet.
 
+`install()` returns a draft Installation that the caller may need to keep; `update()` and `remove()` only stage commands and return `void`. ChangeSet is deliberately not half-fluent: stage each item, then call `commit()` separately.
+
 When a change's setup fails, Core releases the partial activation and restores the old graph. If old resources cannot be stopped, the partial activation cannot be cleaned up, or the old graph cannot be restored, the Host fails closed to idle rather than falsely reporting active.
 
 ### 10.4 stop
@@ -649,7 +696,7 @@ await backend.ready()
 await backend.remove()
 ```
 
-Host and Group share the same `install/group/change` verbs. The `Installer` protocol consumed by higher layers such as Platform deliberately contains only canonical `change()`; `install()` and `group()` are conveniences of concrete owners, so a transactional adapter never has to fake them. The first configure must be synchronous so every declaration compiles into one ChangeSet; returning a thenable rejects immediately.
+Host and Group share the same `install/group/change` verbs and both implement `Installer`. Internal higher-layer collaborators such as Platform that only compile transactions consume `Pick<Installer, "change">`, so they need not fake unused capabilities. The first configure must be synchronous so every declaration compiles into one ChangeSet; returning a thenable rejects immediately.
 
 Group rules:
 

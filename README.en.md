@@ -129,7 +129,9 @@ Chapters 11 and 12 are roughly 200 lines each and implement, using only the publ
 
 ## Requirements
 
-Node.js ≥ 22, or an equivalent ES2024 runtime (`Promise.withResolvers()` is required).
+Node.js ≥ 22. The browser / WebView baseline is Chrome / Edge 119, Firefox 121 and Safari 17.4, with native `Promise.withResolvers()`. Dougong selects stable symbol keys for its disposal protocols instead of silently defining a method named `"undefined"` when `Symbol.dispose` is absent; explicit `.dispose()` works throughout the stated baseline.
+
+`using` / `await using` additionally require the runtime to provide, or the application to polyfill, `Symbol.dispose` / `Symbol.asyncDispose`; Dougong does not mutate globals. Published code does not require the runtime to parse `using` directly, because TypeScript 5.2+ or an equivalent compiler can lower the syntax.
 
 TypeScript consumers need this in `tsconfig.json`:
 

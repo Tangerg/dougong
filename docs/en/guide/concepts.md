@@ -140,7 +140,9 @@ definePlugin({
 })
 ```
 
-`emit()` returns a Promise and awaits all listeners. There is exactly one dispatch mode — no `parallel` / `serial` / `bail` / `waterfall` decision to get wrong. Need to collect return values? That is not Event semantics; use an ExtensionPoint.
+`emit()` returns a Promise and awaits all listeners. A closed Lifetime, an invalid Contract and listener failures all become promise rejections, so `void ctx.emit(EVENT, value).catch(report)` reliably handles every emission failure. An `Event<void>` can be emitted as `ctx.emit(READY)`.
+
+There is exactly one dispatch mode — no `parallel` / `serial` / `bail` / `waterfall` decision to get wrong. Need to collect return values? That is not Event semantics; use an ExtensionPoint.
 
 ### Choosing between the three
 
@@ -156,7 +158,7 @@ A common mistake is shipping state through an Event:
 ctx.emit(CONFIG_CHANGED, newConfig)   // ❌ plugins installed later never see the current config
 ```
 
-Configuration is state. It belongs in a Service or an ExtensionPoint.
+Configuration is state. It belongs in a Service or an ExtensionPoint. In particular, never use an Event in `setup()` to seed initial state: listeners and contributions stay staged until their startup layer commits, and same-layer setup order is unspecified. Initial state belongs in a Service getter, a Signal exposed by a Service, or the current ExtensionPoint snapshot.
 
 ## Lifetime: who owns what
 

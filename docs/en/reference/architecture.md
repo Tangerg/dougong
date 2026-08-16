@@ -141,7 +141,10 @@ observe(ctx, source, callback)
   + ctx.lifetime + ctx.spawn + ctx.cleanup
 
 registration.update(artifact)
-  = platform.change().update(registration, artifact).commit()
+  ↓
+const change = platform.change()
+change.update(registration, artifact)
+await change.commit()
 ```
 
 A higher layer may add schemas, defaults, policy and domain errors, but may not bypass ownership, transactions or permissions.

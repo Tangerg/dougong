@@ -51,6 +51,10 @@ export class Runtime {
       : { found: false as const };
   }
 
+  contributions<T>(token: ExtensionPoint<T>) {
+    return this.#contributions.view(token);
+  }
+
   captureConfigs(installations: Iterable<InstallationRecord>) {
     const configs = new Map<InstallationRecord, unknown>();
     for (const installation of installations) {
@@ -202,12 +206,12 @@ export class Runtime {
 
     try {
       const requirements = this.#resolveRequirements(plan, installation, plugin, lifetime);
-      const meta: InstanceMeta = {
+      const meta: InstanceMeta = Object.freeze({
         hostName: this.#hostName,
         pluginName: plugin.name,
         installationId: installation.id,
         groupId: installation.groupId,
-      };
+      });
       const context = this.#createContext(lifetime, meta, requirements);
       const output = await plugin.setup(context, config);
       const services = new Map<string, unknown>();
@@ -316,8 +320,8 @@ export class Runtime {
       get signal() {
         return lifetime.signal;
       },
-      meta: Object.freeze(meta),
-      log: this.#logger,
+      meta,
+      log: lifetime.contextLogger(meta),
       cleanup: lifetime.cleanup.bind(lifetime),
       lifetime: lifetime.lifetime.bind(lifetime),
       spawn: lifetime.spawn.bind(lifetime),
@@ -336,6 +340,7 @@ export class Runtime {
       stageContribution: (ownerId, token, key, value, release) => {
         return this.#stageContribution(ownerId, token, key, value, release, contracts);
       },
+      writeLog: (level, message, meta, details) => this.#logger[level](message, meta, ...details),
       report: this.#report,
     };
   }

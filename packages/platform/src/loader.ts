@@ -4,7 +4,7 @@ export interface Loader<Reference> {
 
 /** Trusted same-Realm ESM loading. It is intentionally not presented as a sandbox. */
 export class ImportLoader implements Loader<string | URL> {
-  async load(reference: string | URL, signal: AbortSignal) {
+  async load(reference: string | URL, signal: AbortSignal): Promise<unknown> {
     signal.throwIfAborted();
     const module = await import(/* @vite-ignore */ String(reference));
     signal.throwIfAborted();

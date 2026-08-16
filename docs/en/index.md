@@ -94,18 +94,19 @@ Three layers, best read in order:
 **Layer 2 · Go deeper**
 
 3. [Writing plugins](./guide/writing-plugins.md) — dependencies, provisions, config validation, failure
-4. [Lifetime and resources](./guide/lifetime.md) — who owns what, and when it is released
-5. [Transactions and change](./guide/transactions.md) — ChangeSet, Group, rollback and fail-closed
-6. [Reactive and observation](./guide/reactive.md) — why a signal is not a fifth capability
-7. [External plugin delivery](./guide/platform.md) — manifests, permissions, lazy activation, HMR
+4. [Application code](./guide/application-code.md) — read Services, observe ExtensionPoints and bridge Events from outside the graph
+5. [Lifetime and resources](./guide/lifetime.md) — who owns what, and when it is released
+6. [Transactions and change](./guide/transactions.md) — ChangeSet, Group, rollback and fail-closed
+7. [Reactive and observation](./guide/reactive.md) — why a signal is not a fifth capability
+8. [External plugin delivery](./guide/platform.md) — manifests, permissions, lazy activation, HMR
 
 **Layer 3 · Specification**
 
-8. [Core API specification](./reference/core-api.md) — exact semantics and edge cases
-9. [Architecture](./reference/architecture.md) — layering, dependency direction and rationale
-10. [Platform specification](./reference/platform.md) — the external plugin boundary
-11. [Error codes](./reference/errors.md) — stable codes and what triggers them
-12. [Mechanical guards](./reference/guards.md) — what each of the ten `pnpm check` steps protects
+9. [Core API specification](./reference/core-api.md) — exact semantics and edge cases
+10. [Architecture](./reference/architecture.md) — layering, dependency direction and rationale
+11. [Platform specification](./reference/platform.md) — the external plugin boundary
+12. [Error codes](./reference/errors.md) — stable codes and what triggers them
+13. [Mechanical guards](./reference/guards.md) — what each of the ten `pnpm check` steps protects
 
 </div>
 
@@ -115,4 +116,4 @@ If you would rather read code, the [runnable examples](./examples.md) are a twel
 
 Dougong is in early development (`0.0.x`) and **makes no backward-compatibility promises yet**. The current priority is a correct model, a consistent API and complete executable evidence.
 
-Runtime baseline: Node.js ≥ 22, or an equivalent ES2024 runtime.
+Runtime baseline: Node.js ≥ 22; Chrome / Edge 119, Firefox 121 or Safari 17.4 for browsers and WebViews, with `Promise.withResolvers()`. Explicit `.dispose()` works throughout; `using` / `await using` additionally require the corresponding well-known symbols from the runtime or an application-supplied polyfill.

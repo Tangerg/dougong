@@ -81,7 +81,7 @@ On each change to `source`: release the previous `lifetime`, then build a new on
 - 文档站 / Documentation: https://tangerg.github.io/dougong/
 - 仓库 / Repository: https://github.com/Tangerg/dougong
 
-> 早期开发阶段（0.0.x），当前不承诺向后兼容。需要 Node.js ≥ 22 或等价的 ES2024 运行时。
-> Early development (0.0.x); no backward-compatibility promises yet. Requires Node.js ≥ 22 or an equivalent ES2024 runtime.
+> 早期开发阶段（0.0.x），当前不承诺向后兼容。需要 Node.js ≥ 22，或 Chrome / Edge 119、Firefox 121、Safari 17.4 及以上浏览器 / WebView。
+> Early development (0.0.x); no backward-compatibility promises yet. Requires Node.js ≥ 22, or Chrome / Edge 119, Firefox 121 or Safari 17.4 and later.
 
 MIT

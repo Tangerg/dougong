@@ -9,7 +9,9 @@ import {
   optional,
   service,
   type Contribution,
+  type AnyPlugin,
   type InstallationSnapshot,
+  type Logger,
   type Plugin,
   type Service,
 } from "../src/index";
@@ -49,6 +51,74 @@ describe("Host", () => {
     expect(() => createHost({ logger: {} as never })).toThrow(
       "logger must implement debug/info/warn/error",
     );
+  });
+
+  it("adds Instance identity to every Context log record", async () => {
+    let scopedLogger!: Logger;
+    const logger = {
+      debug: vi.fn<(message: unknown, ...details: unknown[]) => void>(),
+      info: vi.fn<(message: unknown, ...details: unknown[]) => void>(),
+      warn: vi.fn<(message: unknown, ...details: unknown[]) => void>(),
+      error: vi.fn<(message: unknown, ...details: unknown[]) => void>(),
+    };
+    const plugin = definePlugin({
+      name: "test.scoped-logger",
+      setup(ctx) {
+        scopedLogger = ctx.log;
+        ctx.log.debug("debug");
+        ctx.log.info("ready", { port: "audio" });
+        ctx.log.warn("warn");
+        ctx.log.error("error");
+        ctx.cleanup(() => ctx.log.info("cleanup"));
+      },
+    });
+    const host = createHost({ name: "player", logger });
+    const installation = host.install(plugin);
+
+    await host.start();
+
+    const meta = {
+      hostName: "player",
+      pluginName: "test.scoped-logger",
+      installationId: installation.id,
+      groupId: "/",
+    };
+    expect(logger.debug).toHaveBeenCalledWith("debug", meta);
+    expect(logger.info).toHaveBeenCalledWith("ready", meta, { port: "audio" });
+    expect(logger.warn).toHaveBeenCalledWith("warn", meta);
+    expect(logger.error).toHaveBeenCalledWith("error", meta);
+    await host.stop();
+    expect(logger.info).toHaveBeenCalledWith("cleanup", meta);
+    expect(() => scopedLogger.info("too late")).toThrowError(
+      expect.objectContaining({ code: "LIFETIME_DISPOSED" }),
+    );
+  });
+
+  it("installs a heterogeneous AnyPlugin collection without casts", async () => {
+    const CONFIG = service<string>("test/any-plugin-config");
+    const observed: string[] = [];
+    const plugins: readonly AnyPlugin[] = [
+      definePlugin({
+        name: "test.any-plugin-provider",
+        provides: { config: CONFIG },
+        setup() {
+          return { config: "ready" };
+        },
+      }),
+      definePlugin({
+        name: "test.any-plugin-consumer",
+        requires: { config: CONFIG },
+        setup(ctx) {
+          observed.push(ctx.config);
+        },
+      }),
+    ];
+    const host = createHost();
+    for (const plugin of plugins) host.install(plugin);
+
+    await host.start();
+    expect(observed).toEqual(["ready"]);
+    await host.stop();
   });
 
   it("owns an immutable snapshot of config validation issues", () => {
@@ -539,7 +609,7 @@ describe("Host", () => {
     const emitter = definePlugin({
       name: "test.layer-emitter",
       setup(ctx) {
-        emit = () => ctx.emit(NOTICE, undefined);
+        emit = () => ctx.emit(NOTICE);
       },
     });
     const preparedListener = definePlugin({
@@ -598,6 +668,7 @@ describe("Host", () => {
 
   it("exposes Service lookup only at the active Host boundary", async () => {
     const CLOCK = service<{ readonly version: number }>("test/host-get");
+    const MISSING = service<{ readonly version: number }>("test/host-get-missing");
     const clock = definePlugin({
       name: "test.host-get",
       provides: { clock: CLOCK },
@@ -607,12 +678,16 @@ describe("Host", () => {
     const installation = host.install(clock, 1);
 
     expect(() => host.get(CLOCK)).toThrow("not active");
+    expect(() => host.get(optional(MISSING))).toThrow("not active");
     await host.start();
     expect(host.get(CLOCK).version).toBe(1);
+    expect(host.get(optional(CLOCK))?.version).toBe(1);
+    expect(host.get(optional(MISSING))).toBeUndefined();
     await installation.update({ config: 2 });
     expect(host.get(CLOCK).version).toBe(2);
     await host.stop();
     expect(() => host.get(CLOCK)).toThrow("not active");
+    expect(() => host.get(optional(MISSING))).toThrow("not active");
   });
 
   it("reads services from the cached active graph and swaps it only after commit", async () => {
@@ -724,6 +799,53 @@ describe("Host", () => {
     await host.stop();
   });
 
+  it("exposes one Host-owned ExtensionPoint view to graph-external consumers", async () => {
+    const COMMANDS = extensionPoint<{ readonly id: string }>("test/external-commands");
+    const host = createHost();
+    const commands = host.contributions(COMMANDS);
+    const snapshots: string[][] = [];
+    using subscription = commands.subscribe(() => {
+      snapshots.push([...commands.get().values()].map((command) => command.id));
+    });
+    expect(subscription).toBeDefined();
+    host.install(
+      definePlugin({
+        name: "test.external-command",
+        setup(ctx) {
+          ctx.contribute(COMMANDS, "play", { id: "play" });
+        },
+      }),
+    );
+
+    expect(commands.get().size).toBe(0);
+    await host.start();
+    expect([...commands.get().values()]).toEqual([{ id: "play" }]);
+    await host.stop();
+    expect(commands.get().size).toBe(0);
+    await host.start();
+    expect([...commands.get().values()]).toEqual([{ id: "play" }]);
+    expect(snapshots).toEqual([["play"], [], ["play"]]);
+    await host.stop();
+  });
+
+  it("makes a graph-external ExtensionPoint identity durable", async () => {
+    const POINT = extensionPoint<string>("test/external-contract-identity");
+    const conflicting = service<string>("test/external-contract-identity");
+    const host = createHost();
+    host.contributions(POINT);
+    host.install(
+      definePlugin({
+        name: "test.external-contract-conflict",
+        provides: { conflicting },
+        setup() {
+          return { conflicting: "value" };
+        },
+      }),
+    );
+
+    await expect(host.start()).rejects.toMatchObject({ code: "CONTRACT_CONFLICT" });
+  });
+
   it("broadcasts events in parallel and aggregates listener failures", async () => {
     const PING = event<number>("test/ping");
     const first = vi.fn<(payload: number) => Promise<void>>(async () => {
@@ -773,7 +895,7 @@ describe("Host", () => {
       setup(ctx) {
         first = ctx.on(NOTICE, listener);
         second = ctx.on(NOTICE, listener);
-        emit = () => ctx.emit(NOTICE, undefined);
+        emit = () => ctx.emit(NOTICE);
       },
     });
     const host = createHost();
@@ -1353,13 +1475,11 @@ describe("Host", () => {
     const plugin = definePlugin({
       name: "test.cleanup-boundary",
       setup(ctx) {
-        ctx.cleanup(() => {
-          try {
-            void ctx.emit(CLOSED, "too-late");
-          } catch (error) {
+        ctx.cleanup(() =>
+          ctx.emit(CLOSED, "too-late").catch((error: unknown) => {
             failure = error;
-          }
-        });
+          }),
+        );
       },
     });
 
@@ -1367,7 +1487,11 @@ describe("Host", () => {
     host.install(plugin);
     await host.start();
     await host.stop();
-    expect(failure).toBeInstanceOf(TypeError);
+    expect(failure).toMatchObject({
+      name: "DougongError",
+      code: "LIFETIME_DISPOSED",
+      message: "Lifetime is disposing or has been disposed",
+    });
   });
 
   it("rejects dependency cycles, duplicate providers, and contract kind collisions", async () => {
@@ -1569,7 +1693,8 @@ describe("Host", () => {
     expect(consumerInstallation.status).toBe("active");
 
     const removal = host.change();
-    removal.remove(providerInstallation).remove(consumerInstallation);
+    expect(removal.remove(providerInstallation)).toBeUndefined();
+    expect(removal.remove(consumerInstallation)).toBeUndefined();
     await removal.commit();
     expect(providerInstallation.status).toBe("removed");
     expect(consumerInstallation.status).toBe("removed");
@@ -1616,7 +1741,7 @@ describe("Host", () => {
     expect(() => change.update(installation, {} as never)).toThrow(
       "must include 'plugin' or 'config'",
     );
-    change.update(installation, { config: undefined });
+    expect(change.update(installation, { config: undefined })).toBeUndefined();
     expect(() => change.remove(installation)).toThrow("can only appear once");
     const committing = change.commit();
     expect(change.commit()).toBe(committing);

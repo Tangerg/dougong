@@ -54,7 +54,7 @@ export default defineConfig({
           branches: 90,
           lines: 98,
         },
-        "packages/reactive/src/**": { statements: 95, functions: 100, branches: 87, lines: 98 },
+        "packages/reactive/src/**": { statements: 96, functions: 100, branches: 89, lines: 99 },
       },
     },
   },

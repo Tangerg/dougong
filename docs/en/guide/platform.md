@@ -19,7 +19,7 @@ Application code → Platform → Artifact / Registration
                      Installer (Host or Group) → Installation
 ```
 
-Platform takes an `Installer` (normally a Host or Group) and compiles external Plugins into its canonical `change()`; a minimal adapter implements only that method.
+Platform consumes the `change()` capability of an `Installer` (normally a Host or Group) and compiles external Plugins into the canonical Core ChangeSet. Its internal port is narrowed on the consuming side to `Pick<Installer, "change">`, while a complete `Installer` still precisely means `install/group/change`.
 
 ## A minimal example
 
@@ -116,6 +116,8 @@ const authorizer = {
 
 ::: danger This is not a sandbox
 The permission check happens **before** the module executes. It decides whether to run the code, not what the code may touch.
+
+Authorization runs at Artifact admission and activation boundaries; it does not intercept every later `contribute()`. If an ExtensionPoint needs per-contribution capability checks, put permission labels in the domain value and enforce them in that point's domain composer or a restricted Service. Platform does not duplicate Core's contribution registry.
 
 Once a JavaScript module is imported it shares the application's realm and reaches the same globals. Real isolation needs a Worker, iframe, process or separate Host — Platform does not pretend otherwise.
 

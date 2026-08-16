@@ -140,7 +140,9 @@ definePlugin({
 })
 ```
 
-`emit()` 返回 Promise 并等待所有监听器。只有一种分发方式——没有 `parallel` / `serial` / `bail` / `waterfall` 的选择题。需要收集返回值？那不是 Event 的语义，用 ExtensionPoint。
+`emit()` 返回 Promise 并等待所有监听器。生命周期已终止、Contract 非法和监听器失败都统一表现为 Promise rejection，因此 `void ctx.emit(EVENT, value).catch(report)` 能可靠处理全部发送失败。`Event<void>` 可直接写成 `ctx.emit(READY)`。
+
+只有一种分发方式——没有 `parallel` / `serial` / `bail` / `waterfall` 的选择题。需要收集返回值？那不是 Event 的语义，用 ExtensionPoint。
 
 ### 三者怎么选
 
@@ -156,7 +158,7 @@ definePlugin({
 ctx.emit(CONFIG_CHANGED, newConfig)   // ❌ 晚安装的插件永远收不到当前配置
 ```
 
-配置是状态，应该是 Service 或 ExtensionPoint。
+配置是状态，应该是 Service 或 ExtensionPoint。尤其不要在 `setup()` 中用 Event “播种初始值”：监听器与贡献在所属启动层提交前保持 staged，同层 setup 的相对顺序也没有承诺。初始状态应由 Service getter、Service 中的 Signal，或 ExtensionPoint 当前快照表达。
 
 ## Lifetime：谁拥有什么
 

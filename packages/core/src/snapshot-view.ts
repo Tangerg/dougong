@@ -1,4 +1,4 @@
-import type { Disposable } from "./resource";
+import { disposeSymbol, type Disposable } from "./resource";
 
 export interface SnapshotView<T> {
   get(): T;
@@ -79,7 +79,7 @@ export class SnapshotPublisher<T> implements Disposable {
     }
   }
 
-  [Symbol.dispose]() {
+  [disposeSymbol]() {
     this.dispose();
   }
 
@@ -126,7 +126,7 @@ class SnapshotSubscription implements Disposable {
     binding.detach(this);
   }
 
-  [Symbol.dispose]() {
+  [disposeSymbol]() {
     this.dispose();
   }
 }

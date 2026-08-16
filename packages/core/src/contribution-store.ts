@@ -1,6 +1,6 @@
 import type { ExtensionPoint } from "./contracts";
 import { ReadonlyMapSnapshot } from "./readonly-map";
-import type { Disposable, Publication, StagedResource } from "./resource";
+import { disposeSymbol, type Disposable, type Publication, type StagedResource } from "./resource";
 import { SnapshotPublisher, type SnapshotView } from "./snapshot-view";
 
 export interface Contribution<T> extends Disposable {
@@ -76,7 +76,7 @@ class ContributionHandle<T> implements Contribution<T> {
     this.#contribution.dispose();
   }
 
-  [Symbol.dispose]() {
+  [disposeSymbol]() {
     this.dispose();
   }
 }
@@ -132,7 +132,7 @@ class ContributionRecord<T> implements StagedResource<Contribution<T>> {
     }
   }
 
-  [Symbol.dispose]() {
+  [disposeSymbol]() {
     this.dispose();
   }
 }
@@ -146,6 +146,7 @@ export class ContributionStore<T> {
   #snapshot: ReadonlyMap<string, T> = new ReadonlyMapSnapshot();
   #views = 0;
   #subscriptions = 0;
+  #retainedByHost = false;
   #released = false;
 
   constructor(
@@ -199,6 +200,12 @@ export class ContributionStore<T> {
       throw error;
     }
     return new ContributionViewHandle(state);
+  }
+
+  /** A stable view explicitly owned by the Host for graph-external consumers. */
+  hostView(): ContributionView<T> {
+    this.#retainedByHost = true;
+    return this.#publisher.view;
   }
 
   snapshot() {
@@ -297,6 +304,7 @@ export class ContributionStore<T> {
   #notifyIfUnused() {
     if (
       this.#released ||
+      this.#retainedByHost ||
       this.#claims.size ||
       this.#entries.size ||
       this.#subscriptions ||
@@ -334,7 +342,7 @@ class ContributionViewLease<T> implements Disposable {
     binding.release();
   }
 
-  [Symbol.dispose]() {
+  [disposeSymbol]() {
     this.dispose();
   }
 }
@@ -363,7 +371,7 @@ class ContributionSubscription implements Disposable {
     }
   }
 
-  [Symbol.dispose]() {
+  [disposeSymbol]() {
     this.dispose();
   }
 }
@@ -392,6 +400,10 @@ export class ContributionRegistry {
     );
     this.#stores.set(token.id, store as ContributionStore<unknown>);
     return store;
+  }
+
+  view<T>(token: ExtensionPoint<T>): ContributionView<T> {
+    return this.get(token).hostView();
   }
 
   beginBatch() {

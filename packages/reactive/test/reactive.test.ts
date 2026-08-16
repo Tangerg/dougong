@@ -1,11 +1,25 @@
 import { describe, expect, it, vi } from "vitest";
 import * as reactive from "../src/index";
+import { assertPromiseRuntime, resolveDisposalSymbol } from "../src/protocol";
 
 const { batch, computed, signal } = reactive;
 
 describe("public API surface", () => {
   it("keeps the reactive value-export budget explicit", () => {
     expect(Object.keys(reactive).sort()).toEqual(["batch", "computed", "observe", "signal"]);
+  });
+
+  it("fails explicitly when Promise.withResolvers is unavailable", () => {
+    expect(() => assertPromiseRuntime(undefined)).toThrow(
+      "Unsupported JavaScript runtime: Promise.withResolvers is required",
+    );
+  });
+
+  it("uses stable disposal protocol keys when the runtime lacks the well-known symbols", () => {
+    expect(resolveDisposalSymbol(undefined, "Symbol.dispose")).toBe(Symbol.for("Symbol.dispose"));
+    expect(resolveDisposalSymbol(undefined, "Symbol.asyncDispose")).toBe(
+      Symbol.for("Symbol.asyncDispose"),
+    );
   });
 });
 
@@ -117,6 +131,46 @@ describe("signal", () => {
 
     expect(() => value.set(1)).toThrow("first failed");
     expect(second).toHaveBeenCalledOnce();
+  });
+
+  it("aggregates multiple subscriber failures in notification order", () => {
+    const value = signal(0);
+    const first = new Error("first failed");
+    const second = new Error("second failed");
+    value.subscribe(() => {
+      throw first;
+    });
+    value.subscribe(() => {
+      throw second;
+    });
+
+    expect(() => value.set(1)).toThrowError(
+      expect.objectContaining({
+        message: "Reactive subscribers failed",
+        errors: [first, second],
+      }),
+    );
+  });
+
+  it("preserves both callback and publication failures at a batch boundary", () => {
+    const value = signal(0);
+    const callbackFailure = new Error("callback failed");
+    const publicationFailure = new Error("publication failed");
+    value.subscribe(() => {
+      throw publicationFailure;
+    });
+
+    expect(() =>
+      batch(() => {
+        value.set(1);
+        throw callbackFailure;
+      }),
+    ).toThrowError(
+      expect.objectContaining({
+        message: "Reactive batch failed",
+        errors: [callbackFailure, publicationFailure],
+      }),
+    );
   });
 
   it("preserves thrown undefined across a batch boundary", () => {

@@ -81,13 +81,11 @@ export class PlatformChangeSetDraft<Reference> implements PlatformChangeSet<Refe
       );
     }
     this.#stage({ kind: "update", registration: record, artifact: normalized });
-    return this;
   }
 
   remove(registration: Registration<Reference>) {
     const port = this.#requireOpen();
     this.#stage({ kind: "remove", registration: port.resolve(registration) });
-    return this;
   }
 
   commit() {

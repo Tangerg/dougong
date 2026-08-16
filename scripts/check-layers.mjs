@@ -129,6 +129,7 @@ const SOURCE_RE = /^(?:reactive|core|platform|dougong)\/src\//;
 const WORKSPACE_SOURCE_RE = /^(?:reactive|core|platform|dougong|examples)\/src\//;
 const TEST_RE = /\.(test|spec)\.ts$/;
 const CONTRACT_FACTORIES = new Set(["service", "extensionPoint", "event"]);
+const FORBIDDEN_TYPE_KINDS = new Set([ts.SyntaxKind.AnyKeyword]);
 
 // Checks that run over the text of every source file under a package's `src`.
 const SOURCE_RULES = [
@@ -170,6 +171,17 @@ const FILE_RULES = [
     // an undeclared one, and the zero-dependency claim is part of its appeal.
     test: (source) => /from\s*["'][^."']/.test(source),
     message: "@dougongjs/reactive must have zero external imports",
+  },
+  {
+    matches: (file) =>
+      (file.startsWith("core/src/") && file !== "core/src/resource.ts") ||
+      (file.startsWith("reactive/src/") && file !== "reactive/src/protocol.ts") ||
+      file.startsWith("platform/src/"),
+    // The two independent foundation protocol modules resolve missing
+    // well-known symbols to stable keys. Platform must reuse Core's values.
+    // Direct computed properties can silently become an `undefined` string key.
+    test: (source) => /\[\s*Symbol\.(?:dispose|asyncDispose)\s*\]/.test(source),
+    message: "resource implementations must use the resolved disposal protocol symbols",
   },
   {
     matches: (file) => file === "dougong/src/index.ts",
@@ -233,6 +245,14 @@ const FILE_RULES = [
     matches: (file) => file === "platform/src/platform.ts",
     test: (source) => /#changeQueue\.settled\.then\s*\(/.test(source),
     message: "Platform disposal must be a terminal SerialQueue command, not a tail observer",
+  },
+  {
+    matches: (file) => file === "platform/src/platform.ts",
+    test: (source) =>
+      !/import\s*\{[^}]*\basyncDisposeSymbol\b[^}]*\}\s*from\s*["']@dougongjs\/core["']/s.test(
+        source,
+      ) || !/\[\s*asyncDisposeSymbol\s*\]/.test(source),
+    message: "Platform disposal must reuse Core asyncDisposeSymbol",
   },
   {
     matches: (file) => file === "platform/src/platform.ts",
@@ -345,15 +365,26 @@ for (const [file, deps] of Object.entries(graph)) {
     // Identifiers and exact error-code strings share the vocabulary guard.
     // AST matching avoids rejecting prose such as the current "extension-point" label.
     const retiredUses = new Set();
-    const findRetiredUses = (node) => {
+    const explicitAnyLines = new Set();
+    const inspectSourceNode = (node) => {
       if ((ts.isIdentifier(node) || ts.isStringLiteralLike(node)) && retiredTerms.has(node.text)) {
         retiredUses.add(node.text);
       }
-      ts.forEachChild(node, findRetiredUses);
+      if (FORBIDDEN_TYPE_KINDS.has(node.kind)) {
+        explicitAnyLines.add(
+          sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile)).line + 1,
+        );
+      }
+      ts.forEachChild(node, inspectSourceNode);
     };
-    findRetiredUses(sourceFile);
+    inspectSourceNode(sourceFile);
     for (const term of retiredUses) {
       architectureViolations.push(`${file}: uses retired source term '${term}'`);
+    }
+    for (const line of explicitAnyLines) {
+      architectureViolations.push(
+        `${file}:${line}: uses an explicit any type; preserve information with a precise type, unknown or never`,
+      );
     }
     const localFactories = new Set();
     const contractNamespaces = new Set();

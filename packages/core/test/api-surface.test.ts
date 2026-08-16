@@ -15,6 +15,36 @@ describe("public API surface", () => {
     expectTypeOf<IsOptional>().toEqualTypeOf<false>();
     expectTypeOf<core.Group["status"]>().toEqualTypeOf<core.LifecycleStatus>();
     expectTypeOf<core.Installation["status"]>().toEqualTypeOf<core.LifecycleStatus>();
+
+    const CONFIG = core.service<string>("surface/config");
+    const configured = core.definePlugin({
+      name: "surface.configured",
+      requires: { config: CONFIG },
+      setup(ctx) {
+        void ctx.config;
+      },
+    });
+    const plugins: readonly core.AnyPlugin[] = [configured];
+    expectTypeOf(plugins[0]).toEqualTypeOf<core.AnyPlugin | undefined>();
+    type AnyPluginIsAuthoringInput = core.AnyPlugin extends Parameters<typeof core.definePlugin>[0]
+      ? true
+      : false;
+    expectTypeOf<AnyPluginIsAuthoringInput>().toEqualTypeOf<false>();
+    expectTypeOf<core.Host>().toMatchTypeOf<core.Installer>();
+    expectTypeOf<core.Group>().toMatchTypeOf<core.Installer>();
+    expectTypeOf<ReturnType<core.ChangeSet["update"]>>().toEqualTypeOf<void>();
+    expectTypeOf<ReturnType<core.ChangeSet["remove"]>>().toEqualTypeOf<void>();
+    type OptionalGet = <T>(token: core.OptionalService<T>) => T | undefined;
+    expectTypeOf<core.Host["get"]>().toMatchTypeOf<OptionalGet>();
+
+    type NarrowLogger = {
+      debug(message: string): void;
+      info(message: string): void;
+      warn(message: string): void;
+      error(message: string): void;
+    };
+    type AcceptsUnknownMessages = NarrowLogger extends core.Logger ? true : false;
+    expectTypeOf<AcceptsUnknownMessages>().toEqualTypeOf<false>();
   });
 
   it("keeps the Core value-export budget explicit", () => {
@@ -25,8 +55,10 @@ describe("public API surface", () => {
       "SerialQueue",
       "SnapshotPublisher",
       "assertPlainRecord",
+      "asyncDisposeSymbol",
       "createHost",
       "definePlugin",
+      "disposeSymbol",
       "event",
       "extensionPoint",
       "isCancellationReason",

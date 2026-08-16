@@ -1,6 +1,12 @@
 import { resolvePluginConfig } from "./configuration";
 import { ContractRegistry, type ContractRegistryDraft } from "./contract-registry";
-import { assertContract, type Service } from "./contracts";
+import {
+  assertContract,
+  isOptionalService,
+  type ExtensionPoint,
+  type OptionalService,
+  type Service,
+} from "./contracts";
 import { DougongError, normalizeFailure } from "./errors";
 import { InstallationGraph } from "./installation-graph";
 import type { InstallationRecord } from "./installation";
@@ -38,20 +44,33 @@ export class Engine {
     return this.#plan !== undefined;
   }
 
-  get<T>(token: Service<T>, availability: ServiceAvailability): T {
+  get<T>(
+    requirement: Service<T> | OptionalService<T>,
+    availability: ServiceAvailability,
+  ): T | undefined {
+    const allowMissing = isOptionalService(requirement);
+    const token = allowMissing ? requirement.service : requirement;
     assertContract(token, "service");
     this.#contracts.assertCompatible(token);
     if (availability === "unavailable") throw hostServicesUnavailable();
 
     const provider = this.#requirePlan().provider(token.id);
     if (!provider) {
+      if (allowMissing) return undefined;
       throw new DougongError("SERVICE_UNAVAILABLE", `Service '${token.id}' is not active`);
     }
     const service = this.#runtime.readService(provider, token.id);
     if (!service.found) {
+      if (allowMissing) return undefined;
       throw new DougongError("SERVICE_UNAVAILABLE", `Service '${token.id}' is not active`);
     }
     return service.value as T;
+  }
+
+  contributions<T>(token: ExtensionPoint<T>) {
+    assertContract(token, "extensionPoint");
+    this.#contracts.remember(token);
+    return this.#runtime.contributions(token);
   }
 
   buildPlan(installations: Iterable<InstallationRecord>) {

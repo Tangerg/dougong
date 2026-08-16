@@ -1,7 +1,7 @@
 import type { ChangeSet, Installer, Installation } from "@dougongjs/core";
 import type { RegistrationCommitState, RegistrationRecord } from "./registration";
 import type { PlatformChangeOperation } from "./platform-change-set";
-import type { ErasedPlugin } from "./platform-api";
+import type { ValidatedPlugin } from "./platform-api";
 
 export interface StagedCoreChange<Reference> {
   readonly registrationStates: ReadonlyArray<{
@@ -16,9 +16,9 @@ export interface StagedCoreChange<Reference> {
 
 /** Compiles one validated Platform change into the canonical Core ChangeSet. */
 export function stageCoreChange<Reference>(
-  installer: Installer,
+  installer: Pick<Installer, "change">,
   operations: ReadonlyArray<PlatformChangeOperation<Reference>>,
-  loadedPlugins: ReadonlyMap<RegistrationRecord<Reference>, ErasedPlugin>,
+  loadedPlugins: ReadonlyMap<RegistrationRecord<Reference>, ValidatedPlugin>,
 ): StagedCoreChange<Reference> {
   let change: ChangeSet | undefined;
   const requireChange = () => (change ??= installer.change());
@@ -67,7 +67,7 @@ function stageActivatedUpdate(
   requireChange: () => ChangeSet,
   current: Installation | undefined,
   config: unknown,
-  plugin: ErasedPlugin,
+  plugin: ValidatedPlugin,
 ) {
   if (current) {
     requireChange().update(current, { plugin, config });

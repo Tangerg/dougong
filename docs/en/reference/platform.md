@@ -40,7 +40,7 @@ await platform.trigger("command:music.search");
 await registration.ready();
 ```
 
-Platform options are a plain record containing only `installer`, `apiVersion`, `loader`, `authorizer` and `logger`. Only enumerable own properties are read, and neither unknown fields nor prototype-chain configuration is accepted. Installer, Loader, Authorizer and Logger remain structural ports and may themselves be implemented by ordinary objects or class instances.
+Platform options are a plain record containing only `installer`, `apiVersion`, `loader`, `authorizer` and `logger`. Only enumerable own properties are read, and neither unknown fields nor prototype-chain configuration is accepted. `installer` consumes `Pick<Installer, "change">`; Loader, Authorizer and Logger are structural ports as well. Any of these collaborators may be implemented by an ordinary object or class instance.
 
 `register()` only admits the Artifact into the Platform; `activate()` selects and loads its external Plugin; `ready()` waits for the corresponding Core Installation to cross the Host / ChangeSet ready barrier. These three are not synonyms.
 
@@ -114,6 +114,8 @@ Authorization happens at two boundaries:
 2. Authorization again immediately before each real module load, so revocable, interactive or session-dependent policies can still block execution.
 
 An Authorizer decides "may this proceed". It does not rewrite the Context and promises no OS-level isolation. Filesystem, network and window capabilities should still be supplied by application code as minimal Service interfaces; the security boundary is formed jointly by the Loader, execution environment and Service implementations.
+
+Authorization occurs only at Artifact admission and activation boundaries; it does not intercept each later Core `contribute()`. Per-ExtensionPoint permission is a domain composition policy based on explicit labels in contribution values or restricted Services, not a reason for Platform to duplicate the contribution registry.
 
 ## 5. Registration, placeholders and activation
 
@@ -201,7 +203,7 @@ If Core rejects an already-prepared update because of config, the Service graph,
 
 ## 8. Groups and application adapters
 
-`createPlatform()` accepts an `Installer`, so it can bind either a whole Host or a single Group:
+`createPlatform()` accepts the transaction capability of an installation position through `Pick<Installer, "change">`, so it can bind either a whole Host or a single Group:
 
 ```ts
 const workspace = host.group("workspace", () => {});

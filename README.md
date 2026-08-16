@@ -126,7 +126,9 @@ pnpm examples
 
 ## 环境要求
 
-Node.js ≥ 22，或等价的 ES2024 运行时（需要 `Promise.withResolvers()`）。
+Node.js ≥ 22；浏览器 / WebView 基线为 Chrome / Edge 119、Firefox 121、Safari 17.4，运行时必须提供 `Promise.withResolvers()`。Dougong 会为释放协议选择稳定的 Symbol key，不会在缺少 `Symbol.dispose` 时静默创建名为 `"undefined"` 的方法；显式 `.dispose()` 在上述基线上始终可用。
+
+`using` / `await using` 还要求运行时原生提供或预先 polyfill `Symbol.dispose` / `Symbol.asyncDispose`；Dougong 不修改全局对象。发布代码本身不要求运行时解析 `using`，TypeScript 5.2+ 或等价编译器可以降级这段语法。
 
 TypeScript 消费者的 `tsconfig.json` 需要：
 

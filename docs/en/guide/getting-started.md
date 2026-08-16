@@ -13,6 +13,8 @@ This page takes about ten minutes: install Dougong, write your first capability 
 ::: warning Browser and WebView runtimes
 `Promise.withResolvers()` requires Safari 17.4+ (macOS 14.4+), Chrome 119+ or Firefox 121+.
 If you embed a system WebView through Electron, Tauri or Wails, check your minimum target OS first.
+
+Explicit `.dispose()` does not require Explicit Resource Management support from the runtime. `using` / `await using` additionally require `Symbol.dispose` / `Symbol.asyncDispose`; when they are not native, the application must install a polyfill before importing Dougong. Dougong does not mutate globals.
 :::
 
 ## Install

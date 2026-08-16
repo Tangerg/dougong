@@ -51,7 +51,9 @@ pnpm check
 | 不读 `Date.now` / `performance.now` / `Math.random` | 隐藏时钟和熵源让行为不可复现 |
 | 不直接调 `console` | 必须走 Logger 端口 |
 | 不深导入其他包的内部模块 | 只能用包入口 |
+| TypeScript AST 中不出现显式 `any` | 用精确类型、`unknown` 或 `never` 保留检查边界，不能主动丢失类型信息 |
 | `@dougongjs/reactive` 零外部导入 | 它是独立基础包 |
+| 资源实现不直接使用 `[Symbol.dispose]` / `[Symbol.asyncDispose]` | 必须经过基础协议模块选择稳定 key，避免缺失 Symbol 退化成 `"undefined"` 属性 |
 | facade 只含 re-export | 有逻辑就是第二条执行路径 |
 | `HostImpl` 不得导出 | `Host` 是接口，`createHost()` 是唯一构造入口 |
 | Lifetime 只能由 `Runtime` 和 `Lifetime` 自身构造 | 别处构造会产生无人释放的资源树 |
@@ -73,6 +75,7 @@ pnpm check
 | Group 空 ChangeSet 必须跨串行化边界 | 同上 |
 | Platform 空 ChangeSet 必须跨串行化命令边界 | 同上 |
 | Platform 释放必须是终态 `SerialQueue` 命令 | 尾部观察者会漏掉排队中的命令 |
+| Platform 释放协议必须复用 Core `asyncDisposeSymbol` | 第三份运行时 Symbol 解析逻辑 |
 | Group 所有权必须用 `GroupNode` 身份 | 用 groupId 前缀编码所有权是隐式关系 |
 
 反向规则是这套门禁里最不常见、也最重要的一类：普通门禁说"不许写 X"，反向规则说"**必须写 X**"。前者防退化，后者防分叉。
@@ -109,7 +112,7 @@ PluginHandle             类型标识符              → 失败
 
 `scripts/check-api-surface.mjs`。读取四个包**构建后**的 `dist/index.d.ts`，用 TypeScript checker 解析导出符号——不是文本匹配，所以 `export *` 展开后的最终消费者视角能被看见。
 
-每个包三条独立断言：
+每个包四条独立断言：
 
 1. **导出标识符精确等于 allowlist**（值导出与类型导出分列）。新增导出是一次刻意决定，不能是 `export *` 的副作用。
 2. **退役标识符不得重新进入公共面**。用整 token 列表而非模式，所以合法名字不受影响：
@@ -119,13 +122,18 @@ PluginHandle             类型标识符              → 失败
    PluginHandle  PluginDefinition  ExtensionView       → 退役
    ```
 3. **每个公开导出都必须出现在中英双语文档里**。更新 allowlist 不能留下一个没人解释的 API。
+4. **构建后的声明文件不允许出现 `any`**。源码门禁看不到 declaration emit 推断出的类型，因此这里扫描全部发布 `.d.ts`，防止类型信息在包边界静默丢失。
 
 facade 的面不重述而是**算出来**：它必须恰好等于 core + platform + 转发的 reactive 名字，多一个少一个都失败。
 
-另外两条跨源码与文档：
+四个发布包的 `engines` 与 `browserslist` 还必须和工作区根的运行时基线完全一致；包之间不能声明互相矛盾的支持范围。
+
+另外还有跨源码与文档的检查：
 
 - **错误码**从源码派生，两份错误码参考表必须**穷举**列出，其余页面**不得发明**源码不抛的码。
 - **文档的代码片段**不得使用退役标识符。只提取带代码语言标注的围栏块与行内 `` `code` `` span，散文不受影响。
+
+文档导航同样从文件树派生：中英文的每个 guide、reference 和 examples 页面都必须同时出现在对应侧边栏与首页，导航也不得保留已经删除的页面。新增页面不再可能只挂进其中一份清单。
 
 ## 测试侧的守卫
 
@@ -139,11 +147,13 @@ facade 的面不重述而是**算出来**：它必须恰好等于 core + platfor
 
 | 包 | statements | branches | functions | lines |
 | --- | --- | --- | --- | --- |
-| core | 91 | 83 | 95 | 95 |
-| platform | 97 | 90 | 99 | 98 |
-| reactive | 95 | 86 | 100 | 98 |
+| core | 92 | 83 | 96 | 95 |
+| platform | 97 | 90 | 100 | 98 |
+| reactive | 96 | 89 | 100 | 99 |
 
 一个包不能靠工作区里别处的高覆盖率掩盖自己的回归。阈值定得贴近实测是有意的：留出裕度就等于允许悄悄删测试。
+
+`check:api` 会从 `vitest.config.ts` 推导这张表并核对中英文页面；提高门槛却忘记更新文档不能通过。
 
 ## 怎么加一条新守卫
 

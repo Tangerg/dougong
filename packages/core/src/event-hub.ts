@@ -1,4 +1,4 @@
-import type { Disposable, Publication, StagedResource } from "./resource";
+import { disposeSymbol, type Disposable, type Publication, type StagedResource } from "./resource";
 
 export type EventListener<T> = (payload: T) => unknown;
 
@@ -29,7 +29,7 @@ class ListenerHandle implements Disposable {
     registration?.dispose();
   }
 
-  [Symbol.dispose]() {
+  [disposeSymbol]() {
     this.dispose();
   }
 }
@@ -68,7 +68,7 @@ class ListenerRegistration<T> implements StagedResource<Disposable> {
     }
   }
 
-  [Symbol.dispose]() {
+  [disposeSymbol]() {
     this.dispose();
   }
 }

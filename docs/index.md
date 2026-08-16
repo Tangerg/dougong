@@ -94,18 +94,19 @@ await host.start()                    // 从 Service 声明推导拓扑，同层
 **第二层 · 深入**
 
 3. [编写插件](./guide/writing-plugins.md) —— 依赖、提供、配置校验、失败处理
-4. [生命周期与资源](./guide/lifetime.md) —— 谁拥有什么，什么时候释放
-5. [事务与变更](./guide/transactions.md) —— ChangeSet、Group、回滚与 fail closed
-6. [响应式与观察](./guide/reactive.md) —— Signal 为什么不是第五种能力
-7. [外部插件分发](./guide/platform.md) —— Manifest、权限、懒激活、HMR
+4. [应用代码消费](./guide/application-code.md) —— 从依赖图外读取 Service、观察 ExtensionPoint、桥接 Event
+5. [生命周期与资源](./guide/lifetime.md) —— 谁拥有什么，什么时候释放
+6. [事务与变更](./guide/transactions.md) —— ChangeSet、Group、回滚与 fail closed
+7. [响应式与观察](./guide/reactive.md) —— Signal 为什么不是第五种能力
+8. [外部插件分发](./guide/platform.md) —— Manifest、权限、懒激活、HMR
 
 **第三层 · 规范**
 
-8. [Core API 规范](./reference/core-api.md) —— 每个 API 的精确语义与边界情形
-9. [整体架构](./reference/architecture.md) —— 分层、依赖方向与设计论证
-10. [Platform 规范](./reference/platform.md) —— 外部插件边界
-11. [错误码](./reference/errors.md) —— 稳定错误码及触发条件
-12. [机械守卫](./reference/guards.md) —— `pnpm check` 十步各自守护什么
+9. [Core API 规范](./reference/core-api.md) —— 每个 API 的精确语义与边界情形
+10. [整体架构](./reference/architecture.md) —— 分层、依赖方向与设计论证
+11. [Platform 规范](./reference/platform.md) —— 外部插件边界
+12. [错误码](./reference/errors.md) —— 稳定错误码及触发条件
+13. [机械守卫](./reference/guards.md) —— `pnpm check` 十步各自守护什么
 
 </div>
 
@@ -115,4 +116,4 @@ await host.start()                    // 从 Service 声明推导拓扑，同层
 
 Dougong 处于早期开发阶段（`0.0.x`），**当前不承诺向后兼容**。优先保证的是模型正确、API 一致和可执行证据完整。
 
-运行时基线：Node.js ≥ 22，或等价的 ES2024 运行时。
+运行时基线：Node.js ≥ 22；浏览器 / WebView 为 Chrome / Edge 119、Firefox 121、Safari 17.4，并提供 `Promise.withResolvers()`。显式 `.dispose()` 在全部基线上可用；`using` / `await using` 还要求运行时提供对应的 well-known Symbol 或由应用显式 polyfill。

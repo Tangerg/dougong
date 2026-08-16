@@ -86,3 +86,11 @@ export function optional<T>(token: Service<T>): OptionalService<T> {
   }
   return Object.freeze({ kind: "optional", service: token }) as OptionalService<T>;
 }
+
+export function isOptionalService<T>(
+  value: Service<T> | OptionalService<T>,
+): value is OptionalService<T> {
+  if (!value || typeof value !== "object") return false;
+  const candidate = value as Partial<OptionalService<unknown>>;
+  return candidate.kind === "optional" && isContract(candidate.service, "service");
+}

@@ -63,7 +63,7 @@ await cleanup.dispose()         // 提前执行 fn（只会执行一次）
 ```ts
 async function listenDuring(session) {
   using subscription = session.on(TICK, handler)
-  await session.emit(TICK, undefined)
+  await session.emit(TICK)
   // 函数结束时自动 dispose
 }
 
@@ -127,15 +127,9 @@ setup(ctx) {
 
 Lifetime 有三个阶段：`active` → `disposing` → `disposed`。
 
-```ts
-setup(ctx) {
-  ctx.cleanup(async () => {
-    await ctx.emit(SHUTTING_DOWN, undefined)   // ✓ disposing 阶段允许 emit
-  })
-}
-```
+进入 `disposing` 后，全部 Context 操作都关闭，包括 `emit()`。停止顺序会先撤回监听、贡献、订阅与 View，再 abort `signal`，最后等待任务、子 Lifetime 和 cleanup；cleanup 是释放资源的阶段，不是继续广播事实的阶段。
 
-`disposing` 阶段仍然允许 `emit`——清理逻辑经常需要广播「我要走了」。但**不允许**再获取新资源（`cleanup` / `spawn` / `on` / `contribute` / `lifetime` 都会抛错），否则会产生没人负责释放的资源。
+`emit()` 在这个边界返回以 `LIFETIME_DISPOSED` 拒绝的 Promise，不会同步抛出。因此有意忽略终止竞态时可以明确写 `void ctx.emit(STOPPED).catch(report)`；若某个“已停止”状态必须始终可读，应把它放在 Service/Signal，而不是 cleanup Event。
 
 ## 观察所有权树
 

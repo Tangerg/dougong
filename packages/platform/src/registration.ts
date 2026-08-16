@@ -212,7 +212,9 @@ export class RegistrationRecord<Reference> {
   >(artifact: Artifact<Reference, Config, Requires, Provides, ConfigInput>): Promise<void> {
     const authority = this.#attachedAuthority();
     if (!authority) throw this.unavailableError();
-    await authority.port.change().update(this.publicRegistration, artifact).commit();
+    const change = authority.port.change();
+    change.update(this.publicRegistration, artifact);
+    await change.commit();
   }
 
   async remove(): Promise<void> {
@@ -221,7 +223,9 @@ export class RegistrationRecord<Reference> {
       if (this.#state.phase === "removed" || this.#state.phase === "failed") return;
       throw this.unavailableError();
     }
-    await authority.port.change().remove(this.publicRegistration).commit();
+    const change = authority.port.change();
+    change.remove(this.publicRegistration);
+    await change.commit();
   }
 
   activateAsDependency(permit: ActivationPermit) {

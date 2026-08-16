@@ -429,7 +429,7 @@ describe("structured lifetime", () => {
     const emitter = definePlugin({
       name: "lifetime.disposable-emitter",
       setup(ctx) {
-        emit = () => ctx.emit(NOTICE, undefined);
+        emit = () => ctx.emit(NOTICE);
       },
     });
 
@@ -511,7 +511,10 @@ describe("structured lifetime", () => {
     expect(childListener).toHaveBeenLastCalledWith("before");
 
     await child.dispose();
-    expect(() => emitFromChild("disposed")).toThrow("Lifetime is disposing or has been disposed");
+    await expect(emitFromChild("disposed")).rejects.toMatchObject({
+      code: "LIFETIME_DISPOSED",
+      message: "Lifetime is disposing or has been disposed",
+    });
     await emitFromRoot("after");
 
     expect(rootListener.mock.calls).toEqual([["before"], ["after"]]);

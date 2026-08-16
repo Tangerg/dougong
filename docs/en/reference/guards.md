@@ -51,7 +51,9 @@ Constraints the type system cannot express but source text can decide. Two kinds
 | No `Date.now` / `performance.now` / `Math.random` | Hidden clocks and entropy make behaviour irreproducible |
 | No direct `console` calls | Must go through the Logger port |
 | No deep imports into another package's internals | Entry points only |
+| No explicit `any` in the TypeScript AST | Preserve the checking boundary with a precise type, `unknown` or `never` instead of discarding type information |
 | `@dougongjs/reactive` has zero external imports | It is an independent foundation |
+| Resource implementations do not use `[Symbol.dispose]` / `[Symbol.asyncDispose]` directly | Foundation protocol modules must select stable keys instead of degrading a missing symbol into an `"undefined"` property |
 | The facade contains re-exports only | Logic there is a second execution path |
 | `HostImpl` must not be exported | `Host` is an interface; `createHost()` is the only constructor |
 | Only `Runtime` and `Lifetime` itself may construct a Lifetime | Anywhere else produces a resource tree nobody disposes |
@@ -73,6 +75,7 @@ Constraints the type system cannot express but source text can decide. Two kinds
 | Empty Group ChangeSets must cross the serialized boundary | Likewise |
 | Empty Platform ChangeSets must cross the serialized command boundary | Likewise |
 | Platform disposal must be a terminal `SerialQueue` command | A tail observer misses queued commands |
+| Platform disposal must reuse Core `asyncDisposeSymbol` | A third runtime Symbol resolver |
 | Group ownership must use `GroupNode` identity | Encoding ownership in a groupId prefix is an implicit relationship |
 
 Inverted rules are the least common and the most important kind here. An ordinary gate says "do not write X". An inverted rule says "**you must** write X". The first prevents decay; the second prevents forking.
@@ -109,7 +112,7 @@ Every package ships as a library, and a value-level cycle between two modules of
 
 `scripts/check-api-surface.mjs`. It reads the **built** `dist/index.d.ts` of all four packages and resolves exported symbols through the TypeScript checker — not text matching, so what a consumer finally sees after `export *` expansion is what gets checked.
 
-Three independent assertions per package:
+Four independent assertions per package:
 
 1. **The exported identifiers equal the allowlist exactly**, values and types listed separately. A new export is a deliberate decision, never a side effect of an `export *`.
 2. **No retired identifier returns to the public surface.** The banlist holds whole tokens rather than patterns, so valid names are unaffected:
@@ -119,13 +122,18 @@ Three independent assertions per package:
    PluginHandle  PluginDefinition  ExtensionView       -> retired
    ```
 3. **Every public export appears in both the Chinese and English documentation** for its package. Updating the allowlist cannot leave a supported API unexplained.
+4. **Built declaration files contain no `any`**. The source gate cannot see types inferred by declaration emit, so this step scans every published `.d.ts` and prevents type information from disappearing at the package boundary.
 
 The facade's surface is **computed rather than restated**: it must equal exactly core plus platform plus the reactive names it forwards, and one name too many or too few fails.
 
-Two further checks span source and documentation:
+The four published packages must also match the workspace runtime baseline exactly in `engines` and `browserslist`; packages cannot advertise contradictory support ranges.
+
+Further checks span source and documentation:
 
 - **Error codes** are derived from source. The two reference tables must list exactly that set, and no other page may invent a code no source throws.
 - **Documentation code fragments** may not use retired identifiers. Only fenced blocks with a code language tag and inline `` `code` `` spans are extracted, so prose is unaffected.
+
+Documentation navigation is derived from the file tree as well: every guide, reference and examples page in each language must appear in both its sidebar and homepage, and neither navigation may retain a deleted page. Adding a page can no longer update only one hand-maintained list.
 
 ## Guards on the test side
 
@@ -139,11 +147,13 @@ Two further checks span source and documentation:
 
 | Package | statements | branches | functions | lines |
 | --- | --- | --- | --- | --- |
-| core | 91 | 83 | 95 | 95 |
-| platform | 97 | 90 | 99 | 98 |
-| reactive | 95 | 86 | 100 | 98 |
+| core | 92 | 83 | 96 | 95 |
+| platform | 97 | 90 | 100 | 98 |
+| reactive | 96 | 89 | 100 | 99 |
 
 A package cannot hide its own regression behind stronger coverage elsewhere in the workspace. Keeping the numbers tight is deliberate: slack is permission to quietly delete tests.
+
+`check:api` derives this table from `vitest.config.ts` and verifies both language versions, so raising a floor without updating the documentation cannot pass.
 
 ## How to add a guard
 

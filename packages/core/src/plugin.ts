@@ -61,7 +61,20 @@ export interface Plugin<
   ) => Awaitable<SetupOutput<NoInfer<Provides>>>;
 }
 
-/** Execution representation after public generic information has been checked and erased. */
+/**
+ * A heterogeneous Plugin value returned by definePlugin after authoring-specific generic
+ * information is irrelevant. Its uncallable setup signature preserves strict variance without
+ * introducing `any`.
+ */
+export interface AnyPlugin {
+  readonly name: string;
+  readonly config?: unknown;
+  readonly requires?: Requirements;
+  readonly provides?: Provisions;
+  readonly setup: (context: never, config: never) => unknown;
+}
+
+/** Internal execution representation after public generic information has been checked. */
 export type ErasedPlugin = Plugin<unknown, Requirements, Provisions, unknown>;
 
 const reservedContextKeys = new Set([
@@ -90,7 +103,11 @@ export function definePlugin<
   ConfigInput = Config,
 >(
   plugin: Plugin<Config, Requires, Provides, ConfigInput>,
-): Plugin<Config, Requires, Provides, ConfigInput> {
+): Plugin<NoInfer<Config>, NoInfer<Requires>, NoInfer<Provides>, NoInfer<ConfigInput>> {
+  return normalizePluginDeclaration(plugin) as Plugin<Config, Requires, Provides, ConfigInput>;
+}
+
+function normalizePluginDeclaration(plugin: AnyPlugin): AnyPlugin {
   assertPluginRecord(plugin);
   const name = Object.hasOwn(plugin, "name") ? plugin.name : undefined;
   const config = Object.hasOwn(plugin, "config") ? plugin.config : undefined;
@@ -223,13 +240,8 @@ function contractLabel(kind: ContractKind) {
 }
 
 /** The sole boundary that validates a public Plugin and erases authoring-only generics. */
-export function normalizePlugin<
-  Config,
-  Requires extends Requirements,
-  Provides extends Provisions,
-  ConfigInput,
->(plugin: Plugin<Config, Requires, Provides, ConfigInput>): ErasedPlugin {
+export function normalizePlugin(plugin: AnyPlugin): ErasedPlugin {
   // Config and alias types are authoring constraints. Core has already checked
   // the declaration here and deliberately stores the same value type-erased.
-  return definePlugin(plugin) as unknown as ErasedPlugin;
+  return normalizePluginDeclaration(plugin) as unknown as ErasedPlugin;
 }

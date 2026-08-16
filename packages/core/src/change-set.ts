@@ -110,7 +110,6 @@ export class ChangeSetDraft implements ChangeSet {
     }
     const operation: ChangeOperation = { kind: "update", installation: record, declaration };
     this.#stage(operation);
-    return this;
   }
 
   remove<Config, Requires extends Requirements, Provides extends Provisions, ConfigInput>(
@@ -118,7 +117,6 @@ export class ChangeSetDraft implements ChangeSet {
   ) {
     const port = this.#requireOpen();
     this.#stage({ kind: "remove", installation: port.resolve(installation) });
-    return this;
   }
 
   commit() {

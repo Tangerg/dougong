@@ -8,7 +8,7 @@ import {
 import { PlatformError } from "./errors";
 import type { Loader } from "./loader";
 import { defineManifest, matchesVersion, type Manifest } from "./manifest";
-import type { ErasedPlugin, NormalizedArtifact, Artifact } from "./platform-api";
+import type { Artifact, NormalizedArtifact, ValidatedPlugin } from "./platform-api";
 
 const artifactFields = new Set(["manifest", "reference", "config", "placeholder"]);
 
@@ -85,7 +85,7 @@ export async function loadPlugin<Reference>(
   const candidate = Object.hasOwn(loaded, "default")
     ? (loaded as { readonly default: unknown }).default
     : undefined;
-  let plugin: ErasedPlugin;
+  let plugin: ValidatedPlugin;
   try {
     plugin = normalizePluginCandidate(candidate);
   } catch (error) {
@@ -106,8 +106,8 @@ function normalizePlaceholder(manifest: Manifest, placeholder: unknown) {
 }
 
 /** The sole Platform boundary that validates and type-erases a Plugin candidate. */
-function normalizePluginCandidate(candidate: unknown): ErasedPlugin {
-  return definePlugin(candidate as ErasedPlugin);
+function normalizePluginCandidate(candidate: unknown): ValidatedPlugin {
+  return definePlugin(candidate as ValidatedPlugin);
 }
 
 function assertArtifactIdentity(

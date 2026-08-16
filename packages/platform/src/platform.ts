@@ -1,4 +1,5 @@
 import {
+  asyncDisposeSymbol,
   assertPlainRecord,
   type Logger,
   type Installer,
@@ -28,8 +29,8 @@ import {
   type PlatformChangePort,
 } from "./platform-change-set";
 import type {
-  ErasedPlugin,
   PlatformOptions,
+  ValidatedPlugin,
   Registration,
   NormalizedArtifact,
   PlatformChangeSet,
@@ -45,7 +46,7 @@ interface PlatformAuthority<Reference> {
 }
 
 interface PlatformPorts<Reference> {
-  readonly installer: Installer;
+  readonly installer: Pick<Installer, "change">;
   readonly loader: Loader<Reference>;
   readonly authorizer: Authorizer;
   readonly logger: Logger;
@@ -210,7 +211,7 @@ class PlatformImpl<Reference> implements Platform<Reference> {
     return completion;
   }
 
-  [Symbol.asyncDispose]() {
+  [asyncDisposeSymbol]() {
     return this.dispose();
   }
 
@@ -337,7 +338,7 @@ class PlatformImpl<Reference> implements Platform<Reference> {
     loader: Loader<Reference>,
     signal: AbortSignal,
   ) {
-    const loadedPlugins = new Map<RegistrationRecord<Reference>, ErasedPlugin>();
+    const loadedPlugins = new Map<RegistrationRecord<Reference>, ValidatedPlugin>();
     for (const operation of operations) {
       if (operation.kind === "update" && activatedUpdates.has(operation.registration)) {
         loadedPlugins.set(
