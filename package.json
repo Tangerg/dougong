@@ -26,6 +26,7 @@
     "docs:preview": "vitepress preview docs",
     "docs:check": "pnpm docs:build",
     "check": "pnpm typecheck && pnpm lint && pnpm format:check && pnpm test && pnpm knip && pnpm check:circular && pnpm check:layers && pnpm build && pnpm check:api && pnpm docs:check",
+    "release": "node scripts/release.mjs",
     "prepare": "husky"
   },
   "lint-staged": {
