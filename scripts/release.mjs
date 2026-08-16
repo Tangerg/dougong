@@ -165,6 +165,19 @@ process.on("exit", (code) => {
   if (code !== 0 && originalManifests.size) restoreManifests();
 });
 
+// A signal terminates the process without emitting `exit`, so the handler above
+// never runs. Interrupting at the confirmation prompt, or during npm's browser
+// two-factor wait, once left all four manifests bumped in a clean checkout.
+for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) {
+  process.on(signal, () => {
+    if (originalManifests.size) {
+      restoreManifests();
+      console.error("\n  interrupted — package.json versions restored");
+    }
+    process.exit(130);
+  });
+}
+
 // 6 · Pack and inspect
 //
 // The tarball is the artifact consumers receive. Everything before this point
@@ -253,14 +266,36 @@ if (!assumeYes) {
 //
 // In dependency order, from the inspected tarball rather than from the working
 // directory, so what was verified is exactly what is uploaded.
+//
+// Each upload is then confirmed against the registry. An exit code alone is not
+// evidence: npm's browser two-factor flow polls for an authorization that may
+// never arrive, and an interrupted release once looked like a finished one.
 
 step("Publishing");
 
+console.log(
+  "  If two-factor authentication is enabled, npm prints a URL and waits for\n" +
+    "  browser approval. Nothing is published until you complete it.\n" +
+    "  Pass --otp=<code> instead to authorize from the terminal.\n",
+);
+
+const otp = args.find((argument) => argument.startsWith("--otp="));
 const published = [];
 for (const { name } of PACKAGES) {
-  const result = spawnSync("npm", ["publish", tarballs.get(name), "--access", "public"], {
-    stdio: "inherit",
-  });
+  const publishArgs = ["publish", tarballs.get(name), "--access", "public"];
+  if (otp) publishArgs.push(otp);
+  const result = spawnSync("npm", publishArgs, { stdio: "inherit" });
+  if (result.status === 0) {
+    // Confirm the version resolves before moving to a package that depends on it.
+    const confirmed = spawnSync("npm", ["view", `${name}@${version}`, "version"], {
+      encoding: "utf8",
+    });
+    if (confirmed.status !== 0 || confirmed.stdout.trim() !== version) {
+      console.error(`\n✗ ${name}: npm reported success but ${version} is not on the registry.`);
+      if (published.length) console.error(`  Already published: ${published.join(", ")}`);
+      process.exit(1);
+    }
+  }
   if (result.status !== 0) {
     console.error(`\n✗ ${name} failed to publish.`);
     if (published.length) {
