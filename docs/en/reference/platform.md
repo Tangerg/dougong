@@ -125,12 +125,14 @@ The Artifact:
 interface Artifact<Reference> {
   readonly manifest: ManifestInput | Manifest;
   readonly reference: Reference;
-  readonly config?: unknown; // required by type when ConfigInput is not void
-  readonly placeholder?: Plugin;
+  readonly config?: unknown;
+  readonly placeholder?: AnyPlugin;
 }
 ```
 
 An Artifact is also a strict declaration value. It must be a plain record containing only `manifest`, `reference`, `config` and `placeholder`, with `manifest` and `reference` present as enumerable own properties. Unknown fields, symbols, hidden properties, arrays and class instances are rejected when the Artifact enters a ChangeSet. Normalization reads each own field once and returns a frozen value instead of guessing declarations from the prototype chain.
+
+Artifact is an external delivery boundary and does not repeat Core's Plugin authoring generics. A loaded module is outside the type system, so the selected Plugin schema must validate `config` at runtime. `placeholder` uses the same erased `AnyPlugin` shape, allowing a heterogeneous Plugin collection to enter Platform without assertions. Erasure creates no second execution path: both placeholders and loaded Plugins cross the same declaration-normalisation and Core commit boundaries.
 
 A `placeholder` must be created by application-trusted code. It suits contributing command titles, menu metadata or a stand-in panel before lazy loading. Platform installs it as an ordinary Core Plugin at registration; on activation it atomically updates the **same Core Installation** to the loaded Plugin, so the Installation ID, Group membership and downstream observation identity stay stable.
 

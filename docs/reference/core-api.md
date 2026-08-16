@@ -573,6 +573,8 @@ await task.dispose()
 
 任务自然 settle 后会立即从父 Lifetime 的拥有集合和 AbortSignal 监听器中脱离；之后调用该 Task 的 `dispose()` 只是幂等完成，不会追溯性 abort 已结束任务的 signal。已完成任务不会在长生命周期中按历史次数累积；父释放仍会 abort 并等待当时尚未 settle 的全部任务。
 
+等待是结构化所有权的承诺，不是超时策略：任务若停在不可取消且不 settle 的操作上，`Task.dispose()`、父 Lifetime 释放与 `host.stop()` 都会保持 pending。Core 不会暗中摘除这类工作；需要放弃等待时，必须由应用代码明确承担该策略及其资源后果。安全模式见 [Lifetime 指南](../guide/lifetime.md#后台任务)。
+
 ### 9.4 停止顺序
 
 Instance 停止时顺序固定，不依赖注册巧合：

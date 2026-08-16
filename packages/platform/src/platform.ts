@@ -3,8 +3,6 @@ import {
   assertPlainRecord,
   type Logger,
   type Installer,
-  type Provisions,
-  type Requirements,
   isLogger,
   SerialQueue,
   type SnapshotView,
@@ -160,12 +158,7 @@ class PlatformImpl<Reference> implements Platform<Reference> {
     return this.#state.phase;
   }
 
-  async register<
-    Config = void,
-    Requires extends Requirements = {},
-    Provides extends Provisions = {},
-    ConfigInput = Config,
-  >(artifact: Artifact<Reference, Config, Requires, Provides, ConfigInput>) {
+  async register(artifact: Artifact<Reference>) {
     const change = this.change();
     const registration = change.register(artifact);
     await change.commit();

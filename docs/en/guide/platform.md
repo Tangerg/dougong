@@ -142,6 +142,8 @@ registration.status      // "activated"
 
 The `placeholder` is an **application-authored Plugin** standing in until the loaded Plugin activates. That is what makes "the command is already in the menu, but the implementation loads on click" possible — and the swap is **atomic**, through the same Core ChangeSet.
 
+`placeholder` accepts Core's `AnyPlugin`, so a composition root can select it directly from a heterogeneous collection such as `readonly AnyPlugin[]`. Artifact is an external delivery boundary and does not pretend to retain the loaded module's authoring-time generics; the actual Plugin schema still validates `config` at the Core boundary.
+
 Activation can also be event-driven:
 
 ```ts

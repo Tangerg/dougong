@@ -125,12 +125,14 @@ Artifact：
 interface Artifact<Reference> {
   readonly manifest: ManifestInput | Manifest;
   readonly reference: Reference;
-  readonly config?: unknown; // ConfigInput 非 void 时在类型上为必填
-  readonly placeholder?: Plugin;
+  readonly config?: unknown;
+  readonly placeholder?: AnyPlugin;
 }
 ```
 
 Artifact 也是严格的声明值：它必须是仅含 `manifest`、`reference`、`config`、`placeholder` 的普通 record，且 `manifest` 与 `reference` 必须是可枚举的 own property。未知字段、Symbol、隐藏属性、数组与类实例都会在进入 ChangeSet 时立即拒绝；规范化只读取一次自己的字段并返回冻结值，不从原型链猜测声明。
+
+Artifact 是外部交付边界，不重复 Core 的 Plugin 作者期泛型：加载所得模块在类型系统外，`config` 必须由最终选中的 Plugin schema 在运行时验证；`placeholder` 使用同一个 `AnyPlugin` 擦除形状，因此异构 Plugin 清单可以直接进入 Platform，无需断言。擦除不增加第二条执行路径；placeholder 与加载所得 Plugin 都经过同一个声明规范化与 Core 提交边界。
 
 `placeholder` 必须由应用代码信任的代码创建。它适合在懒加载前贡献命令标题、菜单元数据或占位面板。Platform 注册时把它作为普通 Core Plugin 安装；激活时原子更新**同一个 Core Installation**，换成加载所得 Plugin，因此 Installation ID、Group 归属和下游观测身份保持稳定。
 

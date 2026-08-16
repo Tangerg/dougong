@@ -98,6 +98,48 @@ That distinction matters: a polling plugin that ran a hundred thousand iteration
 
 Exceptions thrown by tasks are never swallowed; they surface through the Host's error reporting channel (`createHost({ onError })` or the logger). Cancellation covers only `signal.reason` or an explicit `AbortError`; another error raised after cancellation is still reported.
 
+::: warning Abort is cooperative, not pre-emptive
+`task.dispose()`, Lifetime release and `host.stop()` all abort first and then wait for the task body to settle. An `AbortSignal` is only a cancellation notification: if a task is awaiting an operation that neither accepts the signal nor returns, shutdown waits forever too. Dougong never silently abandons work that is still owned by a Lifetime.
+:::
+
+Prefer passing the signal to an adapter that genuinely supports cancellation. If a third-party operation cannot be cancelled and both its late completion and failure are safe to ignore, application code can make an explicit “abandon the wait” policy:
+
+```ts
+function abandonOnAbort<T>(
+  signal: AbortSignal,
+  start: () => PromiseLike<T>,
+): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const abort = () => reject(signal.reason)
+    signal.addEventListener("abort", abort, { once: true })
+    if (signal.aborted) {
+      abort()
+      return
+    }
+
+    void Promise.resolve()
+      .then(() => signal.throwIfAborted())
+      .then(start)
+      .then(
+        (value) => {
+          signal.removeEventListener("abort", abort)
+          resolve(value)
+        },
+        (error: unknown) => {
+          signal.removeEventListener("abort", abort)
+          reject(error)
+        },
+      )
+  })
+}
+
+ctx.spawn((signal) =>
+  abandonOnAbort(signal, () => legacyClient.flush()),
+)
+```
+
+This helper only lets the Dougong Task abandon the **wait**; it does not stop the underlying operation. The rejection handler remains attached and observes a later failure rather than creating an unrelated unhandled rejection. Never use this pattern for work that holds exclusive resources, requires cleanup, or may mutate disposed state after shutdown; such work needs a genuinely cancellable adapter.
+
 ## Child lifetimes
 
 When a group of resources must be replaced or released as a unit, use a child Lifetime:

@@ -1,10 +1,4 @@
-import {
-  assertPlainRecord,
-  definePlugin,
-  isCancellationReason,
-  type Provisions,
-  type Requirements,
-} from "@dougongjs/core";
+import { assertPlainRecord, definePlugin, isCancellationReason } from "@dougongjs/core";
 import { PlatformError } from "./errors";
 import type { Loader } from "./loader";
 import { defineManifest, matchesVersion, type Manifest } from "./manifest";
@@ -13,15 +7,9 @@ import type { Artifact, NormalizedArtifact, ValidatedPlugin } from "./platform-a
 const artifactFields = new Set(["manifest", "reference", "config", "placeholder"]);
 
 /** Normalizes and validates one public Artifact declaration. */
-export function normalizeArtifact<
-  Reference,
-  Config = void,
-  Requires extends Requirements = {},
-  Provides extends Provisions = {},
-  ConfigInput = Config,
->(
+export function normalizeArtifact<Reference>(
   apiVersion: string,
-  artifact: Artifact<Reference, Config, Requires, Provides, ConfigInput>,
+  artifact: Artifact<Reference>,
 ): NormalizedArtifact<Reference> {
   assertPlainRecord(artifact, "Artifact declaration", { fields: artifactFields });
   if (!Object.hasOwn(artifact, "manifest")) {

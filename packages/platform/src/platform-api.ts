@@ -1,4 +1,5 @@
 import type {
+  AnyPlugin,
   AsyncDisposable,
   Logger,
   Installer,
@@ -12,64 +13,27 @@ import type { Loader } from "./loader";
 import type { Manifest, ManifestInput } from "./manifest";
 import type { Authorizer } from "./permissions";
 
-interface ArtifactDeclaration<
-  Reference,
-  Config,
-  Requires extends Requirements,
-  Provides extends Provisions,
-  ConfigInput,
-> {
+export interface Artifact<Reference> {
   readonly manifest: Manifest | ManifestInput;
   readonly reference: Reference;
+  /** Opaque input validated by the selected Plugin at the Core boundary. */
+  readonly config?: unknown;
   /** Plugin supplied by application code until the external module is activated. */
-  readonly placeholder?: Plugin<Config, Requires, Provides, ConfigInput>;
+  readonly placeholder?: AnyPlugin;
 }
-
-export type Artifact<
-  Reference,
-  Config = void,
-  Requires extends Requirements = {},
-  Provides extends Provisions = {},
-  ConfigInput = Config,
-> = ArtifactDeclaration<Reference, Config, Requires, Provides, ConfigInput> &
-  ([ConfigInput] extends [void]
-    ? { readonly config?: ConfigInput }
-    : { readonly config: ConfigInput });
 
 export interface Registration<Reference> {
   readonly manifest: Manifest;
   readonly status: RegistrationStatus;
   ready(): Promise<void>;
   activate(): Promise<void>;
-  update<
-    Config = void,
-    Requires extends Requirements = {},
-    Provides extends Provisions = {},
-    ConfigInput = Config,
-  >(
-    artifact: Artifact<Reference, Config, Requires, Provides, ConfigInput>,
-  ): Promise<void>;
+  update(artifact: Artifact<Reference>): Promise<void>;
   remove(): Promise<void>;
 }
 
 export interface PlatformChangeSet<Reference> {
-  register<
-    Config = void,
-    Requires extends Requirements = {},
-    Provides extends Provisions = {},
-    ConfigInput = Config,
-  >(
-    artifact: Artifact<Reference, Config, Requires, Provides, ConfigInput>,
-  ): Registration<Reference>;
-  update<
-    Config = void,
-    Requires extends Requirements = {},
-    Provides extends Provisions = {},
-    ConfigInput = Config,
-  >(
-    registration: Registration<Reference>,
-    artifact: Artifact<Reference, Config, Requires, Provides, ConfigInput>,
-  ): void;
+  register(artifact: Artifact<Reference>): Registration<Reference>;
+  update(registration: Registration<Reference>, artifact: Artifact<Reference>): void;
   remove(registration: Registration<Reference>): void;
   commit(): Promise<void>;
 }
@@ -78,14 +42,7 @@ export interface Platform<Reference> extends AsyncDisposable {
   readonly apiVersion: string;
   readonly status: PlatformStatus;
   readonly diagnostics: SnapshotView<PlatformSnapshot>;
-  register<
-    Config = void,
-    Requires extends Requirements = {},
-    Provides extends Provisions = {},
-    ConfigInput = Config,
-  >(
-    artifact: Artifact<Reference, Config, Requires, Provides, ConfigInput>,
-  ): Promise<Registration<Reference>>;
+  register(artifact: Artifact<Reference>): Promise<Registration<Reference>>;
   change(): PlatformChangeSet<Reference>;
   trigger(event: string): Promise<void>;
 }

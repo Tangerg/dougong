@@ -1,4 +1,3 @@
-import type { Provisions, Requirements } from "@dougongjs/core";
 import { PlatformError } from "./errors";
 import type { RegistrationRecord } from "./registration";
 import type { Registration, NormalizedArtifact, PlatformChangeSet, Artifact } from "./platform-api";
@@ -17,14 +16,7 @@ export type PlatformChangeOperation<Reference> =
   | { readonly kind: "remove"; readonly registration: RegistrationRecord<Reference> };
 
 export interface PlatformChangePort<Reference> {
-  normalize<
-    Config = void,
-    Requires extends Requirements = {},
-    Provides extends Provisions = {},
-    ConfigInput = Config,
-  >(
-    artifact: Artifact<Reference, Config, Requires, Provides, ConfigInput>,
-  ): NormalizedArtifact<Reference>;
+  normalize(artifact: Artifact<Reference>): NormalizedArtifact<Reference>;
   createRegistration(artifact: NormalizedArtifact<Reference>): RegistrationRecord<Reference>;
   attachRegistration(registration: RegistrationRecord<Reference>): void;
   resolve(registration: Registration<Reference>): RegistrationRecord<Reference>;
@@ -49,12 +41,7 @@ export class PlatformChangeSetDraft<Reference> implements PlatformChangeSet<Refe
     Object.freeze(this);
   }
 
-  register<
-    Config = void,
-    Requires extends Requirements = {},
-    Provides extends Provisions = {},
-    ConfigInput = Config,
-  >(artifact: Artifact<Reference, Config, Requires, Provides, ConfigInput>) {
+  register(artifact: Artifact<Reference>) {
     const port = this.#requireOpen();
     const normalized = port.normalize(artifact);
     const registration = port.createRegistration(normalized);
@@ -62,15 +49,7 @@ export class PlatformChangeSetDraft<Reference> implements PlatformChangeSet<Refe
     return registration.publicRegistration;
   }
 
-  update<
-    Config = void,
-    Requires extends Requirements = {},
-    Provides extends Provisions = {},
-    ConfigInput = Config,
-  >(
-    registration: Registration<Reference>,
-    artifact: Artifact<Reference, Config, Requires, Provides, ConfigInput>,
-  ) {
+  update(registration: Registration<Reference>, artifact: Artifact<Reference>) {
     const port = this.#requireOpen();
     const record = port.resolve(registration);
     const normalized = port.normalize(artifact);

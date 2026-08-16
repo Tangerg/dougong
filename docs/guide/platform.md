@@ -142,6 +142,8 @@ registration.status      // "activated"
 
 `placeholder` 是一个**应用代码编写的 Plugin**，在加载所得 Plugin 激活之前占位。它让「命令已经在菜单里，但点击时才加载实现」这类体验成为可能——而且两者替换是**原子**的，走同一笔 Core ChangeSet。
 
+`placeholder` 接受 Core 的 `AnyPlugin`，因此组合根可以直接从 `readonly AnyPlugin[]` 这类异构清单中选择占位声明。Artifact 位于外部交付边界，不假装保留加载模块的作者期泛型；`config` 最终仍由实际 Plugin 的 schema 在 Core 边界验证。
+
 激活也可以由事件触发：
 
 ```ts

@@ -97,6 +97,48 @@ task.dispose()   // abort 并等待结束
 
 任务抛出的异常不会静默消失，会通过 Host 的错误上报通道（`createHost({ onError })` 或 logger）报出来。取消只覆盖 `signal.reason` 或明确的 `AbortError`；任务在收到取消后又发生的其他错误仍会报告。
 
+::: warning abort 不是抢占
+`task.dispose()`、Lifetime 释放与 `host.stop()` 都会在发出 abort 后等待任务体真正 settle。`AbortSignal` 只是取消通知：若任务正 `await` 一个不接受 signal、也不返回的操作，停止也会一直等待。Dougong 不会静默遗弃仍归 Lifetime 所有的工作。
+:::
+
+优先把 signal 传给真正支持取消的适配器。如果第三方操作确实不可取消，而且它在停止后的完成与失败都可以安全忽略，可以在应用代码中明确采用“放弃等待”策略：
+
+```ts
+function abandonOnAbort<T>(
+  signal: AbortSignal,
+  start: () => PromiseLike<T>,
+): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const abort = () => reject(signal.reason)
+    signal.addEventListener("abort", abort, { once: true })
+    if (signal.aborted) {
+      abort()
+      return
+    }
+
+    void Promise.resolve()
+      .then(() => signal.throwIfAborted())
+      .then(start)
+      .then(
+        (value) => {
+          signal.removeEventListener("abort", abort)
+          resolve(value)
+        },
+        (error: unknown) => {
+          signal.removeEventListener("abort", abort)
+          reject(error)
+        },
+      )
+  })
+}
+
+ctx.spawn((signal) =>
+  abandonOnAbort(signal, () => legacyClient.flush()),
+)
+```
+
+这个 helper 只让 Dougong 的 Task 放弃**等待**，不会终止底层操作；链上的拒绝处理器仍会观察它以后发生的失败，避免产生无关的 unhandled rejection。不要用它遗弃持有独占资源、必须收尾或停止后仍可能改写已释放状态的工作；这类操作需要一个真正可取消的适配器。
+
 ## 子生命周期
 
 当一组资源需要作为整体被替换或释放时，用子 Lifetime：

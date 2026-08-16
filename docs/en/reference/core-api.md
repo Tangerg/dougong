@@ -573,6 +573,8 @@ Releasing a task aborts first, then awaits the result settling. A background fai
 
 A task that settles naturally immediately detaches from the parent Lifetime's ownership set and from the AbortSignal listeners. A later `dispose()` on that task is an idempotent completion and never retroactively aborts the signal of a finished task. Completed tasks do not accumulate in a long-lived owner proportional to history; releasing a parent still aborts and awaits every task that had not settled at that moment.
 
+Waiting is a structured-ownership guarantee, not a timeout policy. If a task is stuck on a non-cancellable operation that never settles, `Task.dispose()`, parent Lifetime release and `host.stop()` all remain pending. Core never detaches such work implicitly; application code must explicitly own both an abandon-wait policy and its resource consequences. See the safe pattern in the [Lifetime guide](../guide/lifetime.md#background-tasks).
+
 ### 9.4 Stop order
 
 A plugin's stop order is fixed and never depends on registration coincidence:

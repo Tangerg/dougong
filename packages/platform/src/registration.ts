@@ -1,10 +1,4 @@
-import {
-  DougongError,
-  SerialQueue,
-  type Installation,
-  type Provisions,
-  type Requirements,
-} from "@dougongjs/core";
+import { DougongError, SerialQueue, type Installation } from "@dougongjs/core";
 import type { Registration, NormalizedArtifact, PlatformChangeSet, Artifact } from "./platform-api";
 import { PlatformError } from "./errors";
 import type { ActivationPermit } from "./activation-gate";
@@ -87,12 +81,7 @@ class RegistrationImpl<Reference> implements Registration<Reference> {
     return this.#registration.activate();
   }
 
-  update<
-    Config = void,
-    Requires extends Requirements = {},
-    Provides extends Provisions = {},
-    ConfigInput = Config,
-  >(artifact: Artifact<Reference, Config, Requires, Provides, ConfigInput>) {
+  update(artifact: Artifact<Reference>) {
     return this.#registration.update(artifact);
   }
 
@@ -204,12 +193,7 @@ export class RegistrationRecord<Reference> {
     });
   }
 
-  async update<
-    Config = void,
-    Requires extends Requirements = {},
-    Provides extends Provisions = {},
-    ConfigInput = Config,
-  >(artifact: Artifact<Reference, Config, Requires, Provides, ConfigInput>): Promise<void> {
+  async update(artifact: Artifact<Reference>): Promise<void> {
     const authority = this.#attachedAuthority();
     if (!authority) throw this.unavailableError();
     const change = authority.port.change();
