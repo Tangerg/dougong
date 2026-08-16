@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // One-command release for the four published packages.
 //
-//   node scripts/release.mjs <version> [--dry-run] [--yes]
+//   node scripts/release.mjs <version> [--dry-run] [--yes] [--otp=<code>]
 //
 // The order below is not arbitrary. Version 0.0.1 of this project shipped
 // broken because `dist/` still held the previous scope: the gate had been read
@@ -12,14 +12,20 @@
 //   * the full `pnpm check`, whose exit code is read directly, never through a pipe
 //   * `npm pack` tarballs extracted and inspected, because listing a tarball with
 //     glob flags is not portable and silently reported "clean" once before
-//   * publish in dependency order, so no consumer can resolve a version whose
-//     workspace dependency is not on the registry yet
+//   * publish in dependency order, and poll the registry after each upload,
+//     because an exit code is not proof: npm's browser two-factor wait can be
+//     interrupted, and a release that uploaded nothing once looked finished
+//
+// npm versions are immutable, so a run that stops midway is resumable rather
+// than requiring a version bump. Re-running the same version skips packages
+// already on the registry, but only after comparing their published contents
+// with what this run would upload.
 //
 // `--dry-run` performs every check and every packaging step, and stops before
 // the first irreversible action (publish, tag, push).
 
 import { execFileSync, spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, globSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createInterface } from "node:readline/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -121,15 +127,30 @@ if (!dryRun) {
   console.log(`  publishing as ${whoami.stdout.trim()}`);
 }
 
-for (const { name } of PACKAGES) {
-  const published = spawnSync("npm", ["view", `${name}@${version}`, "version"], {
+/** Reads a published field, always from the network. A cached miss once aborted a good release. */
+function registryField(name, field) {
+  const result = spawnSync("npm", ["view", `${name}@${version}`, field, "--prefer-online"], {
     encoding: "utf8",
   });
-  if (published.status === 0 && published.stdout.trim()) {
-    fail(`${name}@${version} is already published`);
-  }
+  return result.status === 0 ? result.stdout.trim() : "";
 }
-console.log(`  ${version} is unused on the registry`);
+
+// A release can stop midway — npm's two-factor wait is interruptible and
+// versions are immutable. Rather than force a version bump, packages already
+// at this version are skipped, but only after their published contents are
+// compared with what this run would upload.
+const alreadyPublished = new Set();
+for (const { name } of PACKAGES) {
+  if (registryField(name, "version") === version) alreadyPublished.add(name);
+}
+if (alreadyPublished.size === PACKAGES.length) {
+  fail(`${version} is already published for every package`);
+}
+if (alreadyPublished.size) {
+  console.log(`  resuming: ${[...alreadyPublished].join(", ")} already at ${version}`);
+} else {
+  console.log(`  ${version} is unused on the registry`);
+}
 
 // 4 · The gate
 //
@@ -235,6 +256,32 @@ for (const { dir, name } of PACKAGES) {
     }
   }
 
+  // A package already at this version is only safe to skip if what is on the
+  // registry matches what this run would upload. Contents are compared rather
+  // than tarball bytes, because archive metadata is not reproducible.
+  if (alreadyPublished.has(name)) {
+    const downloaded = join(stage, `published__${name.replace("/", "__")}`);
+    execFileSync("mkdir", ["-p", downloaded]);
+    execFileSync("npm", ["pack", `${name}@${version}`, "--pack-destination", downloaded], {
+      stdio: "ignore",
+    });
+    const [archive] = globSync(join(downloaded, "*.tgz"));
+    if (!archive) fail(`${name}: cannot download the published ${version} to compare`);
+    execFileSync("tar", ["-xzf", archive, "-C", downloaded]);
+    const publishedRoot = join(downloaded, "package");
+    for (const file of ["dist/index.js", "dist/index.d.ts", "package.json"]) {
+      if (
+        readFileSync(join(publishedRoot, file), "utf8") !== readFileSync(join(root, file), "utf8")
+      )
+        fail(
+          `${name}@${version} is published but its ${file} differs from this build; ` +
+            `release a new version instead of resuming`,
+        );
+    }
+    console.log(`  ${name.padEnd(22)} ${"skip".padStart(7)}     already published, contents match`);
+    continue;
+  }
+
   const size = (readFileSync(tarball).byteLength / 1024).toFixed(1);
   console.log(`  ${name.padEnd(22)} ${size.padStart(7)} KB  ${packedManifest.version}`);
 }
@@ -279,29 +326,45 @@ console.log(
     "  Pass --otp=<code> instead to authorize from the terminal.\n",
 );
 
+/**
+ * Confirms the upload is resolvable before a dependent package is published.
+ *
+ * The registry is read-your-writes only eventually, so a single immediate read
+ * can miss a version that did land — which once aborted a healthy release right
+ * after its first successful upload. Poll instead of asking once.
+ */
+function awaitRegistry(name) {
+  for (let attempt = 0; attempt < 10; attempt++) {
+    if (registryField(name, "version") === version) return true;
+    execFileSync("sleep", ["2"]);
+  }
+  return false;
+}
+
 const otp = args.find((argument) => argument.startsWith("--otp="));
 const published = [];
 for (const { name } of PACKAGES) {
+  if (alreadyPublished.has(name)) {
+    console.log(`  · ${name}@${version} already published, skipped`);
+    continue;
+  }
   const publishArgs = ["publish", tarballs.get(name), "--access", "public"];
   if (otp) publishArgs.push(otp);
   const result = spawnSync("npm", publishArgs, { stdio: "inherit" });
-  if (result.status === 0) {
-    // Confirm the version resolves before moving to a package that depends on it.
-    const confirmed = spawnSync("npm", ["view", `${name}@${version}`, "version"], {
-      encoding: "utf8",
-    });
-    if (confirmed.status !== 0 || confirmed.stdout.trim() !== version) {
-      console.error(`\n✗ ${name}: npm reported success but ${version} is not on the registry.`);
-      if (published.length) console.error(`  Already published: ${published.join(", ")}`);
-      process.exit(1);
-    }
+  if (result.status === 0 && !awaitRegistry(name)) {
+    console.error(
+      `\n✗ ${name}: npm reported success but ${version} never appeared on the registry.`,
+    );
+    if (published.length) console.error(`  Already published: ${published.join(", ")}`);
+    console.error(`  Re-running \`pnpm release ${version}\` resumes from here.`);
+    process.exit(1);
   }
   if (result.status !== 0) {
     console.error(`\n✗ ${name} failed to publish.`);
     if (published.length) {
       console.error(`  Already on the registry: ${published.join(", ")}`);
-      console.error("  npm versions are immutable; publish the rest manually or bump again.");
     }
+    console.error(`  Fix the cause and re-run \`pnpm release ${version}\`; it resumes from here.`);
     process.exit(1);
   }
   published.push(name);
