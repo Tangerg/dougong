@@ -1,8 +1,16 @@
-import { assertPlainRecord, definePlugin, isCancellationReason } from "@dougongjs/core";
+import {
+  assertPlainRecord,
+  definePlugin,
+  isCancellationReason,
+  type AnyPlugin,
+  type Plugin,
+  type Provisions,
+  type Requirements,
+} from "@dougongjs/core";
 import { PlatformError } from "./errors";
 import type { Loader } from "./loader";
 import { defineManifest, matchesVersion, type Manifest } from "./manifest";
-import type { Artifact, NormalizedArtifact, ValidatedPlugin } from "./platform-api";
+import type { Artifact, NormalizedArtifact } from "./platform-api";
 
 const artifactFields = new Set(["manifest", "reference", "config", "placeholder"]);
 
@@ -73,7 +81,7 @@ export async function loadPlugin<Reference>(
   const candidate = Object.hasOwn(loaded, "default")
     ? (loaded as { readonly default: unknown }).default
     : undefined;
-  let plugin: ValidatedPlugin;
+  let plugin: AnyPlugin;
   try {
     plugin = normalizePluginCandidate(candidate);
   } catch (error) {
@@ -94,8 +102,8 @@ function normalizePlaceholder(manifest: Manifest, placeholder: unknown) {
 }
 
 /** The sole Platform boundary that validates and type-erases a Plugin candidate. */
-function normalizePluginCandidate(candidate: unknown): ValidatedPlugin {
-  return definePlugin(candidate as ValidatedPlugin);
+function normalizePluginCandidate(candidate: unknown): AnyPlugin {
+  return definePlugin(candidate as Plugin<unknown, Requirements, Provisions, unknown>);
 }
 
 function assertArtifactIdentity(

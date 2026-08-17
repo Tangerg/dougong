@@ -1,5 +1,5 @@
 export interface Loader<Reference> {
-  load(reference: Reference, signal: AbortSignal): unknown | Promise<unknown>;
+  readonly load: (reference: Reference, signal: AbortSignal) => unknown | Promise<unknown>;
 }
 
 /** Trusted same-Realm ESM loading. It is intentionally not presented as a sandbox. */
@@ -14,7 +14,7 @@ export class ImportLoader implements Loader<string | URL> {
 
 /** Deterministic loader useful for embedded bundles, tests and application-owned modules. */
 export class MemoryLoader<Reference> implements Loader<Reference> {
-  readonly #modules: ReadonlyMap<Reference, unknown>;
+  readonly #modules: ReadonlyMap<unknown, unknown>;
 
   constructor(modules: ReadonlyMap<Reference, unknown>) {
     if (
@@ -26,12 +26,12 @@ export class MemoryLoader<Reference> implements Loader<Reference> {
     ) {
       throw new TypeError("MemoryLoader modules must be a ReadonlyMap");
     }
-    this.#modules = new Map(modules);
+    this.#modules = new Map<unknown, unknown>(modules);
   }
 
-  load(reference: Reference, signal: AbortSignal) {
+  readonly load = (reference: Reference, signal: AbortSignal) => {
     signal.throwIfAborted();
     if (!this.#modules.has(reference)) throw new TypeError("Unknown module reference");
     return this.#modules.get(reference);
-  }
+  };
 }

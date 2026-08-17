@@ -1,13 +1,13 @@
 import { resolvePluginConfig } from "./configuration";
 import type { ContractRegistryDraft } from "./contract-registry";
-import { assertContract, type Event, type ExtensionPoint } from "./contracts";
+import { assertContract, type Event, type ExtensionPoint, type Requirement } from "./contracts";
 import { ContributionRegistry, type ContributionView } from "./contribution-store";
 import { DougongError, isCancellationReason } from "./errors";
 import { EventHub, type EventListener } from "./event-hub";
 import type { InstallationGraph } from "./installation-graph";
 import type { InstallationRecord, Instance } from "./installation";
 import { Lifetime, type InstanceMeta, type LifetimePort, type Logger } from "./lifetime";
-import type { ErasedPlugin, PluginContext, Requirements } from "./plugin";
+import type { InstanceContext, NormalizedPlugin } from "./plugin";
 import type { Publication } from "./resource";
 
 interface PreparedActivation {
@@ -15,6 +15,8 @@ interface PreparedActivation {
   readonly instance: Instance;
   readonly services: ReadonlyMap<string, unknown>;
 }
+
+type ExtensionPointIdentity = Extract<Requirement, { readonly kind: "extensionPoint" }>;
 
 interface RuntimeOptions {
   readonly hostName: string;
@@ -52,7 +54,7 @@ export class Runtime {
   }
 
   contributions<T>(token: ExtensionPoint<T>) {
-    return this.#contributions.view(token);
+    return this.#contributions.view<T>(token);
   }
 
   captureConfigs(installations: Iterable<InstallationRecord>) {
@@ -274,7 +276,7 @@ export class Runtime {
   #resolveRequirements(
     plan: InstallationGraph,
     installation: InstallationRecord,
-    plugin: ErasedPlugin,
+    plugin: NormalizedPlugin,
     lifetime: Lifetime,
   ): Record<string, unknown> {
     const values: Record<string, unknown> = Object.create(null);
@@ -314,7 +316,7 @@ export class Runtime {
     lifetime: Lifetime,
     meta: InstanceMeta,
     requirements: Record<string, unknown>,
-  ): PluginContext<Requirements> {
+  ): InstanceContext {
     return Object.freeze({
       ...requirements,
       get signal() {
@@ -328,7 +330,7 @@ export class Runtime {
       on: lifetime.on.bind(lifetime),
       emit: lifetime.emit.bind(lifetime),
       contribute: lifetime.contribute.bind(lifetime),
-    }) as PluginContext<Requirements>;
+    });
   }
 
   #createLifetimePort(contracts: ContractRegistryDraft): LifetimePort {
@@ -376,10 +378,10 @@ export class Runtime {
     this.#assertOwner(ownerId);
     assertContract(token, "extensionPoint");
     contracts.remember(token);
-    return this.#contributions.get(token).stage(ownerId, key, value, release);
+    return this.#contributions.get<T>(token).stage(ownerId, key, value, release);
   }
 
-  #contributionView<T>(token: ExtensionPoint<T>, lifetime: Lifetime): ContributionView<T> {
+  #contributionView(token: ExtensionPointIdentity, lifetime: Lifetime): ContributionView<unknown> {
     return this.#contributions
       .get(token)
       .view((resource, kind) => lifetime.ownLease(resource, kind));

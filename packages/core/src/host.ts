@@ -1,4 +1,4 @@
-import type { Host, HostOptions, ChangeSet, Group } from "./host-api";
+import type { Host, HostOptions, ChangeSet, Group, PluginConfigArguments } from "./host-api";
 import { Engine, type TransitionOutcome } from "./engine";
 import type { ChangeOperation } from "./change-set";
 import type { ExtensionPoint, OptionalService, Service } from "./contracts";
@@ -8,7 +8,7 @@ import type { GroupNode } from "./group";
 import { groupRemovedError } from "./group-lifecycle";
 import { InstallationRegistry } from "./installation-registry";
 import { isLogger, type Logger } from "./lifetime";
-import type { Plugin, Provisions, Requirements } from "./plugin";
+import type { AnyPlugin } from "./plugin";
 import { SerialQueue } from "./serial-queue";
 import type { SnapshotView } from "./snapshot-view";
 import { assertPlainRecord } from "./record";
@@ -117,9 +117,9 @@ class HostImpl implements Host {
     return this.#engine.contributions(token);
   }
 
-  install<Config, Requires extends Requirements, Provides extends Provisions, ConfigInput>(
-    plugin: Plugin<Config, Requires, Provides, ConfigInput>,
-    ...config: [ConfigInput] extends [void] ? [config?: ConfigInput] : [config: ConfigInput]
+  install<Declaration extends AnyPlugin>(
+    plugin: Declaration,
+    ...config: PluginConfigArguments<Declaration>
   ) {
     return this.#groups.install(this.#groups.root, plugin, ...config);
   }

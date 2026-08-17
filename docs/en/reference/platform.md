@@ -42,6 +42,8 @@ await registration.ready();
 
 Platform options are a plain record containing only `installer`, `apiVersion`, `loader`, `authorizer` and `logger`. Only enumerable own properties are read, and neither unknown fields nor prototype-chain configuration is accepted. `installer` consumes `Pick<Installer, "change">`; Loader, Authorizer and Logger are structural ports as well. Any of these collaborators may be implemented by an ordinary object or class instance.
 
+`Reference` is produced by an Artifact and consumed by a Loader, so `Platform<Reference>`, `PlatformChangeSet<Reference>` and `Registration<Reference>` cannot silently widen. To support `string | URL`, declare that complete union when creating the Platform instead of creating a narrow Platform and later widening its input domain by assignment.
+
 `register()` only admits the Artifact into the Platform; `activate()` selects and loads its external Plugin; `ready()` waits for the corresponding Core Installation to cross the Host / ChangeSet ready barrier. These three are not synonyms.
 
 ## 2. Manifest
@@ -83,7 +85,7 @@ Rules:
 
 ```ts
 interface Loader<Reference> {
-  load(reference: Reference, signal: AbortSignal): unknown | Promise<unknown>;
+  readonly load: (reference: Reference, signal: AbortSignal) => unknown | Promise<unknown>;
 }
 ```
 
@@ -96,13 +98,15 @@ Built-in implementations:
 
 A loader must check its `AbortSignal` during expensive phases. Platform reuses Core's `isCancellationReason()` classifier and checks the signal again after the loader returns, so an uncooperative loader cannot commit a module into Core after cancellation — but the I/O and module top-level side effects it already performed cannot be undone.
 
+`load` is a strict function property rather than a bivariant method signature: a Loader accepting only a subset of `Reference` cannot masquerade as one that accepts the whole set. Class methods still implement the structural protocol directly; the built-in `MemoryLoader` itself uses the same function-property form, so its generic instances cannot bypass the Loader constraint either.
+
 Untrusted Plugins belong in a Worker, iframe, separate process or restricted realm. The corresponding Loader can return an **application-authored RPC proxy `Plugin`** that maps granted capabilities onto ordinary Services. What you cannot do is `import()` arbitrary code into the application's realm first and then expect Context permissions to make it safe.
 
 ## 4. Permissions are a policy port, not a pseudo-sandbox
 
 ```ts
 interface Authorizer {
-  authorize(manifest: Manifest, signal: AbortSignal): void | Promise<void>;
+  readonly authorize: (manifest: Manifest, signal: AbortSignal) => void | Promise<void>;
 }
 ```
 
@@ -114,6 +118,8 @@ Authorization happens at two boundaries:
 2. Authorization again immediately before each real module load, so revocable, interactive or session-dependent policies can still block execution.
 
 An Authorizer decides "may this proceed". It does not rewrite the Context and promises no OS-level isolation. Filesystem, network and window capabilities should still be supplied by application code as minimal Service interfaces; the security boundary is formed jointly by the Loader, execution environment and Service implementations.
+
+`authorize` is strict for the same reason: a policy that understands only a narrower Manifest shape cannot pass type checking and then drop fields or reject otherwise valid Manifests at runtime.
 
 Authorization occurs only at Artifact admission and activation boundaries; it does not intercept each later Core `contribute()`. Per-ExtensionPoint permission is a domain composition policy based on explicit labels in contribution values or restricted Services, not a reason for Platform to duplicate the contribution registry.
 

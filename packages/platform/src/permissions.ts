@@ -2,7 +2,7 @@ import type { Manifest } from "./manifest";
 import { PermissionDeniedError } from "./errors";
 
 export interface Authorizer {
-  authorize(manifest: Manifest, signal: AbortSignal): void | Promise<void>;
+  readonly authorize: (manifest: Manifest, signal: AbortSignal) => void | Promise<void>;
 }
 
 /** An immutable allow-list policy; custom interactive policies implement the same port. */

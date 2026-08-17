@@ -1,4 +1,4 @@
-import { describe, expect, expectTypeOf, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { StandardSchemaV1 } from "@standard-schema/spec";
 import {
   ConfigValidationError,
@@ -10,7 +10,6 @@ import {
   service,
   type Contribution,
   type AnyPlugin,
-  type InstallationSnapshot,
   type Logger,
   type Plugin,
   type Service,
@@ -118,6 +117,27 @@ describe("Host", () => {
 
     await host.start();
     expect(observed).toEqual(["ready"]);
+    await host.stop();
+  });
+
+  it("replaces a Plugin through an erased Installation without casts", async () => {
+    const VALUE = service<string>("test/any-plugin-update");
+    const plugin = (value: string) =>
+      definePlugin({
+        name: "test.any-plugin-update",
+        provides: { value: VALUE },
+        setup() {
+          return { value };
+        },
+      });
+    const plugins: readonly AnyPlugin[] = [plugin("first"), plugin("second")];
+    const host = createHost();
+    const installation = host.install(plugins[0]!);
+    await host.start();
+    expect(host.get(VALUE)).toBe("first");
+
+    await installation.update({ plugin: plugins[1]! });
+    expect(host.get(VALUE)).toBe("second");
     await host.stop();
   });
 
@@ -1827,7 +1847,6 @@ describe("Host", () => {
   });
 
   it("publishes an immutable, composable diagnostics read model", async () => {
-    expectTypeOf<InstallationSnapshot["error"]>().toEqualTypeOf<Error | undefined>();
     const CLOCK = service<{ now(): number }>("test/diagnostic-clock");
     const provider = definePlugin({
       name: "test.diagnostic-provider",

@@ -11,7 +11,7 @@ export interface ReadonlySignal<T> extends Readable<T> {
 }
 
 export interface Signal<T> extends ReadonlySignal<T> {
-  set(value: T): void;
+  readonly set: (value: T) => void;
 }
 
 export {

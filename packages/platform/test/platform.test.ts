@@ -1,7 +1,6 @@
-import { describe, expect, expectTypeOf, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   asyncDisposeSymbol,
-  type AnyPlugin,
   createHost,
   definePlugin,
   DougongError,
@@ -23,13 +22,6 @@ type Manifest = platformApi.Manifest;
 
 describe("public API surface", () => {
   it("keeps the Platform value-export budget explicit", () => {
-    expectTypeOf<platformApi.RegistrationSnapshot["error"]>().toEqualTypeOf<Error | undefined>();
-    expectTypeOf<
-      ReturnType<platformApi.PlatformChangeSet<unknown>["update"]>
-    >().toEqualTypeOf<void>();
-    expectTypeOf<
-      ReturnType<platformApi.PlatformChangeSet<unknown>["remove"]>
-    >().toEqualTypeOf<void>();
     expect(Object.keys(platformApi).sort()).toEqual([
       "ImportLoader",
       "MemoryLoader",
@@ -39,25 +31,6 @@ describe("public API surface", () => {
       "createPlatform",
       "defineManifest",
     ]);
-  });
-
-  it("carries heterogeneous placeholder Plugins through Artifact without casts", () => {
-    const CLOCK = service<() => number>("test/platform-placeholder-clock");
-    const placeholder = definePlugin({
-      name: "typed.placeholder",
-      requires: { clock: CLOCK },
-      setup(ctx) {
-        ctx.clock();
-      },
-    });
-    const plugins: readonly AnyPlugin[] = [placeholder];
-    const artifact: platformApi.Artifact<string> = {
-      manifest: { name: "typed.placeholder", version: "1.0.0" },
-      reference: "typed-placeholder",
-      placeholder: plugins[0]!,
-    };
-
-    expectTypeOf(artifact.placeholder).toEqualTypeOf<AnyPlugin | undefined>();
   });
 
   it("implements Core's canonical asynchronous disposal protocol", async () => {

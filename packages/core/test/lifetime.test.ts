@@ -77,14 +77,15 @@ describe("structured lifetime", () => {
     expect(liveSettled).toBe(true);
   });
 
-  it("keeps owner disposal pending until non-cancellable work settles", async () => {
+  it("keeps Task disposal pending until non-cancellable work settles", async () => {
     const started = Promise.withResolvers<void>();
     const aborted = Promise.withResolvers<void>();
     const blocked = Promise.withResolvers<void>();
+    let task!: Task;
     const plugin = definePlugin({
       name: "lifetime.non-cancellable-task",
       setup(ctx) {
-        ctx.spawn((signal) => {
+        task = ctx.spawn((signal) => {
           signal.addEventListener("abort", () => aborted.resolve(), { once: true });
           started.resolve();
           return blocked.promise;
@@ -96,18 +97,18 @@ describe("structured lifetime", () => {
     await host.start();
     await started.promise;
 
-    const stopping = host.stop();
-    await aborted.promise;
+    const disposing = task.dispose();
     let settled = false;
-    void stopping.then(() => {
+    void disposing.then(() => {
       settled = true;
     });
-    await Promise.resolve();
+    await aborted.promise;
     expect(settled).toBe(false);
 
     blocked.resolve();
-    await stopping;
+    await disposing;
     expect(settled).toBe(true);
+    await host.stop();
   });
 
   it("publishes the canonical completion before task cancellation can reenter disposal", async () => {

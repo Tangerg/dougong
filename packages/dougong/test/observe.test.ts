@@ -312,14 +312,16 @@ describe("observe composition", () => {
   it("surfaces a synchronous failure while creating the owned drain task", async () => {
     const source = new ControlledReadable(1);
     let childDisposed = false;
-    const owner = manualOwner(
-      manualLifetime(() => {
-        childDisposed = true;
-      }),
-    );
-    owner.spawn = () => {
-      throw new Error("owner spawn failed");
-    };
+    const owner = {
+      ...manualOwner(
+        manualLifetime(() => {
+          childDisposed = true;
+        }),
+      ),
+      spawn: () => {
+        throw new Error("owner spawn failed");
+      },
+    } satisfies ObservationOwner;
 
     expect(() => observe(owner, source, () => {})).toThrow("owner spawn failed");
     expect(source.subscriptionsDisposed).toBe(1);

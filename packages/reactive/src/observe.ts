@@ -13,15 +13,15 @@ export interface ObservationTask<T = void> extends AsyncDisposable {
 }
 
 export interface ObservationLifetime extends AsyncDisposable {
-  cleanup(dispose: () => unknown): AsyncDisposable;
-  lifetime(label: string): ObservationLifetime;
-  spawn<T>(task: (signal: AbortSignal) => T | PromiseLike<T>): ObservationTask<T>;
+  readonly cleanup: (dispose: () => unknown) => AsyncDisposable;
+  readonly lifetime: (label: string) => ObservationLifetime;
+  readonly spawn: <T>(task: (signal: AbortSignal) => T | PromiseLike<T>) => ObservationTask<T>;
 }
 
 export interface ObservationOwner<Child extends ObservationLifetime = ObservationLifetime> {
-  cleanup(dispose: () => unknown): AsyncDisposable;
-  lifetime(label: string): Child;
-  spawn<T>(task: (signal: AbortSignal) => T | PromiseLike<T>): ObservationTask<T>;
+  readonly cleanup: (dispose: () => unknown) => AsyncDisposable;
+  readonly lifetime: (label: string) => Child;
+  readonly spawn: <T>(task: (signal: AbortSignal) => T | PromiseLike<T>) => ObservationTask<T>;
 }
 
 export type Observer<T, Child extends ObservationLifetime> = (value: T, lifetime: Child) => void;

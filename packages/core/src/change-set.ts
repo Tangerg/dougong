@@ -1,20 +1,19 @@
-import type { ChangeSet, Installation, InstallationUpdate } from "./host-api";
+import type {
+  ChangeSet,
+  Installation,
+  InstallationUpdate,
+  PluginConfigArguments,
+} from "./host-api";
 import type { InstallationRecord } from "./installation";
 import { assertPlainRecord } from "./record";
-import {
-  normalizePlugin,
-  type ErasedPlugin,
-  type Plugin,
-  type Provisions,
-  type Requirements,
-} from "./plugin";
+import { normalizePlugin, type AnyPlugin, type NormalizedPlugin } from "./plugin";
 
 type DeclarationUpdate =
-  | { readonly kind: "plugin"; readonly plugin: ErasedPlugin }
+  | { readonly kind: "plugin"; readonly plugin: NormalizedPlugin }
   | { readonly kind: "config"; readonly config: unknown }
   | {
       readonly kind: "plugin-and-config";
-      readonly plugin: ErasedPlugin;
+      readonly plugin: NormalizedPlugin;
       readonly config: unknown;
     };
 
@@ -31,7 +30,7 @@ export type ChangeOperation =
 
 interface ChangePort {
   create(
-    plugin: ErasedPlugin,
+    plugin: NormalizedPlugin,
     config: unknown,
   ): {
     readonly record: InstallationRecord;
@@ -70,20 +69,20 @@ export class ChangeSetDraft implements ChangeSet {
     Object.freeze(this);
   }
 
-  install<Config, Requires extends Requirements, Provides extends Provisions, ConfigInput>(
-    plugin: Plugin<Config, Requires, Provides, ConfigInput>,
-    ...config: [ConfigInput] extends [void] ? [config?: ConfigInput] : [config: ConfigInput]
-  ): Installation<Config, Requires, Provides, ConfigInput> {
+  install<Declaration extends AnyPlugin>(
+    plugin: Declaration,
+    ...config: PluginConfigArguments<Declaration>
+  ): Installation<Declaration> {
     const port = this.#requireOpen();
     const normalized = normalizePlugin(plugin);
     const draft = port.create(normalized, config[0]);
     this.#stage({ kind: "install", installation: draft.record });
-    return draft.publicInstallation as Installation<Config, Requires, Provides, ConfigInput>;
+    return draft.publicInstallation as Installation<Declaration>;
   }
 
-  update<Config, Requires extends Requirements, Provides extends Provisions, ConfigInput>(
-    installation: Installation<Config, Requires, Provides, ConfigInput>,
-    update: InstallationUpdate<Config, Requires, Provides, ConfigInput>,
+  update<Declaration extends AnyPlugin>(
+    installation: Installation<Declaration>,
+    update: InstallationUpdate<Declaration>,
   ) {
     const port = this.#requireOpen();
     assertPlainRecord(update, "Installation update", { fields: installationUpdateFields });
@@ -94,7 +93,7 @@ export class ChangeSetDraft implements ChangeSet {
     }
 
     const record = port.resolve(installation);
-    let plugin: ErasedPlugin | undefined;
+    let plugin: NormalizedPlugin | undefined;
     if (hasPlugin) {
       const replacement = update.plugin;
       if (!replacement) throw new TypeError("Installation update 'plugin' must be a Plugin");
@@ -112,9 +111,7 @@ export class ChangeSetDraft implements ChangeSet {
     this.#stage(operation);
   }
 
-  remove<Config, Requires extends Requirements, Provides extends Provisions, ConfigInput>(
-    installation: Installation<Config, Requires, Provides, ConfigInput>,
-  ) {
+  remove<Declaration extends AnyPlugin>(installation: Installation<Declaration>) {
     const port = this.#requireOpen();
     this.#stage({ kind: "remove", installation: port.resolve(installation) });
   }

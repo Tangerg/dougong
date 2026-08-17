@@ -1,22 +1,22 @@
 import { DougongError, normalizeFailure } from "./errors";
 import type { Lifetime } from "./lifetime";
 import type { LifecycleStatus } from "./lifecycle-status";
-import type { ErasedPlugin } from "./plugin";
+import type { NormalizedPlugin } from "./plugin";
 import type { GroupNode } from "./group";
 
 export interface InstallationDeclaration {
-  readonly plugin: ErasedPlugin;
+  readonly plugin: NormalizedPlugin;
   readonly config: unknown;
 }
 
 export interface Instance {
-  readonly plugin: ErasedPlugin;
+  readonly plugin: NormalizedPlugin;
   readonly config: unknown;
   readonly lifetime: Lifetime;
 }
 
 export function createInstallationDeclaration(
-  plugin: ErasedPlugin,
+  plugin: NormalizedPlugin,
   config: unknown,
 ): InstallationDeclaration {
   return Object.freeze({ plugin, config });

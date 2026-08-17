@@ -7,19 +7,19 @@ import {
   type InstallationDeclaration,
   InstallationRecord,
 } from "./installation";
-import type { ErasedPlugin, Provisions, Requirements } from "./plugin";
+import type { AnyPlugin, NormalizedPlugin } from "./plugin";
 
-type ErasedInstallation = Installation<unknown, Requirements, Provisions, unknown>;
-type ErasedUpdate = InstallationUpdate<unknown, Requirements, Provisions, unknown>;
+type AnyInstallation = Installation<AnyPlugin>;
+type AnyInstallationUpdate = InstallationUpdate<AnyPlugin>;
 
 interface InstallationRegistryPort {
   readonly notifyChanged: () => void;
   readonly update: (
     installation: InstallationRecord,
-    facade: ErasedInstallation,
-    update: ErasedUpdate,
+    facade: AnyInstallation,
+    update: AnyInstallationUpdate,
   ) => Promise<void>;
-  readonly remove: (installation: InstallationRecord, facade: ErasedInstallation) => Promise<void>;
+  readonly remove: (installation: InstallationRecord, facade: AnyInstallation) => Promise<void>;
 }
 
 interface InstallationCapture {
@@ -29,36 +29,27 @@ interface InstallationCapture {
 }
 
 interface InstallationControl {
-  attach(update: (change: ErasedUpdate) => Promise<void>, remove: () => Promise<void>): void;
+  attach(
+    update: (change: AnyInstallationUpdate) => Promise<void>,
+    remove: () => Promise<void>,
+  ): void;
   revoke(): void;
 }
 
-type InstallationFacadeState<
-  Config,
-  Requires extends Requirements,
-  Provides extends Provisions,
-  ConfigInput,
-> =
+type InstallationFacadeState<Declaration extends AnyPlugin> =
   | { readonly phase: "draft" }
   | {
       readonly phase: "attached";
-      readonly update: (
-        change: InstallationUpdate<Config, Requires, Provides, ConfigInput>,
-      ) => Promise<void>;
+      readonly update: (change: InstallationUpdate<Declaration>) => Promise<void>;
       readonly remove: () => Promise<void>;
     }
   | { readonly phase: "revoked" };
 
 const installationControls = new WeakMap<object, InstallationControl>();
 
-class InstallationFacade<
-  Config,
-  Requires extends Requirements,
-  Provides extends Provisions,
-  ConfigInput,
-> implements Installation<Config, Requires, Provides, ConfigInput> {
+class InstallationFacade<Declaration extends AnyPlugin> {
   readonly #installation: InstallationRecord;
-  #state: InstallationFacadeState<Config, Requires, Provides, ConfigInput> = { phase: "draft" };
+  #state: InstallationFacadeState<Declaration> = { phase: "draft" };
 
   constructor(installation: InstallationRecord) {
     this.#installation = installation;
@@ -69,9 +60,7 @@ class InstallationFacade<
         }
         this.#state = {
           phase: "attached",
-          update: updateRecord as (
-            update: InstallationUpdate<Config, Requires, Provides, ConfigInput>,
-          ) => Promise<void>,
+          update: updateRecord as (update: InstallationUpdate<Declaration>) => Promise<void>,
           remove: removeRecord,
         };
       },
@@ -98,7 +87,7 @@ class InstallationFacade<
     return this.#installation.ready();
   }
 
-  async update(update: InstallationUpdate<Config, Requires, Provides, ConfigInput>) {
+  async update(update: InstallationUpdate<Declaration>) {
     const state = this.#state;
     if (state.phase === "draft") throw this.#notCommitted();
     if (state.phase === "revoked") throw this.#installation.unavailableError();
@@ -123,7 +112,7 @@ class InstallationFacade<
 export class InstallationRegistry {
   readonly #records = new Map<string, InstallationRecord>();
   readonly #owned = new WeakMap<object, InstallationRecord>();
-  readonly #facades = new WeakMap<InstallationRecord, ErasedInstallation>();
+  readonly #facades = new WeakMap<InstallationRecord, AnyInstallation>();
   readonly #port: InstallationRegistryPort;
   #sequence = 0;
 
@@ -143,7 +132,7 @@ export class InstallationRegistry {
     return this.#records.get(installation.id) === installation;
   }
 
-  create(group: GroupNode, plugin: ErasedPlugin, config: unknown) {
+  create(group: GroupNode, plugin: NormalizedPlugin, config: unknown) {
     group.assertAttached();
     const index = ++this.#sequence;
     const installation = new InstallationRecord(
@@ -152,7 +141,9 @@ export class InstallationRegistry {
       group,
       createInstallationDeclaration(plugin, config),
     );
-    const facade = new InstallationFacade<unknown, Requirements, Provisions, unknown>(installation);
+    // The public declaration marker is type-only; runtime authority is the
+    // WeakMap identity registered immediately below.
+    const facade = new InstallationFacade<AnyPlugin>(installation) as unknown as AnyInstallation;
     this.#owned.set(facade, installation);
     this.#facades.set(installation, facade);
     return { record: installation, publicInstallation: facade };

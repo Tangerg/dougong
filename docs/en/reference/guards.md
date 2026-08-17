@@ -19,8 +19,8 @@ Ten steps in order, aborting on the first failure:
 | 5 | `knip` | Unused exports and dependencies |
 | 6 | `check:circular` | Dependency cycles |
 | 7 | `check:layers` | Import direction, module layering, architecture invariants, vocabulary |
-| 8 | `build` | The dist and declaration files of all four packages |
-| 9 | `check:api` | The public declaration surface, retired vocabulary, documentation coverage |
+| 8 | `build` | Dist and declaration files for the four published packages plus examples |
+| 9 | `check:api` | Built-declaration type contracts, public surface, retired vocabulary, documentation coverage |
 | 10 | `docs:check` | Documentation site build and dead links |
 
 Step 8 must precede step 9: `dist/index.d.ts` is **the only place the complete type surface exists as an artifact**. Source cannot show what an `export *` expands to.
@@ -51,7 +51,9 @@ Constraints the type system cannot express but source text can decide. Two kinds
 | No `Date.now` / `performance.now` / `Math.random` | Hidden clocks and entropy make behaviour irreproducible |
 | No direct `console` calls | Must go through the Logger port |
 | No deep imports into another package's internals | Entry points only |
-| No explicit `any` in the TypeScript AST | Preserve the checking boundary with a precise type, `unknown` or `never` instead of discarding type information |
+| No explicit `any` in any TypeScript AST | Source, tests and tooling all preserve the checking boundary with a precise type, `unknown` or `never` |
+| No `@ts-ignore` / `@ts-nocheck` | Silent suppression makes later fixes unchecked too; repair the actual type error |
+| `@ts-expect-error` appears only in `public-api.types.ts` | An expected error is a compile-time contract and does not belong in source or runtime tests |
 | `@dougongjs/reactive` has zero external imports | It is an independent foundation |
 | Resource implementations do not use `[Symbol.dispose]` / `[Symbol.asyncDispose]` directly | Foundation protocol modules must select stable keys instead of degrading a missing symbol into an `"undefined"` property |
 | The facade contains re-exports only | Logic there is a second execution path |
@@ -110,7 +112,7 @@ Every package ships as a library, and a value-level cycle between two modules of
 
 ## `check:api`
 
-`scripts/check-api-surface.mjs`. It reads the **built** `dist/index.d.ts` of all four packages and resolves exported symbols through the TypeScript checker — not text matching, so what a consumer finally sees after `export *` expansion is what gets checked.
+First, `tsconfig.dist.json` replays the public type contracts against the built package entries. Then `scripts/check-api-surface.mjs` reads all four `dist/index.d.ts` files and resolves exported symbols through the TypeScript checker — not text matching, so what a consumer finally sees after `export *` expansion is what gets checked.
 
 Four independent assertions per package:
 
@@ -137,9 +139,13 @@ Documentation navigation is derived from the file tree as well: every guide, ref
 
 ## Guards on the test side
 
+### Compile-time contracts
+
+Each package's `public-api.types.ts` uses `expectTypeOf` and TypeScript expected-error directives to protect variance, generic inference and structural protocols, and deliberately sits outside Vitest's runtime `*.test.ts` pattern. The architecture gate prevents either kind of compile-time assertion from drifting back into runtime tests. `pnpm typecheck` first evaluates the source entries through workspace paths; after the build, `check:api` uses `tsconfig.dist.json` to redirect the same imports to the final `dist/index.d.ts`, catching consumer-visible changes caused by private-field folding or declaration generation. JavaScript emission erases these assertions; `pnpm test` alone cannot prove the contracts and does not present compile-time assertions as runtime cases.
+
 ### Runtime shape
 
-`packages/core/test/api-surface.test.ts` asserts exact `Object.keys()` results: which keys a Context exposes, whether handles are frozen, whether internal orchestration methods leak. `check:api` guards the type surface; this guards the runtime shape. They are complementary, because after type erasure `Object.keys` is what a consumer can actually see.
+`packages/core/test/api-surface.test.ts` asserts exact `Object.keys()` results: which keys a Context exposes, whether handles are frozen, whether internal orchestration methods leak. `check:api` guards built-declaration type relationships, exported vocabulary and `any`, while runtime tests guard actual object shape. They are complementary, because after type erasure `Object.keys` is what a consumer can actually see.
 
 ### Coverage floors
 

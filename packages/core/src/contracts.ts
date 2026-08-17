@@ -1,4 +1,11 @@
-const contractType: unique symbol = Symbol("dougong.contract.type");
+declare const contractBrand: unique symbol;
+declare const contractValueSlot: unique symbol;
+declare const optionalBrand: unique symbol;
+
+interface ContractValueSlot<T> {
+  readonly value: T;
+  readonly accept: (value: T) => void;
+}
 
 export type ContractKind = "service" | "extensionPoint" | "event";
 
@@ -7,22 +14,39 @@ export interface ContractIdentity {
   readonly kind: ContractKind;
 }
 
-interface Contract<T, K extends ContractKind> extends ContractIdentity {
+interface ContractBrand {
+  readonly [contractBrand]: true;
+}
+
+interface Contract<T, K extends ContractKind> extends ContractIdentity, ContractBrand {
   readonly kind: K;
-  readonly [contractType]: T;
+  readonly [contractValueSlot]: ContractValueSlot<T>;
+}
+
+interface ServiceIdentity extends ContractIdentity, ContractBrand {
+  readonly kind: "service";
+}
+
+interface ExtensionPointIdentity extends ContractIdentity, ContractBrand {
+  readonly kind: "extensionPoint";
 }
 
 export interface Service<T> extends Contract<T, "service"> {}
 export interface ExtensionPoint<T> extends Contract<T, "extensionPoint"> {}
 export interface Event<T> extends Contract<T, "event"> {}
 
-export interface OptionalService<T> {
+interface OptionalServiceIdentity {
+  readonly [optionalBrand]: true;
   readonly kind: "optional";
-  readonly service: Service<T>;
-  readonly [contractType]: T;
+  readonly service: ServiceIdentity;
 }
 
-export type Requirement<T = unknown> = Service<T> | ExtensionPoint<T> | OptionalService<T>;
+export interface OptionalService<T> extends OptionalServiceIdentity {
+  readonly service: Service<T>;
+  readonly [contractValueSlot]: ContractValueSlot<T>;
+}
+
+export type Requirement = ServiceIdentity | ExtensionPointIdentity | OptionalServiceIdentity;
 
 export type ContractValue<T> = T extends Contract<infer Value, ContractKind> ? Value : never;
 
@@ -91,6 +115,6 @@ export function isOptionalService<T>(
   value: Service<T> | OptionalService<T>,
 ): value is OptionalService<T> {
   if (!value || typeof value !== "object") return false;
-  const candidate = value as Partial<OptionalService<unknown>>;
+  const candidate = value as Partial<OptionalServiceIdentity>;
   return candidate.kind === "optional" && isContract(candidate.service, "service");
 }

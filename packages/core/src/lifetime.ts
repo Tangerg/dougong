@@ -52,12 +52,12 @@ const disposalReason = Object.freeze(new DOMException("Resource disposed", "Abor
 
 export interface LifetimeOperations {
   readonly signal: AbortSignal;
-  cleanup(dispose: Cleanup): AsyncDisposable;
-  lifetime(label: string): LifetimeContext;
-  spawn<T>(task: BackgroundTask<T>): Task<T>;
-  on<T>(token: Event<T>, listener: EventListener<T>): Disposable;
-  emit<T>(token: Event<T>, ...payload: EventArguments<T>): Promise<void>;
-  contribute<T>(token: ExtensionPoint<T>, key: string, value: T): Contribution<T>;
+  readonly cleanup: (dispose: Cleanup) => AsyncDisposable;
+  readonly lifetime: (label: string) => LifetimeContext;
+  readonly spawn: <T>(task: BackgroundTask<T>) => Task<T>;
+  readonly on: <T>(token: Event<T>, listener: EventListener<T>) => Disposable;
+  readonly emit: <T>(token: Event<T>, ...payload: EventArguments<T>) => Promise<void>;
+  readonly contribute: <T>(token: ExtensionPoint<T>, key: string, value: T) => Contribution<T>;
 }
 
 export interface LifetimeContext extends LifetimeOperations, AsyncDisposable {}

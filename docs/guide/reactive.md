@@ -88,6 +88,8 @@ interface Readable<T> {
 
 Core 的 `ContributionView` 和 `diagnostics` 用的是**同一个协议**。这意味着任何观察源都可以被同样的方式消费——不需要适配器。
 
+只读的 `ReadonlySignal<T>` 可以安全地按普通子类型关系拓宽；可写的 `Signal<T>` 则严格不变。否则把 `Signal<Admin>` 标成 `Signal<User>` 后就能写入一个并非 Admin 的 User。需要收窄写权限时，公开 `ReadonlySignal<T>`，不要靠更宽的泛型标注隐藏 `set()`。
+
 ## observe：把值的变化编译成资源的重建
 
 `observe()` 是这个包里唯一和 Lifetime 打交道的东西，而它是一个**自由函数**，作用在结构化协议上：
@@ -149,9 +151,9 @@ definePlugin({
 
 ```ts
 interface ObservationOwner {
-  cleanup(fn): AsyncDisposable
-  lifetime(label): ObservationLifetime
-  spawn(fn): ObservationTask
+  readonly cleanup: (fn) => AsyncDisposable
+  readonly lifetime: (label) => ObservationLifetime
+  readonly spawn: (fn) => ObservationTask
 }
 ```
 

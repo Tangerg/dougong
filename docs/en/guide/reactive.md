@@ -88,6 +88,8 @@ interface Readable<T> {
 
 Core's `ContributionView` and `diagnostics` use the **same protocol**, so any observation source can be consumed the same way — no adapters.
 
+A read-only `ReadonlySignal<T>` may safely widen through ordinary subtype relationships; a writable `Signal<T>` is strictly invariant. Otherwise annotating `Signal<Admin>` as `Signal<User>` would permit writing a User that is not an Admin. Expose `ReadonlySignal<T>` when narrowing write authority instead of hiding `set()` behind a wider generic annotation.
+
 ## observe: compiling value change into resource rebuild
 
 `observe()` is the only part of this package that touches Lifetimes, and it is a **free function** over structural protocols:
@@ -149,9 +151,9 @@ You never write "check whether there is a previous one, and if so clean it up fi
 
 ```ts
 interface ObservationOwner {
-  cleanup(fn): AsyncDisposable
-  lifetime(label): ObservationLifetime
-  spawn(fn): ObservationTask
+  readonly cleanup: (fn) => AsyncDisposable
+  readonly lifetime: (label) => ObservationLifetime
+  readonly spawn: (fn) => ObservationTask
 }
 ```
 

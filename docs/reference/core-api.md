@@ -172,6 +172,10 @@ const BETA_STORE = workspaceStore("beta")
 
 family 函数本身是唯一声明源：类型和 ID namespace 只写一次，重复调用相同参数得到等价 ID，不依赖对象身份。提供者和消费者必须声明同一个具体 token。Contract ID 因而同时携带“能力是什么”和“选择哪一份”的稳定身份，依赖图、错误和诊断无需再解释第二张作用域树。动态且由每次请求选择的租户不应无限扩张 Installation 图，应改为一个显式接收 tenant/workspace 参数的 Service。
 
+Contract 的值类型是严格不变量：`Service<Admin>` 不能静默拓宽为 `Service<User>`，Event 与 ExtensionPoint 同理。它们既参与读又参与写；允许协变会让同一 Contract 身份随后接收一个只满足较宽类型的值。需要暴露较窄或较宽的领域能力时，应声明一个新的 Contract，并由普通 adapter Plugin 显式转换。
+
+`Requirement` 只表示“可出现在 Plugin `requires` 中的工厂创建身份”，不伪造一个所有 Service 与 ExtensionPoint 共享的值类型参数。需要提取某个精确 Contract 的值时使用 `ContractValue<T>` 或 `ResolvedRequirement<T>`；异构声明表使用 `Requirements`。`Provisions` 直接取 `Requirement` 的 Service 分支，不维护第二套不可见的 Service 身份。
+
 局部配置叠加同样使用显式 Service adapter，而不是通用 `intercept()`：
 
 ```ts
@@ -232,6 +236,8 @@ for (const plugin of plugins) host.install(plugin)
 ```
 
 `AnyPlugin` 不是另一种插件，也没有第二条执行路径；它只用于保存已经由 `definePlugin()` 定义好的值，不是原始对象字面量的作者期输入类型。安装边界仍会按同一套规则重新校验并规范化声明。
+
+擦除沿稳定身份完整传播：精确 Plugin 得到 `Installation<typeof plugin>`，保留安装与更新的 config 输入；从 `readonly AnyPlugin[]` 取出的声明得到 `Installation<AnyPlugin>`，后续可以直接用另一个 `AnyPlugin` 更新，无需在替换边界再次断言。精确 Plugin 不能偷偷落入擦除签名来省略必填 config；需要放弃作者期类型时，调用方必须先显式把声明保存为 `AnyPlugin`。
 
 ### 4.1 `requires`
 
@@ -319,6 +325,8 @@ interface InstanceMeta {
 ```
 
 `ctx.log` 仍使用 Host 提供的 Logger，但 Core 会把当前冻结的 `InstanceMeta` 作为第一项 detail 传入，因此日志端无需从消息文本猜归属。它是 Lifetime 可撤销的窄 facade：cleanup 期间仍可记录，Lifetime 终止后会切断 Runtime/Logger 引用并以 `LIFETIME_DISPOSED` 拒绝继续使用。Logger 的四个成员是严格函数属性；会丢弃 `unknown` message 或 rest details 的窄实现不能通过类型检查。
+
+`LifetimeOperations` 的操作也都是严格函数属性。面向它编写的通用工具必须接受完整的 label、Task、Event 与 ExtensionPoint 输入域，不能用只处理某个局部字面量的窄实现冒充完整 Context；类方法仍可直接满足这个结构协议。
 
 文件系统、网络、窗口、剪贴板、存储、通知和路由器都应声明为 Service，不得成为 Context namespace。
 
@@ -412,6 +420,8 @@ contribution.dispose()
 - 旧 `Contribution` 使用记录身份校验，不能删除后来创建的同 key 贡献；
 - Instance 停止时自动删除全部贡献；
 - setup 失败不会发布贡献。
+
+`Contribution<T>` 是可写 handle，类型不会协变成 `Contribution<Base>`；只读的 `ContributionView<T>` 才能按值类型安全拓宽。权限收窄应交出 View，而不是用更宽的泛型标注隐藏 `update()`。
 
 ### 7.2 统一观察协议
 
@@ -644,6 +654,15 @@ installation.remove()
 
 `update()` 同时覆盖配置与 Plugin 声明替换，参数必须是仅含可枚举 `plugin` / `config` own property 的普通 record，并且至少包含其中之一；未知字段、Symbol、隐藏属性、数组与类实例都会立即拒绝。这里不提供 `replace/reload/restart`。Plugin 更新不能改变 name；Installation 及其 ID 保持稳定，活动 Instance 被替换。
 
+Installation 的唯一类型参数是它背后的 Plugin 声明，而不是四份彼此可能失配的 config/requires/provides 参数。这个表示让声明成为单一真相源：精确声明保持精确，`AnyPlugin` 擦除一次后则在 install 与 update 全链路保持擦除。
+
+因为 `update()` 会接收该声明对应的 Plugin 与 config，带写权限的 Installation 必须保持不变，不能把 `Installation<typeof adminPlugin>` 静默拓宽成 `Installation<AnyPlugin>`。异构集合若只负责等待或删除，应在消费侧声明它真正需要的最小只读/控制协议，而不是再导出一个会丢失更新约束的框架类型：
+
+```ts
+type ManagedInstallation = Pick<Installation, "id" | "status" | "ready" | "remove">
+const managed: ManagedInstallation[] = [host.install(adminPlugin), host.install(auditPlugin)]
+```
+
 Installation 进入 `removed` 后撤销对 Host 的控制引用并释放 Plugin 声明与配置。终态 `remove()` 幂等成功，`update()` 以 `INSTALLATION_REMOVED` 拒绝；保留一个已删除 Installation 不会反向保活 Host。
 
 Installation 在提交前失败时，已经等待 `ready()` 的调用方仍收到原始 `Error`；setup 或配置校验器抛出非 `Error` 值时，首次公开命令与稳定失败状态共享同一个 `INSTALLATION_UNAVAILABLE` 错误，原值保存在 `cause`。Installation 脱离 Host 后，只保留错误的 `name/message/code` 纯数据摘要，后续 `ready()` 在调用边界重建错误。JavaScript `Error` 的调用栈可能保留整个编排对象图，不能成为终态 Installation 的隐藏所有权边。仍附着于活动 Host 的失败 Installation 继续保留原始错误，供诊断和重试语义使用。Platform 的终态 Registration 遵守相同规则。
@@ -673,7 +692,7 @@ await change.commit()
 
 `change.install()` 返回的是该 ChangeSet 独占的 draft Installation。调用 `commit()` 时它才获得 Host 控制权限；commit 前直接调用其 `update/remove`，或把它作为另一份 ChangeSet 的目标，都会以 `INSTALLATION_UNAVAILABLE` 拒绝。已删除或失败后脱离 Host 的 Installation 同样不能重新进入 ChangeSet。`host.install()` 之所以返回即可控制的 Installation，是因为该语法糖在返回前已经同步提交了内部单项 ChangeSet。
 
-`install()` 返回需要保留的 draft Installation；`update()` 与 `remove()` 只暂存命令并返回 `void`。ChangeSet 因而刻意不采用半链式 API：逐项写入，再单独 `commit()`。
+`ChangeSet` 直接复用 `Installer` 的同一份 `install` 类型，不维护第二套 config 推导。`install()` 返回需要保留的 draft Installation；`update()` 与 `remove()` 只暂存命令并返回 `void`。ChangeSet 因而刻意不采用半链式 API：逐项写入，再单独 `commit()`。
 
 变更 setup 失败时，Core 释放部分 activation 并恢复旧图。若旧资源无法停止、部分 activation 无法清理或旧图无法恢复，Host fail closed 到 idle，不谎报 active。
 

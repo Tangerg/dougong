@@ -1,6 +1,7 @@
 import {
   asyncDisposeSymbol,
   assertPlainRecord,
+  type AnyPlugin,
   type Logger,
   type Installer,
   isLogger,
@@ -28,7 +29,6 @@ import {
 } from "./platform-change-set";
 import type {
   PlatformOptions,
-  ValidatedPlugin,
   Registration,
   NormalizedArtifact,
   PlatformChangeSet,
@@ -331,7 +331,7 @@ class PlatformImpl<Reference> implements Platform<Reference> {
     loader: Loader<Reference>,
     signal: AbortSignal,
   ) {
-    const loadedPlugins = new Map<RegistrationRecord<Reference>, ValidatedPlugin>();
+    const loadedPlugins = new Map<RegistrationRecord<Reference>, AnyPlugin>();
     for (const operation of operations) {
       if (operation.kind === "update" && activatedUpdates.has(operation.registration)) {
         loadedPlugins.set(

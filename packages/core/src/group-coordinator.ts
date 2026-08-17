@@ -1,17 +1,17 @@
-import type { Group, Installation } from "./host-api";
+import type { Group, Installation, PluginConfigArguments } from "./host-api";
 import { discardChangeSetDraft, ChangeSetDraft, type ChangeOperation } from "./change-set";
 import { normalizeFailure } from "./errors";
 import { GroupConfigurationSession, GroupNode } from "./group";
 import { groupRemovedError, GroupLifecycle } from "./group-lifecycle";
 import type { InstallationRecord } from "./installation";
 import type { LifecycleStatus } from "./lifecycle-status";
-import type { ErasedPlugin, Plugin, Provisions, Requirements } from "./plugin";
+import type { AnyPlugin, NormalizedPlugin } from "./plugin";
 
 export interface GroupCoordinatorPort {
   installations(): Iterable<InstallationRecord>;
   createDraft(
     group: GroupNode,
-    plugin: ErasedPlugin,
+    plugin: NormalizedPlugin,
     config: unknown,
   ): { readonly record: InstallationRecord; readonly publicInstallation: object };
   resolveInstallation(installation: object): InstallationRecord;
@@ -86,9 +86,9 @@ class GroupImpl implements Group {
       : state.coordinator.ready(this.#node);
   }
 
-  install<Config, Requires extends Requirements, Provides extends Provisions, ConfigInput>(
-    plugin: Plugin<Config, Requires, Provides, ConfigInput>,
-    ...config: [ConfigInput] extends [void] ? [config?: ConfigInput] : [config: ConfigInput]
+  install<Declaration extends AnyPlugin>(
+    plugin: Declaration,
+    ...config: PluginConfigArguments<Declaration>
   ) {
     const state = this.#state;
     if (state.phase === "configuring") {
@@ -150,11 +150,11 @@ export class GroupCoordinator {
     return this.root.walk();
   }
 
-  install<Config, Requires extends Requirements, Provides extends Provisions, ConfigInput>(
+  install<Declaration extends AnyPlugin>(
     group: GroupNode,
-    plugin: Plugin<Config, Requires, Provides, ConfigInput>,
-    ...config: [ConfigInput] extends [void] ? [config?: ConfigInput] : [config: ConfigInput]
-  ): Installation<Config, Requires, Provides, ConfigInput> {
+    plugin: Declaration,
+    ...config: PluginConfigArguments<Declaration>
+  ): Installation<Declaration> {
     const changes = this.change(group);
     const installation = changes.install(plugin, ...config);
     observeReadinessOperation(changes.commit());

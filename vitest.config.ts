@@ -36,10 +36,9 @@ export default defineConfig({
     // next test would show up as a phantom extra call, not as a failure here.
     restoreMocks: true,
 
-    // Type-level coverage is not configured here on purpose: `pnpm typecheck`
-    // already runs `tsc --noEmit -p tsconfig.test.json` over the same files
-    // under the repo's own strict options, which is the stricter gate of the
-    // two. Both live in the `check` chain.
+    // Compile-only `public-api.types.ts` files are intentionally outside this
+    // runtime pattern. `pnpm typecheck` checks every file under `test/` with
+    // the repository's strict options; both gates live in the `check` chain.
     coverage: {
       enabled: true,
       provider: "istanbul",

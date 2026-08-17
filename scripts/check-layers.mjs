@@ -131,6 +131,19 @@ const TEST_RE = /\.(test|spec)\.ts$/;
 const CONTRACT_FACTORIES = new Set(["service", "extensionPoint", "event"]);
 const FORBIDDEN_TYPE_KINDS = new Set([ts.SyntaxKind.AnyKeyword]);
 
+// Checks that run over every TypeScript file, including compile-only contracts.
+const TYPESCRIPT_RULES = [
+  {
+    test: (source) => /@ts-(?:ignore|nocheck)\b/.test(source),
+    message: "uses a silent TypeScript suppression; fix the type error instead",
+  },
+  {
+    test: (source, file) =>
+      /@ts-expect-error\b/.test(source) && !file.endsWith("/public-api.types.ts"),
+    message: "compile-only expected errors belong in public-api.types.ts",
+  },
+];
+
 // Checks that run over the text of every source file under a package's `src`.
 const SOURCE_RULES = [
   {
@@ -351,40 +364,64 @@ for (const file of Object.keys(MODULE_LAYERS)) {
 }
 
 for (const [file, deps] of Object.entries(graph)) {
-  if (TEST_RE.test(file)) continue; // tests may reach across layers for fixtures
-
-  if (WORKSPACE_SOURCE_RE.test(file)) {
-    const sourceText = readFileSync(join(PACKAGES_DIR, file), "utf8");
-    const sourceFile = ts.createSourceFile(
-      file,
-      sourceText,
-      ts.ScriptTarget.Latest,
-      true,
-      ts.ScriptKind.TS,
-    );
-    // Identifiers and exact error-code strings share the vocabulary guard.
-    // AST matching avoids rejecting prose such as the current "extension-point" label.
-    const retiredUses = new Set();
+  const sourceText = file.endsWith(".ts")
+    ? readFileSync(join(PACKAGES_DIR, file), "utf8")
+    : undefined;
+  const sourceFile =
+    sourceText === undefined
+      ? undefined
+      : ts.createSourceFile(file, sourceText, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+  if (sourceText !== undefined) {
+    for (const rule of TYPESCRIPT_RULES) {
+      if (rule.test(sourceText, file)) architectureViolations.push(`${file}: ${rule.message}`);
+    }
+  }
+  if (sourceFile) {
     const explicitAnyLines = new Set();
-    const inspectSourceNode = (node) => {
-      if ((ts.isIdentifier(node) || ts.isStringLiteralLike(node)) && retiredTerms.has(node.text)) {
-        retiredUses.add(node.text);
-      }
+    const inspectTypeNode = (node) => {
       if (FORBIDDEN_TYPE_KINDS.has(node.kind)) {
         explicitAnyLines.add(
           sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile)).line + 1,
         );
+      }
+      ts.forEachChild(node, inspectTypeNode);
+    };
+    inspectTypeNode(sourceFile);
+    for (const line of explicitAnyLines) {
+      architectureViolations.push(
+        `${file}:${line}: uses an explicit any type; preserve information with a precise type, unknown or never`,
+      );
+    }
+  }
+
+  if (TEST_RE.test(file)) {
+    let containsTypeAssertion = false;
+    const inspectTestNode = (node) => {
+      if (ts.isIdentifier(node) && node.text === "expectTypeOf") containsTypeAssertion = true;
+      ts.forEachChild(node, inspectTestNode);
+    };
+    inspectTestNode(sourceFile);
+    if (containsTypeAssertion) {
+      architectureViolations.push(
+        `${file}: compile-only type assertions belong in public-api.types.ts, not a runtime test`,
+      );
+    }
+    continue; // runtime tests may reach across layers for fixtures
+  }
+
+  if (WORKSPACE_SOURCE_RE.test(file)) {
+    // Identifiers and exact error-code strings share the vocabulary guard.
+    // AST matching avoids rejecting prose such as the current "extension-point" label.
+    const retiredUses = new Set();
+    const inspectSourceNode = (node) => {
+      if ((ts.isIdentifier(node) || ts.isStringLiteralLike(node)) && retiredTerms.has(node.text)) {
+        retiredUses.add(node.text);
       }
       ts.forEachChild(node, inspectSourceNode);
     };
     inspectSourceNode(sourceFile);
     for (const term of retiredUses) {
       architectureViolations.push(`${file}: uses retired source term '${term}'`);
-    }
-    for (const line of explicitAnyLines) {
-      architectureViolations.push(
-        `${file}:${line}: uses an explicit any type; preserve information with a precise type, unknown or never`,
-      );
     }
     const localFactories = new Set();
     const contractNamespaces = new Set();
@@ -472,12 +509,11 @@ for (const [file, deps] of Object.entries(graph)) {
 
   if (!SOURCE_RE.test(file)) continue; // vite configs are tooling, not library source
 
-  const source = readFileSync(join(PACKAGES_DIR, file), "utf8");
   for (const rule of SOURCE_RULES) {
-    if (rule.test(source)) architectureViolations.push(`${file}: ${rule.message}`);
+    if (rule.test(sourceText)) architectureViolations.push(`${file}: ${rule.message}`);
   }
   for (const rule of FILE_RULES) {
-    if (rule.matches(file) && rule.test(source)) {
+    if (rule.matches(file) && rule.test(sourceText)) {
       architectureViolations.push(`${file}: ${rule.message}`);
     }
   }

@@ -1,15 +1,17 @@
-import type { ExtensionPoint } from "./contracts";
+import type { Requirement } from "./contracts";
 import { ReadonlyMapSnapshot } from "./readonly-map";
 import { disposeSymbol, type Disposable, type Publication, type StagedResource } from "./resource";
 import { SnapshotPublisher, type SnapshotView } from "./snapshot-view";
 
 export interface Contribution<T> extends Disposable {
-  update(value: T): void;
+  readonly update: (value: T) => void;
 }
 
 export type ContributionView<T> = SnapshotView<ReadonlyMap<string, T>>;
 
 export type ContributionLeaseKind = "view" | "subscription";
+
+type ExtensionPointIdentity = Extract<Requirement, { readonly kind: "extensionPoint" }>;
 
 interface ContributionViewBinding<T> {
   readonly store: ContributionStore<T>;
@@ -386,7 +388,7 @@ export class ContributionRegistry {
     this.#report = report;
   }
 
-  get<T>(token: ExtensionPoint<T>): ContributionStore<T> {
+  get<T = unknown>(token: ExtensionPointIdentity): ContributionStore<T> {
     const current = this.#stores.get(token.id);
     if (current) return current as ContributionStore<T>;
     const store = new ContributionStore<T>(
@@ -402,8 +404,8 @@ export class ContributionRegistry {
     return store;
   }
 
-  view<T>(token: ExtensionPoint<T>): ContributionView<T> {
-    return this.get(token).hostView();
+  view<T = unknown>(token: ExtensionPointIdentity): ContributionView<T> {
+    return this.get<T>(token).hostView();
   }
 
   beginBatch() {

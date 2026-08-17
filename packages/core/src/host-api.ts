@@ -6,11 +6,13 @@ import type { ExtensionPoint, OptionalService, Service } from "./contracts";
 import type { ContributionView } from "./contribution-store";
 import type { SnapshotView } from "./snapshot-view";
 
-export type InstallationUpdate<
+declare const installationBrand: unique symbol;
+
+type DeclaredInstallationUpdate<
   Config,
-  Requires extends Requirements = Requirements,
-  Provides extends Provisions = Provisions,
-  ConfigInput = Config,
+  Requires extends Requirements,
+  Provides extends Provisions,
+  ConfigInput,
 > =
   | {
       readonly plugin: Plugin<Config, Requires, Provides, ConfigInput>;
@@ -20,6 +22,22 @@ export type InstallationUpdate<
       readonly plugin?: never;
       readonly config: ConfigInput;
     };
+
+type AnyPluginInstallationUpdate =
+  | { readonly plugin: AnyPlugin; readonly config?: unknown }
+  | { readonly plugin?: never; readonly config: unknown };
+
+export type InstallationUpdate<Declaration extends AnyPlugin = AnyPlugin> =
+  Declaration extends Plugin<infer Config, infer Requires, infer Provides, infer ConfigInput>
+    ? DeclaredInstallationUpdate<Config, Requires, Provides, ConfigInput>
+    : AnyPluginInstallationUpdate;
+
+export type PluginConfigArguments<Declaration extends AnyPlugin> =
+  Declaration extends Plugin<infer _Config, infer _Requires, infer _Provides, infer ConfigInput>
+    ? [ConfigInput] extends [void]
+      ? [config?: ConfigInput]
+      : [config: ConfigInput]
+    : [config?: unknown];
 
 /**
  * One installed Plugin, as a stable identity. The declaration behind it may be
@@ -36,33 +54,22 @@ export type InstallationUpdate<
  * }
  * ```
  */
-export interface Installation<
-  Config = unknown,
-  Requires extends Requirements = Requirements,
-  Provides extends Provisions = Provisions,
-  ConfigInput = Config,
-> {
+export interface Installation<Declaration extends AnyPlugin = AnyPlugin> {
+  readonly [installationBrand]: (declaration: Declaration) => Declaration;
   readonly id: string;
   readonly groupId: string;
   readonly status: LifecycleStatus;
   ready(): Promise<void>;
-  update(update: InstallationUpdate<Config, Requires, Provides, ConfigInput>): Promise<void>;
+  readonly update: (update: InstallationUpdate<Declaration>) => Promise<void>;
   remove(): Promise<void>;
 }
 
-export interface ChangeSet {
-  install<Config, Requires extends Requirements, Provides extends Provisions, ConfigInput>(
-    plugin: Plugin<Config, Requires, Provides, ConfigInput>,
-    ...config: [ConfigInput] extends [void] ? [config?: ConfigInput] : [config: ConfigInput]
-  ): Installation<Config, Requires, Provides, ConfigInput>;
-  install(plugin: AnyPlugin, config?: unknown): Installation;
-  update<Config, Requires extends Requirements, Provides extends Provisions, ConfigInput>(
-    installation: Installation<Config, Requires, Provides, ConfigInput>,
-    update: InstallationUpdate<Config, Requires, Provides, ConfigInput>,
+export interface ChangeSet extends Pick<Installer, "install"> {
+  update<Declaration extends AnyPlugin>(
+    installation: Installation<Declaration>,
+    update: InstallationUpdate<Declaration>,
   ): void;
-  remove<Config, Requires extends Requirements, Provides extends Provisions, ConfigInput>(
-    installation: Installation<Config, Requires, Provides, ConfigInput>,
-  ): void;
+  remove<Declaration extends AnyPlugin>(installation: Installation<Declaration>): void;
   commit(): Promise<void>;
 }
 
@@ -74,11 +81,10 @@ export interface HostOptions {
 
 /** Capability to install into an ownership position without controlling Host execution. */
 export interface Installer {
-  install<Config, Requires extends Requirements, Provides extends Provisions, ConfigInput>(
-    plugin: Plugin<Config, Requires, Provides, ConfigInput>,
-    ...config: [ConfigInput] extends [void] ? [config?: ConfigInput] : [config: ConfigInput]
-  ): Installation<Config, Requires, Provides, ConfigInput>;
-  install(plugin: AnyPlugin, config?: unknown): Installation;
+  install<Declaration extends AnyPlugin>(
+    plugin: Declaration,
+    ...config: PluginConfigArguments<Declaration>
+  ): Installation<Declaration>;
   group(name: string, configure: (group: Group) => void): Group;
   change(): ChangeSet;
 }

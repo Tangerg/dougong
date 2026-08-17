@@ -39,8 +39,8 @@ function readerPlugin(name: string, token: Service<WorkspaceStore>, trace: strin
 export async function contractsAndGroups(): Promise<ExampleResult> {
   const trace: string[] = [];
   const host = createHost({ name: "contracts-groups" });
-  let alphaProviderInstallation!: Installation<number>;
-  let betaProviderInstallation!: Installation<number>;
+  let alphaProviderInstallation!: Installation<ReturnType<typeof storePlugin>>;
+  let betaProviderInstallation!: Installation<ReturnType<typeof storePlugin>>;
 
   // A Group owns an installation subtree. It is not a capability scope, not a
   // provider shadow tree and not a permission boundary.

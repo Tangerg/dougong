@@ -172,6 +172,10 @@ const BETA_STORE = workspaceStore("beta")
 
 The family function is the single declaration source: the type and the ID namespace are written once, and repeating the call with the same argument yields an equivalent ID without relying on object identity. Providers and consumers must declare the same concrete token. A Contract ID therefore carries both "what the capability is" and "which one is selected" as a stable identity, so the dependency graph, errors and diagnostics never have to explain a second scope tree. A dynamic tenant chosen per request must not expand the Installation graph without bound; use a Service that explicitly accepts a tenant/workspace parameter instead.
 
+A Contract's value type is strictly invariant: `Service<Admin>` cannot silently widen to `Service<User>`, and the same rule applies to Event and ExtensionPoint. Each participates in both reads and writes; covariance would let the same Contract identity later accept a value satisfying only the wider type. Expose a narrower or wider domain capability with a new Contract and an ordinary adapter Plugin that performs the conversion explicitly.
+
+`Requirement` means only “a factory-created identity allowed in Plugin `requires`”; it does not invent one value type parameter shared by every Service and ExtensionPoint. Use `ContractValue<T>` or `ResolvedRequirement<T>` to extract the value of an exact Contract, and use `Requirements` for heterogeneous declaration maps. `Provisions` selects the Service branch of `Requirement` directly instead of maintaining a second hidden Service identity.
+
 Local configuration layering also uses an explicit Service adapter rather than a general `intercept()`:
 
 ```ts
@@ -232,6 +236,8 @@ for (const plugin of plugins) host.install(plugin)
 ```
 
 `AnyPlugin` is not another plugin kind and has no second execution path. It is only a storage type for values already defined by `definePlugin()`, not an authoring type for raw object literals. The installation boundary still revalidates and normalises every declaration through the same rules.
+
+Erasure propagates through the stable identity. A precise Plugin produces `Installation<typeof plugin>` and retains its install/update config input; a declaration read from `readonly AnyPlugin[]` produces `Installation<AnyPlugin>` and may later be replaced by another `AnyPlugin` without an assertion. A precise Plugin cannot silently fall through to the erased signature to omit required config. To discard authoring-time types, the caller must first store the declaration explicitly as `AnyPlugin`.
 
 ### 4.1 `requires`
 
@@ -319,6 +325,8 @@ interface InstanceMeta {
 ```
 
 `ctx.log` still uses the Host's Logger, but Core passes the current frozen `InstanceMeta` as the first detail so a sink never has to infer ownership from message text. It is a Lifetime-revocable narrow facade: cleanup may still log, while terminal disposal severs the Runtime/Logger edge and further use throws `LIFETIME_DISPOSED`. The Logger's four members are strict function properties; a narrow implementation that drops an `unknown` message or rest details does not type-check.
+
+The operations on `LifetimeOperations` are strict function properties as well. A reusable utility targeting this protocol must accept the complete label, Task, Event and ExtensionPoint input domains; an implementation restricted to a local literal cannot masquerade as a full Context. Class methods still satisfy the structural protocol directly.
 
 Filesystem, network, window, clipboard, storage, notification and router all belong in Services and must never become a context namespace.
 
@@ -412,6 +420,8 @@ Therefore:
 - an obsolete `Contribution` is checked by record identity and cannot delete a later contribution with the same key
 - stopping an Instance removes all of its contributions
 - a failed setup publishes no contribution
+
+`Contribution<T>` is a writable handle and does not covary into `Contribution<Base>`; only the read-only `ContributionView<T>` may widen safely with its value type. Narrow authority by handing out the View, not by hiding `update()` behind a wider generic annotation.
 
 ### 7.2 The unified observation protocol
 
@@ -644,6 +654,15 @@ installation.remove()
 
 `update()` covers both config and Plugin declaration replacement. Its argument must be a plain record containing only enumerable `plugin` / `config` own properties and at least one of them; unknown fields, symbols, hidden properties, arrays and class instances are rejected immediately. There is no `replace/reload/restart`. A Plugin update may not change its name; the Installation and its ID stay stable while the active Instance is replaced.
 
+Installation's sole type parameter is its underlying Plugin declaration, not four independently supplied config/requires/provides parameters that can drift apart. The declaration remains the single source of truth: a precise declaration stays precise, while an `AnyPlugin` erased once remains erased across both install and update.
+
+Because `update()` accepts the Plugin and config belonging to that declaration, a writable Installation must remain invariant; `Installation<typeof adminPlugin>` cannot silently widen to `Installation<AnyPlugin>`. If a heterogeneous collection only waits for or removes Installations, define the minimum read/control protocol on the consuming side instead of exporting another framework type that discards update constraints:
+
+```ts
+type ManagedInstallation = Pick<Installation, "id" | "status" | "ready" | "remove">
+const managed: ManagedInstallation[] = [host.install(adminPlugin), host.install(auditPlugin)]
+```
+
 Once an Installation reaches `removed` it revokes its control reference to the Host and releases the Plugin declaration and config. A terminal `remove()` succeeds idempotently and `update()` rejects with `INSTALLATION_REMOVED`; keeping a removed Installation never keeps the Host alive.
 
 When an Installation fails before commit, a caller already awaiting `ready()` still receives the original `Error`. If setup or a config validator throws a non-`Error` value, the first public command and the stable failure state share the same `INSTALLATION_UNAVAILABLE` error, with the original value in `cause`. After the Installation detaches from the Host, it keeps only a `name/message/code` data summary and reconstructs an error at the call boundary on a later `ready()`. A JavaScript `Error`'s stack may retain the whole orchestration object graph and must not become a hidden ownership edge on a terminal Installation. Failed Installations still attached to an active Host keep the original error for diagnostics and retry semantics. Platform's terminal `Registration` follows the same rule.
@@ -673,7 +692,7 @@ Rules:
 
 The Installation returned by `change.install()` is an exclusive draft of that ChangeSet. It gains Host control authority only at `commit()`; before then, calling its `update/remove` or targeting it from another ChangeSet rejects with `INSTALLATION_UNAVAILABLE`. An Installation detached after removal or failure likewise cannot re-enter a ChangeSet. `host.install()` returns an immediately controllable Installation only because that sugar has already synchronously submitted its internal single-item ChangeSet.
 
-`install()` returns a draft Installation that the caller may need to keep; `update()` and `remove()` only stage commands and return `void`. ChangeSet is deliberately not half-fluent: stage each item, then call `commit()` separately.
+`ChangeSet` reuses the exact `install` type from `Installer` rather than maintaining a second config-inference signature. `install()` returns a draft Installation that the caller may need to keep; `update()` and `remove()` only stage commands and return `void`. ChangeSet is deliberately not half-fluent: stage each item, then call `commit()` separately.
 
 When a change's setup fails, Core releases the partial activation and restores the old graph. If old resources cannot be stopped, the partial activation cannot be cleaned up, or the old graph cannot be restored, the Host fails closed to idle rather than falsely reporting active.
 

@@ -19,8 +19,8 @@ pnpm check
 | 5 | `knip` | 未使用的导出与依赖 |
 | 6 | `check:circular` | 循环依赖 |
 | 7 | `check:layers` | 依赖方向、模块分层、架构不变量、词汇 |
-| 8 | `build` | 四个包的 dist 与声明文件 |
-| 9 | `check:api` | 公共声明面、退役词汇、文档覆盖 |
+| 8 | `build` | 四个发布包与 examples 的 dist、声明文件 |
+| 9 | `check:api` | 构建声明的类型契约、公共面、退役词汇、文档覆盖 |
 | 10 | `docs:check` | 文档站构建与死链 |
 
 第 8 步必须在第 9 步之前：`dist/index.d.ts` 是**完整类型面唯一被物化成产物的地方**，源码里看不到 `export *` 展开后的最终结果。
@@ -51,7 +51,9 @@ pnpm check
 | 不读 `Date.now` / `performance.now` / `Math.random` | 隐藏时钟和熵源让行为不可复现 |
 | 不直接调 `console` | 必须走 Logger 端口 |
 | 不深导入其他包的内部模块 | 只能用包入口 |
-| TypeScript AST 中不出现显式 `any` | 用精确类型、`unknown` 或 `never` 保留检查边界，不能主动丢失类型信息 |
+| 全部 TypeScript AST 中不出现显式 `any` | 源码、测试与工具都用精确类型、`unknown` 或 `never` 保留检查边界，不能主动丢失类型信息 |
+| 不使用 `@ts-ignore` / `@ts-nocheck` | 静默抑制会让后续修复也失去检查，必须修正真实类型错误 |
+| `@ts-expect-error` 只出现在 `public-api.types.ts` | 预期错误是编译期契约，不得混进源码或运行期测试 |
 | `@dougongjs/reactive` 零外部导入 | 它是独立基础包 |
 | 资源实现不直接使用 `[Symbol.dispose]` / `[Symbol.asyncDispose]` | 必须经过基础协议模块选择稳定 key，避免缺失 Symbol 退化成 `"undefined"` 属性 |
 | facade 只含 re-export | 有逻辑就是第二条执行路径 |
@@ -110,7 +112,7 @@ PluginHandle             类型标识符              → 失败
 
 ## `check:api`
 
-`scripts/check-api-surface.mjs`。读取四个包**构建后**的 `dist/index.d.ts`，用 TypeScript checker 解析导出符号——不是文本匹配，所以 `export *` 展开后的最终消费者视角能被看见。
+先用 `tsconfig.dist.json` 对构建后的包入口重放公共类型契约，再由 `scripts/check-api-surface.mjs` 读取四个包的 `dist/index.d.ts`，用 TypeScript checker 解析导出符号——不是文本匹配，所以 `export *` 展开后的最终消费者视角能被看见。
 
 每个包四条独立断言：
 
@@ -137,9 +139,13 @@ facade 的面不重述而是**算出来**：它必须恰好等于 core + platfor
 
 ## 测试侧的守卫
 
+### 编译期契约
+
+各包的 `public-api.types.ts` 使用 `expectTypeOf` 与 TypeScript 的预期错误指令保护型变、泛型推导和结构协议，并刻意不匹配 Vitest 的 `*.test.ts` 运行期模式。架构门禁禁止把这两类编译期断言放回运行期测试。`pnpm typecheck` 先通过 workspace path 对源码入口求值；构建后，`check:api` 再用 `tsconfig.dist.json` 把同一批导入重定向到最终 `dist/index.d.ts`，防止私有字段折叠或声明生成改变消费者看到的关系。生成 JavaScript 时这些断言会被擦除；单独运行 `pnpm test` 不能证明契约仍成立，也不会把编译期断言伪装成运行期用例。
+
 ### 运行期形状
 
-`packages/core/test/api-surface.test.ts` 断言 `Object.keys()` 的精确结果：Context 暴露哪些键、Handle 是否冻结、内部编排方法是否泄露。类型面由 `check:api` 守，运行期形状由它守——两者互补，因为类型擦除后 `Object.keys` 才是消费者真正看得到的东西。
+`packages/core/test/api-surface.test.ts` 断言 `Object.keys()` 的精确结果：Context 暴露哪些键、Handle 是否冻结、内部编排方法是否泄露。`check:api` 保护构建声明的类型关系、导出词汇与 `any`，运行期测试保护实际对象形状——两者互补，因为类型擦除后 `Object.keys` 才是消费者真正看得到的东西。
 
 ### 覆盖率地板
 

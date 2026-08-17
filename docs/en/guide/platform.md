@@ -73,7 +73,7 @@ A mismatched `apiVersion` throws `API_INCOMPATIBLE`. That is the compatibility c
 
 ```ts
 interface Loader<Reference> {
-  load(reference: Reference, signal: AbortSignal): Promise<unknown>
+  readonly load: (reference: Reference, signal: AbortSignal) => Promise<unknown>
 }
 ```
 

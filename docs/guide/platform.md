@@ -73,7 +73,7 @@ interface Manifest {
 
 ```ts
 interface Loader<Reference> {
-  load(reference: Reference, signal: AbortSignal): Promise<unknown>
+  readonly load: (reference: Reference, signal: AbortSignal) => Promise<unknown>
 }
 ```
 

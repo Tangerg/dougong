@@ -1,0 +1,12 @@
+{
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "paths": {
+      "@dougongjs/reactive": ["packages/reactive/dist/index.d.ts"],
+      "@dougongjs/core": ["packages/core/dist/index.d.ts"],
+      "@dougongjs/platform": ["packages/platform/dist/index.d.ts"],
+      "dougong": ["packages/dougong/dist/index.d.ts"]
+    }
+  },
+  "include": ["packages/*/test/public-api.types.ts"]
+}

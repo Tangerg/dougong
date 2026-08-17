@@ -24,7 +24,7 @@
     "knip": "knip",
     "check:circular": "node scripts/check-circular.mjs",
     "check:layers": "node scripts/check-layers.mjs",
-    "check:api": "node scripts/check-api-surface.mjs",
+    "check:api": "tsc --noEmit -p tsconfig.dist.json && node scripts/check-api-surface.mjs",
     "examples": "pnpm --filter @dougongjs/examples example",
     "examples:benchmark": "pnpm --filter @dougongjs/examples benchmark",
     "docs:dev": "vitepress dev docs",
