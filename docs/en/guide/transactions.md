@@ -148,6 +148,7 @@ await feature.remove()     // remove the whole subtree
 ```
 
 The `configure` callback **must be synchronous** (returning a promise throws), because the entire Group's content is committed as one ChangeSet.
+Nested Groups share that commit, but an Installation created by `nested.install()` still belongs to the inner Group; calling `nested.remove()` removes only that inner subtree.
 
 A Group can also run its own transaction:
 

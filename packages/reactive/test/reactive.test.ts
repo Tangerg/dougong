@@ -133,6 +133,16 @@ describe("signal", () => {
     expect(second).toHaveBeenCalledOnce();
   });
 
+  it("rejects asynchronous subscribers without leaking their rejection", async () => {
+    const value = signal(0);
+    const failure = new Error("async subscriber failed");
+    const rejected = Promise.reject(failure);
+    value.subscribe(() => rejected);
+
+    expect(() => value.set(1)).toThrow("Signal subscribers must be synchronous");
+    await expect(rejected).rejects.toBe(failure);
+  });
+
   it("aggregates multiple subscriber failures in notification order", () => {
     const value = signal(0);
     const first = new Error("first failed");

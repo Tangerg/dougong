@@ -50,6 +50,21 @@ describe("Host", () => {
     expect(() => createHost({ logger: {} as never })).toThrow(
       "logger must implement debug/info/warn/error",
     );
+    const hostileLogger = Object.defineProperty({}, "debug", {
+      get() {
+        throw new Error("logger getter must not escape");
+      },
+    });
+    expect(() => createHost({ logger: hostileLogger as never })).toThrowError(
+      new TypeError("Host logger must implement debug/info/warn/error"),
+    );
+    const callableLogger = Object.assign(() => undefined, {
+      debug: () => undefined,
+      info: () => undefined,
+      warn: () => undefined,
+      error: () => undefined,
+    }) satisfies Logger;
+    expect(createHost({ logger: callableLogger }).name).toBe("host");
   });
 
   it("adds Instance identity to every Context log record", async () => {
@@ -91,6 +106,29 @@ describe("Host", () => {
     expect(() => scopedLogger.info("too late")).toThrowError(
       expect.objectContaining({ code: "LIFETIME_DISPOSED" }),
     );
+  });
+
+  it("rejects asynchronous Logger methods without leaking their rejection", async () => {
+    const loggerFailure = new Error("async logger failed");
+    const rejected = Promise.reject(loggerFailure);
+    const logger: Logger = {
+      debug: () => undefined,
+      info: () => rejected,
+      warn: () => undefined,
+      error: () => undefined,
+    };
+    const host = createHost({ logger });
+    host.install(
+      definePlugin({
+        name: "test.async-logger",
+        setup(ctx) {
+          ctx.log.info("start");
+        },
+      }),
+    );
+
+    await expect(host.start()).rejects.toThrow("Logger methods must be synchronous");
+    await expect(rejected).rejects.toBe(loggerFailure);
   });
 
   it("installs a heterogeneous AnyPlugin collection without casts", async () => {
@@ -333,6 +371,52 @@ describe("Host", () => {
     expect(installation.status).toBe("active");
     expect(logger.error).toHaveBeenCalled();
     subscription.dispose();
+    await host.stop();
+  });
+
+  it("observes an asynchronous onError failure through the fallback Logger", async () => {
+    const taskFailure = new Error("background failed");
+    const reporterFailure = new Error("async reporter failed");
+    const logger = {
+      debug: vi.fn<(...args: unknown[]) => void>(),
+      info: vi.fn<(...args: unknown[]) => void>(),
+      warn: vi.fn<(...args: unknown[]) => void>(),
+      error: vi.fn<(...args: unknown[]) => void>(),
+    };
+    let rejectTask!: () => void;
+    let rejectedReporter!: Promise<never>;
+    const host = createHost({
+      logger,
+      onError: () => {
+        rejectedReporter = Promise.reject(reporterFailure);
+        return rejectedReporter;
+      },
+    });
+    host.install(
+      definePlugin({
+        name: "test.async-error-reporter",
+        setup(ctx) {
+          ctx.spawn(
+            () =>
+              new Promise<never>((_resolve, reject) => {
+                rejectTask = () => reject(taskFailure);
+              }),
+          );
+        },
+      }),
+    );
+    await host.start();
+
+    rejectTask();
+    await tick();
+
+    expect(logger.error).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: "Host error reporter failed",
+        errors: [taskFailure, reporterFailure],
+      }),
+    );
+    await expect(rejectedReporter).rejects.toBe(reporterFailure);
     await host.stop();
   });
 

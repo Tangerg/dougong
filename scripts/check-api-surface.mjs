@@ -27,6 +27,7 @@ import { createRequire } from "node:module";
 import { existsSync, globSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { retiredVocabulary } from "./vocabulary.mjs";
+import { runtimeBaseline } from "./runtime-baseline.mjs";
 
 const ts = createRequire(import.meta.url)("typescript");
 const retiredIdentifiers = new Set(retiredVocabulary);
@@ -62,6 +63,7 @@ const PACKAGES = {
     values: [
       "ConfigValidationError",
       "DougongError",
+      "ErrorSummary",
       "ReadonlyMapSnapshot",
       "SerialQueue",
       "SnapshotPublisher",
@@ -215,14 +217,36 @@ function difference(actual, expected) {
 const failures = [];
 const surfaces = new Map();
 
-const workspaceManifest = JSON.parse(readFileSync("package.json", "utf8"));
-for (const packageName of ["core", "platform", "reactive", "dougong"]) {
-  const manifestPath = `packages/${packageName}/package.json`;
+const publishedManifestPaths = [
+  ...["core", "platform", "reactive", "dougong"].map(
+    (packageName) => `packages/${packageName}/package.json`,
+  ),
+];
+const runtimeManifestPaths = [
+  "package.json",
+  ...publishedManifestPaths,
+  "packages/examples/package.json",
+];
+for (const manifestPath of runtimeManifestPaths) {
   const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
-  for (const field of ["engines", "browserslist"]) {
-    if (JSON.stringify(manifest[field]) !== JSON.stringify(workspaceManifest[field])) {
-      failures.push(`${manifestPath}: ${field} differs from the workspace runtime baseline`);
-    }
+  if (JSON.stringify(manifest.engines) !== JSON.stringify(runtimeBaseline.engines)) {
+    failures.push(`${manifestPath}: engines differs from scripts/runtime-baseline.mjs`);
+  }
+}
+for (const manifestPath of ["package.json", ...publishedManifestPaths]) {
+  const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+  if (JSON.stringify(manifest.browserslist) !== JSON.stringify(runtimeBaseline.browserslist)) {
+    failures.push(`${manifestPath}: browserslist differs from scripts/runtime-baseline.mjs`);
+  }
+}
+for (const packageName of ["core", "platform", "reactive", "dougong", "examples"]) {
+  const configPath = `packages/${packageName}/vite.config.ts`;
+  const config = readFileSync(configPath, "utf8");
+  if (
+    !config.includes("../../scripts/runtime-baseline.mjs") ||
+    !config.includes("target: runtimeBaseline.buildTargets")
+  ) {
+    failures.push(`${configPath}: emitted syntax does not use the shared runtime baseline`);
   }
 }
 
@@ -439,7 +463,7 @@ const sourceRuleCount = [...gateSource.matchAll(/message:\s*\n?\s*"[^"]+"/g)].le
 // Prohibitions enforced outside SOURCE_RULES, currently constructor allowlists
 // and forbidden AST type kinds. Counted from their markers so the total stays derived.
 const standaloneRuleCount = [
-  ...gateSource.matchAll(/^const [A-Z_]+_(?:CONSTRUCTORS|TYPE_KINDS)\b/gm),
+  ...gateSource.matchAll(/^const [A-Z_]+_(?:CONSTRUCTORS|TYPE_KINDS|INTERFACES)\b/gm),
 ].length;
 const expectedRuleRows = sourceRuleCount + standaloneRuleCount;
 for (const page of GUARD_PAGES) {

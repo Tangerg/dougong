@@ -41,7 +41,7 @@ Dougong Core 的定位是：
 
 `host.install()`、`installation.update()` 和 `installation.remove()` 是单目标语法糖，内部只创建一份 one-shot ChangeSet 并提交。它们不拥有第二套校验、队列或回滚逻辑。
 
-`assertPlainRecord(value, label, { fields, createError })` 是 Core 与高层共享的声明边界：它只接受 `Object.prototype` 或 `null` prototype 的 record，不读取继承属性，并拒绝数组、Symbol key、不可枚举 own key 与 `fields` 之外的字段。默认错误是 `TypeError`；拥有结构化错误体系的高层可用 `createError(message)` 保留自己的错误类型，而不复制校验算法。
+`assertPlainRecord(value, label, { fields, createError })` 是 Core 与高层共享的声明边界：它只接受 `Object.prototype` 或 `null` prototype 的惰性数据 record，不读取继承属性或 accessor，并拒绝数组、Symbol key、不可枚举 own key 与 `fields` 之外的字段。默认错误是 `TypeError`；拥有结构化错误体系的高层可用 `createError(message)` 保留自己的错误类型，而不复制校验算法。
 
 ### 2. 组合闭包
 
@@ -294,7 +294,7 @@ StandardSchemaV1<ConfigInput, Config>
 - Schema 结果必须是含 `value` 的成功对象，或含数组 `issues` 的失败对象；畸形 issue、message 或 path 会在 setup 前以精确 `TypeError` 拒绝。
 - Core 不克隆或深冻结配置；防御性转换属于 Schema。
 
-`definePlugin()` 在定义期校验并规范化声明。Plugin 本身必须是仅含 `name`、`config`、`requires`、`provides`、`setup` 的普通 record；未知字段、Symbol、隐藏属性和类实例都会被拒绝。配置 Schema 必须完整声明 Standard Schema V1 的 `version`、`vendor` 与 `validate`；`requires` 与 `provides` 也必须是仅含可枚举字符串 own key 的普通 record，不能用数组、Map 或类实例表达声明。ChangeSet 在安装与更新边界重新规范化，防止 JavaScript 调用方绕过工厂。
+`definePlugin()` 在定义期校验并规范化声明。Plugin 本身必须是仅含 `name`、`config`、`requires`、`provides`、`setup` 的普通数据 record；未知字段、Symbol、隐藏属性、accessor 和类实例都会被拒绝。配置 Schema 必须完整声明 Standard Schema V1 的 `version`、`vendor` 与 `validate`；`requires` 与 `provides` 也必须是仅含可枚举字符串 own key 的普通数据 record，不能用数组、Map、accessor 或类实例表达声明。ChangeSet 在安装与更新边界重新规范化，防止 JavaScript 调用方绕过工厂。
 
 ## 五、Context API 预算
 
@@ -324,7 +324,7 @@ interface InstanceMeta {
 }
 ```
 
-`ctx.log` 仍使用 Host 提供的 Logger，但 Core 会把当前冻结的 `InstanceMeta` 作为第一项 detail 传入，因此日志端无需从消息文本猜归属。它是 Lifetime 可撤销的窄 facade：cleanup 期间仍可记录，Lifetime 终止后会切断 Runtime/Logger 引用并以 `LIFETIME_DISPOSED` 拒绝继续使用。Logger 的四个成员是严格函数属性；会丢弃 `unknown` message 或 rest details 的窄实现不能通过类型检查。
+`ctx.log` 仍使用 Host 提供的 Logger，但 Core 会把当前冻结的 `InstanceMeta` 作为第一项 detail 传入，因此日志端无需从消息文本猜归属。它是 Lifetime 可撤销的窄 facade：cleanup 期间仍可记录，Lifetime 终止后会切断 InstanceCoordinator/Logger 引用并以 `LIFETIME_DISPOSED` 拒绝继续使用。Logger 的四个成员是严格的同步函数属性；会丢弃 `unknown` message / rest details 的窄实现不能通过类型检查，意外返回 thenable 也会在调用处被拒绝并观察其拒绝值。
 
 `LifetimeOperations` 的操作也都是严格函数属性。面向它编写的通用工具必须接受完整的 label、Task、Event 与 ExtensionPoint 输入域，不能用只处理某个局部字面量的窄实现冒充完整 Context；类方法仍可直接满足这个结构协议。
 
@@ -611,7 +611,7 @@ const host = createHost({
 })
 ```
 
-Host options 是仅含 `name`、`logger`、`onError` 的普通 record；只读取可枚举 own property，未知字段、Symbol、隐藏属性、数组与类实例都会立即拒绝。`logger` 与 `onError` 本身仍是结构化端口，可以由普通对象或类实例实现。
+Host options 是仅含 `name`、`logger`、`onError` 的普通数据 record；只接受可枚举 own data property，未知字段、Symbol、隐藏属性、accessor、数组与类实例都会立即拒绝。`logger` 与 `onError` 本身仍是结构化端口，可以由普通对象或类实例实现。`onError` 可同步返回或返回 thenable；Host 不让错误上报阻塞命令，但会观察异步拒绝并转入 logger 兜底。
 
 `Installer` 精确表示“能安装到一个所有权位置”的能力，包含 `install/group/change`，并由 Host 与 Group 实现。只需要事务入口的高层协作者应在消费侧声明 `Pick<Installer, "change">`，不能把缺少安装能力的窄端口命名为 Installer。
 
@@ -652,7 +652,7 @@ installation.update({ plugin, config })
 installation.remove()
 ```
 
-`update()` 同时覆盖配置与 Plugin 声明替换，参数必须是仅含可枚举 `plugin` / `config` own property 的普通 record，并且至少包含其中之一；未知字段、Symbol、隐藏属性、数组与类实例都会立即拒绝。这里不提供 `replace/reload/restart`。Plugin 更新不能改变 name；Installation 及其 ID 保持稳定，活动 Instance 被替换。
+`update()` 同时覆盖配置与 Plugin 声明替换，参数必须是仅含可枚举 `plugin` / `config` own data property 的普通 record，并且至少包含其中之一；未知字段、Symbol、隐藏属性、accessor、数组与类实例都会立即拒绝。这里不提供 `replace/reload/restart`。Plugin 更新不能改变 name；Installation 及其 ID 保持稳定，活动 Instance 被替换。
 
 Installation 的唯一类型参数是它背后的 Plugin 声明，而不是四份彼此可能失配的 config/requires/provides 参数。这个表示让声明成为单一真相源：精确声明保持精确，`AnyPlugin` 擦除一次后则在 install 与 update 全链路保持擦除。
 
@@ -784,7 +784,7 @@ snapshots.invalidate()                     // 标记失效并通知
 snapshots.dispose()                        // 固化终态并切断闭包
 ```
 
-`view` 是权限收窄，不是第二套观察 API：读取方只能 `get/subscribe`，拥有方只能通过 `SnapshotPublisher` 驱动失效和终止。每次订阅都有独立身份；释放会立即撤回尚未轮到的通知。订阅者失败交给显式 reporter 后仍继续通知其余订阅者；若 reporter 自身失败，Publisher 完成整轮通知后用 `AggregateError` 同时保留订阅者错误与 reporter 错误。`dispose()` 会在切断 reader、reporter 与现有订阅前固化最后一份快照；历史 view 因而仍可读取终态，但不能反向保活拥有方。Host、Lifetime 与 Platform diagnostics 直接走这条路径；`ContributionStore` 同样组合这一个 Publisher，只在订阅外层增加 Lifetime 所有权，因而重复注册同一个函数仍是两份独立订阅。任何高层都不得重写订阅注册表和错误边界。
+`view` 是权限收窄，不是第二套观察 API：读取方只能 `get/subscribe`，拥有方只能通过 `SnapshotPublisher` 驱动失效和终止。每次订阅都有独立身份；释放会立即撤回尚未轮到的通知。订阅者与错误 reporter 都必须同步；意外返回的 thenable 会被观察并作为精确 `TypeError` 进入同一个错误边界，不能变成无关的 unhandled rejection。订阅者失败交给显式 reporter 后仍继续通知其余订阅者；若 reporter 自身失败，Publisher 完成整轮通知后用 `AggregateError` 同时保留订阅者错误与 reporter 错误。`dispose()` 会在切断 reader、reporter 与现有订阅前固化最后一份快照；历史 view 因而仍可读取终态，但不能反向保活拥有方。Host、Lifetime 与 Platform diagnostics 直接走这条路径；`ContributionStore` 同样组合这一个 Publisher，只在订阅外层增加 Lifetime 所有权，因而重复注册同一个函数仍是两份独立订阅。任何高层都不得重写订阅注册表和错误边界。
 
 快照需要 Map 语义时统一使用 `ReadonlyMapSnapshot`。它只接受类型声明中的 Map 或条目 iterable，复制输入并只暴露 `ReadonlyMap` 方法，避免 `Object.freeze(new Map())` 仍可调用 `set/delete/clear` 的伪不可变性；它只保证容器结构不可变，条目值仍应在进入快照时自行冻结。
 
@@ -800,7 +800,7 @@ observe(lifetimeOwner, source, observer)
 - Signal 保存当前值；
 - computed 自动追踪仅用于同步、纯、懒、缓存计算；
 - batch 只接受同步 callback，并按订阅身份合并 callback 内的重复通知；
-- observe 是更高层的 Lifetime 组合器：显式读取一个 source，为当前值创建子 Lifetime，变化时先释放旧子级再创建新子级；observer 必须同步，后续替换失败会停止观察并释放订阅与当前子 Lifetime。
+- observe 是更高层的 Lifetime 组合器：显式读取一个 source，为当前值创建子 Lifetime，变化时先释放旧子级再创建新子级；observer 必须同步，后续替换失败会停止观察，释放订阅与当前子 Lifetime，并从 owner 摘除自己的 cleanup。
 
 ```ts
 const endpoint = computed(() => `${base.get()}/${account.get()}`)
@@ -893,6 +893,8 @@ Context 限制同样不是安全沙箱。同 Realm 插件仍可访问 `globalThi
 Event 因定义要求收集全部监听器失败，总是抛 AggregateError。Lifetime 与关停先尝试所有资源：一个失败原样抛出，多个失败聚合。rollback/fail-closed 跨多个阶段时统一使用 AggregateError。
 
 后台任务、订阅者和后续 observe 的错误无法回到原同步调用栈，通过 `onError` 上报。`onError` 自身失败也不得改变正在观察的 Host 命令。
+
+`ErrorSummary` 是终态句柄共享的最小错误保留原语。构造函数只接受 `Error`，仅保存重建 `name`、`message`、`TypeError` 类别以及 `DougongError.code` 所需的原始值；不保存原错误、`stack`、`cause` 或子类载荷。`restore()` 默认重建 `DougongError`，高层可传入自己的 coded-error 工厂来保留所属错误域，而不复制摘要算法。它只适用于必须切断历史对象图的终态；正常传播路径仍应交付原始错误。
 
 ## 十六、禁止方向
 

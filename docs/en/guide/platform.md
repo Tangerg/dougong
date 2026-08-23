@@ -73,11 +73,11 @@ A mismatched `apiVersion` throws `API_INCOMPATIBLE`. That is the compatibility c
 
 ```ts
 interface Loader<Reference> {
-  readonly load: (reference: Reference, signal: AbortSignal) => Promise<unknown>
+  readonly load: (reference: Reference, signal: AbortSignal) => unknown
 }
 ```
 
-`Reference` is generic — a URL, file path, module ID, blob, anything your application can resolve. Platform does not care.
+`unknown` already covers synchronous values, promises and thenables; Platform awaits the result at the boundary. `Reference` is generic — a URL, file path, module ID, blob, anything your application can resolve. Platform does not care.
 
 Two implementations ship with it:
 

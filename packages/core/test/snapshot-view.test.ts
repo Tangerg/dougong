@@ -49,6 +49,19 @@ describe("SnapshotPublisher", () => {
     expect(succeeding).toHaveBeenCalledOnce();
   });
 
+  it("reports asynchronous subscribers without leaking their rejection", async () => {
+    const report = vi.fn<(error: unknown) => void>();
+    const publisher = new SnapshotPublisher(() => 0, report);
+    const failure = new Error("async subscriber failed");
+    const rejected = Promise.reject(failure);
+    publisher.view.subscribe(() => rejected);
+
+    publisher.invalidate();
+
+    expect(report).toHaveBeenCalledWith(new TypeError("Snapshot subscribers must be synchronous"));
+    await expect(rejected).rejects.toBe(failure);
+  });
+
   it("withdraws a disposed subscription before its notification turn", () => {
     const publisher = new SnapshotPublisher(
       () => 0,
@@ -85,6 +98,28 @@ describe("SnapshotPublisher", () => {
     expect(failure).toBeInstanceOf(AggregateError);
     expect((failure as AggregateError).errors).toEqual([subscriberFailure, reporterFailure]);
     expect(succeeding).toHaveBeenCalledOnce();
+  });
+
+  it("rejects asynchronous error reporters without leaking their rejection", async () => {
+    const subscriberFailure = new Error("subscriber failed");
+    const reporterFailure = new Error("async reporter failed");
+    const rejected = Promise.reject(reporterFailure);
+    const publisher = new SnapshotPublisher(
+      () => 0,
+      () => rejected,
+    );
+    publisher.view.subscribe(() => {
+      throw subscriberFailure;
+    });
+
+    const failure = captureError(() => publisher.invalidate());
+
+    expect(failure).toBeInstanceOf(AggregateError);
+    expect((failure as AggregateError).errors).toEqual([
+      subscriberFailure,
+      new TypeError("Snapshot error reporters must be synchronous"),
+    ]);
+    await expect(rejected).rejects.toBe(reporterFailure);
   });
 
   it("materializes its final snapshot and severs terminal subscriptions", () => {

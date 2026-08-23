@@ -50,15 +50,17 @@ Constraints the type system cannot express but source text can decide. Two kinds
 | No `node:` built-in imports | The kernel stays independent of its runtime |
 | No `Date.now` / `performance.now` / `Math.random` | Hidden clocks and entropy make behaviour irreproducible |
 | No direct `console` calls | Must go through the Logger port |
-| No deep imports into another package's internals | Entry points only |
+| No deep imports into package internals | Entry points only |
 | No explicit `any` in any TypeScript AST | Source, tests and tooling all preserve the checking boundary with a precise type, `unknown` or `never` |
 | No `@ts-ignore` / `@ts-nocheck` | Silent suppression makes later fixes unchecked too; repair the actual type error |
 | `@ts-expect-error` appears only in `public-api.types.ts` | An expected error is a compile-time contract and does not belong in source or runtime tests |
+| `*Port` / `*Control` collaborator protocols use readonly function properties only | Bivariant method parameters let a narrow internal implementation cross the type boundary silently |
 | `@dougongjs/reactive` has zero external imports | It is an independent foundation |
 | Resource implementations do not use `[Symbol.dispose]` / `[Symbol.asyncDispose]` directly | Foundation protocol modules must select stable keys instead of degrading a missing symbol into an `"undefined"` property |
 | The facade contains re-exports only | Logic there is a second execution path |
+| Core and reactive `sync-result.ts` stay byte-identical | The deliberate zero-dependency mirror cannot evolve into two synchronous-boundary semantics |
 | `HostImpl` must not be exported | `Host` is an interface; `createHost()` is the only constructor |
-| Only `Runtime` and `Lifetime` itself may construct a Lifetime | Anywhere else produces a resource tree nobody disposes |
+| Only `InstanceCoordinator` and `Lifetime` itself may construct a Lifetime | Anywhere else produces a resource tree nobody disposes |
 
 **Requirements (inverted rules)** — things that **must** appear, because their absence means somebody started a second path:
 
@@ -69,7 +71,8 @@ Constraints the type system cannot express but source text can decide. Two kinds
 | Platform diagnostics must compile to Core `SnapshotPublisher` | A duplicated observation protocol |
 | Contribution observation must compose the same `SnapshotPublisher` | Likewise |
 | Platform load cancellation must reuse Core `isCancellationReason` | Two cancellation classifications |
-| Platform declaration validation must reuse Core `assertPlainRecord` | Two prototype-chain validators |
+| Platform terminal failures must reuse Core `ErrorSummary` | Two error-summary and reconstruction semantics |
+| Platform declaration validation must reuse Core `assertPlainRecord` | Two plain-data-record validation semantics |
 | Host must delegate declarations and handle authority to `InstallationRegistry` | Host becoming a god object again |
 | Platform structural coordination must delegate activation to `Activator` | A second dependency-activation path |
 | `Activator` must trust `CandidateGraph`'s cycle invariant | A second — and unreachable — graph implementation |
@@ -128,7 +131,7 @@ Four independent assertions per package:
 
 The facade's surface is **computed rather than restated**: it must equal exactly core plus platform plus the reactive names it forwards, and one name too many or too few fails.
 
-The four published packages must also match the workspace runtime baseline exactly in `engines` and `browserslist`; packages cannot advertise contradictory support ranges.
+`scripts/runtime-baseline.mjs` is the single source of truth for runtime support: the workspace root and all five workspace packages must share its `engines`, the root and four published packages must share its `browserslist`, and all five Vite builds must use its derived target. A package cannot advertise one runtime range while emitting syntax that needs another.
 
 Further checks span source and documentation:
 

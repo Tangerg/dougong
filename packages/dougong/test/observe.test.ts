@@ -66,6 +66,12 @@ function logger(): Logger & { error: ReturnType<typeof vi.fn> } {
   };
 }
 
+function errorTree(error: unknown): unknown[] {
+  return error instanceof AggregateError
+    ? [error, ...error.errors.flatMap((nested) => errorTree(nested))]
+    : [error];
+}
+
 function manualOwner(
   child: ObservationLifetime,
   onLifetime: (label: string) => void = () => undefined,
@@ -260,6 +266,29 @@ describe("observe composition", () => {
     expect(source.subscriptionsDisposed).toBe(1);
   });
 
+  it("leaves initial cleanup failure visible to owner rollback", async () => {
+    const source = new ControlledReadable(1);
+    const observerFailure = new Error("observer failed");
+    const cleanupFailure = new Error("observation cleanup failed");
+    const plugin = definePlugin({
+      name: "observe.initial-cleanup-failure",
+      setup(ctx) {
+        observe(ctx, source, (_value, lifetime) => {
+          lifetime.cleanup(() => {
+            throw cleanupFailure;
+          });
+          throw observerFailure;
+        });
+      },
+    });
+    const host = createHost();
+    host.install(plugin);
+
+    const failure = await host.start().catch((error: unknown) => error);
+
+    expect(errorTree(failure)).toEqual(expect.arrayContaining([observerFailure, cleanupFailure]));
+  });
+
   it("fails initial subscription without running the observer", async () => {
     const source = new ControlledReadable(1);
     source.subscribeError = new Error("subscribe failed");
@@ -307,6 +336,40 @@ describe("observe composition", () => {
     await tick();
     expect(trace).toEqual(["start:1", "stop:1"]);
     await host.stop();
+  });
+
+  it("detaches its owner cleanup after stopping", async () => {
+    const source = new ControlledReadable(1);
+    const ownedCleanups = new Set<AsyncDisposable>();
+    const base = manualOwner(manualLifetime(() => undefined));
+    const owner: ObservationOwner = {
+      ...base,
+      cleanup(dispose) {
+        let active = true;
+        let handle!: AsyncDisposable;
+        handle = asyncDisposable(async () => {
+          if (!active) return;
+          active = false;
+          try {
+            await dispose();
+          } finally {
+            ownedCleanups.delete(handle);
+          }
+        });
+        ownedCleanups.add(handle);
+        return handle;
+      },
+    };
+    const handle = observe(owner, source, () => undefined);
+    expect(ownedCleanups.size).toBe(1);
+
+    source.getError = new Error("read failed");
+    source.notify();
+    await tick();
+    await tick();
+
+    expect(ownedCleanups.size).toBe(0);
+    await handle.dispose();
   });
 
   it("surfaces a synchronous failure while creating the owned drain task", async () => {

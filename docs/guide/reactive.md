@@ -77,6 +77,8 @@ subscription.dispose()
 
 每次 `subscribe()` 都创建一份独立、可单独释放的订阅；即使传入同一个函数也不会按函数身份合并。释放会立即撤回尚未轮到的通知。`batch()` 只按每份订阅身份合并同一批次中的重复通知，同一个函数的两次订阅仍各调用一次。
 
+订阅者必须同步。异步工作应在同步通知里显式交给 `ctx.spawn()` 或应用自己的任务所有者；传入 `async` 函数会立即以 `TypeError` 拒绝，同时观察已经产生的拒绝，避免泄漏 unhandled rejection。
+
 `Signal` 和 `ReadonlySignal` 都实现结构化的 `Readable<T>` 协议：
 
 ```ts
@@ -170,7 +172,7 @@ interface ObservationOwner {
 - 释放旧子 Lifetime 失败 → 观察**永久停止**并释放订阅，因为无法确认旧资源是否真的释放了
 - 变化通知在观察还在处理上一次时到达 → 合并，只用最新值重建一次
 
-永久停止也是一个真正的终态：观察会立即撤销对 source、observer 与最后值的引用。owner 中留下的 cleanup 只持有一个无状态终态壳，不会把已经停止的数据流保活到整个 Instance 结束。
+运行后的永久停止也是一个真正的终态：观察会立即撤销对 source、observer 与最后值的引用，并释放自己的 owner cleanup；它不会以无状态壳的形式累积到整个 Instance 结束。首次构造同步失败时没有返回句柄，因此已登记的 cleanup 会留给 owner 回滚，以继续传播可能异步发生的清理错误。
 
 ## 两个观察源，两种用法
 

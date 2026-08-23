@@ -36,7 +36,7 @@ class HostImpl implements Host {
   readonly #diagnosticModel: HostDiagnostics;
   readonly #logger: Logger;
   readonly #groups: GroupCoordinator;
-  readonly #onError: (error: unknown) => void;
+  readonly #onError: NonNullable<HostOptions["onError"]>;
   readonly #engine: Engine;
 
   #status: HostStatus = "idle";
@@ -236,16 +236,14 @@ class HostImpl implements Host {
   }
 
   #report(error: unknown) {
+    const logger = this.#logger;
     try {
-      this.#onError(error);
+      const result: unknown = this.#onError(error);
+      void Promise.resolve(result).catch((reporterError) => {
+        reportToFallbackLogger(logger, error, reporterError);
+      });
     } catch (reporterError) {
-      try {
-        this.#logger.error(
-          new AggregateError([error, reporterError], "Host error reporter failed"),
-        );
-      } catch {
-        // Error observation must never mutate the Host command being observed.
-      }
+      reportToFallbackLogger(logger, error, reporterError);
     }
   }
 
@@ -261,4 +259,17 @@ class HostImpl implements Host {
 
 export function createHost(options?: HostOptions): Host {
   return new HostImpl(options);
+}
+
+function reportToFallbackLogger(logger: Logger, error: unknown, reporterError: unknown) {
+  try {
+    const result: unknown = logger.error(
+      new AggregateError([error, reporterError], "Host error reporter failed"),
+    );
+    // The logger is the terminal error sink. Its own asynchronous failure has
+    // no lower reporting channel, but it must still be observed.
+    void Promise.resolve(result).catch(() => undefined);
+  } catch {
+    // Error observation must never mutate the Host command being observed.
+  }
 }

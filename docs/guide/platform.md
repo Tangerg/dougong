@@ -73,11 +73,11 @@ interface Manifest {
 
 ```ts
 interface Loader<Reference> {
-  readonly load: (reference: Reference, signal: AbortSignal) => Promise<unknown>
+  readonly load: (reference: Reference, signal: AbortSignal) => unknown
 }
 ```
 
-`Reference` 是泛型——它可以是 URL、文件路径、模块 ID、blob，任何你的应用代码能解析的东西。Platform 不关心。
+`unknown` 已覆盖同步值、Promise 和 thenable，Platform 会在边界统一等待结果。`Reference` 是泛型——它可以是 URL、文件路径、模块 ID、blob，任何你的应用代码能解析的东西。Platform 不关心。
 
 内置两个实现：
 

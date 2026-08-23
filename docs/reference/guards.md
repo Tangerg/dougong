@@ -50,15 +50,17 @@ pnpm check
 | 源码不导入 `node:` 内建 | 内核必须与运行环境无关 |
 | 不读 `Date.now` / `performance.now` / `Math.random` | 隐藏时钟和熵源让行为不可复现 |
 | 不直接调 `console` | 必须走 Logger 端口 |
-| 不深导入其他包的内部模块 | 只能用包入口 |
+| 不深导入包内部模块 | 只能用包入口 |
 | 全部 TypeScript AST 中不出现显式 `any` | 源码、测试与工具都用精确类型、`unknown` 或 `never` 保留检查边界，不能主动丢失类型信息 |
 | 不使用 `@ts-ignore` / `@ts-nocheck` | 静默抑制会让后续修复也失去检查，必须修正真实类型错误 |
 | `@ts-expect-error` 只出现在 `public-api.types.ts` | 预期错误是编译期契约，不得混进源码或运行期测试 |
+| `*Port` / `*Control` 协作者协议只使用只读函数属性 | 方法参数双变会让过窄的内部实现静默穿过类型边界 |
 | `@dougongjs/reactive` 零外部导入 | 它是独立基础包 |
 | 资源实现不直接使用 `[Symbol.dispose]` / `[Symbol.asyncDispose]` | 必须经过基础协议模块选择稳定 key，避免缺失 Symbol 退化成 `"undefined"` 属性 |
 | facade 只含 re-export | 有逻辑就是第二条执行路径 |
+| Core / reactive 的 `sync-result.ts` 必须逐字节相同 | 零依赖基础包中的刻意镜像不能演化成两套同步边界语义 |
 | `HostImpl` 不得导出 | `Host` 是接口，`createHost()` 是唯一构造入口 |
-| Lifetime 只能由 `Runtime` 和 `Lifetime` 自身构造 | 别处构造会产生无人释放的资源树 |
+| Lifetime 只能由 `InstanceCoordinator` 和 `Lifetime` 自身构造 | 别处构造会产生无人释放的资源树 |
 
 **要求型（反向规则）**——这些东西**必须**出现，否则说明有人另起了一条路径：
 
@@ -69,7 +71,8 @@ pnpm check
 | Platform 诊断必须编译到 Core `SnapshotPublisher` | 复制观察协议 |
 | Contribution 观察必须组合同一个 `SnapshotPublisher` | 同上 |
 | Platform 加载取消必须复用 Core `isCancellationReason` | 两套取消判定 |
-| Platform 声明校验必须复用 Core `assertPlainRecord` | 两套原型链校验 |
+| Platform 终态错误必须复用 Core `ErrorSummary` | 两套错误摘要与重建语义 |
+| Platform 声明校验必须复用 Core `assertPlainRecord` | 两套普通数据 record 校验语义 |
 | Host 必须把安装声明与句柄权限委托给 `InstallationRegistry` | Host 重新变成总类 |
 | Platform 结构协调必须把激活委托给 `Activator` | 第二条依赖激活路径 |
 | `Activator` 必须信任 `CandidateGraph` 的环不变量 | 第二份、且不可达的图实现 |
@@ -128,7 +131,7 @@ PluginHandle             类型标识符              → 失败
 
 facade 的面不重述而是**算出来**：它必须恰好等于 core + platform + 转发的 reactive 名字，多一个少一个都失败。
 
-四个发布包的 `engines` 与 `browserslist` 还必须和工作区根的运行时基线完全一致；包之间不能声明互相矛盾的支持范围。
+`scripts/runtime-baseline.mjs` 是运行时支持范围的唯一真相源：工作区根与全部五个 workspace package 的 `engines` 必须一致，根与四个发布包的 `browserslist` 必须一致，五份 Vite 构建也必须用它派生的 target。包不能声明一套运行环境、却发出另一套环境才能解析的语法。
 
 另外还有跨源码与文档的检查：
 

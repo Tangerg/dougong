@@ -16,11 +16,15 @@ export type PlatformChangeOperation<Reference> =
   | { readonly kind: "remove"; readonly registration: RegistrationRecord<Reference> };
 
 export interface PlatformChangePort<Reference> {
-  normalize(artifact: Artifact<Reference>): NormalizedArtifact<Reference>;
-  createRegistration(artifact: NormalizedArtifact<Reference>): RegistrationRecord<Reference>;
-  attachRegistration(registration: RegistrationRecord<Reference>): void;
-  resolve(registration: Registration<Reference>): RegistrationRecord<Reference>;
-  execute(operations: ReadonlyArray<PlatformChangeOperation<Reference>>): Promise<void>;
+  readonly normalize: (artifact: Artifact<Reference>) => NormalizedArtifact<Reference>;
+  readonly createRegistration: (
+    artifact: NormalizedArtifact<Reference>,
+  ) => RegistrationRecord<Reference>;
+  readonly attachRegistration: (registration: RegistrationRecord<Reference>) => void;
+  readonly resolve: (registration: Registration<Reference>) => RegistrationRecord<Reference>;
+  readonly execute: (
+    operations: ReadonlyArray<PlatformChangeOperation<Reference>>,
+  ) => Promise<void>;
 }
 
 type PlatformChangeSetState<Reference> =
@@ -46,7 +50,7 @@ export class PlatformChangeSetDraft<Reference> implements PlatformChangeSet<Refe
     const normalized = port.normalize(artifact);
     const registration = port.createRegistration(normalized);
     this.#stage({ kind: "register", registration, artifact: normalized });
-    return registration.publicRegistration;
+    return registration.facade;
   }
 
   update(registration: Registration<Reference>, artifact: Artifact<Reference>) {

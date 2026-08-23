@@ -96,7 +96,7 @@ function notifySlots(slots: Iterable<ListenerSlot>, errors: unknown[]) {
     const listener = slot.listener;
     if (!listener) continue;
     try {
-      listener();
+      assertSynchronous(listener(), "Signal subscribers must be synchronous");
     } catch (error) {
       errors.push(error);
     }

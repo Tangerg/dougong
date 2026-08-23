@@ -114,6 +114,6 @@ await host.start()                    // 从 Service 声明推导拓扑，同层
 
 ## 状态
 
-Dougong 处于早期开发阶段（`0.0.x`），**当前不承诺向后兼容**。优先保证的是模型正确、API 一致和可执行证据完整。
+Dougong 处于早期 `0.x` 开发阶段，**当前不承诺向后兼容**。优先保证的是模型正确、API 一致和可执行证据完整。
 
 运行时基线：Node.js ≥ 22；浏览器 / WebView 为 Chrome / Edge 119、Firefox 121、Safari 17.4，并提供 `Promise.withResolvers()`。显式 `.dispose()` 在全部基线上可用；`using` / `await using` 还要求运行时提供对应的 well-known Symbol 或由应用显式 polyfill。

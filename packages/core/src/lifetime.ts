@@ -26,11 +26,15 @@ export interface Logger {
 }
 
 export function isLogger(value: unknown): value is Logger {
-  if (!value || typeof value !== "object") return false;
-  const candidate = value as Partial<Logger>;
-  return [candidate.debug, candidate.info, candidate.warn, candidate.error].every(
-    (method) => typeof method === "function",
-  );
+  if (!value || (typeof value !== "object" && typeof value !== "function")) return false;
+  try {
+    const candidate = value as Partial<Logger>;
+    return [candidate.debug, candidate.info, candidate.warn, candidate.error].every(
+      (method) => typeof method === "function",
+    );
+  } catch {
+    return false;
+  }
 }
 
 export interface InstanceMeta {
@@ -63,27 +67,27 @@ export interface LifetimeOperations {
 export interface LifetimeContext extends LifetimeOperations, AsyncDisposable {}
 
 export interface LifetimePort {
-  stageOn<T>(
-    ownerId: string,
+  readonly stageOn: <T>(
+    installationId: string,
     token: Event<T>,
     listener: EventListener<T>,
     release: (publication: Publication) => void,
-  ): StagedResource<Disposable>;
-  emit<T>(ownerId: string, token: Event<T>, payload: T): Promise<void>;
-  stageContribution<T>(
-    ownerId: string,
+  ) => StagedResource<Disposable>;
+  readonly emit: <T>(installationId: string, token: Event<T>, payload: T) => Promise<void>;
+  readonly stageContribution: <T>(
+    installationId: string,
     token: ExtensionPoint<T>,
     key: string,
     value: T,
     release: (publication: Publication) => void,
-  ): StagedResource<Contribution<T>>;
-  writeLog(
+  ) => StagedResource<Contribution<T>>;
+  readonly writeLog: (
     level: keyof Logger,
     message: unknown,
     meta: InstanceMeta,
     details: readonly unknown[],
-  ): void;
-  report(error: unknown): void;
+  ) => void;
+  readonly report: (error: unknown) => void;
 }
 
 interface LifetimeOptions {
@@ -277,7 +281,7 @@ class TaskRecord<T> implements Task<T> {
 
 export class Lifetime implements LifetimeContext {
   #binding: LifetimeBinding | undefined;
-  readonly #ownerId: string;
+  readonly #installationId: string;
   readonly #listeners: LifetimeResources<Publication>;
   readonly #contributions: LifetimeResources<Publication>;
   readonly #contributionViews: LifetimeResources<Disposable>;
@@ -291,8 +295,8 @@ export class Lifetime implements LifetimeContext {
   readonly handle: LifetimeContext;
   #state: LifetimeState;
 
-  constructor(port: LifetimePort, ownerId: string, options: LifetimeOptions = {}) {
-    this.#ownerId = ownerId;
+  constructor(port: LifetimePort, installationId: string, options: LifetimeOptions = {}) {
+    this.#installationId = installationId;
     this.handle = new LifetimeHandle(this);
     const controller = new AbortController();
     this.#state = {
@@ -304,7 +308,7 @@ export class Lifetime implements LifetimeContext {
     this.#detachFromParent = parent?.detach;
     this.#kind = parent ? "child" : "root";
     const diagnostics =
-      parent?.diagnostics ?? new LifetimeDiagnostics(ownerId, (error) => port.report(error));
+      parent?.diagnostics ?? new LifetimeDiagnostics(installationId, (error) => port.report(error));
     const diagnosticNode = parent?.diagnosticNode ?? diagnostics.root;
     this.#binding = { port, diagnostics, diagnosticNode };
     const account = (kind: LifetimeResourceKind): LifetimeResourceAccounting => ({
@@ -337,7 +341,7 @@ export class Lifetime implements LifetimeContext {
     return this.#requireActive().diagnostics.view;
   }
 
-  /** A facade whose only Runtime edge disappears when this Lifetime terminates. */
+  /** A facade whose only InstanceCoordinator edge disappears when this Lifetime terminates. */
   contextLogger(meta: InstanceMeta): Logger {
     const write =
       (level: keyof Logger) =>
@@ -363,7 +367,7 @@ export class Lifetime implements LifetimeContext {
     const { port, diagnostics, diagnosticNode: parentNode } = this.#requireActive();
     validateLifetimeLabel(label);
     const diagnosticNode = diagnostics.createNode(label);
-    const child = new Lifetime(port, this.#ownerId, {
+    const child = new Lifetime(port, this.#installationId, {
       parentSignal: this.signal,
       declarations: this.#declarations(),
       parent: {
@@ -395,7 +399,12 @@ export class Lifetime implements LifetimeContext {
 
   on<T>(token: Event<T>, listener: EventListener<T>) {
     const { port } = this.#requireActive();
-    const publication = port.stageOn(this.#ownerId, token, listener, this.#listeners.release);
+    const publication = port.stageOn(
+      this.#installationId,
+      token,
+      listener,
+      this.#listeners.release,
+    );
     this.#listeners.add(publication);
     if (this.#declarations() === "published") publication.publish();
     return publication.handle;
@@ -403,13 +412,13 @@ export class Lifetime implements LifetimeContext {
 
   async emit<T>(token: Event<T>, ...payload: EventArguments<T>) {
     const { port } = this.#requireActive();
-    await port.emit(this.#ownerId, token, payload[0] as T);
+    await port.emit(this.#installationId, token, payload[0] as T);
   }
 
   contribute<T>(token: ExtensionPoint<T>, key: string, value: T) {
     const { port } = this.#requireActive();
     const publication = port.stageContribution(
-      this.#ownerId,
+      this.#installationId,
       token,
       key,
       value,

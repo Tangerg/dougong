@@ -5,6 +5,7 @@ import type { AnyPlugin, Plugin, Provisions, Requirements } from "./plugin";
 import type { ExtensionPoint, OptionalService, Service } from "./contracts";
 import type { ContributionView } from "./contribution-store";
 import type { SnapshotView } from "./snapshot-view";
+import type { Awaitable } from "./resource";
 
 declare const installationBrand: unique symbol;
 
@@ -76,7 +77,7 @@ export interface ChangeSet extends Pick<Installer, "install"> {
 export interface HostOptions {
   readonly name?: string;
   readonly logger?: Logger;
-  readonly onError?: (error: unknown) => void;
+  readonly onError?: (error: unknown) => Awaitable<void>;
 }
 
 /** Capability to install into an ownership position without controlling Host execution. */

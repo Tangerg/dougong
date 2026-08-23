@@ -114,6 +114,6 @@ If you would rather read code, the [runnable examples](./examples.md) are a twel
 
 ## Status
 
-Dougong is in early development (`0.0.x`) and **makes no backward-compatibility promises yet**. The current priority is a correct model, a consistent API and complete executable evidence.
+Dougong is in early `0.x` development and **makes no backward-compatibility promises yet**. The current priority is a correct model, a consistent API and complete executable evidence.
 
 Runtime baseline: Node.js ≥ 22; Chrome / Edge 119, Firefox 121 or Safari 17.4 for browsers and WebViews, with `Promise.withResolvers()`. Explicit `.dispose()` works throughout; `using` / `await using` additionally require the corresponding well-known symbols from the runtime or an application-supplied polyfill.

@@ -48,7 +48,7 @@ Depends only on standard JavaScript and the Standard Schema type contract. It ow
 - a SerialQueue shared across layers, where one failure does not poison later commands
 - read-only diagnostic projections
 
-Core keeps the same division internally: Host serializes public commands and publishes status over three peer collaborators; InstallationRegistry owns declarations and public handle authority; GroupCoordinator owns only structural Groups; Engine owns the committed plan and its commit, rollback and fail-closed transitions. Runtime, beneath Engine, owns live Instances and the Services, Events, ExtensionPoints and Lifetimes reachable from them. Platform reuses Core's serialization primitive directly rather than copying its failure-isolation state machine. Graph switching happens only in Engine and live execution happens only in Runtime — so declaration state, transaction state and active execution state each have exactly one source of truth instead of accumulating in one class.
+Core keeps the same division internally: Host serializes public commands and publishes status over three peer collaborators; InstallationRegistry owns declarations and public handle authority; GroupCoordinator owns only structural Groups; Engine owns the committed plan and its commit, rollback and fail-closed transitions. InstanceCoordinator, beneath Engine, owns live Instances and the Services, Events, ExtensionPoints and Lifetimes reachable from them. Platform reuses Core's serialization primitive directly rather than copying its failure-isolation state machine. Graph switching happens only in Engine and live execution happens only in InstanceCoordinator, so declaration state, transaction state and active execution state each have exactly one source of truth instead of accumulating in one class; runtime remains reserved for the JavaScript environment such as Node, a browser or a WebView.
 
 ### `@dougongjs/reactive`
 
@@ -62,6 +62,8 @@ A zero-dependency value layer providing:
 Core does not import reactive. The two compose through the structural `get()/subscribe()` protocol and the Lifetime object protocol, which also lets third-party observables plug in.
 
 Minimal protocols such as `Disposable` / `AsyncDisposable` are declared separately in both foundation packages. They carry no state or implementation, and TypeScript makes them interoperate structurally. This is deliberate duplication of a protocol declaration, traded for zero dependencies in both directions. The single-path principle forbids duplicated state machines and execution semantics, not shared type sources between independent foundation packages.
+
+The only mirrored behavior is `sync-result.ts` in both packages: when a synchronous callback accidentally returns a thenable, each must observe a possible rejection before throwing a synchronous `TypeError`. Creating a third shared runtime package for those few lines would add more concepts than it removes, so each zero-dependency foundation carries one copy; the architecture gate requires the files to remain byte-identical. There is still one execution semantic, mechanically mirrored across two independent publication boundaries, never two implementations allowed to evolve separately.
 
 ### `@dougongjs/platform`
 
@@ -291,7 +293,7 @@ Group configuration, structural ownership, lifecycle state and facade authority 
 
 Those state machines are composed by an internal `GroupCoordinator` instead of being scattered through the Host orchestrator. The coordinator fully owns the Group tree, facade authority and readiness; Host supplies only Installation ChangeSets, serialized commands and diagnostics publication through narrow ports. That boundary adds no public concept and grants a Group no capability-resolution power.
 
-A nested `configure` shares one configuration session; the first failure poisons the whole draft, so an outer caller that swallows the exception still cannot continue declaring or commit. Any non-`Error` failure is classified at the boundary before entering the lifecycle, so `undefined` never means both "the failure value" and "no failure". A failed change against an established Group that rolls back completely keeps presenting the committed state; a Group that was never established can have its failed barrier replaced by a later successful change.
+A nested `configure` shares one configuration session and one ChangeSet, but not one ownership position. Every inner `install()` still records its Installation against the current Group, so the inner Group can be removed independently while the whole declaration commits atomically. The first failure poisons the whole draft, so an outer caller that swallows the exception still cannot continue declaring or commit. Any non-`Error` failure is classified at the boundary before entering the lifecycle, so `undefined` never means both "the failure value" and "no failure". A failed change against an established Group that rolls back completely keeps presenting the committed state; a Group that was never established can have its failed barrier replaced by a later successful change.
 
 What a Group does not solve is "who can see which capability". Services, ExtensionPoints and Events are globally consistent within one Host.
 
@@ -408,7 +410,7 @@ Three families are worth naming here, because they map directly onto the argumen
 
 - **Import direction** (section 2) — package-level direction plus the module rank table, checked in both directions: a new module without a rank fails, and a rank without a source file fails too.
 - **Single path** (section 4.2) — a set of **inverted rules**. Not "do not write X" but "**you must** write X". Host and Platform command serialization must use the same `SerialQueue`; Platform diagnostics must compile to `SnapshotPublisher`; Platform declaration validation must reuse `assertPlainRecord`. An absence means somebody started a second state machine.
-- **Ownership** (section 7) — `new Lifetime(...)` may appear only in `Runtime` and in `Lifetime` itself; anywhere else produces a resource tree nobody disposes.
+- **Ownership** (section 7) — `new Lifetime(...)` may appear only in `InstanceCoordinator` and in `Lifetime` itself; anywhere else produces a resource tree nobody disposes.
 
 For the complete list, what each rule prevents, and the three-step procedure for adding a guard (write the gate first → watch it fail → reverse-verify), see [Mechanical guards](./guards.md).
 

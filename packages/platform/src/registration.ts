@@ -1,15 +1,15 @@
-import { DougongError, SerialQueue, type Installation } from "@dougongjs/core";
+import { ErrorSummary, SerialQueue, type Installation } from "@dougongjs/core";
 import type { Registration, NormalizedArtifact, PlatformChangeSet, Artifact } from "./platform-api";
 import { PlatformError } from "./errors";
 import type { ActivationPermit } from "./activation-gate";
 
 export interface RegistrationPort<Reference> {
-  change(): PlatformChangeSet<Reference>;
-  activateRegistration(
+  readonly change: () => PlatformChangeSet<Reference>;
+  readonly activateRegistration: (
     registration: RegistrationRecord<Reference>,
     signal: AbortSignal,
     permit?: ActivationPermit,
-  ): Promise<void>;
+  ) => Promise<void>;
 }
 
 type RegistrationAuthority<Reference> =
@@ -22,19 +22,10 @@ type RegistrationAuthority<Reference> =
     }
   | { readonly phase: "terminal" };
 
-type TerminalRegistrationFailure =
-  | {
-      readonly category: "coded";
-      readonly name: string;
-      readonly message: string;
-      readonly code: string;
-      readonly domain: "core" | "platform";
-    }
-  | {
-      readonly category: "typeError" | "error";
-      readonly name: string;
-      readonly message: string;
-    };
+interface TerminalRegistrationFailure {
+  readonly summary: ErrorSummary;
+  readonly platformError: boolean;
+}
 
 type RegistrationFailure =
   | { readonly retention: "live"; readonly error: Error }
@@ -57,7 +48,7 @@ export type RegistrationCommitState = Extract<
   { readonly phase: "registered" | "activated" }
 >;
 
-class RegistrationImpl<Reference> implements Registration<Reference> {
+class RegistrationFacade<Reference> implements Registration<Reference> {
   readonly #registration: RegistrationRecord<Reference>;
 
   constructor(registration: RegistrationRecord<Reference>) {
@@ -98,12 +89,12 @@ export class RegistrationRecord<Reference> {
   readonly #activationQueue = new SerialQueue();
   #activationController: AbortController | undefined;
   readonly #readyWaiters = new Set<{ resolve: () => void; reject: (error: unknown) => void }>();
-  readonly publicRegistration: Registration<Reference>;
+  readonly facade: Registration<Reference>;
 
   constructor(artifact: NormalizedArtifact<Reference>) {
     this.#authority = { phase: "draft", artifact };
     this.#manifest = artifact.manifest;
-    this.publicRegistration = new RegistrationImpl(this);
+    this.facade = new RegistrationFacade(this);
   }
 
   attach(port: RegistrationPort<Reference>) {
@@ -147,7 +138,11 @@ export class RegistrationRecord<Reference> {
     if (state.phase === "failed") {
       return state.failure.retention === "live"
         ? state.failure.error
-        : restoreFailure(state.failure.summary);
+        : state.failure.summary.summary.restore(
+            state.failure.summary.platformError
+              ? (code, message) => new PlatformError(code, message)
+              : undefined,
+          );
     }
     if (state.phase === "removed") {
       return new PlatformError(
@@ -197,7 +192,7 @@ export class RegistrationRecord<Reference> {
     const authority = this.#attachedAuthority();
     if (!authority) throw this.unavailableError();
     const change = authority.port.change();
-    change.update(this.publicRegistration, artifact);
+    change.update(this.facade, artifact);
     await change.commit();
   }
 
@@ -208,7 +203,7 @@ export class RegistrationRecord<Reference> {
       throw this.unavailableError();
     }
     const change = authority.port.change();
-    change.remove(this.publicRegistration);
+    change.remove(this.facade);
     await change.commit();
   }
 
@@ -269,7 +264,13 @@ export class RegistrationRecord<Reference> {
     this.#state = {
       phase: "failed",
       installation: undefined,
-      failure: { retention: "summary", summary: snapshotFailure(failure) },
+      failure: {
+        retention: "summary",
+        summary: {
+          summary: new ErrorSummary(failure),
+          platformError: failure instanceof PlatformError,
+        },
+      },
     };
     this.#authority = { phase: "terminal" };
   }
@@ -346,47 +347,4 @@ export function assertCurrentRegistration<Reference>(
   ) {
     throw registration.unavailableError();
   }
-}
-
-function snapshotFailure(error: Error): TerminalRegistrationFailure {
-  if (error instanceof PlatformError) {
-    return {
-      category: "coded",
-      name: error.name,
-      message: error.message,
-      code: error.code,
-      domain: "platform",
-    };
-  }
-  if (error instanceof DougongError) {
-    return {
-      category: "coded",
-      name: error.name,
-      message: error.message,
-      code: error.code,
-      domain: "core",
-    };
-  }
-  return {
-    category: error instanceof TypeError ? "typeError" : "error",
-    name: error.name,
-    message: error.message,
-  };
-}
-
-function restoreFailure(failure: TerminalRegistrationFailure): Error {
-  let error: Error;
-  if (failure.category === "coded") {
-    error =
-      failure.domain === "platform"
-        ? new PlatformError(failure.code, failure.message)
-        : new DougongError(failure.code, failure.message);
-  } else {
-    error =
-      failure.category === "typeError"
-        ? new TypeError(failure.message)
-        : new Error(failure.message);
-  }
-  error.name = failure.name;
-  return error;
 }

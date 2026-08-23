@@ -38,6 +38,8 @@ render()
 subscription.dispose()
 ```
 
+`subscribe()` 与 Signal 使用同一个同步失效协议；不要传入 `async` 回调。需要异步刷新时，让同步回调把工作交给应用自己拥有、可取消的任务。
+
 视图可在启动前创建，跨 stop/start 保持身份，并且只呈现事务提交后的快照。因为它与 Host 同寿命，保留该 View 也会有意保留 Host 的观察链路；应让两者一起退出作用域。Plugin 中仍通过 `requires` 取得由当前 Lifetime 拥有的视图；不要为了让 UI 读取贡献而生成一份收集所有 ExtensionPoint 的 bridge Plugin。
 
 Contribution Map 的 key 是 Core 生成的所有权身份，包含 Installation ID，重装后会变化。领域 ID、排序权重和权限标签属于 value：

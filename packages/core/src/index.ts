@@ -56,7 +56,7 @@ export {
 
 export type { Contribution, ContributionView } from "./contribution-store";
 export type { EventListener } from "./event-hub";
-export { ConfigValidationError, DougongError, isCancellationReason } from "./errors";
+export { ConfigValidationError, DougongError, ErrorSummary, isCancellationReason } from "./errors";
 export {
   asyncDisposeSymbol,
   disposeSymbol,

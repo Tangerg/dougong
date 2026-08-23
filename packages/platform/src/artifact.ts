@@ -78,11 +78,11 @@ export async function loadPlugin<Reference>(
     );
   }
 
-  const candidate = Object.hasOwn(loaded, "default")
-    ? (loaded as { readonly default: unknown }).default
-    : undefined;
   let plugin: AnyPlugin;
   try {
+    const candidate = Object.hasOwn(loaded, "default")
+      ? (loaded as { readonly default: unknown }).default
+      : undefined;
     plugin = normalizePluginCandidate(candidate);
   } catch (error) {
     throw new PlatformError(

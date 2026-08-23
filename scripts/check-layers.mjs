@@ -66,6 +66,7 @@ const CORE_MODULE_LAYERS = {
   "core/src/readonly-map.ts": 0,
   "core/src/resource.ts": 0,
   "core/src/serial-queue.ts": 0,
+  "core/src/sync-result.ts": 0,
   // Leaf state and fan-out services over standard JavaScript only.
   "core/src/configuration.ts": 1,
   "core/src/contract-registry.ts": 1,
@@ -86,7 +87,7 @@ const CORE_MODULE_LAYERS = {
   "core/src/installation-graph.ts": 6,
   // Public protocols and live execution are orthogonal peers.
   "core/src/host-api.ts": 7,
-  "core/src/runtime.ts": 7,
+  "core/src/instance-coordinator.ts": 7,
   // The canonical ChangeSet implementation.
   "core/src/change-set.ts": 8,
   // Declaration storage, structural Groups and transactional execution are orthogonal.
@@ -130,6 +131,12 @@ const WORKSPACE_SOURCE_RE = /^(?:reactive|core|platform|dougong|examples)\/src\/
 const TEST_RE = /\.(test|spec)\.ts$/;
 const CONTRACT_FACTORIES = new Set(["service", "extensionPoint", "event"]);
 const FORBIDDEN_TYPE_KINDS = new Set([ts.SyntaxKind.AnyKeyword]);
+const STRICT_FUNCTION_PROPERTY_INTERFACES = /(?:Port|Control)$/;
+const NODE_BUILTIN_IMPORT = /(?:from\s*|import\s*(?:\(\s*)?)["']node:/;
+const PACKAGE_DEEP_IMPORT =
+  /(?:from\s*|import\s*(?:\(\s*)?)["'](?:@dougongjs\/(?:reactive|core|platform)|dougong)\//;
+const RELATIVE_DEEP_IMPORT =
+  /(?:from\s*|import\s*(?:\(\s*)?)["']\.\.\/\.\.\/(?:reactive|core|platform|dougong)\//;
 
 // Checks that run over every TypeScript file, including compile-only contracts.
 const TYPESCRIPT_RULES = [
@@ -147,11 +154,11 @@ const TYPESCRIPT_RULES = [
 // Checks that run over the text of every source file under a package's `src`.
 const SOURCE_RULES = [
   {
-    // The kernel is host-agnostic (architecture doc: Core knows nothing about
+    // The kernel is runtime-agnostic (architecture doc: Core knows nothing about
     // HTTP, databases, windows or the filesystem). A `node:` import compiles
     // fine and then breaks only in a browser bundle.
-    test: (source) => /from\s*["']node:/.test(source),
-    message: "imports a Node built-in; the kernel must stay host-agnostic",
+    test: (source) => NODE_BUILTIN_IMPORT.test(source),
+    message: "imports a Node built-in; the kernel must stay runtime-agnostic",
   },
   {
     // Startup order, restart closures and rollback must be reproducible. A
@@ -160,7 +167,7 @@ const SOURCE_RULES = [
     message: "reads an ambient clock or entropy source",
   },
   {
-    // Diagnostics route through the `Logger` port so a host can redirect them.
+    // Diagnostics route through the `Logger` port so application code can redirect them.
     // `const defaultLogger: Logger = console` is the one sanctioned binding.
     // an assignment, not a call, so this rule does not catch it.
     test: (source) => /console\.\w+\s*\(/.test(source),
@@ -169,10 +176,8 @@ const SOURCE_RULES = [
   {
     // A package entry is the only surface the published `exports` map exposes.
     // A deep path would couple consumers to our file layout.
-    test: (source) =>
-      /from\s*["']@dougong\/(?:reactive|core|platform)\//.test(source) ||
-      /from\s*["']\.\.\/\.\.\/(?:reactive|core|platform|dougong)\//.test(source),
-    message: "deep-imports another package instead of using its entry",
+    test: (source) => PACKAGE_DEEP_IMPORT.test(source) || RELATIVE_DEEP_IMPORT.test(source),
+    message: "deep-imports package internals instead of using its entry",
   },
 ];
 
@@ -206,6 +211,15 @@ const FILE_RULES = [
         .replace(/export\s+(?:type\s+)?(?:\*|{[\s\S]*?})\s+from\s+["'][^"']+["'];?/g, "")
         .trim().length > 0,
     message: "the dougong facade must contain only re-exports",
+  },
+  {
+    matches: (file) => file === "core/src/sync-result.ts",
+    // Core and reactive are independent zero-dependency foundations. This one
+    // tiny behavior is mirrored deliberately, so it must remain one definition
+    // in substance rather than evolving into two synchronization semantics.
+    test: (source) =>
+      source !== readFileSync(join(PACKAGES_DIR, "reactive/src/sync-result.ts"), "utf8"),
+    message: "Core and reactive synchronous-result boundaries must remain byte-identical",
   },
   {
     matches: (file) => file === "core/src/index.ts",
@@ -311,6 +325,13 @@ const FILE_RULES = [
     message: "Platform load cancellation must reuse Core isCancellationReason",
   },
   {
+    matches: (file) => file === "platform/src/registration.ts",
+    test: (source) =>
+      !/\bErrorSummary\b/.test(source) ||
+      /function\s+(?:snapshot|restore)(?:Failure|Error)\s*\(/.test(source),
+    message: "Platform terminal failures must reuse Core ErrorSummary",
+  },
+  {
     matches: (file) => file.startsWith("platform/src/"),
     test: (source) => /Object\.getPrototypeOf\s*\(/.test(source),
     message: "Platform declaration validation must reuse Core assertPlainRecord",
@@ -378,11 +399,23 @@ for (const [file, deps] of Object.entries(graph)) {
   }
   if (sourceFile) {
     const explicitAnyLines = new Set();
+    const bivariantPortMethodLines = new Set();
     const inspectTypeNode = (node) => {
       if (FORBIDDEN_TYPE_KINDS.has(node.kind)) {
         explicitAnyLines.add(
           sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile)).line + 1,
         );
+      }
+      if (
+        ts.isInterfaceDeclaration(node) &&
+        STRICT_FUNCTION_PROPERTY_INTERFACES.test(node.name.text)
+      ) {
+        for (const member of node.members) {
+          if (!ts.isMethodSignature(member)) continue;
+          bivariantPortMethodLines.add(
+            sourceFile.getLineAndCharacterOfPosition(member.getStart(sourceFile)).line + 1,
+          );
+        }
       }
       ts.forEachChild(node, inspectTypeNode);
     };
@@ -390,6 +423,11 @@ for (const [file, deps] of Object.entries(graph)) {
     for (const line of explicitAnyLines) {
       architectureViolations.push(
         `${file}:${line}: uses an explicit any type; preserve information with a precise type, unknown or never`,
+      );
+    }
+    for (const line of bivariantPortMethodLines) {
+      architectureViolations.push(
+        `${file}:${line}: Port and Control callbacks must be readonly function properties so parameter variance stays strict`,
       );
     }
   }
@@ -519,10 +557,10 @@ for (const [file, deps] of Object.entries(graph)) {
   }
 }
 
-// `new Lifetime(...)` is ownership creation. Only Runtime (one root Lifetime
-// per live Instance) and Lifetime itself (children) may do it; anywhere else
-// produces a resource tree nobody disposes.
-const LIFETIME_CONSTRUCTORS = new Set(["core/src/runtime.ts", "core/src/lifetime.ts"]);
+// `new Lifetime(...)` is ownership creation. Only InstanceCoordinator (one root
+// Lifetime per live Instance) and Lifetime itself (children) may do it;
+// anywhere else produces a resource tree nobody disposes.
+const LIFETIME_CONSTRUCTORS = new Set(["core/src/instance-coordinator.ts", "core/src/lifetime.ts"]);
 for (const file of Object.keys(graph)) {
   if (!SOURCE_RE.test(file) || TEST_RE.test(file)) continue;
   if (LIFETIME_CONSTRUCTORS.has(file)) continue;

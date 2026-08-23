@@ -48,6 +48,7 @@ class Observation<T, Child extends ObservationLifetime> {
   #observed: ObservedValue<T> = { present: false };
   #dirty = false;
   #drainTask: ObservationTask | undefined;
+  #ownerCleanup: AsyncDisposable | undefined;
   #wakeDrain: (() => void) | undefined;
   #disposePromise: Promise<void> | undefined;
 
@@ -78,10 +79,15 @@ class Observation<T, Child extends ObservationLifetime> {
     );
   }
 
+  attachOwnerCleanup(cleanup: AsyncDisposable) {
+    this.#ownerCleanup = cleanup;
+  }
+
   dispose() {
     if (this.#disposePromise) return this.#disposePromise;
     const completion = Promise.withResolvers<void>();
     this.#disposePromise = completion.promise;
+    this.#ownerCleanup = undefined;
     this.#releaseBinding("disposed");
     this.#wakeDrain?.();
     void this.#disposeResources().then(completion.resolve, completion.reject);
@@ -205,6 +211,12 @@ class Observation<T, Child extends ObservationLifetime> {
     return runner;
   }
 
+  #takeOwnerCleanup() {
+    const cleanup = this.#ownerCleanup;
+    this.#ownerCleanup = undefined;
+    return cleanup;
+  }
+
   #releaseDrainTask(runner: ObservationTask) {
     if (this.#drainTask === runner) this.#drainTask = undefined;
   }
@@ -214,6 +226,10 @@ class Observation<T, Child extends ObservationLifetime> {
     this.#wakeDrain?.();
     await collect(this.#takeSubscription(), errors);
     await collect(this.#takeCurrent(), errors);
+    // The current drain task cannot await its own disposal. Release that edge
+    // before disposing the cleanup handle that owns this Observation.
+    this.#drainTask = undefined;
+    await collect(this.#takeOwnerCleanup(), errors);
     if (errors.length === 1) throw errors[0];
     throw new AggregateError(errors, message);
   }
@@ -255,13 +271,14 @@ export function observe<T, Child extends ObservationLifetime>(
   const observation = new Observation(owner, source, observer);
   const handle = owner.cleanup(() => observation.dispose());
   assertAsyncDisposable(handle, "ObservationOwner.cleanup()");
+  observation.attachOwnerCleanup(handle);
   try {
     observation.start();
     return handle;
   } catch (error) {
-    // Mark the observation disposed immediately so a synchronous notification
-    // cannot race the owner's rollback. The registered cleanup remains the
-    // authoritative ownership path and observes the same idempotent promise.
+    // Dispose immediately so synchronous setup rollback cannot race live work.
+    // The owner cleanup remains authoritative because construction did not
+    // return a handle; owner rollback must still observe async cleanup failure.
     void observation.dispose().catch(() => undefined);
     throw error;
   }

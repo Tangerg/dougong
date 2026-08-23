@@ -40,7 +40,7 @@ await platform.trigger("command:music.search");
 await registration.ready();
 ```
 
-Platform options 是仅含 `installer`、`apiVersion`、`loader`、`authorizer`、`logger` 的普通 record；只读取可枚举 own property，不接受未知字段或原型链配置。`installer` 消费 `Pick<Installer, "change">`，Loader、Authorizer 与 Logger 也都是结构化端口；这些协作者可以由普通对象或类实例实现。
+Platform options 是仅含 `installer`、`apiVersion`、`loader`、`authorizer`、`logger` 的普通数据 record；只接受可枚举 own data property，不接受 accessor、未知字段或原型链配置。`installer` 消费 `Pick<Installer, "change">`，Loader、Authorizer 与 Logger 也都是结构化端口；这些协作者可以由普通对象或类实例实现。
 
 `Reference` 同时由 Artifact 产出、由 Loader 消费，因此 `Platform<Reference>`、`PlatformChangeSet<Reference>` 与 `Registration<Reference>` 不允许静默拓宽。需要同时支持 `string | URL` 时，应在创建 Platform 时声明这个完整联合，而不是先创建窄 Platform 再靠赋值扩大它的输入域。
 
@@ -74,7 +74,7 @@ interface Manifest {
 
 - `name`、激活条件、权限名、依赖名和版本范围必须非空且首尾无空白；不做静默 trim。
 - `version` 必须是完整语义版本；`apiVersion` 和每个依赖值必须是受支持的版本范围，`*` 明确表示任意版本。
-- Manifest 是仅由可枚举字符串 own property 构成的普通 record，未知字段、Symbol、隐藏属性、数组与类实例都会被拒绝，而不是悄悄丢弃或从原型链读取配置；`dependencies` 使用同一 record 规则。
+- Manifest 是仅由可枚举字符串 own data property 构成的普通数据 record，未知字段、Symbol、隐藏属性、accessor、数组与类实例都会被拒绝，而不是悄悄丢弃、执行 getter 或从原型链读取配置；`dependencies` 使用同一 record 规则。
 - 同一激活条件或权限不得重复。
 - 返回对象、数组和依赖映射都冻结；Manifest 是值，不持有执行状态。
 - `Manifest.name` 是 Registration 身份，也必须与 placeholder 及加载模块的 `Plugin.name` 完全一致。
@@ -85,9 +85,11 @@ interface Manifest {
 
 ```ts
 interface Loader<Reference> {
-  readonly load: (reference: Reference, signal: AbortSignal) => unknown | Promise<unknown>;
+  readonly load: (reference: Reference, signal: AbortSignal) => unknown;
 }
 ```
+
+`unknown` 是刻意的信任边界：它已经包含同步值和 Promise，Platform 会统一 `await` 结果并验证模块结构；写成 `unknown | Promise<unknown>` 在 TypeScript 中会被 `unknown` 吸收，反而虚构了一条并不存在的类型信息。
 
 Loader 返回的模块必须以 own `default` 属性导出唯一的 `Plugin`，原型链属性不属于模块导出。Platform 在加载后重新走 `definePlugin()` 的结构校验，并核对 name。加载错误统一包装为 `PlatformError` 的 `MODULE_LOAD_FAILED`；模块形状或默认导出错误使用 `MODULE_INVALID`。
 
@@ -98,6 +100,8 @@ Loader 返回的模块必须以 own `default` 属性导出唯一的 `Plugin`，�
 
 Loader 必须在耗时阶段检查 `AbortSignal`。Platform 复用 Core 的 `isCancellationReason()` 判定取消，并在 Loader 返回后再次检查 signal；因此一个不合作的 Loader 不能在取消后把模块提交进 Core，但它自身已发生的 I/O 或模块顶层副作用无法撤销。
 
+取消对 Loader 与 Authorizer 都是协作式的。若返回的 Promise 忽略 signal 且永不 settle，正在等待它的激活、结构变更或 Platform 释放也无法 settle。只有在迟到结果、失败和副作用都确认可安全忽略时，应用代码才可显式采用“放弃等待”适配；Platform 不会暗中把仍在执行的外部工作伪装成已释放。
+
 `load` 使用严格函数属性而不是双变方法签名：只接受某个 `Reference` 子集的 Loader 不能伪装成可加载整个集合。类方法仍可直接实现这个结构协议；内置 `MemoryLoader` 自身也使用同样的函数属性，因此它的泛型实例不能绕过 Loader 的这条约束。
 
 不可信 Plugin 应使用 Worker、iframe、独立进程或受限 Realm。相应 Loader 可以返回一个**应用代码编写的 RPC 代理 Plugin**，把获准能力映射成普通 Service；不能先在应用 Realm `import()` 任意代码，再指望 Context 权限把它变安全。
@@ -106,7 +110,7 @@ Loader 必须在耗时阶段检查 `AbortSignal`。Platform 复用 Core 的 `isC
 
 ```ts
 interface Authorizer {
-  readonly authorize: (manifest: Manifest, signal: AbortSignal) => void | Promise<void>;
+  readonly authorize: (manifest: Manifest, signal: AbortSignal) => Awaitable<void>;
 }
 ```
 
@@ -136,7 +140,7 @@ interface Artifact<Reference> {
 }
 ```
 
-Artifact 也是严格的声明值：它必须是仅含 `manifest`、`reference`、`config`、`placeholder` 的普通 record，且 `manifest` 与 `reference` 必须是可枚举的 own property。未知字段、Symbol、隐藏属性、数组与类实例都会在进入 ChangeSet 时立即拒绝；规范化只读取一次自己的字段并返回冻结值，不从原型链猜测声明。
+Artifact 也是严格的声明值：它必须是仅含 `manifest`、`reference`、`config`、`placeholder` 的普通数据 record，且 `manifest` 与 `reference` 必须是可枚举的 own data property。未知字段、Symbol、隐藏属性、accessor、数组与类实例都会在进入 ChangeSet 时立即拒绝；规范化只读取一次自己的字段并返回冻结值，不执行 getter，也不从原型链猜测声明。
 
 Artifact 是外部交付边界，不重复 Core 的 Plugin 作者期泛型：加载所得模块在类型系统外，`config` 必须由最终选中的 Plugin schema 在运行时验证；`placeholder` 使用同一个 `AnyPlugin` 擦除形状，因此异构 Plugin 清单可以直接进入 Platform，无需断言。擦除不增加第二条执行路径；placeholder 与加载所得 Plugin 都经过同一个声明规范化与 Core 提交边界。
 

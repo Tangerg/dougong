@@ -17,7 +17,7 @@ const plugin = definePlugin({
 
 `name` 是必填的稳定标识。它用于诊断和 Installation ID（`app.hello:1`），不参与依赖解析——依赖解析看的是 Contract。
 
-`definePlugin` 保留声明的 Plugin 形状用于**类型推导**，同时在边界把它规范化为仅含 `name`、`config`、`requires`、`provides`、`setup` 的不可变普通 record。声明不能使用 Symbol、隐藏属性、类实例或未知字段；`requires` 与 `provides` 也只能是由可枚举字符串 own key 构成的普通 record。错误因此留在定义处，而不是拖到 Host 启动时。
+`definePlugin` 保留声明的 Plugin 形状用于**类型推导**，同时在边界把它规范化为仅含 `name`、`config`、`requires`、`provides`、`setup` 的不可变普通数据 record。声明不能使用 Symbol、隐藏属性、accessor、类实例或未知字段；`requires` 与 `provides` 也只能是由可枚举字符串 own key 构成的普通数据 record。错误因此留在定义处，而不是拖到 Host 启动时。
 
 ## 声明依赖
 

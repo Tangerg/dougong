@@ -29,18 +29,20 @@ export type ChangeOperation =
   | { readonly kind: "remove"; readonly installation: InstallationRecord };
 
 interface ChangePort {
-  create(
+  readonly create: (
     plugin: NormalizedPlugin,
     config: unknown,
-  ): {
+  ) => {
     readonly record: InstallationRecord;
-    readonly publicInstallation: object;
+    readonly facade: Installation<AnyPlugin>;
   };
-  resolve(installation: object): InstallationRecord;
-  execute(operations: ReadonlyArray<ChangeOperation>): Promise<void>;
-  attach(installation: InstallationRecord): void;
-  discard(installation: InstallationRecord, error: unknown): void;
+  readonly resolve: (installation: object) => InstallationRecord;
+  readonly execute: (operations: ReadonlyArray<ChangeOperation>) => Promise<void>;
+  readonly attach: (installation: InstallationRecord) => void;
+  readonly discard: (installation: InstallationRecord, error: unknown) => void;
 }
+
+type DraftInstallationFactory = ChangePort["create"];
 
 type ChangeSetState =
   | { readonly phase: "open"; readonly port: ChangePort }
@@ -48,10 +50,31 @@ type ChangeSetState =
   | { readonly phase: "submitted"; readonly promise: Promise<void> }
   | { readonly phase: "discarded" };
 
-const draftDiscarders = new WeakMap<ChangeSetDraft, (error: unknown) => void>();
+interface ChangeSetDraftControl {
+  readonly discard: (error: unknown) => void;
+  readonly install: <Declaration extends AnyPlugin>(
+    plugin: Declaration,
+    config: unknown,
+    create?: DraftInstallationFactory,
+  ) => Installation<Declaration>;
+}
+
+const draftControls = new WeakMap<ChangeSetDraft, ChangeSetDraftControl>();
 
 export function discardChangeSetDraft(draft: ChangeSetDraft, error: unknown) {
-  draftDiscarders.get(draft)?.(error);
+  draftControls.get(draft)?.discard(error);
+}
+
+/** Stages explicit ownership into a shared draft without widening the public ChangeSet API. */
+export function stageChangeSetInstallation<Declaration extends AnyPlugin>(
+  draft: ChangeSetDraft,
+  plugin: Declaration,
+  config: unknown,
+  create: DraftInstallationFactory,
+) {
+  const control = draftControls.get(draft);
+  if (!control) throw new Error("ChangeSet draft control has been released");
+  return control.install(plugin, config, create);
 }
 
 /**
@@ -65,7 +88,10 @@ export class ChangeSetDraft implements ChangeSet {
 
   constructor(port: ChangePort) {
     this.#state = { phase: "open", port };
-    draftDiscarders.set(this, (error) => this.#discard(error));
+    draftControls.set(this, {
+      discard: (error) => this.#discard(error),
+      install: (plugin, config, create) => this.#install(plugin, config, create),
+    });
     Object.freeze(this);
   }
 
@@ -73,11 +99,21 @@ export class ChangeSetDraft implements ChangeSet {
     plugin: Declaration,
     ...config: PluginConfigArguments<Declaration>
   ): Installation<Declaration> {
+    return this.#install(plugin, config[0]);
+  }
+
+  #install<Declaration extends AnyPlugin>(
+    plugin: Declaration,
+    config: unknown,
+    create?: DraftInstallationFactory,
+  ): Installation<Declaration> {
     const port = this.#requireOpen();
     const normalized = normalizePlugin(plugin);
-    const draft = port.create(normalized, config[0]);
+    const draft = (create ?? port.create)(normalized, config);
     this.#stage({ kind: "install", installation: draft.record });
-    return draft.publicInstallation as Installation<Declaration>;
+    // Runtime authority is the facade identity; Declaration exists only in the
+    // invariant compile-time brand and is recovered at this single erasure seam.
+    return draft.facade as unknown as Installation<Declaration>;
   }
 
   update<Declaration extends AnyPlugin>(
@@ -183,6 +219,6 @@ export class ChangeSetDraft implements ChangeSet {
 
   #releaseOperations() {
     this.#operations.clear();
-    draftDiscarders.delete(this);
+    draftControls.delete(this);
   }
 }

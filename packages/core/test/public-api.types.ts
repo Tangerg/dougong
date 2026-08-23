@@ -152,6 +152,9 @@ type NarrowLogger = {
   error(message: string): void;
 };
 expectTypeOf<NarrowLogger extends core.Logger ? true : false>().toEqualTypeOf<false>();
+expectTypeOf<NonNullable<core.HostOptions["onError"]>>().toEqualTypeOf<
+  (error: unknown) => core.Awaitable<void>
+>();
 
 type NarrowLifetime = Omit<core.LifetimeOperations, "lifetime"> & {
   lifetime(label: "known"): core.LifetimeContext;

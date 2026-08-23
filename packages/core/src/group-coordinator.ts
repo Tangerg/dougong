@@ -1,31 +1,40 @@
 import type { Group, Installation, PluginConfigArguments } from "./host-api";
-import { discardChangeSetDraft, ChangeSetDraft, type ChangeOperation } from "./change-set";
+import {
+  discardChangeSetDraft,
+  stageChangeSetInstallation,
+  ChangeSetDraft,
+  type ChangeOperation,
+} from "./change-set";
 import { normalizeFailure } from "./errors";
 import { GroupConfigurationSession, GroupNode } from "./group";
 import { groupRemovedError, GroupLifecycle } from "./group-lifecycle";
 import type { InstallationRecord } from "./installation";
 import type { LifecycleStatus } from "./lifecycle-status";
 import type { AnyPlugin, NormalizedPlugin } from "./plugin";
+import { assertSynchronous } from "./sync-result";
 
 export interface GroupCoordinatorPort {
-  installations(): Iterable<InstallationRecord>;
-  createDraft(
+  readonly installations: () => Iterable<InstallationRecord>;
+  readonly createDraft: (
     group: GroupNode,
     plugin: NormalizedPlugin,
     config: unknown,
-  ): { readonly record: InstallationRecord; readonly publicInstallation: object };
-  resolveInstallation(installation: object): InstallationRecord;
-  executeChanges(group: GroupNode, operations: ReadonlyArray<ChangeOperation>): Promise<void>;
-  attachInstallation(installation: InstallationRecord): void;
-  discardInstallation(installation: InstallationRecord, error: unknown): void;
-  runExclusive(operation: () => Promise<void>): Promise<void>;
-  removeInstallations(operations: ReadonlyArray<ChangeOperation>): Promise<void>;
-  notifyChanged(): void;
+  ) => { readonly record: InstallationRecord; readonly facade: Installation<AnyPlugin> };
+  readonly resolveInstallation: (installation: object) => InstallationRecord;
+  readonly executeChanges: (
+    group: GroupNode,
+    operations: ReadonlyArray<ChangeOperation>,
+  ) => Promise<void>;
+  readonly attachInstallation: (installation: InstallationRecord) => void;
+  readonly discardInstallation: (installation: InstallationRecord, error: unknown) => void;
+  readonly runExclusive: (operation: () => Promise<void>) => Promise<void>;
+  readonly removeInstallations: (operations: ReadonlyArray<ChangeOperation>) => Promise<void>;
+  readonly notifyChanged: () => void;
 }
 
 interface GroupControl {
-  finishConfiguration(): void;
-  revoke(): void;
+  readonly finishConfiguration: () => void;
+  readonly revoke: () => void;
 }
 
 const groupControls = new WeakMap<object, GroupControl>();
@@ -39,7 +48,7 @@ type GroupState =
   | { readonly phase: "attached"; readonly coordinator: GroupCoordinator }
   | { readonly phase: "revoked" };
 
-class GroupImpl implements Group {
+class GroupFacade implements Group {
   readonly #node: GroupNode;
   #state: GroupState;
 
@@ -92,7 +101,12 @@ class GroupImpl implements Group {
   ) {
     const state = this.#state;
     if (state.phase === "configuring") {
-      return state.configuration.requireDraft().install(plugin, ...config);
+      return state.coordinator.stageConfigurationInstall(
+        this.#node,
+        state.configuration,
+        plugin,
+        ...config,
+      );
     }
     return this.#requireCoordinator().install(this.#node, plugin, ...config);
   }
@@ -134,7 +148,7 @@ class GroupImpl implements Group {
 export class GroupCoordinator {
   readonly root: GroupNode;
   readonly #port: GroupCoordinatorPort;
-  readonly #publicGroups = new WeakMap<GroupNode, GroupImpl>();
+  readonly #facades = new WeakMap<GroupNode, GroupFacade>();
   readonly #lifecycles = new WeakMap<GroupNode, GroupLifecycle>();
 
   constructor(rootName: string, port: GroupCoordinatorPort) {
@@ -159,6 +173,24 @@ export class GroupCoordinator {
     const installation = changes.install(plugin, ...config);
     observeReadinessOperation(changes.commit());
     return installation;
+  }
+
+  stageConfigurationInstall<Declaration extends AnyPlugin>(
+    group: GroupNode,
+    configuration: GroupConfigurationSession<ChangeSetDraft>,
+    plugin: Declaration,
+    ...config: PluginConfigArguments<Declaration>
+  ): Installation<Declaration> {
+    this.#requireLifecycle(group);
+    return stageChangeSetInstallation(
+      configuration.requireDraft(),
+      plugin,
+      config[0],
+      (normalized, value) => {
+        this.#requireLifecycle(group);
+        return this.#port.createDraft(group, normalized, value);
+      },
+    );
   }
 
   change(group: GroupNode, tracking: "immediate" | "deferred" = "immediate") {
@@ -211,14 +243,12 @@ export class GroupCoordinator {
           `Group '${node.id}' configuration failed with a non-Error value`,
         ),
       );
-    const group = new GroupImpl(this, node, configuration);
-    this.#publicGroups.set(node, group);
+    const facade = new GroupFacade(this, node, configuration);
+    this.#facades.set(node, facade);
 
     try {
-      const result: unknown = configure(group);
-      if (isThenable(result)) {
-        rejectAsyncConfiguration(result);
-      }
+      const result: unknown = configure(facade);
+      assertSynchronous(result, "Group configure must be synchronous");
       const failure = configuration.failure;
       if (failure) throw failure;
     } catch (error) {
@@ -234,14 +264,14 @@ export class GroupCoordinator {
     if (ownsConfiguration) {
       const operation = configuration.seal().commit();
       for (const child of node.walk()) {
-        const childGroup = this.#publicGroups.get(child);
-        if (childGroup) groupControls.get(childGroup)?.finishConfiguration();
+        const childFacade = this.#facades.get(child);
+        if (childFacade) groupControls.get(childFacade)?.finishConfiguration();
         this.#track(child, operation);
       }
       observeReadinessOperation(operation);
     }
     this.#port.notifyChanged();
-    return group;
+    return facade;
   }
 
   async ready(group: GroupNode) {
@@ -313,12 +343,12 @@ export class GroupCoordinator {
     for (const group of groups) {
       this.#lifecycles.get(group)?.release();
       this.#lifecycles.delete(group);
-      const publicGroup = this.#publicGroups.get(group);
-      if (publicGroup) {
-        groupControls.get(publicGroup)?.revoke();
-        groupControls.delete(publicGroup);
+      const facade = this.#facades.get(group);
+      if (facade) {
+        groupControls.get(facade)?.revoke();
+        groupControls.delete(facade);
       }
-      this.#publicGroups.delete(group);
+      this.#facades.delete(group);
     }
   }
 }
@@ -326,16 +356,4 @@ export class GroupCoordinator {
 /** Failures remain observable through ready(); this only marks the owned branch handled. */
 function observeReadinessOperation(operation: PromiseLike<unknown>) {
   void Promise.resolve(operation).catch(() => undefined);
-}
-
-function rejectAsyncConfiguration(result: PromiseLike<unknown>): never {
-  // The synchronous TypeError is the configuration result. The rejected async
-  // branch is outside the accepted contract and must not become an unhandled rejection.
-  void Promise.resolve(result).catch(() => undefined);
-  throw new TypeError("Group configure must be synchronous");
-}
-
-function isThenable(value: unknown): value is PromiseLike<unknown> {
-  if (value === null || (typeof value !== "object" && typeof value !== "function")) return false;
-  return typeof (value as { readonly then?: unknown }).then === "function";
 }

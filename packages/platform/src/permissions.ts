@@ -1,8 +1,9 @@
+import type { Awaitable } from "@dougongjs/core";
 import type { Manifest } from "./manifest";
 import { PermissionDeniedError } from "./errors";
 
 export interface Authorizer {
-  readonly authorize: (manifest: Manifest, signal: AbortSignal) => void | Promise<void>;
+  readonly authorize: (manifest: Manifest, signal: AbortSignal) => Awaitable<void>;
 }
 
 /** An immutable allow-list policy; custom interactive policies implement the same port. */
@@ -30,9 +31,9 @@ export class PermissionSet implements Authorizer {
     this.#allowed = permissions;
   }
 
-  authorize(manifest: Manifest, signal: AbortSignal) {
+  readonly authorize = (manifest: Manifest, signal: AbortSignal) => {
     signal.throwIfAborted();
     const denied = manifest.permissions.filter((permission) => !this.#allowed.has(permission));
     if (denied.length) throw new PermissionDeniedError(manifest.name, denied);
-  }
+  };
 }

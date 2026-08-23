@@ -7,6 +7,7 @@ import {
   extensionPoint,
   service,
   type Group,
+  type Installation,
 } from "../src/index";
 
 describe("plugin groups", () => {
@@ -61,7 +62,7 @@ describe("plugin groups", () => {
     await host.stop();
   });
 
-  it("composes nested groups and removes the subtree in one operation", async () => {
+  it("assigns nested installations to independently removable groups", async () => {
     const trace: string[] = [];
     const owned = (name: string) =>
       definePlugin({
@@ -74,14 +75,24 @@ describe("plugin groups", () => {
 
     const host = createHost();
     const rootInstallation = host.install(owned("root"));
+    let workspaceInstallation!: Pick<Installation, "groupId" | "status">;
+    let sessionInstallation!: Pick<Installation, "groupId" | "status">;
     let session!: Group;
     const workspace = host.group("workspace", (group) => {
-      group.install(owned("workspace"));
+      workspaceInstallation = group.install(owned("workspace"));
       session = group.group("session", (current) => {
-        current.install(owned("session"));
+        sessionInstallation = current.install(owned("session"));
       });
     });
     await host.start();
+
+    expect(workspaceInstallation.groupId).toBe("/workspace");
+    expect(sessionInstallation.groupId).toBe("/workspace/session");
+    await session.remove();
+    expect(sessionInstallation.status).toBe("removed");
+    expect(workspaceInstallation.status).toBe("active");
+    expect(workspace.status).toBe("active");
+    expect(trace).toEqual(["start:root", "start:workspace", "start:session", "stop:session"]);
 
     await workspace.remove();
     expect(rootInstallation.status).toBe("active");

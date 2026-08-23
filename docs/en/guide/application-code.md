@@ -38,6 +38,8 @@ render()
 subscription.dispose()
 ```
 
+`subscribe()` shares Signal's synchronous invalidation protocol; never pass an `async` callback. When a refresh needs asynchronous work, have the synchronous callback hand it to an application-owned, cancellable task.
+
 The view can be created before startup, keeps its identity across stop/start, and exposes committed snapshots only. Because it has the Host's lifetime, retaining the view intentionally retains the Host observation chain; let both leave scope together. A Plugin still obtains a view owned by its current Lifetime through `requires`; do not generate a bridge Plugin that collects every ExtensionPoint merely so UI code can read contributions.
 
 The Contribution Map key is a Core-generated ownership identity containing the Installation ID, so it changes after reinstall. Domain IDs, ordering weights and permission labels belong in the value:

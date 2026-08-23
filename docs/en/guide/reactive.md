@@ -77,6 +77,8 @@ subscription.dispose()
 
 Every `subscribe()` call creates an independent subscription that can be disposed on its own, even when the same function is passed more than once. Disposal immediately withdraws a notification whose turn has not started. `batch()` coalesces repeated notices only per subscription identity; two subscriptions that share one function are still invoked once each.
 
+Subscribers must be synchronous. Hand asynchronous work explicitly to `ctx.spawn()` or to an application-owned task from inside the synchronous notice; passing an `async` function is rejected with a `TypeError`, while the already-created rejection is observed instead of leaking as an unhandled rejection.
+
 Both `Signal` and `ReadonlySignal` implement the structural `Readable<T>` protocol:
 
 ```ts
@@ -170,7 +172,7 @@ The result is a dependency direction that stays one-way: `reactive` does not dep
 - releasing the previous child Lifetime fails → the observation **stops permanently** and releases its subscription, because whether the old resources were released cannot be confirmed
 - a change arrives while the previous one is still being handled → coalesced into a single rebuild with the latest value
 
-Permanent stop is a real terminal state: the observation immediately revokes its references to the source, observer and last value. The cleanup left in the owner retains only an inert terminal shell, so a stopped dataflow does not stay alive until the whole Instance ends.
+A permanent stop after startup is a real terminal state: the observation immediately revokes its references to the source, observer and last value, then releases its own owner cleanup instead of accumulating as an inert shell until the Instance ends. A synchronous construction failure returned no handle, so its registered cleanup remains for owner rollback and can still propagate an asynchronous cleanup failure.
 
 ## Two observation sources
 

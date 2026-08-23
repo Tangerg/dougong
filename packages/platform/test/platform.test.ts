@@ -43,6 +43,20 @@ describe("public API surface", () => {
     await platform[asyncDisposeSymbol]();
     expect(platform.status).toBe("disposed");
   });
+
+  it("validates permission failure data at the JavaScript boundary", () => {
+    expect(() => new PermissionDeniedError("", ["filesystem"])).toThrowError(
+      new TypeError("PermissionDeniedError manifestName must be a non-empty trimmed string"),
+    );
+    expect(() => new PermissionDeniedError("demo", null as never)).toThrowError(
+      new TypeError("PermissionDeniedError denied permissions must be an array"),
+    );
+    expect(() => new PermissionDeniedError("demo", [" filesystem "])).toThrowError(
+      new TypeError(
+        "PermissionDeniedError denied permission at index 0 must be a non-empty trimmed string",
+      ),
+    );
+  });
 });
 
 describe("Platform", () => {
@@ -257,6 +271,13 @@ describe("Platform", () => {
   });
 
   it("validates Artifacts and loaded modules at their JavaScript trust boundaries", async () => {
+    const defaultExportFailure = new Error("default export getter failed");
+    const throwingDefault = Object.defineProperty({}, "default", {
+      enumerable: true,
+      get() {
+        throw defaultExportFailure;
+      },
+    });
     const inheritedDefault = Object.create({
       default: definePlugin({ name: "invalid.inherited-default", setup() {} }),
     });
@@ -268,6 +289,7 @@ describe("Platform", () => {
           ["empty", null],
           ["invalid-default", { default: {} }],
           ["inherited-default", inheritedDefault],
+          ["throwing-default", throwingDefault],
         ]),
       ),
     });
@@ -301,6 +323,10 @@ describe("Platform", () => {
       manifest: { name: "invalid.inherited-default", version: "1.0.0" },
       reference: "inherited-default",
     });
+    const throwing = await platform.register({
+      manifest: { name: "invalid.throwing-default", version: "1.0.0" },
+      reference: "throwing-default",
+    });
 
     await expect(empty.activate()).rejects.toMatchObject({
       code: "MODULE_INVALID",
@@ -314,6 +340,11 @@ describe("Platform", () => {
     await expect(inherited.activate()).rejects.toMatchObject({
       code: "MODULE_INVALID",
       message: "Module 'invalid.inherited-default' does not default-export a valid Plugin",
+    });
+    await expect(throwing.activate()).rejects.toMatchObject({
+      code: "MODULE_INVALID",
+      message: "Module 'invalid.throwing-default' does not default-export a valid Plugin",
+      cause: defaultExportFailure,
     });
 
     await platform.dispose();
@@ -337,6 +368,38 @@ describe("Platform", () => {
         Object.entries(fixture.references).map(([name, ref]) => [name, ref.deref() === undefined]),
       ),
     ).toEqual({ host: true, loader: true, platform: true });
+  });
+
+  it("observes terminal diagnostics Logger failures without changing commands", async () => {
+    const loggerFailure = new Error("async logger failed");
+    let rejected!: Promise<never>;
+    const logger = {
+      debug: vi.fn<(...args: unknown[]) => void>(),
+      info: vi.fn<(...args: unknown[]) => void>(),
+      warn: vi.fn<(...args: unknown[]) => void>(),
+      error: vi.fn<(...args: unknown[]) => void>(() => {
+        rejected = Promise.reject(loggerFailure);
+        return rejected;
+      }),
+    };
+    const platform = createPlatform({
+      installer: createHost(),
+      apiVersion: "1.0.0",
+      loader: new MemoryLoader(new Map()),
+      logger,
+    });
+    platform.diagnostics.subscribe(() => {
+      throw new Error("diagnostics subscriber failed");
+    });
+
+    await expect(
+      platform.register({
+        manifest: { name: "diagnostics.logger", version: "1.0.0" },
+        reference: "unused",
+      }),
+    ).resolves.toMatchObject({ status: "registered" });
+    await expect(rejected).rejects.toBe(loggerFailure);
+    await platform.dispose();
   });
 
   it("does not retain Platform ports through a historical diagnostic view", async () => {
@@ -373,6 +436,7 @@ describe("Platform", () => {
     }
 
     expect(fixture.registration.status).toBe("failed");
+    await expect(fixture.registration.ready()).rejects.toBeInstanceOf(PlatformError);
     expect(
       Object.fromEntries(
         Object.entries(fixture.references).map(([name, ref]) => [name, ref.deref() === undefined]),
@@ -414,6 +478,14 @@ describe("Platform", () => {
   });
 
   it("normalizes and freezes manifests at the trust boundary", () => {
+    let declarationAccessed = false;
+    const throwingDeclaration = Object.defineProperty({ version: "1.2.3" }, "name", {
+      enumerable: true,
+      get() {
+        declarationAccessed = true;
+        return "demo.accessor";
+      },
+    });
     class ManifestClass {
       readonly name = "demo.class";
       readonly version = "1.2.3";
@@ -421,6 +493,13 @@ describe("Platform", () => {
     expect(() => defineManifest(new ManifestClass())).toThrow(
       "Manifest declaration must be a plain record",
     );
+    expect(() => defineManifest(throwingDeclaration as never)).toThrowError(
+      expect.objectContaining({
+        code: "MANIFEST_INVALID",
+        message: "Manifest declaration field 'name' must be a data property",
+      }),
+    );
+    expect(declarationAccessed).toBe(false);
     const hiddenDependency = Object.defineProperty({}, "hidden", { value: "*" });
     expect(() =>
       defineManifest({

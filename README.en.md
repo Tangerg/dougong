@@ -153,7 +153,7 @@ Architectural constraints do not live only in prose. Package dependency directio
 
 ## Status
 
-Early development (`0.0.x`) with **no backward-compatibility promises yet**. The priority is a correct model, a consistent API and complete executable evidence.
+Early `0.x` development with **no backward-compatibility promises yet**. The priority is a correct model, a consistent API and complete executable evidence.
 
 ## License
 

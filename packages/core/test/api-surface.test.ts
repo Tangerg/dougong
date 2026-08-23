@@ -6,6 +6,7 @@ describe("public API surface", () => {
     expect(Object.keys(core).sort()).toEqual([
       "ConfigValidationError",
       "DougongError",
+      "ErrorSummary",
       "ReadonlyMapSnapshot",
       "SerialQueue",
       "SnapshotPublisher",
@@ -21,6 +22,55 @@ describe("public API surface", () => {
       "optional",
       "service",
     ]);
+  });
+
+  it("summarizes terminal errors without retaining their object graph", () => {
+    const retained = { payload: "application state" };
+    const original = new core.DougongError("TEST_FAILURE", "failed", { cause: retained });
+    original.name = "SpecializedError";
+
+    const summary = new core.ErrorSummary(original);
+    const restored = summary.restore((code, message) => new core.DougongError(code, message));
+
+    expect(Object.isFrozen(summary)).toBe(true);
+    expect(Object.keys(summary)).toEqual([]);
+    expect(restored).toMatchObject({
+      name: "SpecializedError",
+      message: "failed",
+      code: "TEST_FAILURE",
+    });
+    expect(restored).not.toBe(original);
+    expect(restored).not.toHaveProperty("cause");
+    expect(new core.ErrorSummary(new TypeError("invalid")).restore()).toBeInstanceOf(TypeError);
+    expect(() => new core.ErrorSummary(null as never)).toThrowError(
+      new TypeError("ErrorSummary expects an Error"),
+    );
+    expect(() => summary.restore(() => null as never)).toThrowError(
+      new TypeError("ErrorSummary coded error factory must return an Error"),
+    );
+
+    const hostile = Object.defineProperties(new Error(), {
+      name: { get: () => 1 },
+      message: {
+        get() {
+          throw new Error("must not escape");
+        },
+      },
+    });
+    const recovered = new core.ErrorSummary(hostile).restore();
+    expect(recovered).toMatchObject({ name: "Error", message: "" });
+  });
+
+  it("validates structured error identity at the JavaScript boundary", () => {
+    expect(() => new core.DougongError("" as never, "failed")).toThrowError(
+      new TypeError("DougongError code must be a non-empty trimmed string"),
+    );
+    expect(() => new core.DougongError(" TEST " as never, "failed")).toThrowError(
+      new TypeError("DougongError code must be a non-empty trimmed string"),
+    );
+    expect(() => new core.DougongError("TEST", null as never)).toThrowError(
+      new TypeError("DougongError message must be a string"),
+    );
   });
 
   it("does not leak orchestrator internals through public objects", async () => {

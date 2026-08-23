@@ -162,13 +162,13 @@ export class ContributionStore<T> {
   }
 
   stage(
-    ownerId: string,
+    installationId: string,
     key: string,
     value: T,
     release: (publication: Publication) => void,
   ): ContributionRecord<T> {
     validateKey(key);
-    const id = contributionId(ownerId, key);
+    const id = contributionId(installationId, key);
     if (this.#claims.has(id)) {
       throw new TypeError(`Duplicate contribution '${id}'`);
     }
@@ -449,8 +449,8 @@ function validateKey(key: string) {
   }
 }
 
-function contributionId(ownerId: string, key: string) {
-  return `${escapeKeyPart(ownerId)}/${escapeKeyPart(key)}`;
+function contributionId(installationId: string, key: string) {
+  return `${escapeKeyPart(installationId)}/${escapeKeyPart(key)}`;
 }
 
 function escapeKeyPart(value: string) {

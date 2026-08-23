@@ -1,5 +1,6 @@
 import { defineConfig } from "vite";
 import dts from "vite-plugin-dts";
+import { runtimeBaseline } from "../../scripts/runtime-baseline.mjs";
 
 export default defineConfig({
   plugins: [
@@ -11,7 +12,7 @@ export default defineConfig({
     }),
   ],
   build: {
-    target: "es2024",
+    target: runtimeBaseline.buildTargets,
     lib: {
       entry: {
         index: "src/index.ts",

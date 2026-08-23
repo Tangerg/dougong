@@ -121,7 +121,10 @@ class PlatformImpl<Reference> implements Platform<Reference> {
       const ports = platform.#livePorts();
       if (!ports) return;
       try {
-        ports.logger.error(error);
+        const result: unknown = ports.logger.error(error);
+        // Platform has no secondary error port. Logger failure is terminal but
+        // still observed so it cannot surface as an unhandled rejection.
+        void Promise.resolve(result).catch(() => undefined);
       } catch {
         // Diagnostics are observation-only and cannot fail a platform command.
       }
@@ -210,7 +213,7 @@ class PlatformImpl<Reference> implements Platform<Reference> {
 
   #createRegistration(artifact: NormalizedArtifact<Reference>): RegistrationRecord<Reference> {
     const registration: RegistrationRecord<Reference> = new RegistrationRecord(artifact);
-    this.#ownedRegistrations.set(registration.publicRegistration, registration);
+    this.#ownedRegistrations.set(registration.facade, registration);
     return registration;
   }
 

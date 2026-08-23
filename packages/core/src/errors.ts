@@ -2,13 +2,94 @@ import type { StandardSchemaV1 } from "@standard-schema/spec";
 
 export class DougongError extends Error {
   override name = "DougongError";
+  readonly code: string;
 
-  constructor(
-    public readonly code: string,
-    message: string,
-    options?: ErrorOptions,
-  ) {
+  constructor(code: string, message: string, options?: ErrorOptions) {
+    if (typeof code !== "string" || code.trim() !== code || code.length === 0) {
+      throw new TypeError("DougongError code must be a non-empty trimmed string");
+    }
+    if (typeof message !== "string") throw new TypeError("DougongError message must be a string");
     super(message, options);
+    this.code = code;
+  }
+}
+
+type ErrorSummaryState =
+  | {
+      readonly category: "coded";
+      readonly name: string;
+      readonly message: string;
+      readonly code: string;
+    }
+  | {
+      readonly category: "typeError" | "error";
+      readonly name: string;
+      readonly message: string;
+    };
+
+/**
+ * A primitive-only record of an Error for terminal objects that must not retain
+ * the original stack, cause, subclass fields or the object graph behind them.
+ */
+export class ErrorSummary {
+  readonly #state: ErrorSummaryState;
+
+  constructor(error: Error) {
+    if (!(error instanceof Error)) throw new TypeError("ErrorSummary expects an Error");
+    const name = readErrorString(error, "name", "Error");
+    const message = readErrorString(error, "message", "");
+    const code = error instanceof DougongError ? readDougongErrorCode(error) : undefined;
+    this.#state = Object.freeze(
+      code === undefined
+        ? {
+            category: error instanceof TypeError ? "typeError" : "error",
+            name,
+            message,
+          }
+        : {
+            category: "coded",
+            name,
+            message,
+            code,
+          },
+    );
+    Object.freeze(this);
+  }
+
+  restore(
+    createCodedError: (code: string, message: string) => Error = (code, message) =>
+      new DougongError(code, message),
+  ) {
+    const state = this.#state;
+    const error =
+      state.category === "coded"
+        ? createCodedError(state.code, state.message)
+        : state.category === "typeError"
+          ? new TypeError(state.message)
+          : new Error(state.message);
+    if (!(error instanceof Error)) {
+      throw new TypeError("ErrorSummary coded error factory must return an Error");
+    }
+    error.name = state.name;
+    return error;
+  }
+}
+
+function readErrorString(error: Error, key: "name" | "message", fallback: string) {
+  try {
+    const value = error[key];
+    return typeof value === "string" ? value : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function readDougongErrorCode(error: DougongError) {
+  try {
+    const code = error.code;
+    return typeof code === "string" && code.trim() === code && code.length > 0 ? code : undefined;
+  } catch {
+    return undefined;
   }
 }
 

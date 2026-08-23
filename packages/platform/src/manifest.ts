@@ -49,7 +49,24 @@ function isVersionRange(range: string) {
 export type ManifestInput = z.input<typeof manifestSchema>;
 
 export function defineManifest(input: ManifestInput | Manifest): Manifest {
-  const result = manifestSchema.safeParse(snapshotManifestDeclaration(input));
+  let declaration: Record<string, unknown>;
+  try {
+    declaration = snapshotManifestDeclaration(input);
+  } catch (error) {
+    if (error instanceof PlatformError && error.code === "MANIFEST_INVALID") throw error;
+    throw new PlatformError("MANIFEST_INVALID", "Manifest declaration could not be read", {
+      cause: error,
+    });
+  }
+
+  let result: ReturnType<typeof manifestSchema.safeParse>;
+  try {
+    result = manifestSchema.safeParse(declaration);
+  } catch (error) {
+    throw new PlatformError("MANIFEST_INVALID", "Manifest declaration could not be validated", {
+      cause: error,
+    });
+  }
   if (!result.success) {
     throw new PlatformError("MANIFEST_INVALID", z.prettifyError(result.error), {
       cause: result.error,

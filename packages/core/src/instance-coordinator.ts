@@ -9,6 +9,7 @@ import type { InstallationRecord, Instance } from "./installation";
 import { Lifetime, type InstanceMeta, type LifetimePort, type Logger } from "./lifetime";
 import type { InstanceContext, NormalizedPlugin } from "./plugin";
 import type { Publication } from "./resource";
+import { assertSynchronous } from "./sync-result";
 
 interface PreparedActivation {
   readonly installation: InstallationRecord;
@@ -18,7 +19,7 @@ interface PreparedActivation {
 
 type ExtensionPointIdentity = Extract<Requirement, { readonly kind: "extensionPoint" }>;
 
-interface RuntimeOptions {
+export interface InstanceCoordinatorPort {
   readonly hostName: string;
   readonly logger: Logger;
   readonly isInstalled: (installationId: string) => boolean;
@@ -28,7 +29,7 @@ interface RuntimeOptions {
 export class IncompleteActivationCleanupError extends AggregateError {}
 
 /** Owns live Instances and the capabilities reachable from their Lifetimes. */
-export class Runtime {
+export class InstanceCoordinator {
   readonly #hostName: string;
   readonly #logger: Logger;
   readonly #isInstalled: (installationId: string) => boolean;
@@ -38,12 +39,12 @@ export class Runtime {
   readonly #contributions: ContributionRegistry;
   #activationOrder: InstallationRecord[] = [];
 
-  constructor(options: RuntimeOptions) {
-    this.#hostName = options.hostName;
-    this.#logger = options.logger;
-    this.#isInstalled = options.isInstalled;
-    this.#report = options.report;
-    this.#contributions = new ContributionRegistry(options.report);
+  constructor(port: InstanceCoordinatorPort) {
+    this.#hostName = port.hostName;
+    this.#logger = port.logger;
+    this.#isInstalled = port.isInstalled;
+    this.#report = port.report;
+    this.#contributions = new ContributionRegistry(port.report);
   }
 
   readService(provider: InstallationRecord, serviceId: string) {
@@ -335,50 +336,56 @@ export class Runtime {
 
   #createLifetimePort(contracts: ContractRegistryDraft): LifetimePort {
     return {
-      stageOn: (ownerId, token, listener, release) => {
-        return this.#stageOn(ownerId, token, listener, release, contracts);
+      stageOn: (installationId, token, listener, release) => {
+        return this.#stageOn(installationId, token, listener, release, contracts);
       },
-      emit: (ownerId, token, payload) => this.#emit(ownerId, token, payload, contracts),
-      stageContribution: (ownerId, token, key, value, release) => {
-        return this.#stageContribution(ownerId, token, key, value, release, contracts);
+      emit: (installationId, token, payload) =>
+        this.#emit(installationId, token, payload, contracts),
+      stageContribution: (installationId, token, key, value, release) => {
+        return this.#stageContribution(installationId, token, key, value, release, contracts);
       },
-      writeLog: (level, message, meta, details) => this.#logger[level](message, meta, ...details),
+      writeLog: (level, message, meta, details) => {
+        assertSynchronous(
+          this.#logger[level](message, meta, ...details),
+          "Logger methods must be synchronous",
+        );
+      },
       report: this.#report,
     };
   }
 
   #stageOn<T>(
-    ownerId: string,
+    installationId: string,
     token: Event<T>,
     listener: EventListener<T>,
     release: (publication: Publication) => void,
     contracts: ContractRegistryDraft,
   ) {
-    this.#assertOwner(ownerId);
+    this.#assertInstallation(installationId);
     assertContract(token, "event");
     contracts.remember(token);
     return this.#events.stage(token.id, listener, release);
   }
 
-  #emit<T>(ownerId: string, token: Event<T>, payload: T, contracts: ContractRegistryDraft) {
-    this.#assertOwner(ownerId);
+  #emit<T>(installationId: string, token: Event<T>, payload: T, contracts: ContractRegistryDraft) {
+    this.#assertInstallation(installationId);
     assertContract(token, "event");
     contracts.remember(token);
     return this.#events.emit(token.id, payload);
   }
 
   #stageContribution<T>(
-    ownerId: string,
+    installationId: string,
     token: ExtensionPoint<T>,
     key: string,
     value: T,
     release: (publication: Publication) => void,
     contracts: ContractRegistryDraft,
   ) {
-    this.#assertOwner(ownerId);
+    this.#assertInstallation(installationId);
     assertContract(token, "extensionPoint");
     contracts.remember(token);
-    return this.#contributions.get<T>(token).stage(ownerId, key, value, release);
+    return this.#contributions.get<T>(token).stage(installationId, key, value, release);
   }
 
   #contributionView(token: ExtensionPointIdentity, lifetime: Lifetime): ContributionView<unknown> {
@@ -387,9 +394,9 @@ export class Runtime {
       .view((resource, kind) => lifetime.ownLease(resource, kind));
   }
 
-  #assertOwner(ownerId: string) {
-    if (!this.#isInstalled(ownerId)) {
-      throw new Error(`Installation '${ownerId}' is not installed`);
+  #assertInstallation(installationId: string) {
+    if (!this.#isInstalled(installationId)) {
+      throw new Error(`Installation '${installationId}' is not installed`);
     }
   }
 }

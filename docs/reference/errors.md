@@ -179,7 +179,7 @@ const host = createHost({
 })
 ```
 
-上报通道本身是 fail-safe 的：`onError` 抛异常会退到 logger，logger 再抛就静默——**错误观察永远不会改变它正在观察的 Host 命令**。
+上报通道本身是 fail-safe 的：`onError` 抛出或异步拒绝都会退到 logger，logger 自己抛出或拒绝则作为终端 sink 被观察后静默——**错误观察永远不会改变它正在观察的 Host 命令**。
 
 ### 终态失败的信息量
 
@@ -189,7 +189,7 @@ Installation 脱离 Host 之后（被移除或丢弃），它只保留错误的 
 
 **这不影响正常路径**：等待 `ready()` 的调用方总是收到原始 `Error`；仍附着于活动 Host 的失败 Installation 也保留原始错误。只有「Installation 已脱离、且调用方没 await 过 ready()」的事后读取会拿到摘要——此时 `ConfigValidationError.issues` 这类子类附加数据不再可用。
 
-终态 Registration 使用同一保留原则，并在摘要中额外记录 coded error 属于 Core 还是 Platform，以便重建正确的 `DougongError` / `PlatformError`；`TypeError` 的调用者错误类别同样保留，子类专有字段则不进入摘要。它不会为了保留历史 `stack` 或 `cause` 而反向保活 Installer、Loader 或 Platform。
+终态 Installation 与 Registration 复用 Core 的 `ErrorSummary`，而不是各自实现错误分类。Registration 只额外记录 coded error 属于 Core 还是 Platform，并在 `restore()` 时选择正确的 `DougongError` / `PlatformError` 工厂；`TypeError` 的调用者错误类别同样保留，子类专有字段则不进入摘要。它不会为了保留历史 `stack` 或 `cause` 而反向保活 Installer、Loader 或 Platform。
 
 ## 相关
 

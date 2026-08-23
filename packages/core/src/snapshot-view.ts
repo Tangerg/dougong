@@ -1,4 +1,5 @@
 import { disposeSymbol, type Disposable } from "./resource";
+import { assertSynchronous } from "./sync-result";
 
 export interface SnapshotView<T> {
   get(): T;
@@ -54,7 +55,10 @@ export class SnapshotPublisher<T> implements Disposable {
         notifySnapshotSubscription(subscription);
       } catch (subscriberError) {
         try {
-          report(subscriberError);
+          assertSynchronous(
+            report(subscriberError),
+            "Snapshot error reporters must be synchronous",
+          );
         } catch (reporterError) {
           reportingFailures.push(subscriberError, reporterError);
         }
@@ -132,7 +136,9 @@ class SnapshotSubscription implements Disposable {
 }
 
 function notifySnapshotSubscription(subscription: SnapshotSubscription) {
-  snapshotSubscriptionBindings.get(subscription)?.listener();
+  const binding = snapshotSubscriptionBindings.get(subscription);
+  if (!binding) return;
+  assertSynchronous(binding.listener(), "Snapshot subscribers must be synchronous");
 }
 
 function closeSnapshotSubscription(subscription: SnapshotSubscription) {

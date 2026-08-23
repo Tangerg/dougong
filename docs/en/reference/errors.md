@@ -179,7 +179,7 @@ const host = createHost({
 })
 ```
 
-The channel is fail-safe: a throwing `onError` falls back to the logger, and a throwing logger falls silent — **observing an error never changes the Host command being observed**.
+The channel is fail-safe: an `onError` that throws or rejects falls back to the logger; a logger that itself throws or rejects is observed and then falls silent as the terminal sink — **observing an error never changes the Host command being observed**.
 
 ### How much a terminal failure retains
 
@@ -189,7 +189,7 @@ The reason is that JavaScript's `Error.stack` can carry the whole orchestration 
 
 **The normal path is unaffected**: a caller awaiting `ready()` always receives the original `Error`, and a failed Installation still attached to a live Host keeps its original error too. Only an after-the-fact read of a detached Installation whose caller never awaited `ready()` gets the summary — and there subclass data such as `ConfigValidationError.issues` is no longer available.
 
-A terminal Registration follows the same retention rule and records whether a coded error belonged to Core or Platform, so it can rebuild the correct `DougongError` or `PlatformError`. It also preserves the caller-error category of `TypeError`, while subclass-specific fields remain absent from the summary. It never keeps an Installer, Loader or Platform alive merely to preserve a historical `stack` or `cause`.
+Terminal Installations and Registrations share Core's `ErrorSummary` instead of implementing error classification independently. A Registration records only whether a coded error belonged to Core or Platform, then selects the correct `DougongError` or `PlatformError` factory during `restore()`; it also preserves the caller-error category of `TypeError`, while subclass-specific fields remain absent from the summary. It never keeps an Installer, Loader or Platform alive merely to preserve a historical `stack` or `cause`.
 
 ## Related
 

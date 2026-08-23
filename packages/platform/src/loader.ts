@@ -1,15 +1,16 @@
 export interface Loader<Reference> {
-  readonly load: (reference: Reference, signal: AbortSignal) => unknown | Promise<unknown>;
+  /** The result is awaited and structurally validated at the Artifact boundary. */
+  readonly load: (reference: Reference, signal: AbortSignal) => unknown;
 }
 
 /** Trusted same-Realm ESM loading. It is intentionally not presented as a sandbox. */
 export class ImportLoader implements Loader<string | URL> {
-  async load(reference: string | URL, signal: AbortSignal): Promise<unknown> {
+  readonly load = async (reference: string | URL, signal: AbortSignal): Promise<unknown> => {
     signal.throwIfAborted();
     const module = await import(/* @vite-ignore */ String(reference));
     signal.throwIfAborted();
     return module;
-  }
+  };
 }
 
 /** Deterministic loader useful for embedded bundles, tests and application-owned modules. */

@@ -1,4 +1,5 @@
-import { type AnyPlugin, definePlugin, service } from "@dougongjs/core";
+import { type AnyPlugin, type Awaitable, definePlugin, service } from "@dougongjs/core";
+import { ImportLoader, PermissionSet } from "@dougongjs/platform";
 import { expectTypeOf } from "vitest";
 import type * as platform from "@dougongjs/platform";
 
@@ -17,10 +18,32 @@ type BroadLoader = {
 type NarrowAuthorizer = {
   authorize(manifest: platform.Manifest & { readonly name: "known" }, signal: AbortSignal): void;
 };
+type ThenableAuthorizer = {
+  authorize(manifest: platform.Manifest, signal: AbortSignal): PromiseLike<void>;
+};
 
 expectTypeOf<NarrowLoader extends platform.Loader<string> ? true : false>().toEqualTypeOf<false>();
 expectTypeOf<BroadLoader extends platform.Loader<string> ? true : false>().toEqualTypeOf<true>();
 expectTypeOf<NarrowAuthorizer extends platform.Authorizer ? true : false>().toEqualTypeOf<false>();
+expectTypeOf<ThenableAuthorizer extends platform.Authorizer ? true : false>().toEqualTypeOf<true>();
+expectTypeOf<ReturnType<platform.Loader<string>["load"]>>().toEqualTypeOf<unknown>();
+expectTypeOf<ReturnType<platform.Authorizer["authorize"]>>().toEqualTypeOf<Awaitable<void>>();
+
+class NarrowImportLoader extends ImportLoader {
+  // @ts-expect-error Concrete Loader adapters preserve the same strict reference boundary.
+  override readonly load = async (reference: string, _signal: AbortSignal) => reference;
+}
+
+class NarrowPermissionSet extends PermissionSet {
+  // @ts-expect-error Concrete Authorizer adapters cannot narrow the Manifest they accept.
+  override readonly authorize = (
+    _manifest: platform.Manifest & { readonly name: "known" },
+    _signal: AbortSignal,
+  ) => undefined;
+}
+
+void NarrowImportLoader;
+void NarrowPermissionSet;
 expectTypeOf<
   platform.MemoryLoader<"known"> extends platform.MemoryLoader<string> ? true : false
 >().toEqualTypeOf<false>();

@@ -99,7 +99,7 @@ Node.js ≥ 22; Chrome / Edge 119, Firefox 121 or Safari 17.4 for browsers and W
 - 文档站 / Documentation: https://tangerg.github.io/dougong/
 - 仓库 / Repository: https://github.com/Tangerg/dougong
 
-> 早期开发阶段（0.0.x），当前不承诺向后兼容。
-> Early development (0.0.x); no backward-compatibility promises yet.
+> 早期 0.x 开发阶段，当前不承诺向后兼容。
+> Early 0.x development; no backward-compatibility promises yet.
 
 MIT

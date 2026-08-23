@@ -86,7 +86,7 @@ const task = ctx.spawn(async (signal) => {
 })
 
 task.result      // Promise<string>
-task.dispose()   // abort and await completion
+await task.dispose() // abort and await completion
 ```
 
 `spawn` hands the callback an `AbortSignal`. When the Lifetime is released:
@@ -145,11 +145,11 @@ This helper only lets the Dougong Task abandon the **wait**; it does not stop th
 When a group of resources must be replaced or released as a unit, use a child Lifetime:
 
 ```ts
-setup(ctx) {
+async setup(ctx) {
   let current: LifetimeContext | undefined
 
-  const connect = (url: string) => {
-    current?.dispose()                        // release the previous group
+  const connect = async (url: string) => {
+    await current?.dispose()                  // fully release the previous group
     const scope = ctx.lifetime(`conn:${url}`) // the label is for diagnostics
     const socket = openSocket(url)
     scope.cleanup(() => socket.close())
@@ -157,7 +157,7 @@ setup(ctx) {
     current = scope
   }
 
-  connect(initialUrl)
+  await connect(initialUrl)
   ctx.cleanup(() => current?.dispose())
 }
 ```

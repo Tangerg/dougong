@@ -148,6 +148,7 @@ await feature.remove()     // 整棵子树一起移除
 ```
 
 `configure` 回调**必须是同步的**（返回 Promise 会抛错），因为整个 Group 的内容需要作为一笔 ChangeSet 提交。
+嵌套 Group 共享这一笔提交，但 `nested.install()` 的 Installation 仍属于内层 Group；单独 `nested.remove()` 只移除内层子树。
 
 Group 也可以发起自己的事务：
 

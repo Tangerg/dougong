@@ -8,6 +8,8 @@ export const retiredVocabulary = Object.freeze([
   "ApplicationImpl",
   "ApplicationRuntime",
   "ApplicationRuntimeOptions",
+  "Runtime",
+  "RuntimeOptions",
   "ApplicationSnapshot",
   "ApplicationStatus",
   "CreateAppOptions",

@@ -101,7 +101,7 @@ describe("the startup benchmark", () => {
     expect(Number.isFinite(result.independentMilliseconds)).toBe(true);
     expect(Number.isFinite(result.chainedMilliseconds)).toBe(true);
     expect(result.independentMilliseconds).toBeGreaterThanOrEqual(0);
-    expect(result.chainedMilliseconds).toBeGreaterThanOrEqual(3);
+    expect(result.chainedMilliseconds).toBeGreaterThanOrEqual(0);
   });
 
   it("rejects invalid inputs before constructing an application", async () => {

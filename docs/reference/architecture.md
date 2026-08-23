@@ -48,7 +48,7 @@ core 与 reactive 互不依赖
 - 跨层共用、失败不污染后续命令的 SerialQueue；
 - 只读诊断投影。
 
-Core 内部也保持同一分工：Host 在三个平级协作者之上串行化公共命令并发布状态；InstallationRegistry 拥有声明与公共 handle 权限；GroupCoordinator 只拥有结构 Group；Engine 只拥有已提交计划及其 commit、rollback、fail-closed 转换。Engine 下层的 Runtime 只拥有活动 Instance，以及从中可达的 Service、Event、ExtensionPoint 与 Lifetime。Platform 直接复用 Core 的同一串行原语，不复制失败隔离状态机。图切换只在 Engine 中执行，活动执行只在 Runtime 中发生，因此声明状态、事务状态和活动执行状态各有一个真相源，而不是堆进一个总类。
+Core 内部也保持同一分工：Host 在三个平级协作者之上串行化公共命令并发布状态；InstallationRegistry 拥有声明与公共 handle 权限；GroupCoordinator 只拥有结构 Group；Engine 只拥有已提交计划及其 commit、rollback、fail-closed 转换。Engine 下层的 InstanceCoordinator 只拥有活动 Instance，以及从中可达的 Service、Event、ExtensionPoint 与 Lifetime。Platform 直接复用 Core 的同一串行原语，不复制失败隔离状态机。图切换只在 Engine 中执行，活动执行只在 InstanceCoordinator 中发生，因此声明状态、事务状态和活动执行状态各有一个真相源，而不是堆进一个总类；runtime 一词只保留给 Node、浏览器或 WebView 等 JavaScript 环境。
 
 ### `@dougongjs/reactive`
 
@@ -62,6 +62,8 @@ Core 内部也保持同一分工：Host 在三个平级协作者之上串行化�
 Core 不导入 reactive。二者通过结构化 `get()/subscribe()` 和 Lifetime 对象协议组合，因此第三方 Observable 也能接入。
 
 `Disposable` / `AsyncDisposable` 等极小协议会在两个基础包中分别声明。它们不携带状态或实现，TypeScript 依靠结构类型互通。这是有意的协议声明重复，用来换取双向零依赖；单路径原则禁止的是重复状态机和执行语义，不是要求独立基础包共享一个类型来源。
+
+唯一携带执行行为的镜像是两边的 `sync-result.ts`：同步回调意外返回 thenable 时，两者都必须先观察潜在 rejection，再同步抛出 `TypeError`。为这十余行建立第三个共享运行时包会制造比它消除的更多概念，因此两个零依赖基础包各自持有一份；架构门禁要求它们逐字节相同。这里仍然只有一种执行语义，只是在两个独立发布边界中机械复制，不能各自演化。
 
 ### `@dougongjs/platform`
 
@@ -291,7 +293,7 @@ Group 配置、结构所有权、生命周期状态与 facade 权限各自使用
 
 这些状态机由一个内部 `GroupCoordinator` 组合，不再散落在 Host 编排器中。Coordinator 完整拥有 Group 树、facade authority 与 readiness；Host 只通过窄端口提供 Installation ChangeSet、串行命令和诊断发布。这个边界不会新增公共概念，也不会让 Group 获得能力解析权。
 
-嵌套 configure 共享一份配置会话；第一次失败会毒化整笔草稿，外层即使捕获异常也不能继续声明或提交。任意非 `Error` 失败在边界分类后再进入生命周期，因此 `undefined` 永远不同时承担“失败值”和“没有失败”两种含义。已建立 Group 的失败变更若完整回滚，就继续呈现已提交状态；未建立 Group 可由后续成功变更替换失败 barrier。
+嵌套 configure 共享一份配置会话和一笔 ChangeSet，但不共享所有权位置；每个内层 `install()` 仍把它的 Installation 明确记在当前 Group，因此内层可单独移除，而整份声明仍原子提交。第一次失败会毒化整笔草稿，外层即使捕获异常也不能继续声明或提交。任意非 `Error` 失败在边界分类后再进入生命周期，因此 `undefined` 永远不同时承担“失败值”和“没有失败”两种含义。已建立 Group 的失败变更若完整回滚，就继续呈现已提交状态；未建立 Group 可由后续成功变更替换失败 barrier。
 
 它不解决“谁能看见什么能力”。Service、ExtensionPoint 和 Event 在同一个 Host 内全局一致。
 
@@ -408,7 +410,7 @@ Group 删除负责安装所有权；领域值中的 workspace ID 负责数据选
 
 - **依赖方向**（第二节）——包级方向 + 模块 rank 表，rank 表两个方向都查：新模块没有 rank 会失败，rank 没有对应文件也会失败。
 - **单路径**（4.2 节）——一组**反向规则**：不是"不许写 X"，而是"**必须**写 X"。Host 与 Platform 的命令串行化必须用同一个 `SerialQueue`，Platform 诊断必须编译到 `SnapshotPublisher`，Platform 声明校验必须复用 `assertPlainRecord`。缺了就说明有人另起了一条状态机。
-- **所有权**（第七节）——`new Lifetime(...)` 只允许出现在 `Runtime` 和 `Lifetime` 自身；别处构造会产生无人释放的资源树。
+- **所有权**（第七节）——`new Lifetime(...)` 只允许出现在 `InstanceCoordinator` 和 `Lifetime` 自身；别处构造会产生无人释放的资源树。
 
 完整清单、每条规则防的是什么、以及新增守卫的三步流程（先写门禁 → 看它失败 → 反向验证），见[机械守卫](./guards.md)。
 

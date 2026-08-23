@@ -23,17 +23,16 @@ interface InstallationRegistryPort {
 }
 
 interface InstallationCapture {
-  readonly id: string;
   readonly installation: InstallationRecord;
   readonly declaration: InstallationDeclaration;
 }
 
 interface InstallationControl {
-  attach(
+  readonly attach: (
     update: (change: AnyInstallationUpdate) => Promise<void>,
     remove: () => Promise<void>,
-  ): void;
-  revoke(): void;
+  ) => void;
+  readonly revoke: () => void;
 }
 
 type InstallationFacadeState<Declaration extends AnyPlugin> =
@@ -146,7 +145,7 @@ export class InstallationRegistry {
     const facade = new InstallationFacade<AnyPlugin>(installation) as unknown as AnyInstallation;
     this.#owned.set(facade, installation);
     this.#facades.set(installation, facade);
-    return { record: installation, publicInstallation: facade };
+    return { record: installation, facade };
   }
 
   resolve(value: object) {
@@ -231,8 +230,7 @@ export class InstallationRegistry {
   }
 
   capture(): ReadonlyArray<InstallationCapture> {
-    return [...this.#records].map(([id, installation]) => ({
-      id,
+    return [...this.#records.values()].map((installation) => ({
       installation,
       declaration: installation.declaration,
     }));
@@ -242,7 +240,7 @@ export class InstallationRegistry {
     this.#records.clear();
     for (const item of snapshot) {
       item.installation.replaceDeclaration(item.declaration);
-      this.#records.set(item.id, item.installation);
+      this.#records.set(item.installation.id, item.installation);
     }
   }
 

@@ -1,4 +1,4 @@
-import { DougongError, normalizeFailure } from "./errors";
+import { DougongError, ErrorSummary, normalizeFailure } from "./errors";
 import type { Lifetime } from "./lifetime";
 import type { LifecycleStatus } from "./lifecycle-status";
 import type { NormalizedPlugin } from "./plugin";
@@ -28,22 +28,9 @@ interface InstallationAttachment {
   notifyChanged: (() => void) | undefined;
 }
 
-type TerminalFailure =
-  | {
-      readonly category: "dougong";
-      readonly name: string;
-      readonly message: string;
-      readonly code: string;
-    }
-  | {
-      readonly category: "typeError" | "error";
-      readonly name: string;
-      readonly message: string;
-    };
-
 type InstallationFailure =
   | { readonly retention: "live"; readonly error: Error }
-  | { readonly retention: "summary"; readonly summary: TerminalFailure };
+  | { readonly retention: "summary"; readonly summary: ErrorSummary };
 
 type InstallationState =
   | { readonly phase: "pending" }
@@ -112,7 +99,7 @@ export class InstallationRecord {
     if (state.phase === "failed") {
       return state.failure.retention === "live"
         ? state.failure.error
-        : restoreFailure(state.failure.summary);
+        : state.failure.summary.restore();
     }
     if (state.phase === "removed") {
       return new DougongError("INSTALLATION_REMOVED", `Installation '${this.id}' has been removed`);
@@ -228,7 +215,7 @@ export class InstallationRecord {
     const failure = this.#normalizeFailure(error);
     this.#transition({
       phase: "failed",
-      failure: { retention: "summary", summary: snapshotFailure(failure) },
+      failure: { retention: "summary", summary: new ErrorSummary(failure) },
       readiness: "settled",
     });
     for (const waiter of this.#readyWaiters) waiter.reject(failure);
@@ -271,26 +258,4 @@ export class InstallationRecord {
     if (!attachment) throw new Error(`Installation '${this.id}' is no longer installed`);
     return attachment;
   }
-}
-
-function snapshotFailure(error: Error): TerminalFailure {
-  if (error instanceof DougongError) {
-    return { category: "dougong", name: error.name, message: error.message, code: error.code };
-  }
-  return {
-    category: error instanceof TypeError ? "typeError" : "error",
-    name: error.name,
-    message: error.message,
-  };
-}
-
-function restoreFailure(failure: TerminalFailure): Error {
-  const error =
-    failure.category === "dougong"
-      ? new DougongError(failure.code, failure.message)
-      : failure.category === "typeError"
-        ? new TypeError(failure.message)
-        : new Error(failure.message);
-  error.name = failure.name;
-  return error;
 }

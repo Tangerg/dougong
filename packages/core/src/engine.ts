@@ -10,8 +10,11 @@ import {
 import { DougongError, normalizeFailure } from "./errors";
 import { InstallationGraph } from "./installation-graph";
 import type { InstallationRecord } from "./installation";
-import type { Logger } from "./lifetime";
-import { IncompleteActivationCleanupError, Runtime } from "./runtime";
+import {
+  IncompleteActivationCleanupError,
+  InstanceCoordinator,
+  type InstanceCoordinatorPort,
+} from "./instance-coordinator";
 
 export type TransitionOutcome =
   | { readonly kind: "committed"; readonly affected: ReadonlySet<InstallationRecord> }
@@ -21,23 +24,16 @@ export type TransitionOutcome =
       readonly error: unknown;
     };
 
-interface EngineOptions {
-  readonly hostName: string;
-  readonly logger: Logger;
-  readonly isInstalled: (installationId: string) => boolean;
-  readonly report: (error: unknown) => void;
-}
-
 type ServiceAvailability = "available" | "unavailable";
 
 /** Owns the committed plan and its commit, rollback and fail-closed transitions. */
 export class Engine {
   readonly #contracts = new ContractRegistry();
-  readonly #runtime: Runtime;
+  readonly #instances: InstanceCoordinator;
   #plan: InstallationGraph | undefined;
 
-  constructor(options: EngineOptions) {
-    this.#runtime = new Runtime(options);
+  constructor(port: InstanceCoordinatorPort) {
+    this.#instances = new InstanceCoordinator(port);
   }
 
   get hasCommittedPlan() {
@@ -59,7 +55,7 @@ export class Engine {
       if (allowMissing) return undefined;
       throw new DougongError("SERVICE_UNAVAILABLE", `Service '${token.id}' is not active`);
     }
-    const service = this.#runtime.readService(provider, token.id);
+    const service = this.#instances.readService(provider, token.id);
     if (!service.found) {
       if (allowMissing) return undefined;
       throw new DougongError("SERVICE_UNAVAILABLE", `Service '${token.id}' is not active`);
@@ -70,7 +66,7 @@ export class Engine {
   contributions<T>(token: ExtensionPoint<T>) {
     assertContract(token, "extensionPoint");
     this.#contracts.remember(token);
-    return this.#runtime.contributions(token);
+    return this.#instances.contributions(token);
   }
 
   buildPlan(installations: Iterable<InstallationRecord>) {
@@ -80,7 +76,7 @@ export class Engine {
   async start(plan: InstallationGraph) {
     const contracts = this.#contracts.draft(plan.contractKinds);
     try {
-      await this.#runtime.withContributionBatch(() => this.#activateInitialPlan(plan, contracts));
+      await this.#instances.withContributionBatch(() => this.#activateInitialPlan(plan, contracts));
       this.#plan = plan;
     } catch (error) {
       contracts.discard();
@@ -90,7 +86,9 @@ export class Engine {
   }
 
   async stop() {
-    const errors = await this.#runtime.withContributionBatch(() => this.#runtime.deactivateAll());
+    const errors = await this.#instances.withContributionBatch(() =>
+      this.#instances.deactivateAll(),
+    );
     this.#plan = undefined;
     return errors;
   }
@@ -100,7 +98,7 @@ export class Engine {
     changed: ReadonlySet<InstallationRecord>,
     restoreDeclarations: () => void,
   ): Promise<TransitionOutcome> {
-    return this.#runtime.withContributionBatch(async () => {
+    return this.#instances.withContributionBatch(async () => {
       const previousPlan = this.#requirePlan();
       const affected = previousPlan.affectedByTransitionTo(nextPlan, changed);
       let nextConfigs: ReadonlyMap<InstallationRecord, unknown>;
@@ -115,8 +113,8 @@ export class Engine {
         throw error;
       }
 
-      const previousConfigs = this.#runtime.captureConfigs(affected);
-      const stopErrors = await this.#runtime.deactivate(affected);
+      const previousConfigs = this.#instances.captureConfigs(affected);
+      const stopErrors = await this.#instances.deactivate(affected);
       if (stopErrors.length) {
         contracts.discard();
         return this.#failClosed(
@@ -127,13 +125,13 @@ export class Engine {
       }
 
       try {
-        await this.#runtime.activate(nextPlan, affected, nextConfigs, contracts);
+        await this.#instances.activate(nextPlan, affected, nextConfigs, contracts);
         contracts.commit();
-        this.#runtime.commitActivationOrder(nextPlan.order);
+        this.#instances.commitActivationOrder(nextPlan.order);
         this.#plan = nextPlan;
         return Object.freeze({ kind: "committed", affected });
       } catch (changeError) {
-        const nextStopErrors = await this.#runtime.deactivate(affected);
+        const nextStopErrors = await this.#instances.deactivate(affected);
         contracts.discard();
         if (changeError instanceof IncompleteActivationCleanupError || nextStopErrors.length) {
           return this.#failClosed(
@@ -153,13 +151,13 @@ export class Engine {
   async #activateInitialPlan(plan: InstallationGraph, contracts: ContractRegistryDraft) {
     const installations = new Set(plan.order);
     const configs = await this.#resolveConfigs(plan.order);
-    this.#runtime.resetActivationState();
+    this.#instances.resetActivationState();
     try {
-      await this.#runtime.activate(plan, installations, configs, contracts);
+      await this.#instances.activate(plan, installations, configs, contracts);
       contracts.commit();
-      this.#runtime.commitActivationOrder(plan.order);
+      this.#instances.commitActivationOrder(plan.order);
     } catch (error) {
-      const cleanupErrors = await this.#runtime.deactivate(installations);
+      const cleanupErrors = await this.#instances.deactivate(installations);
       if (cleanupErrors.length) {
         throw new AggregateError([error, ...cleanupErrors], "Host startup failed");
       }
@@ -173,7 +171,7 @@ export class Engine {
     message: string,
   ): Promise<never> {
     restoreDeclarations();
-    const shutdownErrors = await this.#runtime.deactivateAll();
+    const shutdownErrors = await this.#instances.deactivateAll();
     this.#plan = undefined;
     throw new AggregateError([...causes, ...shutdownErrors], message);
   }
@@ -188,12 +186,12 @@ export class Engine {
     restoreDeclarations();
     const contracts = this.#contracts.draft(previousPlan.contractKinds);
     try {
-      await this.#runtime.activate(previousPlan, affected, previousConfigs, contracts);
+      await this.#instances.activate(previousPlan, affected, previousConfigs, contracts);
       contracts.commit();
-      this.#runtime.commitActivationOrder(previousPlan.order);
+      this.#instances.commitActivationOrder(previousPlan.order);
       this.#plan = previousPlan;
     } catch (rollbackError) {
-      const shutdownErrors = await this.#runtime.deactivateAll();
+      const shutdownErrors = await this.#instances.deactivateAll();
       contracts.discard();
       this.#plan = undefined;
       throw new AggregateError(

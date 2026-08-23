@@ -85,7 +85,7 @@ const task = ctx.spawn(async (signal) => {
 })
 
 task.result      // Promise<string>
-task.dispose()   // abort 并等待结束
+await task.dispose() // abort 并等待结束
 ```
 
 `spawn` 传给回调一个 `AbortSignal`。释放 Lifetime 时：
@@ -144,11 +144,11 @@ ctx.spawn((signal) =>
 当一组资源需要作为整体被替换或释放时，用子 Lifetime：
 
 ```ts
-setup(ctx) {
+async setup(ctx) {
   let current: LifetimeContext | undefined
 
-  const connect = (url: string) => {
-    current?.dispose()                        // 释放上一组
+  const connect = async (url: string) => {
+    await current?.dispose()                  // 完整释放上一组
     const scope = ctx.lifetime(`conn:${url}`) // label 用于诊断
     const socket = openSocket(url)
     scope.cleanup(() => socket.close())
@@ -156,7 +156,7 @@ setup(ctx) {
     current = scope
   }
 
-  connect(initialUrl)
+  await connect(initialUrl)
   ctx.cleanup(() => current?.dispose())
 }
 ```

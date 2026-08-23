@@ -41,7 +41,7 @@ One abstraction layer and one semantic allow exactly one canonical entry point. 
 
 `host.install()`, `installation.update()` and `installation.remove()` are single-target sugar: internally each creates a one-shot ChangeSet and commits it. They own no second validation, queue or rollback logic.
 
-`assertPlainRecord(value, label, { fields, createError })` is the shared declaration boundary for Core and higher layers. It accepts only records whose prototype is `Object.prototype` or `null`, never reads inherited properties, and rejects arrays, symbol keys, non-enumerable own keys and fields outside `fields`. It throws `TypeError` by default; a higher layer with a structured error taxonomy may use `createError(message)` to preserve its own error type without copying the validation algorithm.
+`assertPlainRecord(value, label, { fields, createError })` is the shared declaration boundary for Core and higher layers. It accepts only inert data records whose prototype is `Object.prototype` or `null`, never reads inherited properties or accessors, and rejects arrays, symbol keys, non-enumerable own keys and fields outside `fields`. It throws `TypeError` by default; a higher layer with a structured error taxonomy may use `createError(message)` to preserve its own error type without copying the validation algorithm.
 
 ### 1.2 Composition closure
 
@@ -294,7 +294,7 @@ StandardSchemaV1<ConfigInput, Config>
 - A schema result must be either a success object containing `value` or a failure object containing an `issues` array; malformed issues, messages or paths reject with a precise `TypeError` before setup.
 - Core neither clones nor deep-freezes config; defensive transformation belongs to the schema.
 
-`definePlugin()` validates and normalizes declarations at definition time. A Plugin must be a plain record containing only `name`, `config`, `requires`, `provides` and `setup`; unknown fields, symbols, hidden properties and class instances are rejected. A config schema must declare the complete Standard Schema V1 `version`, `vendor` and `validate` protocol, while `requires` and `provides` must likewise be plain records containing only enumerable string own keys rather than arrays, Maps or class instances. The ChangeSet re-normalises at install and update boundaries so a JavaScript caller cannot bypass the factory.
+`definePlugin()` validates and normalizes declarations at definition time. A Plugin must be a plain data record containing only `name`, `config`, `requires`, `provides` and `setup`; unknown fields, symbols, hidden properties, accessors and class instances are rejected. A config schema must declare the complete Standard Schema V1 `version`, `vendor` and `validate` protocol, while `requires` and `provides` must likewise be plain data records containing only enumerable string own keys rather than arrays, Maps, accessors or class instances. The ChangeSet re-normalises at install and update boundaries so a JavaScript caller cannot bypass the factory.
 
 ## 5. The context API budget
 
@@ -324,7 +324,7 @@ interface InstanceMeta {
 }
 ```
 
-`ctx.log` still uses the Host's Logger, but Core passes the current frozen `InstanceMeta` as the first detail so a sink never has to infer ownership from message text. It is a Lifetime-revocable narrow facade: cleanup may still log, while terminal disposal severs the Runtime/Logger edge and further use throws `LIFETIME_DISPOSED`. The Logger's four members are strict function properties; a narrow implementation that drops an `unknown` message or rest details does not type-check.
+`ctx.log` still uses the Host's Logger, but Core passes the current frozen `InstanceMeta` as the first detail so a sink never has to infer ownership from message text. It is a Lifetime-revocable narrow facade: cleanup may still log, while terminal disposal severs the InstanceCoordinator/Logger edge and further use throws `LIFETIME_DISPOSED`. The Logger's four members are strict synchronous function properties. A narrow implementation that drops an `unknown` message or rest details does not type-check, and an accidental thenable is rejected at the call site while its rejection is observed.
 
 The operations on `LifetimeOperations` are strict function properties as well. A reusable utility targeting this protocol must accept the complete label, Task, Event and ExtensionPoint input domains; an implementation restricted to a local literal cannot masquerade as a full Context. Class methods still satisfy the structural protocol directly.
 
@@ -611,7 +611,7 @@ const host = createHost({
 })
 ```
 
-Host options are a plain record containing only `name`, `logger` and `onError`. Only enumerable own properties are read; unknown fields, symbols, hidden properties, arrays and class instances are rejected immediately. The `logger` and `onError` values remain structural ports and may themselves be implemented by ordinary objects or class instances.
+Host options are a plain data record containing only `name`, `logger` and `onError`. Only enumerable own data properties are accepted; unknown fields, symbols, hidden properties, accessors, arrays and class instances are rejected immediately. The `logger` and `onError` values remain structural ports and may themselves be implemented by ordinary objects or class instances. `onError` may return synchronously or return a thenable. Error reporting never blocks a Host command, but an asynchronous rejection is observed and routed to the fallback logger.
 
 `Installer` precisely means “can install into an ownership position”: it contains `install/group/change` and is implemented by Host and Group. A higher-level collaborator that consumes only the transaction entry point declares `Pick<Installer, "change">` on its side; a narrower port without installation capability must not be named Installer.
 
@@ -652,7 +652,7 @@ installation.update({ plugin, config })
 installation.remove()
 ```
 
-`update()` covers both config and Plugin declaration replacement. Its argument must be a plain record containing only enumerable `plugin` / `config` own properties and at least one of them; unknown fields, symbols, hidden properties, arrays and class instances are rejected immediately. There is no `replace/reload/restart`. A Plugin update may not change its name; the Installation and its ID stay stable while the active Instance is replaced.
+`update()` covers both config and Plugin declaration replacement. Its argument must be a plain data record containing only enumerable `plugin` / `config` own data properties and at least one of them; unknown fields, symbols, hidden properties, accessors, arrays and class instances are rejected immediately. There is no `replace/reload/restart`. A Plugin update may not change its name; the Installation and its ID stay stable while the active Instance is replaced.
 
 Installation's sole type parameter is its underlying Plugin declaration, not four independently supplied config/requires/provides parameters that can drift apart. The declaration remains the single source of truth: a precise declaration stays precise, while an `AnyPlugin` erased once remains erased across both install and update.
 
@@ -784,7 +784,7 @@ snapshots.invalidate()                     // mark invalid and notify
 snapshots.dispose()                        // freeze the terminal state and sever closures
 ```
 
-`view` is an authority narrowing, not a second observation API: a reader may only `get/subscribe`, and the owner may drive invalidation and termination only through `SnapshotPublisher`. Every subscription has independent identity; disposal immediately withdraws a notification whose turn has not started. A subscriber failure is handed to the explicit reporter without preventing later subscribers from being notified; if the reporter itself fails, the Publisher finishes the notification pass and then preserves both failures in an `AggregateError`. `dispose()` freezes the last snapshot before severing the reader, reporter and existing subscriptions, so a historical view can still read the terminal state without keeping the owner alive. Host, Lifetime and Platform diagnostics take this path directly; `ContributionStore` composes the same Publisher and adds only Lifetime ownership around each subscription, so registering one function twice still creates two independent subscriptions. No higher layer may rewrite the subscription registry or error boundary.
+`view` is an authority narrowing, not a second observation API: a reader may only `get/subscribe`, and the owner may drive invalidation and termination only through `SnapshotPublisher`. Every subscription has independent identity; disposal immediately withdraws a notification whose turn has not started. Subscribers and the error reporter must be synchronous; an accidental thenable is observed and enters the same error boundary as a precise `TypeError`, never as an unrelated unhandled rejection. A subscriber failure is handed to the explicit reporter without preventing later subscribers from being notified; if the reporter itself fails, the Publisher finishes the notification pass and then preserves both failures in an `AggregateError`. `dispose()` freezes the last snapshot before severing the reader, reporter and existing subscriptions, so a historical view can still read the terminal state without keeping the owner alive. Host, Lifetime and Platform diagnostics take this path directly; `ContributionStore` composes the same Publisher and adds only Lifetime ownership around each subscription, so registering one function twice still creates two independent subscriptions. No higher layer may rewrite the subscription registry or error boundary.
 
 Where a snapshot needs map semantics it uniformly uses `ReadonlyMapSnapshot`. It accepts only the Map or entry-iterable inputs admitted by its type, copies the input and exposes only `ReadonlyMap` methods, avoiding the fake immutability of `Object.freeze(new Map())`, on which `set/delete/clear` still work. It guarantees only the container's structural immutability; entry values should be frozen as they enter the snapshot.
 
@@ -800,7 +800,7 @@ observe(lifetimeOwner, source, observer)
 - a signal holds the current value
 - computed auto-tracking applies only to synchronous, pure, lazy, cached computation
 - batch accepts only a synchronous callback and coalesces repeated notifications per subscription identity
-- observe is a higher-level Lifetime combinator: it explicitly reads one source, creates a child Lifetime for the current value, and on change releases the old child before creating the new one. The observer must be synchronous, and a failed later replacement stops the observation and releases the subscription and the current child Lifetime
+- observe is a higher-level Lifetime combinator: it explicitly reads one source, creates a child Lifetime for the current value, and on change releases the old child before creating the new one. The observer must be synchronous, and a failed later replacement stops the observation, releases the subscription and current child Lifetime, and detaches its cleanup from the owner
 
 ```ts
 const endpoint = computed(() => `${base.get()}/${account.get()}`)
@@ -893,6 +893,8 @@ Programming-shape errors use `TypeError`. Decidable model errors use `DougongErr
 Because an Event by definition collects every listener failure, it always throws an `AggregateError`. Lifetime and shutdown attempt every resource first: a single failure is rethrown as-is, and multiple failures aggregate. A rollback or fail-closed spanning several phases uses `AggregateError` uniformly.
 
 Errors from background tasks, subscribers and later observes cannot return to the original synchronous stack and are reported through `onError`. A failure inside `onError` itself must not change the Host command being observed.
+
+`ErrorSummary` is the minimal error-retention primitive shared by terminal handles. Its constructor accepts only an `Error` and stores only the primitive values needed to rebuild its `name`, `message`, `TypeError` category and any `DougongError.code`; it does not retain the original error, `stack`, `cause` or subclass payload. `restore()` rebuilds a `DougongError` by default, while a higher layer may supply its own coded-error factory to preserve the error domain without copying the summary algorithm. It is only for terminal state that must sever a historical object graph; normal propagation still delivers the original error.
 
 ## 16. Forbidden directions
 

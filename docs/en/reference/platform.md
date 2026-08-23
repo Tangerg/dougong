@@ -40,7 +40,7 @@ await platform.trigger("command:music.search");
 await registration.ready();
 ```
 
-Platform options are a plain record containing only `installer`, `apiVersion`, `loader`, `authorizer` and `logger`. Only enumerable own properties are read, and neither unknown fields nor prototype-chain configuration is accepted. `installer` consumes `Pick<Installer, "change">`; Loader, Authorizer and Logger are structural ports as well. Any of these collaborators may be implemented by an ordinary object or class instance.
+Platform options are a plain data record containing only `installer`, `apiVersion`, `loader`, `authorizer` and `logger`. Only enumerable own data properties are accepted; accessors, unknown fields and prototype-chain configuration are rejected. `installer` consumes `Pick<Installer, "change">`; Loader, Authorizer and Logger are structural ports as well. Any of these collaborators may be implemented by an ordinary object or class instance.
 
 `Reference` is produced by an Artifact and consumed by a Loader, so `Platform<Reference>`, `PlatformChangeSet<Reference>` and `Registration<Reference>` cannot silently widen. To support `string | URL`, declare that complete union when creating the Platform instead of creating a narrow Platform and later widening its input domain by assignment.
 
@@ -74,7 +74,7 @@ Rules:
 
 - `name`, activation conditions, permission names, dependency names and version ranges must be non-empty with no leading or trailing whitespace. Nothing is silently trimmed.
 - `version` must be a complete semantic version. `apiVersion` and every dependency value must be a supported range; `*` explicitly means any version.
-- A Manifest is a plain record made only of enumerable string own properties. Unknown fields, symbols, hidden properties, arrays and class instances are rejected rather than silently dropped or read through the prototype chain; `dependencies` follows the same record rule.
+- A Manifest is a plain data record made only of enumerable string own data properties. Unknown fields, symbols, hidden properties, accessors, arrays and class instances are rejected rather than silently dropped, executed as getters or read through the prototype chain; `dependencies` follows the same record rule.
 - No activation condition or permission may repeat.
 - The returned object, arrays and dependency map are frozen. A Manifest is a value; it holds no execution state.
 - `Manifest.name` is the Registration identity and must match the `Plugin.name` of both the placeholder and the loaded module exactly.
@@ -85,9 +85,11 @@ Rules:
 
 ```ts
 interface Loader<Reference> {
-  readonly load: (reference: Reference, signal: AbortSignal) => unknown | Promise<unknown>;
+  readonly load: (reference: Reference, signal: AbortSignal) => unknown;
 }
 ```
+
+`unknown` is the deliberate trust boundary: it already includes synchronous values and promises, while Platform always awaits the result and validates the module shape. Writing `unknown | Promise<unknown>` would be absorbed by `unknown` in TypeScript and pretend to carry information that the type does not preserve.
 
 A loaded module must expose exactly one `Plugin` as its own `default` export; inherited properties are not module exports. Platform re-runs `definePlugin()`'s structural validation after loading and verifies the name. Loader failures are wrapped as `PlatformError` with `MODULE_LOAD_FAILED`; a bad module shape or default export uses `MODULE_INVALID`.
 
@@ -98,6 +100,8 @@ Built-in implementations:
 
 A loader must check its `AbortSignal` during expensive phases. Platform reuses Core's `isCancellationReason()` classifier and checks the signal again after the loader returns, so an uncooperative loader cannot commit a module into Core after cancellation — but the I/O and module top-level side effects it already performed cannot be undone.
 
+Cancellation is cooperative for both Loaders and Authorizers. If a returned Promise ignores the signal and never settles, the activation, structural change or Platform disposal waiting for it cannot settle either. Application code may explicitly adapt the operation to abandon its wait only when every late result, failure and side effect is safe to ignore; Platform never disguises still-running external work as released.
+
 `load` is a strict function property rather than a bivariant method signature: a Loader accepting only a subset of `Reference` cannot masquerade as one that accepts the whole set. Class methods still implement the structural protocol directly; the built-in `MemoryLoader` itself uses the same function-property form, so its generic instances cannot bypass the Loader constraint either.
 
 Untrusted Plugins belong in a Worker, iframe, separate process or restricted realm. The corresponding Loader can return an **application-authored RPC proxy `Plugin`** that maps granted capabilities onto ordinary Services. What you cannot do is `import()` arbitrary code into the application's realm first and then expect Context permissions to make it safe.
@@ -106,7 +110,7 @@ Untrusted Plugins belong in a Worker, iframe, separate process or restricted rea
 
 ```ts
 interface Authorizer {
-  readonly authorize: (manifest: Manifest, signal: AbortSignal) => void | Promise<void>;
+  readonly authorize: (manifest: Manifest, signal: AbortSignal) => Awaitable<void>;
 }
 ```
 
@@ -136,7 +140,7 @@ interface Artifact<Reference> {
 }
 ```
 
-An Artifact is also a strict declaration value. It must be a plain record containing only `manifest`, `reference`, `config` and `placeholder`, with `manifest` and `reference` present as enumerable own properties. Unknown fields, symbols, hidden properties, arrays and class instances are rejected when the Artifact enters a ChangeSet. Normalization reads each own field once and returns a frozen value instead of guessing declarations from the prototype chain.
+An Artifact is also a strict declaration value. It must be a plain data record containing only `manifest`, `reference`, `config` and `placeholder`, with `manifest` and `reference` present as enumerable own data properties. Unknown fields, symbols, hidden properties, accessors, arrays and class instances are rejected when the Artifact enters a ChangeSet. Normalization reads each own field once and returns a frozen value instead of executing getters or guessing declarations from the prototype chain.
 
 Artifact is an external delivery boundary and does not repeat Core's Plugin authoring generics. A loaded module is outside the type system, so the selected Plugin schema must validate `config` at runtime. `placeholder` uses the same erased `AnyPlugin` shape, allowing a heterogeneous Plugin collection to enter Platform without assertions. Erasure creates no second execution path: both placeholders and loaded Plugins cross the same declaration-normalisation and Core commit boundaries.
 

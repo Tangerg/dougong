@@ -17,8 +17,12 @@ export function assertPlainRecord(
     throw recordError(options, `${label} must be a plain record`);
   }
   for (const key of Reflect.ownKeys(value)) {
-    if (typeof key !== "string" || !Object.prototype.propertyIsEnumerable.call(value, key)) {
+    const descriptor = Reflect.getOwnPropertyDescriptor(value, key);
+    if (typeof key !== "string" || !descriptor?.enumerable) {
       throw recordError(options, `${label} keys must be enumerable strings`);
+    }
+    if (!("value" in descriptor)) {
+      throw recordError(options, `${label} field '${key}' must be a data property`);
     }
     if (options.fields && !options.fields.has(key)) {
       throw recordError(options, `${label}: unknown field '${key}'`);
