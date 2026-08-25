@@ -1,3 +1,9 @@
+// Deliberately duplicated from @dougongjs/core's `resource.ts` rather than
+// imported. The two packages are independent foundations — importing either way
+// would make one depend on the other, and `check-layers.mjs` fails the build if
+// one does. The shape is identical because both describe the same JavaScript
+// protocol, not because one copied the other's design.
+
 /** Fails at module load before an unavailable Promise primitive reaches an observation. */
 export function assertPromiseRuntime(
   withResolvers: unknown,

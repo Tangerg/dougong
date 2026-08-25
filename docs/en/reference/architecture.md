@@ -414,7 +414,20 @@ Three families are worth naming here, because they map directly onto the argumen
 
 For the complete list, what each rule prevents, and the three-step procedure for adding a guard (write the gate first → watch it fail → reverse-verify), see [Mechanical guards](./guards.md).
 
-## 14. Long-term criteria
+## 14. Architecture diagrams
+
+The repository's `diagrams/` directory holds two diagrams generated from the real code, where every node carries the repository path it stands for. Open the matching `.html` to view one, with theme switching, pan/zoom and path tracing:
+
+| Diagram | What it shows |
+| --- | --- |
+| `execution-architecture` | Host and its three peers, the Instance layer beneath Engine, and how Platform compiles outside code into one Core ChangeSet |
+| `package-layering` | The one-way dependencies between the five packages, and the three gates that make those edges irreversible |
+
+In `package-layering` there is deliberately **no edge between core and reactive**, because none exists. A dashed line labelled "does not import" would be an arrow asserting that it is not an arrow; the fact lives in a card beside the diagram instead.
+
+Each diagram's `.architecture.json` is the specification and the `.html` is generated from it. To change a diagram, edit the specification and regenerate — do not hand-edit the HTML.
+
+## 15. Long-term criteria
 
 Before adding an abstraction, check every item:
 

@@ -28,6 +28,20 @@ export type {
 const defaultLogger: Logger = console;
 const hostOptionFields = new Set(["name", "logger", "onError"]);
 
+/**
+ * The Host owns no domain state. It is a serialization boundary over three
+ * peers, each of which is the single source of truth for one thing:
+ *
+ *   InstallationRegistry  declarations and public-handle authority
+ *   GroupCoordinator      installation ownership structure
+ *   Engine                the committed plan, and commit/rollback/fail-closed
+ *
+ * What the Host adds is the `SerialQueue`, the `HostStatus` transitions, and the
+ * decision of which path a change takes — direct application while idle, a full
+ * transaction while active. Any state kept here as well would be a second state
+ * machine to keep in agreement with one of the three; `check-layers.mjs` has an
+ * inverted rule that fails if one appears.
+ */
 class HostImpl implements Host {
   readonly name: string;
   readonly diagnostics: SnapshotView<HostSnapshot>;
@@ -109,6 +123,11 @@ class HostImpl implements Host {
   get<T>(token: Service<T>): T;
   get<T>(token: OptionalService<T>): T | undefined;
   get<T>(token: Service<T> | OptionalService<T>): T | undefined {
+    // Only `active` opens the read window. During `starting`, `changing` and
+    // `stopping` a plan exists but is not the committed one, so answering would
+    // expose an intermediate graph — the Engine raises SERVICE_UNAVAILABLE
+    // instead. An `optional()` token does not soften this: the difference
+    // between "not installed" and "not readable yet" has to stay visible.
     const availability = this.#status === "active" ? "available" : "unavailable";
     return this.#engine.get(token, availability);
   }
@@ -142,6 +161,11 @@ class HostImpl implements Host {
         this.#setStatus("active");
         this.#installations.settleReadiness(plan.order);
       } catch (error) {
+        // Back to `idle`, not to a `failed` Host: the Engine has already
+        // disposed whatever it activated, so there is no partial graph left to
+        // describe and `start()` may be attempted again. Every Installation
+        // still needs its readiness settled, or a caller already awaiting
+        // `ready()` would wait for an attempt that no longer exists.
         this.#setStatus("idle");
         for (const installation of this.#installations.values()) {
           if (installation.status !== "active") installation.fail(error);
@@ -174,6 +198,9 @@ class HostImpl implements Host {
       try {
         if (!group.attached) throw groupRemovedError(group);
         if (!operations.length) return;
+        // While idle there are no Instances to stop or start, so the change is
+        // just a declaration edit. A transaction is only needed once a committed
+        // plan exists that the change could break.
         if (this.#status === "active") {
           await this.#transact(operations);
         } else {
@@ -182,6 +209,9 @@ class HostImpl implements Host {
         }
         this.#publishDiagnostics();
       } catch (error) {
+        // An install that never reached the registry leaves a handle the caller
+        // already holds. Discarding it makes that handle report the real failure
+        // rather than behave like an Installation that is merely not ready yet.
         for (const installation of installed) {
           if (!this.#installations.contains(installation)) {
             this.#installations.discard(installation, error);
@@ -208,6 +238,17 @@ class HostImpl implements Host {
     this.#installations.settleChanges(operations, true);
   }
 
+  // Three failure levels, in the order they are attempted:
+  //
+  //   1. the new plan does not even build       restore declarations, stay active
+  //   2. the plan builds but activation fails   Engine rolls back to the previous
+  //                                             Instances and reports the cause
+  //   3. rollback itself cannot complete        fail closed: everything stops and
+  //                                             the Host reports `idle`
+  //
+  // Level 3 is the one worth stating out loud. A Host that cannot restore its
+  // previous state is not healthy, so it refuses to present itself as active —
+  // `hasCommittedPlan` is what distinguishes the two outcomes here.
   async #runTransaction(operations: ReadonlyArray<ChangeOperation>): Promise<TransitionOutcome> {
     const snapshot = this.#installations.capture();
     const changed = new Set(operations.map((operation) => operation.installation));

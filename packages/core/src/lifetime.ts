@@ -1,3 +1,27 @@
+// Structured ownership. Everything an Instance creates during `setup()` — child
+// lifetimes, background tasks, event listeners, contributions, cleanups — is
+// owned by a Lifetime and released when it disposes. A Plugin that only uses the
+// context it was given cannot leak, because there is nowhere to put a resource
+// that is not owned.
+//
+// Two properties are worth stating before reading the code:
+//
+// Terminal resources detach. A finished task, a disposed cleanup, a withdrawn
+// contribution removes itself from its owner's set, so a long-lived Instance that
+// spawns a million short tasks holds none of them. That is what
+// `LifetimeResources.release` is for, and why every record is handed its own
+// release function rather than searching for itself later.
+//
+// Disposal order is fixed and not alphabetical:
+//
+//   1. listeners, contributions, subscriptions, views   withdraw capabilities
+//   2. abort the signal                                 cancel in-flight work
+//   3. tasks, children, cleanups                        await completion
+//
+// Capabilities go first so nothing new arrives mid-teardown; cancellation comes
+// before awaiting, or a task waiting on its signal would never finish; user
+// cleanups run last, when the resources they might touch are already quiet.
+
 import type { Event, ExtensionPoint } from "./contracts";
 import type { Contribution, ContributionLeaseKind } from "./contribution-store";
 import { DougongError, isCancellationReason } from "./errors";
@@ -25,6 +49,11 @@ export interface Logger {
   readonly error: (message: unknown, ...details: unknown[]) => void;
 }
 
+/**
+ * Structural, so `console` and any four-method object both qualify without
+ * importing a Dougong type. The try/catch is for hostile getters: a validator
+ * must not throw the very error it was asked to prevent.
+ */
 export function isLogger(value: unknown): value is Logger {
   if (!value || (typeof value !== "object" && typeof value !== "function")) return false;
   try {
@@ -52,8 +81,17 @@ export type Cleanup = () => unknown;
 export type BackgroundTask<T> = (signal: AbortSignal) => T | PromiseLike<T>;
 type EventArguments<T> = [T] extends [void] ? [payload?: T] : [payload: T];
 
+// One shared reason object, so `isCancellationReason` can recognise a disposal
+// by identity. An `AbortError` name alone is a convention that unrelated code
+// also uses; identity is proof that this disposal caused it.
 const disposalReason = Object.freeze(new DOMException("Resource disposed", "AbortError"));
 
+/**
+ * The complete set of things an Instance can do. Seven members, each returning
+ * something the Lifetime already owns — there is no `register()` that takes a
+ * resource from elsewhere, which is why ownership is structural rather than a
+ * convention Plugin authors have to follow.
+ */
 export interface LifetimeOperations {
   readonly signal: AbortSignal;
   readonly cleanup: (dispose: Cleanup) => AsyncDisposable;
@@ -134,6 +172,12 @@ class LifetimeResources<T extends Resource> implements Iterable<T> {
     return true;
   };
 
+  /**
+   * Disposes in reverse creation order, collecting failures rather than
+   * throwing. Later resources may depend on earlier ones, and a resource that
+   * refuses to shut down cleanly must not strand its siblings. The caller
+   * aggregates the collected errors.
+   */
   async dispose(errors: unknown[]) {
     try {
       for (const resource of [...this.#resources].reverse()) {
@@ -207,6 +251,20 @@ type TaskState =
   | { readonly phase: "disposing"; readonly completion: Promise<void> }
   | { readonly phase: "settled" };
 
+/**
+ * One background task. Three things it has to get right:
+ *
+ * A task that finishes detaches itself from its Lifetime, so an Instance that
+ * spawns work in a loop does not accumulate settled tasks.
+ *
+ * Its abort listener on the parent signal is removed the moment it settles,
+ * because a listener on a long-lived signal is itself a retained reference.
+ *
+ * A rejection that is not a cancellation goes to `report()`. A background task
+ * has no caller to return an error to, so this is where it would otherwise
+ * vanish — and `dispose()` deliberately resolves rather than rejects, since
+ * cancelling a task is not a failure of whoever cancelled it.
+ */
 class TaskRecord<T> implements Task<T> {
   #detachParentAbortListener: (() => void) | undefined;
   #detachFromParent: ((task: AsyncDisposable) => void) | undefined;
@@ -225,6 +283,9 @@ class TaskRecord<T> implements Task<T> {
     parentSignal.addEventListener("abort", abort, { once: true });
     this.#detachParentAbortListener = () => parentSignal.removeEventListener("abort", abort);
     this.#detachFromParent = detachFromParent;
+    // Already-aborted parent: `addEventListener` would never fire, so the abort
+    // is applied directly. A task spawned into a dying Lifetime starts cancelled
+    // rather than running unowned.
     if (parentSignal.aborted) abort();
 
     this.result = Promise.resolve().then(() => task(controller.signal));
@@ -363,6 +424,15 @@ export class Lifetime implements LifetimeContext {
     return resource;
   }
 
+  /**
+   * A child scope. It inherits this Lifetime's signal, so cancellation flows
+   * down, and its declaration phase, so a child created during `setup()` also
+   * stages rather than publishing immediately.
+   *
+   * Disposing a child detaches it from both the resource set and the diagnostics
+   * tree. A Plugin can therefore use child lifetimes as a unit of work — one per
+   * open document, per connection — without the parent growing.
+   */
   lifetime(label: string) {
     const { port, diagnostics, diagnosticNode: parentNode } = this.#requireActive();
     validateLifetimeLabel(label);
@@ -443,7 +513,14 @@ export class Lifetime implements LifetimeContext {
     remove?.();
   }
 
-  /** Atomically makes all declarations staged during setup visible. */
+  /**
+   * Atomically makes all declarations staged during setup visible.
+   *
+   * Children publish too, recursively, so a Lifetime created inside `setup()`
+   * becomes visible with its parent rather than being stranded staged. Called by
+   * the InstanceCoordinator once the whole activation layer has succeeded —
+   * which is what makes "no half-built Instance is observable" true.
+   */
   publish() {
     const state = this.#state;
     if (state.phase !== "active") throw lifetimeDisposedError();
@@ -455,6 +532,15 @@ export class Lifetime implements LifetimeContext {
     this.#state = { ...state, declarations: "published" };
   }
 
+  /**
+   * Disposal is idempotent and joinable: concurrent callers share one completion
+   * promise, so a Lifetime disposed by both its owner and a `using` block runs
+   * its teardown once.
+   *
+   * The three-stage order is the module header's; see it for why. Errors from
+   * every stage accumulate and are aggregated at the end, so one failing cleanup
+   * neither hides the others nor prevents them from running.
+   */
   dispose() {
     const state = this.#state;
     if (state.phase === "disposing") return state.completion;
@@ -463,14 +549,19 @@ export class Lifetime implements LifetimeContext {
     const completion = Promise.resolve()
       .then(async () => {
         const errors: unknown[] = [];
+        // 1. Withdraw capabilities: nothing new can arrive after this point.
         await this.#listeners.dispose(errors);
         await this.#contributions.dispose(errors);
         await this.#subscriptions.dispose(errors);
         await this.#contributionViews.dispose(errors);
 
+        // 2. Cancel. Before awaiting anything, or a task that waits on its own
+        //    signal would deadlock the teardown that is trying to stop it.
         state.controller.abort(disposalReason);
         this.detachStartupSignal();
 
+        // 3. Await completion, innermost work first. User cleanups run last,
+        //    when the resources they might reach are already quiet.
         await this.#tasks.dispose(errors);
         await this.#children.dispose(errors);
         await this.#cleanups.dispose(errors);
@@ -479,6 +570,9 @@ export class Lifetime implements LifetimeContext {
         if (errors.length > 1) throw new AggregateError(errors, "Lifetime cleanup failed");
       })
       .finally(() => {
+        // A standalone aborted signal replaces the controller's, so `signal`
+        // keeps answering after disposal without the Lifetime retaining the
+        // controller — and everything the old signal had listeners for is gone.
         this.#state = { phase: "disposed", signal: AbortSignal.abort(disposalReason) };
         const detach = this.#detachFromParent;
         this.#detachFromParent = undefined;
@@ -489,11 +583,12 @@ export class Lifetime implements LifetimeContext {
           this.#binding = undefined;
         }
       });
+    // The phase moves to `disposing` synchronously, before the body above runs.
+    // That is what rejects new work — `#requireActive` fails immediately — and
+    // what lets a reentrant `dispose()` from inside a cleanup join this
+    // completion instead of starting a second teardown.
     this.#state = { phase: "disposing", controller: state.controller, completion };
     binding.diagnostics.beginDisposing(binding.diagnosticNode);
-
-    // Reject new work before withdrawing capabilities, cancellation or user
-    // cleanup. The completion is already published so reentrant disposal joins it.
     return completion;
   }
 
@@ -501,6 +596,10 @@ export class Lifetime implements LifetimeContext {
     return this.dispose();
   }
 
+  // The gate on every operation that creates a resource. `signal.aborted` is
+  // checked as well as the phase, because a parent's disposal aborts this signal
+  // before this Lifetime's own teardown has begun — work must be refused from
+  // that moment, not from when the cascade reaches here.
   #requireActive() {
     const binding = this.#binding;
     if (this.#state.phase !== "active" || this.signal.aborted || !binding) {
@@ -535,6 +634,11 @@ type LifetimeState =
     }
   | { readonly phase: "disposed"; readonly signal: AbortSignal };
 
+/**
+ * What a Plugin actually receives. Forwarding only, and deliberately without
+ * `publish()`, `ownLease()`, `detachStartupSignal()` or `diagnostics` — those
+ * belong to whoever owns the Lifetime, not to the code running inside it.
+ */
 class LifetimeHandle implements LifetimeContext {
   readonly #lifetime: Lifetime;
 

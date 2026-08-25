@@ -1,3 +1,11 @@
+// How a Reference becomes a module. One method, returning `unknown`, because a
+// Loader's job ends at "here is what that reference resolved to" — validating
+// that it default-exports a Plugin whose name matches the Manifest belongs to
+// `artifact.ts`, in one place, for every Loader.
+//
+// The two implementations here are the honest ones for a same-realm runtime.
+// Neither isolates anything, and neither pretends to.
+
 export interface Loader<Reference> {
   /** The result is awaited and structurally validated at the Artifact boundary. */
   readonly load: (reference: Reference, signal: AbortSignal) => unknown;

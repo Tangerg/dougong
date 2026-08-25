@@ -28,6 +28,12 @@ interface InstallationAttachment {
   notifyChanged: (() => void) | undefined;
 }
 
+/**
+ * A failure that may recover keeps the live Error — its stack is the useful part
+ * while the Installation is still in the graph. A discarded one keeps only an
+ * `ErrorSummary`, because a terminal record must not retain the object graph
+ * that was live when it failed.
+ */
 type InstallationFailure =
   | { readonly retention: "live"; readonly error: Error }
   | { readonly retention: "summary"; readonly summary: ErrorSummary };
@@ -135,6 +141,18 @@ export class InstallationRecord {
     );
   }
 
+  /**
+   * Binds `ready()` to the change currently in flight.
+   *
+   * The `attempt` token is the point: a second change can start before the
+   * first one's promise settles, and only the latest attempt is allowed to clear
+   * the barrier. Without it, a stale resolution would report readiness for an
+   * attempt that has already been superseded.
+   *
+   * A rejection is rethrown only when this Installation did not end up active.
+   * A change that failed elsewhere in the batch but left this one running is not
+   * this Installation's failure to report.
+   */
   trackReadiness(operation: Promise<void>) {
     const attempt = {};
     const barrier = operation.then(
@@ -151,6 +169,10 @@ export class InstallationRecord {
     void barrier.catch(() => undefined);
   }
 
+  // A terminal state only answers `ready()` once its readiness has been settled.
+  // Before that the outcome is still being decided by the change in flight, so
+  // the caller joins the waiter set instead of being told a result that the
+  // transaction might still roll back.
   #readyFromCurrentState(): Promise<void> {
     const state = this.#state;
     if (
@@ -211,6 +233,12 @@ export class InstallationRecord {
     return this.#transitionToFailed(error);
   }
 
+  /**
+   * For an Installation that never made it into the graph. Unlike `fail()`, this
+   * is terminal: readiness settles immediately, the attachment is dropped, and
+   * the reason is kept as a summary rather than a live Error. The handle the
+   * caller already holds stays usable and reports why it is dead.
+   */
   discard(error: unknown) {
     const failure = this.#normalizeFailure(error);
     this.#transition({

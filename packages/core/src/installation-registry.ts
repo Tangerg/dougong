@@ -44,6 +44,10 @@ type InstallationFacadeState<Declaration extends AnyPlugin> =
     }
   | { readonly phase: "revoked" };
 
+// The facade a caller receives is created before its ChangeSet commits, so it
+// starts with no authority at all. `attach` grants it, `revoke` takes it back
+// when the Installation leaves the graph. Keeping both off the object means
+// public code holding the handle cannot call either.
 const installationControls = new WeakMap<object, InstallationControl>();
 
 class InstallationFacade<Declaration extends AnyPlugin> {
@@ -96,6 +100,9 @@ class InstallationFacade<Declaration extends AnyPlugin> {
   async remove() {
     const state = this.#state;
     if (state.phase === "draft") throw this.#notCommitted();
+    // Removing something already removed succeeds. `update()` rejects in the
+    // same state because it asks for a change that cannot happen, while
+    // `remove()` only asks for an end state that already holds.
     if (state.phase === "attached") await state.remove();
   }
 
@@ -166,6 +173,12 @@ export class InstallationRegistry {
     );
   }
 
+  /**
+   * Validates the whole batch, then applies the whole batch. The two loops are
+   * not a style choice: a rejected operation halfway through a single loop would
+   * leave the earlier ones already written, and this method has no way to undo
+   * them. Checking first means `apply` either changes everything or nothing.
+   */
   apply(operations: ReadonlyArray<ChangeOperation>) {
     for (const operation of operations) {
       if (operation.kind === "install") {
@@ -229,6 +242,9 @@ export class InstallationRegistry {
     this.#revoke(installation);
   }
 
+  // Captures declarations only, since that is all a rollback restores. Instances
+  // belong to the InstanceCoordinator and are rebuilt from the previous plan
+  // rather than snapshotted — a live Instance is not a value that can be copied.
   capture(): ReadonlyArray<InstallationCapture> {
     return [...this.#records.values()].map((installation) => ({
       installation,

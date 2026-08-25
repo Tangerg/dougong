@@ -1,3 +1,20 @@
+// A small synchronous reactive graph. Independent of @dougongjs/core by design:
+// neither package imports the other, and `check-layers.mjs` enforces it. They
+// meet only at the structural `Readable` protocol — `get()` plus `subscribe()` —
+// which a Signal, a ContributionView and a diagnostics view all satisfy without
+// knowing about each other.
+//
+// Three ideas, and that is the whole model:
+//
+//   signal    a value with subscribers
+//   computed  a derived value that tracks its own dependencies
+//   batch     defer notification until a group of writes is done
+//
+// Everything is synchronous and pull-based. `set()` marks and notifies; nothing
+// recomputes until someone reads. A `computed` nobody reads costs nothing, and a
+// read is never stale, because staleness is checked at read time rather than
+// pushed eagerly.
+
 import { disposeSymbol, type Disposable, type Readable } from "./protocol";
 import { assertSynchronous } from "./sync-result";
 
@@ -37,6 +54,19 @@ type Dependency = {
   subscription: Disposable | undefined;
 };
 
+// Module-level state, which is unusual enough to justify.
+//
+// `activeCollector` is how dependency tracking works without the caller
+// declaring anything: while a `computed` evaluates, it installs a collector, and
+// every `get()` reached during that evaluation reports itself. The alternative —
+// passing a context through every read — would put the mechanism in the API.
+//
+// `batchDepth` and `pendingSlots` are the batch. `nodes` maps a public signal
+// back to its internal node, weakly, so a signal nobody holds is collectable.
+//
+// All of it is single-threaded and synchronous. Nothing here survives a turn:
+// the collector is restored in a `finally`, and pending slots are flushed before
+// the outermost `batch()` returns.
 let batchDepth = 0;
 let pendingSlots: Set<ListenerSlot> | undefined;
 let activeCollector: ((source: ReadonlySignal<unknown>) => void) | undefined;
@@ -65,6 +95,10 @@ class ReactiveSubscription implements Disposable {
   }
 }
 
+// Loops, because a listener may write to another signal and queue more work.
+// Each pass takes the current set and installs a fresh one, so notifications
+// added during a pass are delivered in the next one rather than mutating the set
+// being iterated. Failures are collected across all passes and thrown together.
 function flushPendingListeners() {
   const errors: unknown[] = [];
 
@@ -114,6 +148,17 @@ function track(source: ReadonlySignal<unknown>) {
   activeCollector?.(source);
 }
 
+/**
+ * Defers notification until the outermost batch returns, so a group of writes is
+ * observed once. Nested calls join the outer batch.
+ *
+ * Notifications are queued by subscription, not by callback, so the same
+ * function subscribed to two signals is still called twice — deduplicating by
+ * callback would silently merge two independent subscriptions.
+ *
+ * If both the body and the flush fail, both errors are reported. A subscriber
+ * failing during flush must not hide why the batch itself failed.
+ */
 export function batch<T>(callback: () => T): T {
   if (typeof callback !== "function") throw new TypeError("batch() expects a function");
   batchDepth++;
@@ -144,6 +189,11 @@ export function batch<T>(callback: () => T): T {
   return outcome.value;
 }
 
+/**
+ * A value with subscribers. Writes are compared with `Object.is`, so setting the
+ * same value notifies nobody — which is what makes `computed` chains stable
+ * under idempotent updates.
+ */
 export function signal<T>(initialValue: T): Signal<T> {
   let value = initialValue;
   let version = 0;
@@ -192,6 +242,24 @@ export function computed<T>(calculate: () => T): ReadonlySignal<T> {
 type ComputedValue<T> =
   { readonly phase: "uninitialized" } | { readonly phase: "cached"; readonly value: T };
 
+/**
+ * A derived value that discovers its own dependencies by evaluating.
+ *
+ * Two modes, and the difference matters:
+ *
+ * Unobserved — nobody has subscribed — it holds no subscriptions to its
+ * dependencies at all. Freshness is checked lazily on read by comparing each
+ * dependency's version. So an unused `computed` is inert and cannot keep the
+ * signals it reads alive through a listener.
+ *
+ * Observed — someone has subscribed — it subscribes to its dependencies so it can
+ * notify onward. Dropping the last subscriber detaches them again.
+ *
+ * Dependencies are re-collected on every evaluation, so a conditional branch that
+ * stops being taken stops being a dependency. `#version` advances only when the
+ * computed value actually changes, which is what stops a dependency change that
+ * produces an equal result from cascading.
+ */
 class ComputedNode<T> implements ReactiveNode {
   readonly #calculate: () => T;
   readonly #listeners = new Set<ListenerSlot>();
@@ -274,6 +342,9 @@ class ComputedNode<T> implements ReactiveNode {
       }
       if (!this.#dirty) return current.value;
     }
+    // Reentrant evaluation means the calculation read itself, directly or through
+    // another computed. There is no value to return, so it fails rather than
+    // recursing until the stack runs out.
     if (this.#evaluating) throw new TypeError("Circular computed signal");
 
     const sources = new Set<ReadonlySignal<unknown>>();

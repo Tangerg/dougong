@@ -2,6 +2,19 @@ import type { Awaitable } from "@dougongjs/core";
 import type { Manifest } from "./manifest";
 import { PermissionDeniedError } from "./errors";
 
+/**
+ * A policy port, not a sandbox.
+ *
+ * Denying a permission stops Dougong from loading the module. It does nothing to
+ * constrain code that is already running: an admitted module has the same
+ * capabilities as any other module in the runtime. Real isolation needs a real
+ * boundary — a Worker, an iframe, a separate process — and that boundary lives
+ * outside Dougong.
+ *
+ * `authorize` is async and receives a signal, so an implementation may prompt a
+ * user or call a remote service, and a Platform change that is abandoned can
+ * cancel the prompt.
+ */
 export interface Authorizer {
   readonly authorize: (manifest: Manifest, signal: AbortSignal) => Awaitable<void>;
 }

@@ -16,6 +16,12 @@ import { assertPlainRecord } from "./record";
 export type { Awaitable } from "./resource";
 
 export type Requirements = Readonly<Record<string, Requirement>>;
+
+/**
+ * Only Services can be provided. An ExtensionPoint is an open set that many
+ * Installations contribute to, and an Event has no owner at all, so neither is
+ * something one Plugin can claim to supply.
+ */
 export type Provisions = Readonly<
   Record<string, Extract<Requirement, { readonly kind: "service" }>>
 >;
@@ -39,8 +45,22 @@ export type ProvidedServices<T extends Provisions> = {
   readonly [Key in keyof T]: ServiceValue<T[Key]>;
 };
 
+/**
+ * A Plugin that provides nothing returns `void`; one that provides Services must
+ * return exactly them. Forgetting a provided Service is therefore a compile
+ * error, not a `SERVICE_NOT_RETURNED` at activation time.
+ */
 type SetupOutput<T extends Provisions> = keyof T extends never ? void : ProvidedServices<T>;
 
+/**
+ * Everything one Instance can reach, and nothing more. Resolved requirements
+ * arrive under the same aliases they were declared with, alongside the Lifetime
+ * operations that own whatever `setup()` creates.
+ *
+ * There is no Host, no registry and no parent here. A Plugin's dependencies are
+ * exactly what it declared — which is what makes a declaration readable in
+ * isolation.
+ */
 export type PluginContext<T extends Requirements = Requirements> = LifetimeOperations &
   ResolvedRequirements<T> & {
     readonly meta: InstanceMeta;
@@ -95,6 +115,9 @@ export interface NormalizedPlugin {
   ) => Awaitable<void | Readonly<Record<string, unknown>>>;
 }
 
+// Requirement aliases become context properties, so an alias named `spawn` would
+// shadow a Lifetime operation. Rejecting the collision at declaration time is
+// the only point where the Plugin author can still rename it.
 const reservedContextKeys = new Set([
   "signal",
   "meta",
@@ -114,6 +137,13 @@ interface PluginContractDeclaration {
   readonly role: "requirement" | "provision";
 }
 
+/**
+ * Validates and freezes a Plugin declaration.
+ *
+ * The `NoInfer` wrappers on the return type stop a caller's annotation from
+ * widening the inferred generics back out, which would let `setup()` see a
+ * looser context than the declaration actually promises.
+ */
 export function definePlugin<
   Config = void,
   Requires extends Requirements = {},
@@ -202,6 +232,10 @@ function assertPluginRecord(value: unknown): asserts value is Record<string, unk
   assertPlainRecord(value, "Plugin declaration", { fields: pluginFields });
 }
 
+// Structural, because Standard Schema is a protocol rather than a base class:
+// zod, valibot and arktype all satisfy it without sharing an ancestor. Checking
+// the shape here means an object that merely looks close fails at `definePlugin`
+// instead of at activation.
 function isStandardSchemaV1(value: unknown): value is StandardSchemaV1 {
   if (!value || (typeof value !== "object" && typeof value !== "function")) return false;
   const standard = (value as { readonly "~standard"?: unknown })["~standard"];
@@ -223,6 +257,11 @@ function assertContractRecord(value: unknown, pluginName: string, field: "requir
   assertPlainRecord(value, `Plugin '${pluginName}' ${field}`);
 }
 
+// Rejects three distinct mistakes that all look like "this Contract appears
+// twice": using one id as two kinds, requiring and providing the same Service
+// (an unsatisfiable self-dependency), and two aliases for one Contract (where
+// only one of the two names could ever be the real one). Each gets its own
+// message because each has a different fix.
 function rememberPluginContract(
   pluginName: string,
   contracts: Map<string, PluginContractDeclaration>,

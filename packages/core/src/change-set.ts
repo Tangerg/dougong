@@ -59,6 +59,11 @@ interface ChangeSetDraftControl {
   ) => Installation<Declaration>;
 }
 
+// Two capabilities that Core needs and application code must not have: discard a
+// draft, and stage an install with a caller-supplied ownership target. Keeping
+// them in a WeakMap keyed by the draft means they are reachable from inside the
+// package without appearing on the public `ChangeSet` interface, and they vanish
+// with the draft rather than being revoked by hand.
 const draftControls = new WeakMap<ChangeSetDraft, ChangeSetDraftControl>();
 
 export function discardChangeSetDraft(draft: ChangeSetDraft, error: unknown) {
@@ -152,6 +157,12 @@ export class ChangeSetDraft implements ChangeSet {
     this.#stage({ kind: "remove", installation: port.resolve(installation) });
   }
 
+  /**
+   * Commit is idempotent by returning the same promise, so two callers awaiting
+   * one draft get one transaction rather than two. `committing` exists to catch
+   * the reentrant case — an `attach` hook that calls `commit()` again — which
+   * would otherwise submit the operation list twice.
+   */
   commit() {
     const state = this.#state;
     if (state.phase === "submitted") return state.promise;
@@ -165,6 +176,9 @@ export class ChangeSetDraft implements ChangeSet {
     const operations = Object.freeze([...this.#operations.values()]);
     const port = state.port;
     try {
+      // Authority is granted to every new Installation before any of them
+      // executes. If one attach fails, all of them are discarded: a batch must
+      // not leave half its handles live and half of them dead.
       for (const operation of operations) {
         if (operation.kind === "install") port.attach(operation.installation);
       }
@@ -194,6 +208,10 @@ export class ChangeSetDraft implements ChangeSet {
     }
   }
 
+  // One operation per Installation per ChangeSet. Allowing two would make the
+  // outcome depend on staging order — `update` then `remove` versus the reverse —
+  // and there is no reading of "both" that is obviously right. The caller has to
+  // say which one it meant.
   #stage(operation: ChangeOperation) {
     if (this.#operations.has(operation.installation)) {
       throw new TypeError(

@@ -52,7 +52,18 @@ export function normalizeArtifact<Reference>(
   });
 }
 
-/** Resolves one normalized Artifact into its canonical Core Plugin. */
+/**
+ * Resolves one normalized Artifact into its canonical Core Plugin.
+ *
+ * Everything a Loader returns is untrusted. Four things are checked, in order:
+ * that the load itself succeeded, that it produced a module-like object, that
+ * its default export is a valid Plugin, and that the Plugin's name matches the
+ * Manifest. The last check is the one that matters most — without it, a Manifest
+ * could be authorized under one name and deliver code under another.
+ *
+ * Cancellation is re-thrown unchanged rather than becoming `MODULE_LOAD_FAILED`.
+ * An abandoned load is not a broken module.
+ */
 export async function loadPlugin<Reference>(
   loader: Loader<Reference>,
   artifact: NormalizedArtifact<Reference>,

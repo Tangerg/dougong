@@ -8,6 +8,27 @@ import {
 } from "./protocol";
 import { assertSynchronous, isThenable } from "./sync-result";
 
+// `observe()` — the bridge between a changing value and structured ownership.
+//
+// The idea: each observed value gets its own child lifetime. When the value
+// changes, that lifetime is disposed and a fresh one is created for the new
+// value. So an observer can create tasks, listeners and cleanups freely and
+// never write teardown code — the lifetime it was handed *is* the teardown.
+//
+// The owner is described structurally (`cleanup`/`lifetime`/`spawn`), not as a
+// Core type. A Core `Lifetime` satisfies it, and so does a test double. That is
+// why this lives in @dougongjs/reactive and yet composes with Core: it is a
+// combinator over two public protocols, not a privileged hook.
+//
+// Replacement is serialized through a drain loop rather than done inline in the
+// subscription callback. Disposing the previous lifetime is asynchronous, and two
+// rapid changes must not overlap two teardowns — the loop guarantees the previous
+// lifetime is fully gone before the next observer call.
+//
+// The `assert*` helpers at the bottom check the owner's return values because the
+// owner is a caller-supplied object. A `lifetime()` that returns something
+// undisposable would leak silently, so it is rejected at the boundary instead.
+
 export interface ObservationTask<T = void> extends AsyncDisposable {
   readonly result: Promise<T>;
 }
@@ -109,6 +130,16 @@ class Observation<T, Child extends ObservationLifetime> {
     this.#wakeDrain?.();
   }
 
+  /**
+   * The serialization point. Sleeps until invalidated, then replaces the current
+   * lifetime, repeating while the value keeps changing. The inner loop collapses
+   * a burst of changes into one replacement per settled value rather than one per
+   * notification.
+   *
+   * A failure here stops the observation and reports it. There is no caller to
+   * return to — this runs in a spawned task — so continuing would mean silently
+   * observing a value with a lifetime that failed to establish.
+   */
   async #drain(signal: AbortSignal) {
     try {
       while (this.#state.phase === "active" && !signal.aborted) {
@@ -140,9 +171,21 @@ class Observation<T, Child extends ObservationLifetime> {
     });
   }
 
+  /**
+   * Dispose the old lifetime, then create the new one, then call the observer.
+   * Strictly in that order: overlapping them would run two owners of whatever the
+   * observer set up, and a failed observer would leave the previous lifetime half
+   * disposed.
+   *
+   * `#observed` is cleared while no lifetime is current, so an interrupted
+   * replacement cannot leave a value marked as observed when nothing is
+   * observing it.
+   */
   async #replaceCurrent() {
     if (this.#state.phase !== "active") return;
     const value = this.#state.binding.source.get();
+    // A notification does not guarantee a different value. Re-reading and
+    // comparing avoids tearing down a live lifetime to rebuild an identical one.
     if (this.#observed.present && Object.is(value, this.#observed.value)) return;
 
     const previous = this.#takeCurrent();

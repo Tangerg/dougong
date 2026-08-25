@@ -81,7 +81,21 @@ class RegistrationFacade<Reference> implements Registration<Reference> {
   }
 }
 
-/** Internal state machine behind one public Registration. */
+/**
+ * Internal state machine behind one public Registration.
+ *
+ * Two independent axes, which is why there are two state fields:
+ *
+ *   #authority   draft -> attached -> terminal    may this Registration act?
+ *   #state       pending -> registered -> loading -> activated | failed | removed
+ *
+ * A Registration can be attached and failed at once — still ours, currently
+ * broken, retryable. Collapsing the two would make that state unrepresentable.
+ *
+ * `admission` is the promise of the change that admitted this Registration.
+ * `activate()` awaits it first, so activation triggered immediately after
+ * `register()` waits for the registration to actually commit instead of racing it.
+ */
 export class RegistrationRecord<Reference> {
   #authority: RegistrationAuthority<Reference>;
   #manifest: NormalizedArtifact<Reference>["manifest"];
@@ -229,12 +243,20 @@ export class RegistrationRecord<Reference> {
 
   commitActivation(installation: Installation) {
     this.#state = { phase: "activated", installation };
+    // Waiters are forwarded to the Installation rather than resolved here.
+    // `ready()` on a Registration means "its Plugin has started", and only Core
+    // knows that — activation merely means the Installation now exists.
     for (const waiter of this.#readyWaiters) {
       void installation.ready().then(waiter.resolve, waiter.reject);
     }
     this.#readyWaiters.clear();
   }
 
+  /**
+   * Splits validation from mutation: everything that can fail happens now, and
+   * the returned closure only assigns. Platform calls it after the Core commit
+   * succeeds, so a Registration's own state can never move ahead of the graph.
+   */
   prepareCommit(artifact: NormalizedArtifact<Reference>, state: RegistrationCommitState) {
     const authority = this.#authority;
     if (authority.phase !== "attached") throw this.unavailableError();
@@ -259,6 +281,12 @@ export class RegistrationRecord<Reference> {
     return failure;
   }
 
+  /**
+   * Terminal counterpart to `fail()`, for a Registration that never made it in.
+   * The failure is kept as an `ErrorSummary` so the record retains no live object
+   * graph, and `platformError` remembers which class to rebuild — a
+   * `PlatformError` must not come back as a plain Error and lose its code.
+   */
   discard(error: unknown) {
     const failure = this.fail(error);
     this.#state = {

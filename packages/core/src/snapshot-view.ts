@@ -1,3 +1,13 @@
+// The observation protocol behind every diagnostics surface in Dougong.
+//
+// Reads are lazy: `invalidate()` only marks the snapshot dirty and notifies, and
+// the reader function runs on the next `get()`. A Host that changes a hundred
+// times while nobody is looking therefore builds zero snapshots.
+//
+// Subscribers must be synchronous. An async subscriber would resume after the
+// state it was told about had already moved on, which is exactly the torn read
+// this type exists to prevent.
+
 import { disposeSymbol, type Disposable } from "./resource";
 import { assertSynchronous } from "./sync-result";
 
@@ -11,6 +21,10 @@ interface SnapshotSubscriptionBinding {
   readonly detach: (subscription: SnapshotSubscription) => void;
 }
 
+// The listener and the detach closure live outside the subscription object so
+// the handle a caller retains holds no strong edge to either. Disposing deletes
+// the entry, and a dropped handle takes its binding with it — a retained
+// subscription cannot keep a Host alive through a callback it no longer needs.
 const snapshotSubscriptionBindings = new WeakMap<
   SnapshotSubscription,
   SnapshotSubscriptionBinding
@@ -50,6 +64,10 @@ export class SnapshotPublisher<T> implements Disposable {
     const { report } = this.#requireActive();
     this.#dirty = true;
     const reportingFailures: unknown[] = [];
+    // Iterate a copy: a subscriber is allowed to dispose itself, or another
+    // subscriber, while being notified. One subscriber's failure must not stop
+    // the rest from hearing about the change, so each is reported and the loop
+    // continues; only a failure of the reporter itself escapes.
     for (const subscription of [...this.#subscriptions]) {
       try {
         notifySnapshotSubscription(subscription);
@@ -74,6 +92,9 @@ export class SnapshotPublisher<T> implements Disposable {
     if (state.phase === "disposed") return;
     this.#state = { phase: "disposed" };
     try {
+      // Materialize one last time so `get()` keeps answering after disposal with
+      // the final state rather than a stale one. A disposed publisher stops
+      // accepting writes; it does not stop being readable.
       this.#materialize(state.read);
     } finally {
       this.#dirty = false;

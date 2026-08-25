@@ -1,6 +1,15 @@
 import type { ContractIdentity, ContractKind } from "./contracts";
 import { DougongError } from "./errors";
 
+// One Contract id must mean one kind for the whole life of a Host. Otherwise
+// `service("app.theme")` in one Plugin and `event("app.theme")` in another would
+// silently name the same slot, and which meaning wins would depend on
+// installation order.
+//
+// Kinds are learned as declarations arrive, which means they are learned during
+// transactions that may still roll back. Hence the draft: identities seen by a
+// change become durable only when that change commits.
+
 /** Host-wide identity registry with an explicit draft commit boundary. */
 export class ContractRegistry {
   readonly #kinds = new Map<string, ContractKind>();
@@ -47,6 +56,10 @@ export class ContractRegistryDraft {
 
   remember(contract: ContractIdentity) {
     const state = this.#state;
+    // A live Instance keeps its port after its change commits, so a Contract
+    // first named by a later `emit()` or `contribute()` arrives here through an
+    // already-committed draft. There is no transaction left to stage it in, so
+    // it goes straight to the durable registry — still kind-checked.
     if (state.phase === "committed") {
       state.registry.remember(contract);
       return;

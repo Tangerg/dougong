@@ -1,12 +1,32 @@
+// ExtensionPoints: an open set that many Installations write into and anyone can
+// read. The bookkeeping here exists to answer one question — when is a store no
+// longer needed? — without ever leaving a live edge behind.
+//
+// Four kinds of reference keep a store alive: unpublished claims, published
+// entries, views handed to Instances, and subscriptions. When the last of them
+// goes and the Host is not holding a view of its own, the store disposes itself
+// and removes itself from the registry. An ExtensionPoint that nobody
+// contributes to or reads therefore costs nothing after its last user leaves.
+//
+// The layering is: ContributionRegistry (one store per ExtensionPoint id) owns
+// ContributionStore (entries and snapshot) which owns ContributionRecord (one
+// contribution's stage/publish/dispose state).
+
 import type { Requirement } from "./contracts";
 import { ReadonlyMapSnapshot } from "./readonly-map";
 import { disposeSymbol, type Disposable, type Publication, type StagedResource } from "./resource";
 import { SnapshotPublisher, type SnapshotView } from "./snapshot-view";
 
+/** A contributed entry the contributor may update or withdraw — nobody else can. */
 export interface Contribution<T> extends Disposable {
   readonly update: (value: T) => void;
 }
 
+/**
+ * The read side: a keyed map, not a list. Keys are `installationId/key`, so two
+ * Installations contributing under the same local key stay distinct, and a
+ * consumer can tell which Installation an entry came from.
+ */
 export type ContributionView<T> = SnapshotView<ReadonlyMap<string, T>>;
 
 export type ContributionLeaseKind = "view" | "subscription";
@@ -204,7 +224,14 @@ export class ContributionStore<T> {
     return new ContributionViewHandle(state);
   }
 
-  /** A stable view explicitly owned by the Host for graph-external consumers. */
+  /**
+   * A stable view explicitly owned by the Host for graph-external consumers.
+   *
+   * Application code has no Lifetime to lease a view from, so this one is
+   * retained by the Host instead — which also pins the store open for as long as
+   * the Host lives. That is the trade: `host.contributions()` gives a handle that
+   * never goes stale, at the cost of a store that is no longer self-releasing.
+   */
   hostView(): ContributionView<T> {
     this.#retainedByHost = true;
     return this.#publisher.view;
@@ -278,6 +305,12 @@ export class ContributionStore<T> {
     }
   }
 
+  /**
+   * Rebuilds the published snapshot, and does nothing when the result would be
+   * equal by identity per key. A change that adds and removes the same entry —
+   * an Instance restarting with an identical contribution — therefore notifies
+   * nobody, instead of waking every observer to hand them what they already had.
+   */
   publishSnapshot() {
     const nextEntries = [...this.#entries].map(([key, entry]) => [key, entry.value] as const);
     const unchanged =
@@ -303,6 +336,9 @@ export class ContributionStore<T> {
     return entry;
   }
 
+  // The self-release check. Every counter has to be at zero and the Host must
+  // not be holding a view; `#released` makes it run once, since disposing the
+  // publisher can re-enter through a subscription's own teardown.
   #notifyIfUnused() {
     if (
       this.#released ||
@@ -412,6 +448,10 @@ export class ContributionRegistry {
     this.#batchDepth++;
   }
 
+  // Depth-counted, so nested Host operations collapse into the outermost batch
+  // and publication happens exactly once. Every store's snapshot is attempted
+  // even if one of them throws, then the failures are aggregated — a single bad
+  // subscriber must not leave the remaining stores unpublished.
   endBatch() {
     if (!this.#batchDepth) throw new Error("Contribution batch is not active");
     this.#batchDepth--;
@@ -453,6 +493,10 @@ function contributionId(installationId: string, key: string) {
   return `${escapeKeyPart(installationId)}/${escapeKeyPart(key)}`;
 }
 
+// Percent-escaped so the composed id is unambiguous: without it, installation
+// `a` with key `b/c` and installation `a/b` with key `c` would collide. `%` is
+// escaped first, or escaping `/` afterwards could produce a sequence that
+// decodes back to a different pair.
 function escapeKeyPart(value: string) {
   return value.replaceAll("%", "%25").replaceAll("/", "%2F");
 }

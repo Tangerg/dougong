@@ -77,6 +77,30 @@ await expect(changes.commit()).rejects.toMatchObject({ code: "CONFIG_INVALID" })
 
 一个拼错的配置字段不会让你的应用停在半路。
 
+### 贡献集也是原子的
+
+一笔事务里，被停止的 Instance 会撤走它的贡献，被启动的会加上新的。这两件事**合并成一次发布**：
+
+```ts
+const observer = definePlugin({
+  name: "app.observer",
+  requires: { views: VIEWS },
+  setup(ctx) {
+    ctx.views.subscribe(() => snapshots.push([...ctx.views.get().keys()]))
+  },
+})
+
+// 一笔 ChangeSet 同时替换 outline 和 search
+const changes = host.change()
+changes.update(outline, { plugin: outlineV2 })
+changes.update(search, { plugin: searchV2 })
+await changes.commit()
+
+snapshots.length   // 1 —— 不是 4，也不曾出现过空集合
+```
+
+没有这个批次边界，观察者会在一次成功的变更中间看到集合短暂变空，然后一条条被填回来。这就是 HMR 与「两次连续更新」的区别：[示例 12](../examples.md#stage-3) 断言的正是这个计数。
+
 ## 增量重启
 
 变更不会重启整个应用。Dougong 计算**受影响闭包**：变更的 Installation，加上依赖它们的传递闭包，在**新旧两张图**上取并集。

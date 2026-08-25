@@ -66,6 +66,12 @@ class ModuleGraph {
     this.#importers = importers;
   }
 
+  /**
+   * Walks importers, not imports. A changed module invalidates whoever imported
+   * it, transitively, and each affected entry module names the Registration that
+   * has to be replaced. That is how the theme stays untouched below: nothing in
+   * its import chain moved.
+   */
   invalidate(changed: ReadonlyArray<string>): Invalidation {
     const queue: string[] = [];
     const affected = new Set<string>();
@@ -165,6 +171,9 @@ export async function hmrModuleGraph(): Promise<ExampleResult> {
     .sort()
     .join(", ");
 
+  // Outline imports the shared module directly; search reaches it one hop away;
+  // the theme does not import it at all. Editing it should therefore replace two
+  // Registrations out of three.
   const graph = new ModuleGraph([
     { id: "shared/icons.ts", imports: [] },
     { id: "outline/entry.ts", imports: ["shared/icons.ts"], registration: OUTLINE },
@@ -178,6 +187,10 @@ export async function hmrModuleGraph(): Promise<ExampleResult> {
     [SEARCH, artifact(SEARCH, "2.0.0", "search-v2")],
     [THEME, artifact(THEME, "2.0.0", "theme-v2")],
   ]);
+  // Every affected Registration goes into one ChangeSet, so the two updates
+  // commit together. This is the difference between HMR and two sequential
+  // updates: the observer below counts exactly one published snapshot, meaning no
+  // reader ever saw the new outline beside the old search.
   const change = platform.change();
   for (const name of invalidation.registrations) {
     const registration = registrations.get(name);

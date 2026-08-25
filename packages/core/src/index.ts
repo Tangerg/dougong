@@ -1,3 +1,11 @@
+// The public surface of @dougongjs/core. Nothing here is re-exported with
+// `export *`: the list is written out so adding a name is a deliberate act.
+//
+// `scripts/check-api-surface.mjs` reads the built `dist/index.d.ts` and compares
+// it against an explicit allowlist, so an accidental export fails CI rather than
+// quietly becoming API. That gate — not this file — is the authority on what is
+// public.
+
 export {
   event,
   extensionPoint,

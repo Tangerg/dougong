@@ -77,6 +77,9 @@ export async function planetScenario(): Promise<ExampleResult> {
   });
   const playerPlugin = definePlugin({
     name: "examples.planet.player",
+    // `sources` is an ExtensionPoint, so it is a live set rather than a
+    // dependency edge. Providers can come and go without restarting the player —
+    // that is the fact `playerStarts` measures at the end.
     requires: { audio: AUDIO_OUTPUT, sources: MEDIA_SOURCES },
     provides: { player: PLAYER },
     setup(ctx) {
@@ -88,10 +91,16 @@ export async function planetScenario(): Promise<ExampleResult> {
         player: {
           current,
           async play(query: string) {
+            // One child Lifetime per playback. Replacing it aborts whatever the
+            // previous track was still doing, without the player owning any
+            // cancellation bookkeeping of its own.
             const previous = playback;
             const currentPlayback = ctx.lifetime("playback");
             playback = currentPlayback;
             await previous.dispose();
+            // Selection happens per call, from the set as it is right now. There
+            // is no registration order, no priority field and no ambient
+            // "current provider" — the query decides.
             const source = [...ctx.sources.get().values()].reduce<MediaSource | undefined>(
               (selected, candidate) =>
                 !selected || candidate.score(query) > selected.score(query) ? candidate : selected,
@@ -150,9 +159,12 @@ export async function planetScenario(): Promise<ExampleResult> {
   const playerInstallation = host.install(playerPlugin);
   host.install(historyPlugin);
   host.install(shellPlugin);
+  // An empty Group, created only to own what arrives later.
   const providers = host.group("providers", () => undefined);
   await host.start();
 
+  // Pointing the Platform at the Group rather than the Host is what makes
+  // `providers.remove()` at the end remove every downloaded provider with it.
   const platform = createPlatform({
     installer: providers,
     apiVersion: "1.0.0",
@@ -169,6 +181,9 @@ export async function planetScenario(): Promise<ExampleResult> {
     reference: "remote",
   });
 
+  // The whole point of the scenario, in eight lines: play with only the local
+  // source, activate a better one, start a track that will be interrupted,
+  // interrupt it, remove the remote source, and play again.
   await player.play("intro");
   await platform.trigger("media:remote");
   const superseded = player.play("superseded").catch((error: unknown) => {

@@ -1,3 +1,13 @@
+// What an Artifact claims about itself, before anything is loaded.
+//
+// A Manifest is data, so it can be read, cached and authorized without importing
+// a single line of the code it describes. That ordering is the reason permissions
+// are meaningful at all: policy decides on the declaration, not on the module.
+//
+// `.strict()` rejects unknown fields rather than ignoring them, so a typo in a
+// manifest is an error the author sees instead of a setting that silently does
+// nothing.
+
 import { satisfies, validate } from "compare-versions";
 import { z } from "zod";
 import { assertPlainRecord } from "@dougongjs/core";
@@ -48,6 +58,14 @@ function isVersionRange(range: string) {
 
 export type ManifestInput = z.input<typeof manifestSchema>;
 
+/**
+ * Every failure here is one `MANIFEST_INVALID`, whatever went wrong inside.
+ *
+ * A manifest may come from a file, a registry response or another process, so
+ * zod itself can throw on input it was not built to see. Wrapping all three
+ * paths — unreadable declaration, validator crash, validation failure — means a
+ * caller has one code to handle, with the original always kept as `cause`.
+ */
 export function defineManifest(input: ManifestInput | Manifest): Manifest {
   let declaration: Record<string, unknown>;
   try {
@@ -85,6 +103,9 @@ export function defineManifest(input: ManifestInput | Manifest): Manifest {
   });
 }
 
+// Copied to own data before validation, because the object may be shared with
+// whoever supplied it. Validating one object and storing another that has since
+// been mutated is exactly the gap this closes.
 function snapshotManifestDeclaration(input: unknown) {
   assertManifestRecord(input, "Manifest declaration");
   const declaration: Record<string, unknown> = Object.fromEntries(Object.entries(input));

@@ -2,6 +2,12 @@ import { ReadonlyMapSnapshot, SnapshotPublisher, type SnapshotView } from "@doug
 import type { Manifest } from "./manifest";
 
 export type PlatformStatus = "active" | "disposing" | "disposed";
+
+/**
+ * `registered` and `activated` are the distinction the whole Platform exists to
+ * make: admitted, versus actually loaded and running. `loading` is visible in
+ * between so a slow import is observable rather than looking like a hang.
+ */
 export type RegistrationStatus =
   "pending" | "registered" | "loading" | "activated" | "failed" | "removed";
 
@@ -28,7 +34,12 @@ export interface DiagnosableRegistration {
   readonly error: Error | undefined;
 }
 
-/** Immutable operational read model compiled to Core's snapshot protocol. */
+/**
+ * Immutable operational read model compiled to Core's snapshot protocol.
+ *
+ * Built on Core's `SnapshotPublisher` rather than a second observation mechanism,
+ * so a consumer subscribes to Platform and Host diagnostics the same way.
+ */
 export class PlatformDiagnostics {
   readonly #apiVersion: string;
   readonly #publisher: SnapshotPublisher<PlatformSnapshot>;

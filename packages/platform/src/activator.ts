@@ -32,7 +32,18 @@ export class ActivationBarrier {
   }
 }
 
-/** Owns activation admission, dependency activation and target exclusion. */
+/**
+ * Owns activation admission, dependency activation and target exclusion.
+ *
+ * Activation is depth-first: authorize, then activate dependencies, then load
+ * this module, then install. Dependencies come before the load so a Registration
+ * whose dependency cannot activate never imports its own module — the cheapest
+ * failure happens first.
+ *
+ * `#locked` is separate from the gate. The gate stops *new* activation trees
+ * during a change; `#locked` marks the specific Registrations that change is
+ * touching, so they stay refused even after the gate reopens.
+ */
 export class Activator<Reference> {
   readonly #registrations: ReadonlyMap<string, RegistrationRecord<Reference>>;
   readonly #ports: () => ActivationPorts<Reference>;
@@ -62,6 +73,8 @@ export class Activator<Reference> {
         `Registration '${registration.manifestName}' is being changed`,
       );
     }
+    // Already activated is success, not an error. Several activation events, or
+    // several dependents, routinely ask for the same Registration.
     if (registration.status === "activated") return;
 
     const permit = inheritedPermit ?? this.#gate.enter();
@@ -81,6 +94,10 @@ export class Activator<Reference> {
         await authorizer.authorize(registration.manifest, signal);
         await this.#activateDependencies(registration, signal, permit);
         const plugin = await loadPlugin(loader, registration.artifact, signal);
+        // Update when a placeholder is already installed, install when it is not.
+        // The update path is the whole point of placeholders: the Installation
+        // identity survives activation, so dependents see the Service change
+        // rather than an Installation appear.
         const change = installer.change();
         let installation = registration.installation;
         if (installation) {

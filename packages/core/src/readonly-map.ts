@@ -1,4 +1,11 @@
-/** A structural snapshot that exposes no mutating Map methods. */
+/**
+ * A structural snapshot that exposes no mutating Map methods.
+ *
+ * `ReadonlyMap` is only a compile-time view — casting a live `Map` to it still
+ * hands out an object whose `set` and `delete` are one cast away. This copies on
+ * construction and freezes itself, so a published snapshot cannot be edited by
+ * whoever received it, and cannot change under a reader afterwards.
+ */
 export class ReadonlyMapSnapshot<Key, Value> implements ReadonlyMap<Key, Value> {
   readonly #values: Map<Key, Value>;
 

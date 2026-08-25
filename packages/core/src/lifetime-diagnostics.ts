@@ -18,7 +18,13 @@ export interface LifetimeSnapshot {
 export type LifetimeResourceKind =
   "cleanups" | "tasks" | "listeners" | "contributions" | "contributionViews" | "subscriptions";
 
-/** Internal state that mirrors a Lifetime without retaining any owned resource. */
+/**
+ * Internal state that mirrors a Lifetime without retaining any owned resource.
+ *
+ * Counts, not references. A diagnostics tree that held the listeners and tasks
+ * it describes would keep them alive precisely because someone was watching, so
+ * a node knows how many of each kind exist and nothing about what they are.
+ */
 export interface LifetimeDiagnosticNode {
   readonly label: string;
   readonly counts: Record<LifetimeResourceKind, number>;
@@ -56,6 +62,9 @@ export class LifetimeDiagnostics {
 
   change(node: LifetimeDiagnosticNode, kind: LifetimeResourceKind, delta: 1 | -1) {
     const next = node.counts[kind] + delta;
+    // A negative count means a resource was released twice, or released by
+    // something that never owned it. That is a broken ownership edge in Core, so
+    // it throws rather than clamping at zero and hiding the bug.
     if (next < 0) throw new Error(`Lifetime '${kind}' count cannot be negative`);
     node.counts[kind] = next;
     this.#publisher.invalidate();

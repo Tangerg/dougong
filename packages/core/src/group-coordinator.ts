@@ -144,7 +144,18 @@ class GroupFacade implements Group {
   }
 }
 
-/** Owns the complete structural Group model and compiles it to Installation changes. */
+/**
+ * Owns the complete structural Group model and compiles it to Installation
+ * changes.
+ *
+ * Groups are structure, and the Engine only understands installations, so
+ * everything here ends as a `ChangeOperation` list. Removing a Group is not its
+ * own kind of command — it is the removal of every Installation the subtree
+ * contains, followed by detaching the nodes.
+ *
+ * Lifecycles and facades are held in WeakMaps keyed by node rather than as node
+ * fields, so `GroupNode` stays pure structure and a revoked facade releases both.
+ */
 export class GroupCoordinator {
   readonly root: GroupNode;
   readonly #port: GroupCoordinatorPort;
@@ -193,6 +204,12 @@ export class GroupCoordinator {
     );
   }
 
+  /**
+   * `deferred` tracking exists for `create()`. A Group being configured must not
+   * mark itself pending on each nested install, because the whole configuration
+   * commits once; the coordinator attaches that single operation to every node in
+   * the finished subtree instead.
+   */
   change(group: GroupNode, tracking: "immediate" | "deferred" = "immediate") {
     this.#requireLifecycle(group);
     return new ChangeSetDraft({
@@ -247,8 +264,14 @@ export class GroupCoordinator {
     this.#facades.set(node, facade);
 
     try {
+      // Synchronous by contract. An async callback would return before its
+      // installs were staged, so the session would seal an incomplete subtree
+      // and the awaited work would then stage into a sealed draft.
       const result: unknown = configure(facade);
       assertSynchronous(result, "Group configure must be synchronous");
+      // A nested `group()` that failed recorded its error on the shared session
+      // without throwing here. Checking the session is what makes a failure deep
+      // in the tree collapse the whole `create()`.
       const failure = configuration.failure;
       if (failure) throw failure;
     } catch (error) {
@@ -314,6 +337,10 @@ export class GroupCoordinator {
     );
   }
 
+  // A Group has no status of its own — it reports what its contents say, with
+  // the worst news winning. The last line is the one that needs stating: an
+  // empty Group is `active`, because a subtree that owns nothing has nothing
+  // left to wait for.
   #contentsStatus(group: GroupNode): LifecycleStatus {
     const installations = this.#installationsIn(group);
     if (installations.some((installation) => installation.status === "failed")) return "failed";

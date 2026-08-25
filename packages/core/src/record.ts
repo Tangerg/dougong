@@ -1,9 +1,24 @@
 interface PlainRecordOptions {
+  /** When present, any key outside this set is rejected instead of ignored. */
   readonly fields?: ReadonlySet<string>;
+  /** Lets a caller raise its own coded error instead of a bare `TypeError`. */
   readonly createError?: (message: string) => Error;
 }
 
-/** Validates declaration bags without reading through their prototype chain. */
+/**
+ * Validates declaration bags without reading through their prototype chain.
+ *
+ * Every option object Core accepts passes through here. The checks look
+ * paranoid, and each one closes a way for a declaration to lie:
+ *
+ * - a non-`Object.prototype` prototype could answer for keys it does not own;
+ * - a non-enumerable or symbol key would escape the field allowlist;
+ * - a getter (`{ get name() {...} }`) would return a different value on the
+ *   second read, so validation would not describe what gets stored.
+ *
+ * Rejecting an unknown field rather than ignoring it turns a typo — `permissions`
+ * for `authorizer` — into an error at the call site instead of silence.
+ */
 export function assertPlainRecord(
   value: unknown,
   label: string,

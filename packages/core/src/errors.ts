@@ -1,3 +1,13 @@
+// Error vocabulary for Core. Three jobs, kept apart on purpose:
+//
+//   DougongError      a failure with a stable machine-readable `code`
+//   ErrorSummary      a primitive-only record for objects that must not retain
+//                     the failed object graph
+//   normalizeFailure  the one place a non-Error rejection reason becomes an Error
+//
+// `docs/reference/errors.md` lists every code, and the api-surface gate derives
+// the codes from this source and fails when the two disagree.
+
 import type { StandardSchemaV1 } from "@standard-schema/spec";
 
 export class DougongError extends Error {
@@ -30,6 +40,12 @@ type ErrorSummaryState =
 /**
  * A primitive-only record of an Error for terminal objects that must not retain
  * the original stack, cause, subclass fields or the object graph behind them.
+ *
+ * A discarded Installation keeps its failure reason forever, and an Error's
+ * `stack` and `cause` reach back into the Host, the payloads and the closures
+ * that were live when it was thrown. Copying three strings out and dropping the
+ * Error keeps the explanation and releases the graph. `restore()` rebuilds an
+ * Error good enough to throw; the stack is deliberately not the original one.
  */
 export class ErrorSummary {
   readonly #state: ErrorSummaryState;
@@ -75,6 +91,9 @@ export class ErrorSummary {
   }
 }
 
+// `name` and `message` can be getters on a hostile or merely clever subclass.
+// A summary that throws while recording a failure would replace the real error
+// with its own, so a broken accessor degrades to the fallback instead.
 function readErrorString(error: Error, key: "name" | "message", fallback: string) {
   try {
     const value = error[key];
@@ -96,7 +115,18 @@ function readDougongErrorCode(error: DougongError) {
 /** Internal marker that lets a higher public boundary reclassify the original non-Error reason. */
 class NonErrorFailure extends DougongError {}
 
-/** Preserves explicit Error values and classifies non-Error rejection reasons. */
+/**
+ * Preserves explicit Error values and classifies non-Error rejection reasons.
+ *
+ * `throw "nope"` in a Plugin must not become an unnamed failure at the Host
+ * boundary, so a non-Error reason is wrapped in a coded Error with the original
+ * kept as `cause`. A real Error is returned untouched — Core never rewrites a
+ * failure a Plugin author deliberately threw.
+ *
+ * The private marker class is why re-normalizing is safe: a wrapper that already
+ * belongs to Core can be re-coded as it passes an outer boundary instead of
+ * being wrapped a second time.
+ */
 export function normalizeFailure(error: unknown, code: string, message: string): Error {
   if (error instanceof NonErrorFailure) {
     return error.code === code ? error : new NonErrorFailure(code, message, { cause: error.cause });
@@ -104,7 +134,15 @@ export function normalizeFailure(error: unknown, code: string, message: string):
   return error instanceof Error ? error : new NonErrorFailure(code, message, { cause: error });
 }
 
-/** Classifies the exact signal reason or a conventional AbortError, but only after abort. */
+/**
+ * Classifies the exact signal reason or a conventional AbortError, but only
+ * after abort.
+ *
+ * This is the one place Core is allowed to stop propagating a failure, so the
+ * test is deliberately narrow. Checking `signal.aborted` first means an
+ * `AbortError` thrown by unrelated code on a live signal stays a real error, and
+ * only a cancellation that this Lifetime actually requested is treated as one.
+ */
 export function isCancellationReason(signal: AbortSignal, error: unknown) {
   if (
     !signal ||
@@ -135,6 +173,9 @@ export class ConfigValidationError extends DougongError {
   }
 }
 
+// Issues come from a third-party validator, so they are copied and frozen
+// rather than stored by reference. A retained ConfigValidationError otherwise
+// keeps whatever object graph that library hung off its issue objects alive.
 function snapshotValidationIssues(issues: unknown): ReadonlyArray<StandardSchemaV1.Issue> {
   if (!Array.isArray(issues)) {
     throw new TypeError("Config validation issues must be an array");

@@ -77,6 +77,34 @@ await expect(changes.commit()).rejects.toMatchObject({ code: "CONFIG_INVALID" })
 
 A misspelled config field never leaves your application halfway down.
 
+### Contribution sets are atomic too
+
+Within one transaction, stopping Instances withdraw their contributions and
+starting ones add theirs. Both halves are **published as a single step**:
+
+```ts
+const observer = definePlugin({
+  name: "app.observer",
+  requires: { views: VIEWS },
+  setup(ctx) {
+    ctx.views.subscribe(() => snapshots.push([...ctx.views.get().keys()]))
+  },
+})
+
+// One ChangeSet replaces outline and search together
+const changes = host.change()
+changes.update(outline, { plugin: outlineV2 })
+changes.update(search, { plugin: searchV2 })
+await changes.commit()
+
+snapshots.length   // 1 — not 4, and the set is never observed empty
+```
+
+Without that batch boundary an observer would watch the set briefly empty in the
+middle of a *successful* change, then refill one entry at a time. This is the
+difference between HMR and two sequential updates, and it is exactly the count
+[example 12](../examples.md#stage-3) asserts.
+
 ## Incremental restart
 
 A change does not restart the whole application. Dougong computes the **affected closure**: the changed installations plus their transitive dependents, unioned over **both the old and the new** graph.

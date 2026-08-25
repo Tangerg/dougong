@@ -13,6 +13,17 @@ export interface StagedCoreChange<Reference> {
   commit(): Promise<void>;
 }
 
+// The seam between the two layers. Everything Platform decided arrives here as
+// operations and becomes exactly one Core ChangeSet — which is what makes a
+// Platform change atomic without Platform owning a transaction of its own.
+//
+// The ChangeSet is created lazily, so a change that touches nothing installable
+// (registering artifacts with no placeholder) never opens a Core transaction.
+//
+// `registrationStates` is returned rather than applied: Platform state must move
+// only after the Core commit succeeds, so this stages the intent and the caller
+// commits it afterwards.
+
 /** Compiles one validated Platform change into the canonical Core ChangeSet. */
 export function stageCoreChange<Reference>(
   installer: Pick<Installer, "change">,
@@ -75,6 +86,10 @@ function stageActivatedUpdate(
   return requireChange().install(plugin, config);
 }
 
+// Updating a Registration that is not activated, where the new Artifact may or
+// may not carry a placeholder. Four cases, and the third is the interesting one:
+// dropping the placeholder from an inactive Registration removes the Installation
+// entirely, because there is nothing left for it to hold.
 function stagePlaceholderUpdate<Reference>(
   requireChange: () => ChangeSet,
   current: Installation | undefined,

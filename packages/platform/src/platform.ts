@@ -65,7 +65,18 @@ type PlatformState<Reference> =
     }
   | { readonly phase: "disposed" };
 
-/** Serializes public structural commands over the Activator and Core compiler. */
+/**
+ * Serializes public structural commands over the Activator and Core compiler.
+ *
+ * The mirror of `HostImpl`: a serialization boundary that owns no domain state
+ * of its own. Registrations hold their own state machines, the Activator owns
+ * admission, `core-change.ts` owns the compilation to Core.
+ *
+ * `PlatformAuthority` is the indirection worth understanding. Every port closes
+ * over a mutable `{ current }` cell rather than over `this`, so disposal can
+ * clear one field and every callback a Registration still holds becomes a clean
+ * `PLATFORM_UNAVAILABLE` — instead of a live edge back into a disposed Platform.
+ */
 class PlatformImpl<Reference> implements Platform<Reference> {
   readonly #registrations = new Map<string, RegistrationRecord<Reference>>();
   readonly #ownedRegistrations = new WeakMap<object, RegistrationRecord<Reference>>();
@@ -173,6 +184,11 @@ class PlatformImpl<Reference> implements Platform<Reference> {
     return new PlatformChangeSetDraft(this.#changePort);
   }
 
+  /**
+   * Fires one activation event. Every Registration that names it activates
+   * concurrently, and every failure is reported — one Registration failing to
+   * activate must not silence the rest, and must not hide the others' failures.
+   */
   async trigger(event: string) {
     this.#assertActive();
     if (typeof event !== "string" || !event.trim()) {
@@ -259,6 +275,21 @@ class PlatformImpl<Reference> implements Platform<Reference> {
     });
   }
 
+  /**
+   * The change pipeline. Order matters at every step:
+   *
+   *   1. plan            fix what this change means before anything awaits
+   *   2. validate        the graph that *would* exist — cycles, versions
+   *   3. authorize       before loading, so denied code is never imported
+   *   4. load            only for Registrations already activated
+   *   5. stabilize       close the activation gate; wait for in-flight trees
+   *   6. validate again  concurrent activations may have moved the graph
+   *   7. compile+commit  one Core ChangeSet, atomic
+   *
+   * Step 6 is not redundant. Between steps 2 and 5 an activation that was already
+   * running can commit and change what the graph looks like, so the check is
+   * repeated once nothing else can be in flight.
+   */
   async #applyChanges(operations: ReadonlyArray<PlatformChangeOperation<Reference>>) {
     const controller = new AbortController();
     this.#changeController = controller;
@@ -396,6 +427,16 @@ class PlatformImpl<Reference> implements Platform<Reference> {
     return this.#changeQueue.run(operation);
   }
 
+  /**
+   * Cancels every activation, waits for them to settle, then removes the
+   * installations in one Core change.
+   *
+   * Waiting is not optional: an activation mid-commit would otherwise install
+   * into a Host the Platform is in the middle of vacating. And if the removal
+   * fails, the Platform returns to `active` rather than claiming to be disposed —
+   * a Platform whose installations are still in the graph has not been disposed,
+   * whatever it would prefer to report.
+   */
   async #disposeRegistrations() {
     const ports = this.#requirePorts();
     const registrations = [...this.#registrations.values()];

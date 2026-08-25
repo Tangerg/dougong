@@ -38,6 +38,19 @@ export class GroupLifecycle {
     await readyContents();
   }
 
+  /**
+   * `preserveCommittedState` is the whole point of this class.
+   *
+   * A Group that has already committed something is established, and a later
+   * failed change does not un-establish it — the transaction rolled back, so the
+   * state the Group describes is still the one that was committed. Such a
+   * failure leaves the phase at `established` and does not rethrow, because the
+   * caller of the failed change already has the error.
+   *
+   * A Group whose *first* change fails never had a committed state, so it does
+   * become `failed` and the failure propagates: there is nothing to report but
+   * the failure.
+   */
   track(operation: Promise<void>) {
     this.node.assertAttached();
     const current = this.#state;

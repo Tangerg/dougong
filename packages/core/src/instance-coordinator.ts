@@ -28,7 +28,19 @@ export interface InstanceCoordinatorPort {
 
 export class IncompleteActivationCleanupError extends AggregateError {}
 
-/** Owns live Instances and the capabilities reachable from their Lifetimes. */
+/**
+ * Owns live Instances and the capabilities reachable from their Lifetimes.
+ *
+ * The only place in Core where `setup()` is called and where a Service value
+ * exists as a value. Above this line everything is declarations and plans; below
+ * it there are running objects.
+ *
+ * Activation is prepare-then-commit, per layer. Every Instance in a layer is
+ * built first, and only once the whole layer succeeds does any of it become
+ * visible. That is why a failing sibling cannot be observed by one that
+ * succeeded, and why cleanup after a failed layer can still reach everything the
+ * layer created.
+ */
 export class InstanceCoordinator {
   readonly #hostName: string;
   readonly #logger: Logger;
@@ -93,6 +105,12 @@ export class InstanceCoordinator {
       );
       if (!candidates.length) continue;
 
+      // One controller per layer, aborted by the first failure. Siblings run
+      // concurrently, so a long `setup()` next to one that failed immediately
+      // would otherwise keep the whole layer waiting for work whose result is
+      // already going to be thrown away. `allSettled` rather than `all` because
+      // every started Instance must be collected for cleanup, including the ones
+      // that finished after the abort.
       const controller = new AbortController();
       const results = await Promise.allSettled(
         candidates.map(async (installation) => {
@@ -145,6 +163,12 @@ export class InstanceCoordinator {
     }
   }
 
+  /**
+   * Stops in reverse activation order, sequentially, and collects every failure
+   * instead of stopping at the first. A dependent must be gone before the
+   * Service it consumed, and one Instance that refuses to shut down cleanly must
+   * not leave the rest running — its error is returned, not thrown.
+   */
   async deactivate(installations: ReadonlySet<InstallationRecord>) {
     const errors: unknown[] = [];
     const order = this.#activationOrder
@@ -169,6 +193,17 @@ export class InstanceCoordinator {
     return errors;
   }
 
+  /**
+   * Runs one operation with contribution publication deferred to its end, so a
+   * change that withdraws and adds contributions is observed once rather than as
+   * an intermediate state.
+   *
+   * Publication happens even when the operation failed, because contributions
+   * withdrawn by Instances that did stop must not stay visible. If both the
+   * operation and the publication fail, both errors are reported — the
+   * publication failure must not hide the reason the change failed, and the
+   * operation failure must not hide a store left inconsistent.
+   */
   async withContributionBatch<T>(operation: () => Promise<T>) {
     this.#contributions.beginBatch();
     let outcome:
@@ -218,6 +253,10 @@ export class InstanceCoordinator {
       const context = this.#createContext(lifetime, meta, requirements);
       const output = await plugin.setup(context, config);
       const services = new Map<string, unknown>();
+      // The types already require these, but `setup()` may come from JavaScript
+      // or from a Plugin loaded at runtime, where nothing checked them. A missing
+      // Service has to fail here rather than surface later as an `undefined`
+      // dependency inside whatever consumed it.
       for (const [alias, token] of Object.entries(plugin.provides ?? {})) {
         if (typeof output !== "object" || output === null || !Object.hasOwn(output, alias)) {
           throw new DougongError(
@@ -238,6 +277,10 @@ export class InstanceCoordinator {
       try {
         await lifetime.dispose();
       } catch (cleanupError) {
+        // A failed `setup()` may have already registered listeners, tasks or
+        // cleanups. If disposing them also fails, this Installation is not
+        // merely broken — something it created is still alive and unowned. The
+        // distinct error type is what tells the Engine that rollback is unsafe.
         throw new IncompleteActivationCleanupError(
           [failure, cleanupError],
           `Installation '${installation.id}' failed to start and could not be cleanly disposed`,
@@ -280,6 +323,12 @@ export class InstanceCoordinator {
     plugin: NormalizedPlugin,
     lifetime: Lifetime,
   ): Record<string, unknown> {
+    // Requirements resolve through `plan.providerFor`, the edge recorded when the
+    // graph was built — not by searching for whoever currently provides the id.
+    // The dependency a Plugin was validated against is the one it receives.
+    //
+    // A null prototype because these keys come from the declaration: an alias
+    // called `toString` must be a requirement, not an inherited method.
     const values: Record<string, unknown> = Object.create(null);
     for (const [alias, requirement] of Object.entries(plugin.requires ?? {})) {
       if (requirement.kind === "optional") {
@@ -401,6 +450,13 @@ export class InstanceCoordinator {
   }
 }
 
+// Separates real failures from the cancellations they caused.
+//
+// When one Instance in a layer fails, the shared controller aborts and every
+// sibling rejects with that same reason. Reporting all of them would turn one
+// root cause into N identical errors, so the root is kept once and the derived
+// cancellations are dropped. A sibling that failed for its own reason is still
+// reported — two genuine failures in one layer are two errors.
 function collectActivationFailures<T>(
   results: ReadonlyArray<PromiseSettledResult<T>>,
   signal: AbortSignal,

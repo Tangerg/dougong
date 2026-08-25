@@ -1,3 +1,12 @@
+// Two independent structures live in this file:
+//
+//   GroupConfigurationSession  the transaction shared by a `group()` callback and
+//                              every nested `group()` inside it
+//   GroupNode                  the ownership tree itself
+//
+// They are separate because a configuration transaction is short-lived and
+// spans several nodes, while a node outlives every transaction that touched it.
+
 type GroupConfigurationState<Draft> =
   | {
       readonly phase: "open";
@@ -13,7 +22,15 @@ type GroupConfigurationState<Draft> =
     }
   | { readonly phase: "sealed" };
 
-/** One explicit transaction shared by every nested Group configure callback. */
+/**
+ * One explicit transaction shared by every nested Group configure callback.
+ *
+ * Nested `group()` calls join the outer session instead of opening their own, so
+ * a whole tree of groups declared in one statement commits once. A failure
+ * anywhere in that tree fails the session, which is why `fail()` records the
+ * first error and later calls return it unchanged: the cause of a collapsed tree
+ * is the first thing that went wrong, not the last.
+ */
 export class GroupConfigurationSession<Draft> {
   #state: GroupConfigurationState<Draft>;
 
@@ -82,6 +99,11 @@ type GroupNodeState =
 /**
  * A Group is an ownership tree over installations, never a capability scope.
  * Service resolution and ExtensionPoint/Event visibility remain Host-wide.
+ *
+ * So a Plugin inside a Group sees exactly what it would see outside one: the
+ * same providers, the same contributions. The only thing membership decides is
+ * what gets removed together. Ids are paths (`/ui/panels`) because a position in
+ * this tree is the whole meaning of a Group.
  */
 export class GroupNode {
   readonly #children = new Map<string, GroupNode>();
@@ -137,6 +159,10 @@ export class GroupNode {
     }
   }
 
+  // Depth-first, and children are detached before this node unlinks itself from
+  // its parent. A node that unlinked first would leave its subtree unreachable
+  // but still attached, so those groups would report themselves as live with no
+  // path back to the root.
   detach() {
     const state = this.#state;
     if (state.phase === "detached") return;
