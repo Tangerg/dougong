@@ -1,0 +1,313 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Dougong Execution Architecture",
+    "output": "execution-architecture.html",
+    "quality_profile": "showcase",
+    "repository": {
+      "url": "https://github.com/Tangerg/dougong",
+      "revision": "67f7cc984c6e80ba2076b82b2b8b1e552317a827"
+    },
+    "viewBox": [1180, 650],
+    "views": [
+      {
+        "id": "command-path",
+        "label": "Command path",
+        "focus": ["plugin", "host", "engine", "instances"],
+        "note": "Every mutation is serialized by Host, planned by Engine, and executed by InstanceCoordinator."
+      },
+      {
+        "id": "read-path",
+        "label": "Read path",
+        "focus": ["appCode", "host", "diagnostics"],
+        "note": "Application code reads committed state only; diagnostics is an immutable projection it cannot steer."
+      },
+      {
+        "id": "external-code",
+        "label": "External code",
+        "focus": ["platform", "authorizer", "activator", "loader", "host"],
+        "note": "Platform authorizes and loads outside code, then compiles the result into one Core ChangeSet."
+      }
+    ]
+  },
+  "components": [
+    {
+      "id": "plugin",
+      "type": "external",
+      "label": "Plugin",
+      "sublabel": "requires \u00b7 provides \u00b7 setup",
+      "pos": [20, 150],
+      "size": [140, 76],
+      "sources": [
+        {
+          "path": "packages/core/src/plugin.ts",
+          "label": "definePlugin"
+        }
+      ]
+    },
+    {
+      "id": "appCode",
+      "type": "external",
+      "label": "Application code",
+      "sublabel": "outside the graph",
+      "pos": [20, 270],
+      "size": [140, 76],
+      "sources": [
+        {
+          "path": "docs/en/guide/application-code.md",
+          "label": "guide"
+        }
+      ]
+    },
+    {
+      "id": "registry",
+      "type": "backend",
+      "label": "InstallationRegistry",
+      "sublabel": "declarations + authority",
+      "pos": [300, 30],
+      "size": [180, 72],
+      "sources": [
+        {
+          "path": "packages/core/src/installation-registry.ts"
+        }
+      ]
+    },
+    {
+      "id": "groups",
+      "type": "backend",
+      "label": "GroupCoordinator",
+      "sublabel": "installation ownership",
+      "pos": [620, 30],
+      "size": [180, 72],
+      "sources": [
+        {
+          "path": "packages/core/src/group-coordinator.ts"
+        }
+      ]
+    },
+    {
+      "id": "host",
+      "type": "backend",
+      "label": "Host",
+      "sublabel": "serialized command boundary",
+      "tag": "createHost()",
+      "pos": [300, 190],
+      "size": [180, 116],
+      "sources": [
+        {
+          "path": "packages/core/src/host.ts"
+        }
+      ]
+    },
+    {
+      "id": "engine",
+      "type": "backend",
+      "label": "Engine",
+      "sublabel": "commit \u00b7 rollback \u00b7 fail-closed",
+      "pos": [620, 190],
+      "size": [180, 116],
+      "sources": [
+        {
+          "path": "packages/core/src/engine.ts"
+        }
+      ]
+    },
+    {
+      "id": "instances",
+      "type": "backend",
+      "label": "InstanceCoordinator",
+      "sublabel": "live Instances + Lifetimes",
+      "pos": [940, 190],
+      "size": [180, 116],
+      "sources": [
+        {
+          "path": "packages/core/src/instance-coordinator.ts"
+        }
+      ]
+    },
+    {
+      "id": "diagnostics",
+      "type": "database",
+      "label": "Diagnostics",
+      "sublabel": "immutable, read-only",
+      "pos": [940, 340],
+      "size": [180, 90],
+      "sources": [
+        {
+          "path": "packages/core/src/diagnostics.ts"
+        }
+      ]
+    },
+    {
+      "id": "authorizer",
+      "type": "security",
+      "label": "Authorizer",
+      "sublabel": "policy port, not a sandbox",
+      "pos": [20, 530],
+      "size": [140, 76],
+      "sources": [
+        {
+          "path": "packages/platform/src/permissions.ts"
+        }
+      ]
+    },
+    {
+      "id": "platform",
+      "type": "cloud",
+      "label": "Platform",
+      "sublabel": "manifest \u00b7 apiVersion",
+      "tag": "createPlatform()",
+      "pos": [300, 520],
+      "size": [180, 96],
+      "sources": [
+        {
+          "path": "packages/platform/src/platform.ts"
+        }
+      ]
+    },
+    {
+      "id": "activator",
+      "type": "cloud",
+      "label": "Activator",
+      "sublabel": "lazy activation, gated",
+      "pos": [620, 520],
+      "size": [180, 96],
+      "sources": [
+        {
+          "path": "packages/platform/src/activator.ts"
+        }
+      ]
+    },
+    {
+      "id": "loader",
+      "type": "external",
+      "label": "Loader",
+      "sublabel": "module boundary",
+      "pos": [940, 470],
+      "size": [140, 76],
+      "sources": [
+        {
+          "path": "packages/platform/src/loader.ts"
+        }
+      ]
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "@dougongjs/core \u2014 capability composition and structured lifetime",
+      "wraps": ["registry", "groups", "host", "engine", "instances", "diagnostics"]
+    },
+    {
+      "kind": "region",
+      "label": "@dougongjs/platform \u2014 external plugin delivery",
+      "wraps": ["platform", "activator"]
+    }
+  ],
+  "connections": [
+    {
+      "id": "install",
+      "from": "plugin",
+      "to": "host",
+      "label": "install() \u00b7 change()"
+    },
+    {
+      "id": "read-committed",
+      "from": "appCode",
+      "to": "host",
+      "label": "get() \u00b7 contributions()",
+      "variant": "emphasis"
+    },
+    {
+      "id": "store-declarations",
+      "from": "host",
+      "to": "registry",
+      "label": "stores declarations",
+      "labelDx": -46
+    },
+    {
+      "id": "own-groups",
+      "from": "host",
+      "to": "groups",
+      "label": "owns Group subtrees",
+      "fromSide": "top",
+      "toSide": "left"
+    },
+    {
+      "id": "serialized-commands",
+      "from": "host",
+      "to": "engine",
+      "label": "serialized commands",
+      "variant": "emphasis"
+    },
+    {
+      "id": "switch-graph",
+      "from": "engine",
+      "to": "instances",
+      "label": "activate / deactivate",
+      "variant": "emphasis"
+    },
+    {
+      "id": "project-state",
+      "from": "instances",
+      "to": "diagnostics",
+      "label": "publishes snapshots",
+      "labelDy": 40
+    },
+    {
+      "id": "compile-changeset",
+      "from": "platform",
+      "to": "host",
+      "label": "one Core ChangeSet",
+      "variant": "emphasis",
+      "labelDy": -56
+    },
+    {
+      "id": "authorize",
+      "from": "platform",
+      "to": "authorizer",
+      "label": "authorize(manifest)",
+      "variant": "security"
+    },
+    {
+      "id": "delegate-activation",
+      "from": "platform",
+      "to": "activator",
+      "label": "delegates activation"
+    },
+    {
+      "id": "load-module",
+      "from": "activator",
+      "to": "loader",
+      "label": "load(reference)",
+      "variant": "dashed"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "emerald",
+      "title": "One source of truth each",
+      "items": [
+        "Registry owns declarations; Engine owns the committed plan",
+        "Host adds no state of its own \u2014 it serializes and publishes"
+      ]
+    },
+    {
+      "dot": "cyan",
+      "title": "Only committed state is visible",
+      "items": [
+        "Setup declarations stay staged until the whole layer validates",
+        "A failed change rolls back, or fails closed when it cannot"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "Platform compiles, never duplicates",
+      "items": [
+        "Manifest, permission and loading policy stay in Platform",
+        "Permissions are a policy port \u2014 real isolation needs a Worker"
+      ]
+    }
+  ]
+}

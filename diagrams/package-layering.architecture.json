@@ -1,0 +1,219 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Dougong Package Layering",
+    "output": "package-layering.html",
+    "quality_profile": "showcase",
+    "repository": {
+      "url": "https://github.com/Tangerg/dougong",
+      "revision": "67f7cc984c6e80ba2076b82b2b8b1e552317a827"
+    },
+    "viewBox": [1000, 550],
+    "views": [
+      {
+        "id": "foundations",
+        "label": "Independent foundations",
+        "focus": ["core", "reactive"],
+        "note": "No edge joins them because none exists: neither package imports the other."
+      },
+      {
+        "id": "one-way",
+        "label": "One-way direction",
+        "focus": ["examples", "facade", "platform", "core"],
+        "note": "Platform depends only on Core, the facade only re-exports, and no published package may import examples."
+      },
+      {
+        "id": "enforcement",
+        "label": "Enforcement",
+        "focus": ["layers", "api", "circular"],
+        "note": "Every edge above becomes a CI failure when reversed."
+      }
+    ]
+  },
+  "components": [
+    {
+      "id": "examples",
+      "type": "external",
+      "label": "@dougongjs/examples",
+      "sublabel": "12 chapters, private",
+      "tag": "outermost consumer",
+      "pos": [400, 20],
+      "size": [200, 76],
+      "sources": [
+        {
+          "path": "packages/examples/src/suite.ts"
+        }
+      ]
+    },
+    {
+      "id": "reactive",
+      "type": "backend",
+      "label": "@dougongjs/reactive",
+      "sublabel": "zero dependencies",
+      "tag": "foundation",
+      "pos": [60, 152],
+      "size": [200, 76],
+      "sources": [
+        {
+          "path": "packages/reactive/src/index.ts"
+        }
+      ]
+    },
+    {
+      "id": "facade",
+      "type": "cloud",
+      "label": "dougong",
+      "sublabel": "re-exports only, no logic",
+      "pos": [400, 152],
+      "size": [200, 76],
+      "sources": [
+        {
+          "path": "packages/dougong/src/index.ts"
+        }
+      ]
+    },
+    {
+      "id": "core",
+      "type": "backend",
+      "label": "@dougongjs/core",
+      "sublabel": "one-way module ranks",
+      "tag": "foundation",
+      "pos": [400, 290],
+      "size": [200, 84],
+      "sources": [
+        {
+          "path": "packages/core/src/index.ts"
+        }
+      ]
+    },
+    {
+      "id": "platform",
+      "type": "cloud",
+      "label": "@dougongjs/platform",
+      "sublabel": "external plugin delivery",
+      "pos": [740, 290],
+      "size": [200, 84],
+      "sources": [
+        {
+          "path": "packages/platform/src/index.ts"
+        }
+      ]
+    },
+    {
+      "id": "layers",
+      "type": "security",
+      "label": "check-layers",
+      "sublabel": "direction \u00b7 ranks \u00b7 vocabulary",
+      "pos": [60, 420],
+      "size": [200, 76],
+      "sources": [
+        {
+          "path": "scripts/check-layers.mjs"
+        }
+      ]
+    },
+    {
+      "id": "api",
+      "type": "security",
+      "label": "check-api",
+      "sublabel": "built declaration surface",
+      "pos": [400, 420],
+      "size": [200, 76],
+      "sources": [
+        {
+          "path": "scripts/check-api-surface.mjs"
+        }
+      ]
+    },
+    {
+      "id": "circular",
+      "type": "security",
+      "label": "check-circular",
+      "sublabel": "empty allowlist",
+      "pos": [740, 420],
+      "size": [200, 76],
+      "sources": [
+        {
+          "path": "scripts/check-circular.mjs"
+        }
+      ]
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "Published packages",
+      "wraps": ["reactive", "facade", "core", "platform"]
+    },
+    {
+      "kind": "security-group",
+      "label": "pnpm check \u2014 reversing any edge above fails CI",
+      "wraps": ["layers", "api", "circular"]
+    }
+  ],
+  "connections": [
+    {
+      "id": "examples-facade",
+      "from": "examples",
+      "to": "facade",
+      "label": "public API only",
+      "variant": "emphasis",
+      "labelDy": 40
+    },
+    {
+      "id": "facade-reactive",
+      "from": "facade",
+      "to": "reactive",
+      "label": "forwards signals"
+    },
+    {
+      "id": "facade-core",
+      "from": "facade",
+      "to": "core",
+      "label": "re-exports",
+      "labelDy": 44
+    },
+    {
+      "id": "facade-platform",
+      "from": "facade",
+      "to": "platform",
+      "label": "re-exports",
+      "fromSide": "right",
+      "toSide": "top"
+    },
+    {
+      "id": "platform-core",
+      "from": "platform",
+      "to": "core",
+      "label": "compiles onto",
+      "variant": "emphasis"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "emerald",
+      "title": "Two independent foundations",
+      "items": [
+        "Core and reactive are joined by no edge because neither imports the other",
+        "They meet only at get()/subscribe() and the Lifetime object protocol"
+      ]
+    },
+    {
+      "dot": "cyan",
+      "title": "Direction is mechanical, not cultural",
+      "items": [
+        "Each Core and Platform module declares a rank and imports only lower ranks",
+        "A rank without a file, and a file without a rank, both fail"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "Narrow runtime surface",
+      "items": [
+        "Core's only runtime dependency is the @standard-schema/spec type contract",
+        "Any statement other than a re-export in the facade fails CI"
+      ]
+    }
+  ]
+}
