@@ -156,11 +156,19 @@ Each package's `public-api.types.ts` uses `expectTypeOf` and TypeScript expected
 
 | Package | statements | branches | functions | lines |
 | --- | --- | --- | --- | --- |
-| core | 92 | 83 | 96 | 95 |
-| platform | 97 | 90 | 100 | 98 |
+| core | 93 | 86 | 96 | 96 |
+| platform | 97 | 92 | 100 | 99 |
 | reactive | 96 | 89 | 100 | 99 |
 
 A package cannot hide its own regression behind stronger coverage elsewhere in the workspace. Keeping the numbers tight is deliberate: slack is permission to quietly delete tests.
+
+::: tip These are floors, not targets
+Most of what remains uncovered is defence-in-depth behind an earlier check: a
+`GroupNode.assertAttached()` that the `GroupCoordinator` has already refused, a
+self-dependency `SERVICE_CYCLE` that `definePlugin` rejects first. Reaching those
+lines means bypassing the public API, so pushing the numbers higher would buy
+assertions about unreachable states rather than protection of behaviour.
+:::
 
 `check:api` derives this table from `vitest.config.ts` and verifies both language versions, so raising a floor without updating the documentation cannot pass.
 

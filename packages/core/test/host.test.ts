@@ -352,6 +352,112 @@ describe("Host", () => {
     expect(() => host.install(invalid)).toThrow("cannot start or end with whitespace");
   });
 
+  it("rejects requirement aliases that would shadow the context API", () => {
+    // Requirement aliases become properties on the context a Plugin receives, so
+    // an alias named `spawn` would replace a Lifetime operation. Declaration time
+    // is the only point where the author can still rename it; discovering the
+    // collision inside setup() would mean discovering it as a missing method.
+    const TOKEN = service<string>("test/reserved-alias");
+
+    for (const reserved of [
+      "signal",
+      "meta",
+      "log",
+      "cleanup",
+      "lifetime",
+      "spawn",
+      "on",
+      "emit",
+      "contribute",
+    ]) {
+      expect(() =>
+        definePlugin({
+          name: "test.reserved-alias",
+          requires: { [reserved]: TOKEN } as never,
+          setup() {},
+        }),
+      ).toThrowError(
+        new TypeError(`Plugin requirement '${reserved}' conflicts with the context API`),
+      );
+    }
+  });
+
+  it("rejects declarations whose aliases or Contracts are not usable", () => {
+    const TOKEN = service<string>("test/unusable-declaration");
+    const POINT = extensionPoint<string>("test/unusable-point");
+
+    expect(() =>
+      definePlugin({ name: "test.blank-requirement", requires: { "": TOKEN }, setup() {} }),
+    ).toThrowError(new TypeError("Plugin requirement alias cannot be empty"));
+    expect(() =>
+      definePlugin({
+        name: "test.non-contract-requirement",
+        requires: { token: null as never },
+        setup() {},
+      }),
+    ).toThrowError(new TypeError("Plugin requirement 'token' is not a contract"));
+    // `optional()` refuses a non-Service, so an object that only claims to be an
+    // optional requirement has to be rejected here too.
+    expect(() =>
+      definePlugin({
+        name: "test.fake-optional",
+        requires: { token: { kind: "optional", service: POINT } as never },
+        setup() {},
+      }),
+    ).toThrowError(new TypeError("Optional requirement 'token' must wrap a Service"));
+    expect(() =>
+      definePlugin({
+        name: "test.event-requirement",
+        requires: { notice: event<void>("test/unusable-event") as never },
+        setup() {},
+      }),
+    ).toThrowError(
+      new TypeError("Plugin requirement 'notice' must be a Service or ExtensionPoint"),
+    );
+
+    expect(() =>
+      definePlugin({
+        name: "test.blank-provision",
+        provides: { "": TOKEN } as never,
+        setup: () => ({ "": "value" }) as never,
+      }),
+    ).toThrowError(new TypeError("Plugin provision alias cannot be empty"));
+    expect(() =>
+      definePlugin({
+        name: "test.padded-provision",
+        provides: { " token": TOKEN } as never,
+        setup: () => ({ " token": "value" }) as never,
+      }),
+    ).toThrowError(new TypeError("Plugin provision alias cannot start or end with whitespace"));
+    // Only a Service can be provided: an ExtensionPoint is an open set many
+    // Installations write into, so no single Plugin can claim to supply it.
+    expect(() =>
+      definePlugin({
+        name: "test.point-provision",
+        provides: { point: POINT } as never,
+        setup: () => ({ point: "value" }) as never,
+      }),
+    ).toThrowError(new TypeError("Plugin provision 'point' must be a Service"));
+  });
+
+  it("names both kinds when one Contract id is declared as two", () => {
+    // One id must mean one kind. The message says which two, because the fix
+    // depends on which of the two declarations was the mistake.
+    const id = "test/conflicting-kind";
+
+    expect(() =>
+      definePlugin({
+        name: "test.conflicting-kind",
+        requires: { point: extensionPoint<string>(id), token: service<string>(id) },
+        setup() {},
+      }),
+    ).toThrowError(
+      new TypeError(
+        `Plugin 'test.conflicting-kind' uses Contract '${id}' as both ExtensionPoint and Service`,
+      ),
+    );
+  });
+
   it("isolates Host commands from failing diagnostics observers", async () => {
     const logger = {
       debug: vi.fn<(...args: unknown[]) => void>(),
@@ -1087,6 +1193,115 @@ describe("Host", () => {
     expect(host.status).toBe("idle");
     expect(installation.status).toBe("failed");
     expect(() => host.get(WORKER)).toThrow("Host services are not active");
+  });
+
+  it("fails closed when a failed activation cannot dispose what it already created", async () => {
+    // Rollback is only safe when the abandoned activation left nothing behind.
+    // Here setup() registers a cleanup and then throws, and the cleanup throws
+    // too — so something the new Instance created is still owned by nobody.
+    // Restoring the previous Instance would run two owners of it at once.
+    const WORKER = service<string>("test/unclean-activation-worker");
+    const setupFailure = new Error("replacement setup failed");
+    const cleanupFailure = new Error("replacement resource is still owned");
+
+    const previous = definePlugin({
+      name: "test.unclean-activation-worker",
+      provides: { worker: WORKER },
+      setup: () => ({ worker: "previous" }),
+    });
+    const replacement = definePlugin({
+      name: "test.unclean-activation-worker",
+      provides: { worker: WORKER },
+      setup(ctx) {
+        ctx.cleanup(() => {
+          throw cleanupFailure;
+        });
+        throw setupFailure;
+      },
+    });
+
+    const host = createHost();
+    const installation = host.install(previous);
+    await host.start();
+    expect(host.get(WORKER)).toBe("previous");
+
+    const failure = await installation.update({ plugin: replacement }).then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+
+    expect(failure).toBeInstanceOf(AggregateError);
+    expect(failure).toMatchObject({
+      message:
+        "Installation change failed and its partial activation could not be cleanly disposed",
+    });
+    // Fail closed, not rolled back: the Host reports idle and refuses reads
+    // rather than presenting the previous Service as healthy.
+    expect(host.status).toBe("idle");
+    expect(() => host.get(WORKER)).toThrow("Host services are not active");
+  });
+
+  it("aggregates a failed startup with the cleanup failures it caused", async () => {
+    // The provider activates, the consumer fails, and disposing the provider
+    // fails too. Both errors reach the caller: neither the reason startup failed
+    // nor the resource left behind may be dropped.
+    const ROOT = service<string>("test/startup-aggregate-root");
+    const startupFailure = new Error("consumer setup failed");
+    const cleanupFailure = new Error("provider resource is still owned");
+
+    const provider = definePlugin({
+      name: "test.startup-aggregate-root",
+      provides: { root: ROOT },
+      setup(ctx) {
+        ctx.cleanup(() => {
+          throw cleanupFailure;
+        });
+        return { root: "root" };
+      },
+    });
+    const consumer = definePlugin({
+      name: "test.startup-aggregate-consumer",
+      requires: { root: ROOT },
+      setup() {
+        throw startupFailure;
+      },
+    });
+
+    const host = createHost();
+    host.install(provider);
+    host.install(consumer);
+
+    const failure = await host.start().then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+
+    expect(failure).toBeInstanceOf(AggregateError);
+    expect(failure).toMatchObject({ message: "Host startup failed" });
+    expect((failure as AggregateError).errors).toEqual([startupFailure, cleanupFailure]);
+    expect(host.status).toBe("idle");
+  });
+
+  it("discards staged Installations when a ChangeSet cannot claim authority", async () => {
+    // The Group is removed between staging and commit, so `attach` fails before
+    // any operation executes. The handle the caller already holds must report
+    // the real reason instead of behaving like an Installation that is merely
+    // not ready yet.
+    const plugin = definePlugin({ name: "test.unclaimed-install", setup() {} });
+    const host = createHost();
+    await host.start();
+
+    const group = host.group("doomed", () => undefined);
+    const change = group.change();
+    const installation = change.install(plugin);
+    await group.remove();
+
+    await expect(change.commit()).rejects.toThrow("Group '/doomed' has been removed");
+    expect(installation.status).toBe("failed");
+    await expect(installation.ready()).rejects.toThrow("Group '/doomed' has been removed");
+    expect(host.diagnostics.get().installations.has(installation.id)).toBe(false);
+
+    await host.stop();
   });
 
   it("fails the whole Host closed when affected Instances cannot be cleaned up", async () => {

@@ -10,6 +10,51 @@ import {
   type Installation,
 } from "../src/index";
 
+describe("group structure", () => {
+  // A Group id is a path, so its name is the segment. Rejecting a blank, padded
+  // or slash-bearing name at creation keeps `/workspace/session` a faithful
+  // description of the tree instead of a string that only looks like one.
+  it.each([
+    ["a blank name", "", "Group name must be a non-empty string"],
+    ["a whitespace-only name", "   ", "Group name must be a non-empty string"],
+    ["a padded name", " workspace ", "Group name cannot start or end with whitespace"],
+    ["an embedded separator", "workspace/session", "Group name cannot contain '/'"],
+  ])("rejects %s", (_label, name, message) => {
+    const host = createHost();
+
+    expect(() => host.group(name, () => undefined)).toThrowError(new TypeError(message));
+  });
+
+  it("rejects a non-function configure rather than creating an unconfigured Group", () => {
+    const host = createHost();
+
+    expect(() => host.group("workspace", undefined as never)).toThrowError(
+      new TypeError("Group configure must be a function"),
+    );
+    expect(host.diagnostics.get().groups.has("/workspace")).toBe(false);
+  });
+
+  it("rejects a duplicate sibling name so one path always means one Group", () => {
+    const host = createHost();
+    host.group("workspace", () => undefined);
+
+    expect(() => host.group("workspace", () => undefined)).toThrowError(
+      new TypeError("Group '/workspace' already exists"),
+    );
+  });
+
+  it("reports an empty Group as active because it owns nothing to wait for", async () => {
+    const host = createHost();
+    const empty = host.group("empty", () => undefined);
+    await host.start();
+
+    expect(empty.status).toBe("active");
+    await expect(empty.ready()).resolves.toBeUndefined();
+
+    await host.stop();
+  });
+});
+
 describe("plugin groups", () => {
   it("groups ownership without creating a second capability namespace", async () => {
     const FILES = service<{ read(): string }>("group/files");

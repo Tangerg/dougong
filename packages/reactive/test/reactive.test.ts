@@ -301,6 +301,71 @@ describe("computed", () => {
     expect(calculate).toHaveBeenCalledTimes(2);
   });
 
+  it("rejects a computed signal that reads itself", () => {
+    // There is no value to return, so recursing would exhaust the stack instead
+    // of reporting the mistake. Both the direct case and the indirect one fail.
+    let self!: { get(): number };
+    self = computed(() => self.get() + 1);
+
+    expect(() => self.get()).toThrowError(new TypeError("Circular computed signal"));
+
+    let left!: { get(): number };
+    let right!: { get(): number };
+    left = computed(() => right.get() + 1);
+    right = computed(() => left.get() + 1);
+
+    expect(() => left.get()).toThrowError(new TypeError("Circular computed signal"));
+  });
+
+  it("detaches its dependency subscriptions when its last subscriber leaves", () => {
+    // Observed and unobserved are genuinely different modes. While observed, a
+    // computed subscribes to its dependencies so it can notify onward; dropping
+    // the last subscriber must release those edges, or an unread computed would
+    // keep the signals it reads alive through a listener nobody wants.
+    const value = signal(1);
+    const calculate = vi.fn<() => number>(() => value.get() * 2);
+    const doubled = computed(calculate);
+    const listener = vi.fn<() => void>();
+
+    const subscription = doubled.subscribe(listener);
+    expect(calculate).toHaveBeenCalledTimes(1);
+    value.set(2);
+    expect(listener).toHaveBeenCalledOnce();
+
+    subscription.dispose();
+    value.set(3);
+    expect(listener).toHaveBeenCalledOnce();
+    // Still correct on demand: freshness is rechecked at read time.
+    expect(doubled.get()).toBe(6);
+  });
+
+  it("stops an unobserved chain when a dependency recomputes to an equal value", () => {
+    // `#version` advances only when a computed value actually changes. An
+    // unobserved reader dirty-checks by comparing dependency versions, so an
+    // upstream edit it cannot observe costs one recomputation of the dependency
+    // and none of its own.
+    const value = signal(1);
+    const parity = vi.fn<() => number>(() => value.get() % 2);
+    const oddness = computed(parity);
+    const label = vi.fn<() => string>(() => `parity:${oddness.get()}`);
+    const described = computed(label);
+
+    expect(described.get()).toBe("parity:1");
+    expect(parity).toHaveBeenCalledTimes(1);
+    expect(label).toHaveBeenCalledTimes(1);
+
+    value.set(3);
+
+    expect(described.get()).toBe("parity:1");
+    expect(parity).toHaveBeenCalledTimes(2);
+    expect(label).toHaveBeenCalledTimes(1);
+
+    // A change that does move the value propagates normally.
+    value.set(2);
+    expect(described.get()).toBe("parity:0");
+    expect(label).toHaveBeenCalledTimes(2);
+  });
+
   it("rejects asynchronous computed calculations", async () => {
     const value = signal(1);
     const derived = computed(async () => {

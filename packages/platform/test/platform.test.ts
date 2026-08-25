@@ -311,6 +311,17 @@ describe("Platform", () => {
     expect(() => platform.change().register(null as never)).toThrowError(
       new TypeError("Artifact declaration must be a plain record"),
     );
+    // `manifest` and `reference` are required, and an absent one is not the same
+    // as `undefined`: naming the missing field is the difference between a fixable
+    // message and a validation error from somewhere deeper.
+    expect(() => platform.change().register({ reference: "empty" } as never)).toThrowError(
+      new TypeError("Artifact declaration must define manifest"),
+    );
+    expect(() =>
+      platform.change().register({
+        manifest: { name: "invalid.no-reference", version: "1.0.0" },
+      } as never),
+    ).toThrowError(new TypeError("Artifact declaration must define reference"));
     const empty = await platform.register({
       manifest: { name: "invalid.empty-module", version: "1.0.0" },
       reference: "empty",
@@ -537,6 +548,55 @@ describe("Platform", () => {
         permissions: ["fs", "fs"],
       }),
     ).toThrow("duplicate permission");
+    expect(() =>
+      defineManifest({
+        name: "demo",
+        version: "1.0.0",
+        activation: ["startup", "startup"],
+      }),
+    ).toThrow("duplicate activation event");
+    // `.strict()`, so an unknown field is an error rather than a setting that
+    // silently does nothing. A manifest typo has to be visible to its author.
+    expect(() =>
+      defineManifest({ name: "demo", version: "1.0.0", permision: ["fs"] } as never),
+    ).toThrowError(
+      expect.objectContaining({
+        code: "MANIFEST_INVALID",
+        message: expect.stringContaining("permision"),
+      }),
+    );
+  });
+
+  it("reports one code however a manifest fails to validate", () => {
+    // A manifest may arrive from a file, a registry response or another process,
+    // so the validator itself can throw on input it was never built to see. Every
+    // path collapses to MANIFEST_INVALID with the original kept as `cause`, so a
+    // caller has one code to handle.
+    const readFailure = new Error("declaration could not be read");
+    const unreadable = new Proxy(
+      { name: "demo.unreadable", version: "1.0.0" },
+      {
+        ownKeys() {
+          throw readFailure;
+        },
+      },
+    );
+
+    const failure = (() => {
+      try {
+        defineManifest(unreadable as never);
+      } catch (error) {
+        return error;
+      }
+      throw new Error("Expected defineManifest to fail");
+    })();
+
+    expect(failure).toBeInstanceOf(PlatformError);
+    expect(failure).toMatchObject({
+      code: "MANIFEST_INVALID",
+      message: "Manifest declaration could not be read",
+      cause: readFailure,
+    });
   });
 
   it("rejects malformed optional placeholders instead of treating them as absent", () => {
@@ -1477,6 +1537,47 @@ describe("Platform", () => {
     await committing;
     expect(registration.manifest.version).toBe("1.1.0");
     await Promise.all([first.dispose(), second.dispose()]);
+  });
+
+  it("refuses to rename a Registration through an update", async () => {
+    // A Registration is the stable identity of one Manifest name. Its version,
+    // reference, permissions and dependencies may all be replaced; the name is
+    // what makes it the same Registration, so changing it is a new registration
+    // and a removal, not an update.
+    const plugin = definePlugin({ name: "change.identity", setup() {} });
+    const platform = createPlatform({
+      installer: createHost(),
+      apiVersion: "1.0.0",
+      loader: new MemoryLoader(new Map([["plugin", { default: plugin }]])),
+    });
+    const registration = await platform.register({
+      manifest: { name: "change.identity", version: "1.0.0" },
+      reference: "plugin",
+    });
+
+    const change = platform.change();
+    expect(() =>
+      change.update(registration, {
+        manifest: { name: "change.renamed", version: "1.0.0" },
+        reference: "plugin",
+      }),
+    ).toThrowError(
+      new PlatformError(
+        "REGISTRATION_IDENTITY",
+        "Registration 'change.identity' cannot change name to 'change.renamed'",
+      ),
+    );
+    // Rejected at staging, so nothing was locked and the draft is still usable.
+    expect(
+      change.update(registration, {
+        manifest: { name: "change.identity", version: "2.0.0" },
+        reference: "plugin",
+      }),
+    ).toBeUndefined();
+    await change.commit();
+
+    expect(registration.manifest.version).toBe("2.0.0");
+    await platform.dispose();
   });
 
   it("validates every change target before locking any Registration", async () => {

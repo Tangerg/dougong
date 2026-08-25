@@ -45,13 +45,20 @@ export default defineConfig({
       include: ["packages/*/src/**"],
       // Thresholds follow the measured package floors. A package cannot hide a
       // regression behind stronger coverage elsewhere in the workspace.
+      //
+      // They are floors, not targets. The remaining gap in each package is
+      // defence-in-depth behind an earlier check — a `GroupNode.assertAttached()`
+      // that the GroupCoordinator has already refused, a `SERVICE_CYCLE` for a
+      // self-dependency that `definePlugin` rejects first. Reaching those lines
+      // would mean bypassing the public API, so raising the numbers further
+      // would buy assertions about unreachable states rather than behaviour.
       thresholds: {
-        "packages/core/src/**": { statements: 92, functions: 96, branches: 83, lines: 95 },
+        "packages/core/src/**": { statements: 93, functions: 96, branches: 86, lines: 96 },
         "packages/platform/src/**": {
           statements: 97,
           functions: 100,
-          branches: 90,
-          lines: 98,
+          branches: 92,
+          lines: 99,
         },
         "packages/reactive/src/**": { statements: 96, functions: 100, branches: 89, lines: 99 },
       },

@@ -156,11 +156,15 @@ facade 的面不重述而是**算出来**：它必须恰好等于 core + platfor
 
 | 包 | statements | branches | functions | lines |
 | --- | --- | --- | --- | --- |
-| core | 92 | 83 | 96 | 95 |
-| platform | 97 | 90 | 100 | 98 |
+| core | 93 | 86 | 96 | 96 |
+| platform | 97 | 92 | 100 | 99 |
 | reactive | 96 | 89 | 100 | 99 |
 
 一个包不能靠工作区里别处的高覆盖率掩盖自己的回归。阈值定得贴近实测是有意的：留出裕度就等于允许悄悄删测试。
+
+::: tip 这是地板，不是目标
+剩下的未覆盖行大多是**更早一层检查之后的纵深防御**：`GroupCoordinator` 已经拒绝过的 `GroupNode.assertAttached()`、`definePlugin` 已经拒绝过的自依赖 `SERVICE_CYCLE`。要执行到这些行必须绕过公共 API，所以继续拉高数字买到的是"对不可达状态的断言"，而不是行为保护。
+:::
 
 `check:api` 会从 `vitest.config.ts` 推导这张表并核对中英文页面；提高门槛却忘记更新文档不能通过。
 

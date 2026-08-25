@@ -144,6 +144,30 @@ describe("SnapshotPublisher", () => {
     expect(() => subscription.dispose()).not.toThrow();
   });
 
+  it("is owned by a using declaration through the disposal protocol", () => {
+    // SnapshotPublisher is public, so application code building its own
+    // diagnostics surface owns one. Requiring both `dispose()` and the
+    // well-known symbol is what lets `using` work without an adapter; this
+    // exercises the symbol path rather than the method.
+    const listener = vi.fn<() => void>();
+    let escaped!: SnapshotPublisher<number>;
+
+    {
+      using publisher = new SnapshotPublisher(
+        () => 1,
+        () => undefined,
+      );
+      publisher.view.subscribe(listener);
+      escaped = publisher;
+      expect(() => publisher.invalidate()).not.toThrow();
+      expect(listener).toHaveBeenCalledOnce();
+    }
+
+    expect(() => escaped.invalidate()).toThrow("Snapshot publisher is disposed");
+    expect(escaped.view.get()).toBe(1);
+    expect(listener).toHaveBeenCalledOnce();
+  });
+
   it("validates callback boundaries", () => {
     expect(() => new SnapshotPublisher(undefined as never, () => undefined)).toThrow(
       "Snapshot reader must be a function",
