@@ -1,91 +1,138 @@
-# Dougong repository guidance
+# AGENTS.md
 
-## Domain vocabulary
+## Priorities
 
-Every noun names exactly one lifecycle stage. Reading the name must be enough to
-know which layer an object belongs to, who owns it, and what may be done to it —
-without opening the implementation.
+Preserve correctness, security, data integrity, and explicit requirements. Within those constraints, optimize
+for maintainability, readability, and testability. Add extensibility, flexibility, and reuse only when current
+needs justify them.
 
-```text
-Manifest + Reference → Artifact → Registration      (Platform: code from outside the build)
-                                        ↓ compiles to
-                                  Plugin → Installation  (Core: stable identity)
-                                               ↓ owns while active
-                                            Instance     (Core: internal execution)
+Use design principles as judgment aids, not a checklist of patterns to implement. Resolve trade-offs in favor
+of clear behavior and lower overall complexity.
 
-Host owns one Engine; the Engine coordinates the committed Installation graph
-and its active Instances.
-```
+## Working approach
 
-| Noun | Stage | Layer |
-| --- | --- | --- |
-| `Plugin` | A declaration. Reusable, inert, owns nothing | Core |
-| `Installation` | The stable identity of one installed Plugin. Its declaration may be replaced; its identity and position may not | Core |
-| `Instance` | One active execution of an Installation. Internal and replaced on restart | Core |
-| `Group` | An installation-ownership subtree. Nothing else | Core |
-| `Installer` | The capability to install into something — implemented by `Host` and `Group` | Core |
-| `Engine` | The internal owner of committed Contracts, Services, Events, Contributions, Instances and graph transitions | Core |
-| `Host` | The execution boundary Dougong owns: commands, transactions and orchestration | Core |
-| `Artifact` | A manifest plus a reference that can load a Plugin | Platform |
-| `Registration` | The stable identity of one Artifact admitted to a Platform | Platform |
-| `Platform` | The delivery boundary: declaration, authorization, loading, activation | Platform |
+- Read applicable instructions and relevant implementation, callers, and tests. Expand context as dependencies
+  or uncertainty require; load documentation and skills only when their scope matches the task.
+- Use commands verified in repository scripts, configuration, or CI. Follow sound local conventions; introduce
+  a different pattern to address a concrete limitation, not a stylistic preference.
+- For cross-cutting or risky work, identify intended behavior, affected contracts, and verification before
+  editing. Make straightforward changes directly.
+- Resolve ambiguity from contracts and repository evidence. Ask only when remaining uncertainty materially
+  affects behavior, scope, or data safety; otherwise use the simplest consistent interpretation.
+- Within the authorized scope, implement and verify the change. Run checks and fix introduced failures without
+  repeated approval in confirmed isolated environments. Before unfamiliar or potentially state-changing
+  commands, confirm the target environment and expected side effects are within the authorized scope. Changes
+  to shared or external state require explicit authorization; a command named `test` is not proof of isolation.
+- Preserve unrelated work. Production actions, destructive data operations, and destructive Git operations
+  require explicit authorization beyond permission to edit code.
 
-Three words that used to mean "host" are now distinct, and must stay distinct in
-code, comments, error messages and documentation:
+## Design and implementation
 
-- **`Host`** — the Dougong execution boundary. A product may run several.
-- **application code** — the code that embeds Dougong and calls `host.get()`. Never called a host.
-- **runtime** — the JavaScript environment (Node, a browser, a WebView). Never called a host.
-- **`*Port`** — an internal collaborator protocol (`LifetimePort`, `ChangePort`). Never called a host either.
+### Simplicity and abstraction
 
-Retired names must not return. `scripts/vocabulary.mjs` holds the banlist;
-`check-layers.mjs` checks source tokens, while `check-api-surface.mjs` checks
-built declarations and code-shaped Markdown, so neither an `export *` nor stale
-documentation can smuggle one back in.
+- **Occam's razor / KISS:** Choose the least complex sufficient solution: fewer assumptions, concepts, states,
+  dependencies, and indirections. Reduce understanding and change costs, not line count.
+- **YAGNI:** Add only capabilities required now. Do not prebuild configuration, extension points, or
+  frameworks. Necessary safety checks and tests are not speculative work.
+- **DRY:** Give each business rule one authoritative representation. Share stable knowledge, not merely
+  similar syntax; keep independently changing concepts separate.
+- An abstraction must reduce complexity for its callers, consolidate stable knowledge, or isolate an actual
+  variation. Moving code behind another name is not enough.
+- Prefer standard-library and existing project capabilities. Add dependencies only when their benefits justify
+  their maintenance cost; use established implementations for security-sensitive primitives.
 
-## Project philosophy
+### Boundaries and contracts (SOLID)
 
-- Treat explainability as an architecture test. In a coherent design, names, responsibilities, dependency directions, ownership, and execution behavior agree; if the implementation is hard to explain through the public model, first assume that the model or implementation is wrong.
-- Make important relationships explicit. Dependencies belong in declarations, ownership belongs in Lifetimes, capability identity belongs in Contracts, and execution-time choices belong in ordinary parameters. Do not infer them from ambient state, call stacks, installation order, ancestor lookup, or hidden globals.
-- Choose the simplest model that completely expresses the requirement. Do not confuse simplicity with missing semantics: keep irreducible complexity visible instead of hiding it behind magic.
-- Keep the conceptual structure as flat and orthogonal as the domain permits. Add nesting only when it represents real ownership or composition, never merely to organize implementation details.
-- Keep components modular and responsibilities sharply separated. Introduce an abstraction only when it clarifies an existing responsibility or a real composition point.
-- Keep APIs sparse. Every public concept must earn its place, have one precise responsibility, and compose with the existing primitives.
-- Design for the reader. Prefer ordinary TypeScript, intention-revealing names, small state machines, and local reasoning over clever metaprogramming, implicit proxies, decorators, or surprising control flow.
-- Never let errors disappear accidentally. Propagate, aggregate, report, or explicitly classify them as cancellation; silence them only at a deliberate boundary whose behavior is documented.
-- Refuse to guess when input, ownership, capability selection, or state is ambiguous. Reject the operation with a precise error and require the caller to make the choice explicit.
-- Use namespaces deliberately. Stable Contract IDs, module boundaries, and package layers should prevent collisions and communicate ownership; do not turn Context into a bag of globally mixed names.
+- **SRP:** Group code by its reason to change; split independent responsibilities, not cohesive logic to
+  satisfy arbitrary size limits.
+- **OCP:** Extend behavior at demonstrated variation points; repair flawed abstractions instead of preserving
+  them behind extra layers.
+- **LSP:** Preserve behavioral contracts, including invariants and failure semantics. Do not strengthen
+  preconditions or weaken postconditions.
+- **ISP:** Shape small, cohesive interfaces around consumer needs, not every capability of an implementation.
+- **DIP:** Separate business policy from volatile infrastructure through explicit boundaries; do not create an
+  interface for every type.
+- **LoD:** Depend on direct collaborators' public contracts, not their internal object graphs. Avoid
+  forwarding layers that merely disguise coupling.
 
-## Dougong architecture axioms
+### Readability and state (Zen of Python)
 
-- Composition is preferred over inheritance. Higher-level capabilities are built from Service, ExtensionPoint, Event, Lifetime, Plugin, Host, and their public protocols rather than framework base classes or privileged hooks.
-- The same capability at the same abstraction layer has exactly one canonical API. Do not add aliases, parallel configuration forms, or alternate lifecycle paths. Special cases must use composition or a higher layer unless their underlying semantics are genuinely different.
-- Higher layers may provide domain vocabulary and ergonomic sugar, but they must compile to Core primitives and must not duplicate registries, dependency graphs, transactions, resource ownership, observation protocols, or error semantics.
-- Keep the core atoms orthogonal: Service is stable capability, ExtensionPoint is an open contribution set, Event is a transient fact, and Lifetime is structured ownership. Do not make one atom secretly perform another atom's job.
-- Group expresses installation ownership only. It is not a capability scope, provider shadow tree, permission boundary, or security sandbox.
-- Stable Service dependencies are declared through `requires`; Core does not use a Service Locator, ambient scope, prototype-chain injection, or live Service proxy.
-- Static multi-instance capabilities use explicit Contract families. Execution-time tenant or workspace selection uses explicit Service parameters. Security isolation uses a Host, Worker, iframe, process, or another real isolation boundary.
-- Resource ownership is structural and terminal resources detach from their owners. A retained handle must not keep a Host, Store, callback, payload, or completed task alive without a documented reason.
-- Transactions expose only committed states. Setup declarations remain staged until their commit boundary, and failed changes roll back or fail closed rather than presenting mixed execution state as healthy.
-- Package and module dependencies point in one direction. Core and reactive remain independent foundations; Platform compiles external plugin concerns into Core operations; the facade remains a pure re-export layer.
+- Use the host language's idioms. Prefer explicit dependencies, flat control flow, readable spacing, and
+  coherent namespaces over implicit magic or clever compression.
+- Represent necessary complexity behind clear boundaries. Keep justified exceptions local and prefer practical
+  clarity over rigid uniformity.
+- Keep mutable state minimal, ownership explicit, and each fact authoritative in one place. Separate business
+  decisions from external I/O.
+- Prefer one clear path per behavior. Simplify hard-to-explain logic without fragmenting cohesive code into
+  tiny helpers.
+- Make failures explicit; suppress only specific expected errors allowed by the contract. Never turn
+  unexpected failure into apparent success.
 
-## Simplicity and performance
+### Data and performance (Rob Pike)
 
-Apply Rob Pike's five rules of programming:
+1. Do not guess bottlenecks or add speculative speed hacks.
+2. Measure representative workloads before tuning; optimize significant bottlenecks and compare results
+   against the baseline.
+3. Choose algorithms for actual input sizes; consider constant costs as well as asymptotic complexity.
+4. Use simple algorithms and data structures unless requirements or measurements justify the added complexity.
+5. Design data representations and invariants first; simplify algorithms through better structure.
 
-1. You cannot tell where a program will spend its time. Bottlenecks appear in surprising places, so do not guess; prove them with profiling.
-2. Measure before tuning. Optimize only when measurements show that one part dominates the workload, then measure again and preserve a benchmark or behavioral guard when regression risk is meaningful.
-3. Fancy algorithms are slow when `n` is small, and `n` is usually small. Consider real input sizes, constants, allocation, and locality before choosing a theoretically better algorithm.
-4. Fancy algorithms are buggier than simple ones. Prefer simple algorithms and simple data structures unless evidence forces additional complexity.
-5. Data dominates. Choose representations and ownership structures that make the algorithms self-evident. In Pike's phrasing, “write stupid code that uses smart objects.”
+Respect known scale and resource limits during design.
 
-## Working rules
+### Comments
 
-- Backward compatibility is not a goal during the current development stage. When a design changes, remove obsolete paths instead of adding compatibility layers, fallbacks, aliases, or migrations.
-- Fix causes rather than symptoms. Do not accept a stopgap that is intended to be replaced later; make architectural decisions for the long term while breaking changes are inexpensive.
-- Implement proven needs as complete vertical slices. Start with the smallest end-to-end version that works, finish it completely, and leave speculative features unimplemented.
-- Prefer established, maintained libraries when they reduce total complexity or improve reliability. Check existing dependencies, documentation, and types before reimplementing functionality or adding another package.
-- Let practical evidence from real applications correct theory without weakening the invariants that keep the system understandable.
-- Tests should protect semantics and architectural boundaries rather than implementation trivia. For important regressions, verify that the test fails when the protected behavior is removed.
-- Keep documentation, public types, execution behavior, and architecture guards consistent in the same change.
-- Treat repository-local usage as no evidence for or against a public API. This is a framework: judge exports and extension points by responsibility, abstraction quality, and downstream utility, not merely by whether this repository calls them.
+- Default to no comments; use naming, types, and structure to express intent.
+- At critical data structures, non-obvious algorithms, interfaces, or pitfalls, explain **why**: constraints,
+  trade-offs, or essential contracts the types cannot express, such as ownership, lifetime, concurrency, or
+  failure semantics. Do not narrate operations or repeat signatures.
+- Keep necessary comments accurate; remove stale comments and commented-out code. Preserve licenses and tool
+  directives. Do not use TODOs in place of required work.
+
+## Fixes and evolution
+
+- Establish the root cause through reproduction, tests, or traced behavior. Fix the responsible model,
+  invariant, or boundary and check other affected paths.
+- Do not conceal defects with stacked special cases, duplicated state, blind retries, or silent fallbacks.
+  Keep validation and resilience where real contracts require them.
+- **Breaking changes are allowed** to fix faulty contracts or achieve a simplification worth the migration
+  cost. Honor explicit compatibility requirements; do not break sound contracts for style.
+- Update affected callers, types, tests, and documentation together. Address protocol, persisted-data, and
+  external-consumer migrations explicitly; disclose what remains outside the task's control.
+- Keep compatibility adapters only for real consumers or rollout needs, with a removal condition. Delete
+  superseded code and configuration when that condition is met.
+- Make the smallest complete change that fixes the cause. Refactor obstructive related code in verifiable
+  steps; distinguish behavior-preserving cleanup from intentional contract changes.
+- At iteration or milestone reviews, revisit repeatedly broken, frequently changed, or hard-to-test modules.
+  Record out-of-scope debt with its impact and a trigger for revisiting it; do not start unrelated rewrites.
+
+## Verification and completion
+
+- Use checks sufficient to demonstrate changed behavior. Broaden coverage for shared contracts, cross-module
+  changes, or build configuration. Honor required repository checks.
+- For bug fixes, add regression coverage that exposes the original failure when feasible. Test observable
+  behavior and contracts, including relevant boundaries and failures.
+- Control time, randomness, and external state where needed for reliable tests. Do not distort production
+  interfaces merely to mock them.
+- Do not disable checks, skip failing tests, or weaken valid assertions to manufacture a pass. Correct test
+  expectations only for intentional contract changes or demonstrated test errors.
+- Review the diff for concrete defects, contract violations, and maintainability problems. Remove accidental
+  edits, debug residue, and dead code; do not treat stylistic alternatives as defects.
+- Finish when requested behavior and affected integrations are complete and relevant verification passes.
+  Report genuine blockers rather than claiming completion; stop improving when acceptance criteria are met.
+- Report changes, actual verification results, and any migrations or remaining risks. Distinguish passed,
+  failed, and not-run checks; identify unrelated pre-existing failures.
+
+## Maintaining these instructions
+
+- Keep durable rules that prevent recurring mistakes or record non-obvious project decisions. Put scoped rules
+  near affected code and occasional procedures in narrowly triggered skills or linked documentation.
+- When maintaining instructions, remove stale or redundant guidance and evaluate changes on representative
+  tasks. Let observed task outcomes guide further revisions. Keep skill descriptions short and triggers
+  precise; do not rewrite policy during unrelated coding work.
+- Enforce mechanical requirements through formatters, linters, hooks, and CI rather than repeated prose. Never
+  weaken instructions or checks to excuse a noncompliant change.
+## Project-specific rules
+
+Rules that apply only to this repository live in [`PROJECT_RULES.md`](PROJECT_RULES.md).
+
+@./PROJECT_RULES.md
