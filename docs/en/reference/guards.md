@@ -71,7 +71,7 @@ Constraints the type system cannot express but source text can decide. Two kinds
 | Platform diagnostics must compile to Core `SnapshotPublisher` | A duplicated observation protocol |
 | Contribution observation must compose the same `SnapshotPublisher` | Likewise |
 | Platform load cancellation must reuse Core `isCancellationReason` | Two cancellation classifications |
-| Platform terminal failures must reuse Core `ErrorSummary` | Two error-summary and reconstruction semantics |
+| Platform terminal failures must reuse Core `RecordedFailure` | Two terminal diagnostic recording protocols |
 | Platform declaration validation must reuse Core `assertPlainRecord` | Two plain-data-record validation semantics |
 | Host must delegate declarations and handle authority to `InstallationRegistry` | Host becoming a god object again |
 | Platform structural coordination must delegate activation to `Activator` | A second dependency-activation path |

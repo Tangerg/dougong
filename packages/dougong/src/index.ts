@@ -18,7 +18,6 @@ export {
   computed,
   observe,
   signal,
-  type ObservationLifetime,
   type ObservationOwner,
   type ObservationTask,
   type Observer,

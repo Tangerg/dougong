@@ -183,13 +183,11 @@ const host = createHost({
 
 ### 终态失败的信息量
 
-Installation 脱离 Host 之后（被移除或丢弃），它只保留错误的 `name` / `message`，以及最小构造类别和可用的 `code` 纯数据摘要。读取时会重建正确的 `DougongError` 或 `TypeError`；其他错误重建为普通 `Error`。
+被丢弃的 Installation 与 Registration 的 `ready()` 会拒绝为 `RecordedFailure`。它的 `name` 固定为 `RecordedFailure`，可选 `code` 与冻结的 `snapshot: ErrorSnapshot` 描述原始失败；它不声称自己是 `TypeError`、`DougongError` 或 `PermissionDeniedError` 子类。失败命令本身和仍可恢复的活动失败继续交付原始 Error。
 
-原因是 JavaScript 的 `Error.stack` 可能携带创建错误时的整个编排调用帧，让一个历史对象反向保活整个 Host。
+快照保留原始名称、消息、错误码和栈文本，以及有界的 `cause` 与 `errors` 树。权限失败保留 `manifestName` 和 `denied`；配置失败保留 issue 消息与路径。任意对象、回调和自定义载荷会被省略。栈文本复制为字符串，历史错误不会通过原错误对象图保活 Host、Installer、Loader 或 Platform。
 
-**这不影响正常路径**：等待 `ready()` 的调用方总是收到原始 `Error`；仍附着于活动 Host 的失败 Installation 也保留原始错误。只有「Installation 已脱离、且调用方没 await 过 ready()」的事后读取会拿到摘要——此时 `ConfigValidationError.issues` 这类子类附加数据不再可用。
-
-终态 Installation 与 Registration 复用 Core 的 `ErrorSummary`，而不是各自实现错误分类。Registration 只额外记录 coded error 属于 Core 还是 Platform，并在 `restore()` 时选择正确的 `DougongError` / `PlatformError` 工厂；`TypeError` 的调用者错误类别同样保留，子类专有字段则不进入摘要。它不会为了保留历史 `stack` 或 `cause` 而反向保活 Installer、Loader 或 Platform。
+记录最多展开 32 个错误节点，递归最多四条边，每个错误列表最多八项。消息上限为 4,096 字符，栈文本为 16,384，名称、错误码与权限字段为 256；校验路径最多 16 段。`truncated` 标记发生截断的记录与错误链。这是诊断记录协议，不是应用状态序列化器。
 
 ## 相关
 

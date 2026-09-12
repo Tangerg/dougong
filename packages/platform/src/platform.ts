@@ -53,7 +53,7 @@ interface PlatformPorts<Reference> {
 /** The fixed meaning of one structural change before asynchronous preflight begins. */
 interface PlatformChangePlan<Reference> {
   readonly targets: ReadonlyArray<RegistrationRecord<Reference>>;
-  readonly activatedUpdates: ReadonlySet<RegistrationRecord<Reference>>;
+  readonly installedUpdates: ReadonlySet<RegistrationRecord<Reference>>;
 }
 
 type PlatformState<Reference> =
@@ -126,20 +126,27 @@ class PlatformImpl<Reference> implements Platform<Reference> {
         logger: logger ?? console,
       }),
     };
-    this.#diagnosticModel = new PlatformDiagnostics(this.apiVersion, (error) => {
-      const platform = authority.current;
-      if (!platform) return;
-      const ports = platform.#livePorts();
-      if (!ports) return;
-      try {
-        const result: unknown = ports.logger.error(error);
-        // Platform has no secondary error port. Logger failure is terminal but
-        // still observed so it cannot surface as an unhandled rejection.
-        void Promise.resolve(result).catch(() => undefined);
-      } catch {
-        // Diagnostics are observation-only and cannot fail a platform command.
-      }
-    });
+    this.#diagnosticModel = new PlatformDiagnostics(
+      this.apiVersion,
+      () => ({
+        status: this.#state.phase,
+        registrations: this.#registrations.values(),
+      }),
+      (error) => {
+        const platform = authority.current;
+        if (!platform) return;
+        const ports = platform.#livePorts();
+        if (!ports) return;
+        try {
+          const result: unknown = ports.logger.error(error);
+          // Platform has no secondary error port. Logger failure is terminal but
+          // still observed so it cannot surface as an unhandled rejection.
+          void Promise.resolve(result).catch(() => undefined);
+        } catch {
+          // Diagnostics are observation-only and cannot fail a platform command.
+        }
+      },
+    );
     this.diagnostics = this.#diagnosticModel.view;
     this.#activator = new Activator(
       this.#registrations,
@@ -246,7 +253,7 @@ class PlatformImpl<Reference> implements Platform<Reference> {
     if (!registration) {
       throw new TypeError("Registration belongs to a different Platform");
     }
-    if (!registration.attached) throw registration.unavailableError();
+    if (!registration.hasAuthority) throw registration.unavailableError();
     return registration;
   }
 
@@ -262,9 +269,9 @@ class PlatformImpl<Reference> implements Platform<Reference> {
       .map((operation) => operation.registration);
 
     return this.#enqueueChange(async () => {
-      this.#assertActive();
-      if (!operations.length) return;
       try {
+        this.#assertActive();
+        if (!operations.length) return;
         await this.#applyChanges(operations);
       } catch (error) {
         const failure = normalizePlatformOperationFailure(error, "change");
@@ -281,7 +288,7 @@ class PlatformImpl<Reference> implements Platform<Reference> {
    *   1. plan            fix what this change means before anything awaits
    *   2. validate        the graph that *would* exist — cycles, versions
    *   3. authorize       before loading, so denied code is never imported
-   *   4. load            only for Registrations already activated
+   *   4. load            only for Registrations already installed
    *   5. stabilize       close the activation gate; wait for in-flight trees
    *   6. validate again  concurrent activations may have moved the graph
    *   7. compile+commit  one Core ChangeSet, atomic
@@ -297,11 +304,11 @@ class PlatformImpl<Reference> implements Platform<Reference> {
     try {
       const { installer, loader, authorizer } = this.#requirePorts();
       const plan = this.#planChange(operations);
-      validateCandidateGraph(this.#registrations.values(), operations, plan.activatedUpdates);
+      validateCandidateGraph(this.#registrations.values(), operations, plan.installedUpdates);
       await this.#authorizeChanges(operations, authorizer, controller.signal);
       const loadedPlugins = await this.#loadUpdatedPlugins(
         operations,
-        plan.activatedUpdates,
+        plan.installedUpdates,
         loader,
         controller.signal,
       );
@@ -310,7 +317,7 @@ class PlatformImpl<Reference> implements Platform<Reference> {
       activationBarrier = this.#activator.stabilize(plan.targets);
       await activationBarrier.settled;
       controller.signal.throwIfAborted();
-      validateCandidateGraph(this.#registrations.values(), operations, plan.activatedUpdates);
+      validateCandidateGraph(this.#registrations.values(), operations, plan.installedUpdates);
 
       const coreChange = stageCoreChange(installer, operations, loadedPlugins);
       const commitPlatformChange = this.#prepareChangeCommit(
@@ -330,17 +337,17 @@ class PlatformImpl<Reference> implements Platform<Reference> {
     operations: ReadonlyArray<PlatformChangeOperation<Reference>>,
   ): PlatformChangePlan<Reference> {
     const targets: RegistrationRecord<Reference>[] = [];
-    const activatedUpdates = new Set<RegistrationRecord<Reference>>();
+    const installedUpdates = new Set<RegistrationRecord<Reference>>();
     for (const operation of operations) {
       if (operation.kind === "register") continue;
       const registration = operation.registration;
       assertCurrentRegistration(this.#registrations, registration);
       targets.push(registration);
-      if (operation.kind === "update" && registration.status === "activated") {
-        activatedUpdates.add(registration);
+      if (operation.kind === "update" && registration.status === "installed") {
+        installedUpdates.add(registration);
       }
     }
-    return { targets, activatedUpdates };
+    return { targets, installedUpdates };
   }
 
   async #authorizeChanges(
@@ -361,13 +368,13 @@ class PlatformImpl<Reference> implements Platform<Reference> {
 
   async #loadUpdatedPlugins(
     operations: ReadonlyArray<PlatformChangeOperation<Reference>>,
-    activatedUpdates: ReadonlySet<RegistrationRecord<Reference>>,
+    installedUpdates: ReadonlySet<RegistrationRecord<Reference>>,
     loader: Loader<Reference>,
     signal: AbortSignal,
   ) {
     const loadedPlugins = new Map<RegistrationRecord<Reference>, AnyPlugin>();
     for (const operation of operations) {
-      if (operation.kind === "update" && activatedUpdates.has(operation.registration)) {
+      if (operation.kind === "update" && installedUpdates.has(operation.registration)) {
         loadedPlugins.set(
           operation.registration,
           await loadPlugin(loader, operation.artifact, signal),
@@ -420,7 +427,7 @@ class PlatformImpl<Reference> implements Platform<Reference> {
   }
 
   #publish() {
-    this.#diagnosticModel.publish(this.#state.phase, this.#registrations.values());
+    this.#diagnosticModel.publish();
   }
 
   #enqueueChange(operation: () => Promise<void>) {

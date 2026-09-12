@@ -6,7 +6,7 @@ import type { PlatformChangeOperation } from "./platform-change-set";
 
 interface Candidate<Reference> {
   readonly artifact: NormalizedArtifact<Reference>;
-  readonly activated: boolean;
+  readonly installed: boolean;
 }
 
 // Validates the graph a change *would* produce, before any of it is applied.
@@ -15,7 +15,7 @@ interface Candidate<Reference> {
 // work: registering A which depends on B, and B, in one change is valid, even
 // though neither is valid alone. Per-operation checks would reject it.
 //
-// Only activated Registrations have their dependencies enforced. A registered
+// Only installed Registrations have their dependencies enforced. A registered
 // but inactive one is a declaration nobody is running yet, so a missing
 // dependency is a future problem, not a present one — enforcing it here would
 // make registration order matter.
@@ -24,24 +24,24 @@ interface Candidate<Reference> {
 export function validateCandidateGraph<Reference>(
   current: Iterable<RegistrationRecord<Reference>>,
   operations: ReadonlyArray<PlatformChangeOperation<Reference>>,
-  activatedUpdates: ReadonlySet<RegistrationRecord<Reference>>,
+  installedUpdates: ReadonlySet<RegistrationRecord<Reference>>,
 ) {
-  const candidate = buildCandidateGraph(current, operations, activatedUpdates);
+  const candidate = buildCandidateGraph(current, operations, installedUpdates);
   assertAcyclic(candidate);
-  assertActivatedDependencies(candidate);
+  assertInstalledDependencies(candidate);
 }
 
 function buildCandidateGraph<Reference>(
   current: Iterable<RegistrationRecord<Reference>>,
   operations: ReadonlyArray<PlatformChangeOperation<Reference>>,
-  activatedUpdates: ReadonlySet<RegistrationRecord<Reference>>,
+  installedUpdates: ReadonlySet<RegistrationRecord<Reference>>,
 ) {
   const candidate = new Map<string, Candidate<Reference>>(
     [...current].map((registration) => [
       registration.manifestName,
       {
         artifact: registration.artifact,
-        activated: registration.status === "activated",
+        installed: registration.status === "installed",
       },
     ]),
   );
@@ -56,12 +56,12 @@ function buildCandidateGraph<Reference>(
       }
       candidate.set(operation.registration.manifestName, {
         artifact: operation.artifact,
-        activated: false,
+        installed: false,
       });
     } else if (operation.kind === "update") {
       candidate.set(operation.registration.manifestName, {
         artifact: operation.artifact,
-        activated: activatedUpdates.has(operation.registration),
+        installed: installedUpdates.has(operation.registration),
       });
     } else {
       candidate.delete(operation.registration.manifestName);
@@ -87,7 +87,7 @@ function assertAcyclic<Reference>(candidate: ReadonlyMap<string, Candidate<Refer
 
     visiting.add(name);
     // Unknown dependencies are skipped rather than reported. Whether a missing
-    // dependency matters is `assertActivatedDependencies`' decision; this
+    // dependency matters is `assertInstalledDependencies`' decision; this
     // function only answers whether the edges that do exist form a cycle.
     for (const dependency of Object.keys(current.artifact.manifest.dependencies)) {
       if (candidate.has(dependency)) visit(dependency, [...path, name]);
@@ -99,17 +99,17 @@ function assertAcyclic<Reference>(candidate: ReadonlyMap<string, Candidate<Refer
   for (const name of candidate.keys()) visit(name, []);
 }
 
-function assertActivatedDependencies<Reference>(
+function assertInstalledDependencies<Reference>(
   candidate: ReadonlyMap<string, Candidate<Reference>>,
 ) {
-  for (const [registrationName, { artifact, activated }] of candidate) {
-    if (!activated) continue;
+  for (const [registrationName, { artifact, installed }] of candidate) {
+    if (!installed) continue;
     for (const [name, range] of Object.entries(artifact.manifest.dependencies)) {
       const dependency = candidate.get(name);
       if (!dependency) {
         throw new PlatformError(
           "REGISTRATION_DEPENDENCY_MISSING",
-          `Activated Registration '${registrationName}' requires missing Registration '${name}'`,
+          `Installed Registration '${registrationName}' requires missing Registration '${name}'`,
         );
       }
       if (!matchesVersion(dependency.artifact.manifest.version, range)) {
@@ -118,10 +118,10 @@ function assertActivatedDependencies<Reference>(
           `Registration '${registrationName}' requires Registration '${name}' ${range}, found ${dependency.artifact.manifest.version}`,
         );
       }
-      if (!dependency.activated) {
+      if (!dependency.installed) {
         throw new PlatformError(
           "REGISTRATION_DEPENDENCY_INACTIVE",
-          `Activated Registration '${registrationName}' requires Registration '${name}' to be activated`,
+          `Installed Registration '${registrationName}' requires Registration '${name}' to be installed`,
         );
       }
     }

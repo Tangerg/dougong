@@ -1675,7 +1675,7 @@ describe("Host", () => {
     expect(setupRan).toBe(false);
   });
 
-  it("preserves TypeError classification after a failed Installation becomes terminal", async () => {
+  it("records TypeError classification after a failed Installation becomes terminal", async () => {
     const schema: StandardSchemaV1<unknown, unknown> = {
       "~standard": {
         version: 1,
@@ -1694,8 +1694,14 @@ describe("Host", () => {
       undefined,
     );
 
-    await expect(installation.ready()).rejects.toBeInstanceOf(TypeError);
-    await expect(installation.ready()).rejects.toBeInstanceOf(TypeError);
+    await expect(installation.ready()).rejects.toMatchObject({
+      name: "RecordedFailure",
+      snapshot: { name: "TypeError" },
+    });
+    await expect(installation.ready()).rejects.toMatchObject({
+      name: "RecordedFailure",
+      snapshot: { name: "TypeError" },
+    });
     await host.stop();
   });
 

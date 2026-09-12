@@ -2,6 +2,10 @@
 // Both source and built-declaration guards consume exact tokens from this list;
 // patterns would accidentally reject valid names such as PluginContext.
 export const retiredVocabulary = Object.freeze([
+  // Replaced diagnostic and internal lifecycle contracts.
+  "ErrorSummary",
+  "ObservationLifetime",
+  "ContractRegistryDraft",
   // Host and its former internal collaborators.
   "Application",
   "ApplicationDiagnostics",

@@ -170,7 +170,7 @@ A child that is disposed early detaches from its parent; releasing a parent recu
 
 A Lifetime moves through `active` → `disposing` → `disposed`.
 
-Once `disposing` begins, every Context operation is closed, including `emit()`. Stop order first withdraws listeners, contributions, subscriptions and views, then aborts the `signal`, and only then awaits tasks, child Lifetimes and cleanups. Cleanup releases resources; it is not a second fact-broadcast phase.
+Calling `dispose()` synchronously seals the entire owned subtree. Every Context operation closes, including `emit()`. Dougong withdraws all descendant listeners, subscriptions and views before withdrawing contributions, then aborts the signals. Only after these entrances have closed do tasks and descendant Lifetimes drain concurrently; child shutdown starts in reverse creation order. Each Lifetime runs its cleanups after its own tasks and children have settled. A slow parent task cannot leave a child accepting new events. Cleanup only releases resources.
 
 At this boundary `emit()` returns a promise rejected with `LIFETIME_DISPOSED` rather than throwing synchronously. Code intentionally absorbing a shutdown race can therefore write `void ctx.emit(STOPPED).catch(report)`. If a stopped state must remain readable, put it in a Service or Signal rather than a cleanup Event.
 

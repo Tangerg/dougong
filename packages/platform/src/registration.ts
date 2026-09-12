@@ -1,4 +1,4 @@
-import { ErrorSummary, SerialQueue, type Installation } from "@dougongjs/core";
+import { RecordedFailure, SerialQueue, type Installation } from "@dougongjs/core";
 import type { Registration, NormalizedArtifact, PlatformChangeSet, Artifact } from "./platform-api";
 import { PlatformError } from "./errors";
 import type { ActivationPermit } from "./activation-gate";
@@ -15,37 +15,28 @@ export interface RegistrationPort<Reference> {
 type RegistrationAuthority<Reference> =
   | { readonly phase: "draft"; artifact: NormalizedArtifact<Reference> }
   | {
-      readonly phase: "attached";
+      readonly phase: "granted";
       readonly port: RegistrationPort<Reference>;
       artifact: NormalizedArtifact<Reference>;
       admission: Promise<void> | undefined;
     }
   | { readonly phase: "terminal" };
 
-interface TerminalRegistrationFailure {
-  readonly summary: ErrorSummary;
-  readonly platformError: boolean;
-}
-
-type RegistrationFailure =
-  | { readonly retention: "live"; readonly error: Error }
-  | { readonly retention: "summary"; readonly summary: TerminalRegistrationFailure };
-
 type RegistrationState =
   | { readonly phase: "pending" }
   | { readonly phase: "registered"; readonly installation: Installation | undefined }
   | { readonly phase: "loading"; readonly installation: Installation | undefined }
-  | { readonly phase: "activated"; readonly installation: Installation }
+  | { readonly phase: "installed"; readonly installation: Installation }
   | {
       readonly phase: "failed";
       readonly installation: Installation | undefined;
-      readonly failure: RegistrationFailure;
+      readonly error: Error;
     }
   | { readonly phase: "removed" };
 
 export type RegistrationCommitState = Extract<
   RegistrationState,
-  { readonly phase: "registered" | "activated" }
+  { readonly phase: "registered" | "installed" }
 >;
 
 class RegistrationFacade<Reference> implements Registration<Reference> {
@@ -86,10 +77,10 @@ class RegistrationFacade<Reference> implements Registration<Reference> {
  *
  * Two independent axes, which is why there are two state fields:
  *
- *   #authority   draft -> attached -> terminal    may this Registration act?
- *   #state       pending -> registered -> loading -> activated | failed | removed
+ *   #authority   draft -> granted -> terminal    may this Registration act?
+ *   #state       pending -> registered -> loading -> installed | failed | removed
  *
- * A Registration can be attached and failed at once — still ours, currently
+ * A Registration can hold authority and be failed at once — still ours, currently
  * broken, retryable. Collapsing the two would make that state unrepresentable.
  *
  * `admission` is the promise of the change that admitted this Registration.
@@ -117,7 +108,7 @@ export class RegistrationRecord<Reference> {
       throw new Error(`Registration '${this.manifestName}' is already sealed`);
     }
     this.#authority = {
-      phase: "attached",
+      phase: "granted",
       port,
       artifact: authority.artifact,
       admission: undefined,
@@ -143,20 +134,14 @@ export class RegistrationRecord<Reference> {
   }
 
   /** Whether the owning ChangeSet has granted this Registration Platform authority. */
-  get attached() {
-    return this.#authority.phase === "attached";
+  get hasAuthority() {
+    return this.#authority.phase === "granted";
   }
 
   get error() {
     const state = this.#state;
     if (state.phase === "failed") {
-      return state.failure.retention === "live"
-        ? state.failure.error
-        : state.failure.summary.summary.restore(
-            state.failure.summary.platformError
-              ? (code, message) => new PlatformError(code, message)
-              : undefined,
-          );
+      return state.error;
     }
     if (state.phase === "removed") {
       return new PlatformError(
@@ -174,7 +159,7 @@ export class RegistrationRecord<Reference> {
 
   ready() {
     const state = this.#state;
-    if (state.phase === "activated") {
+    if (state.phase === "installed") {
       return state.installation.ready();
     }
     if (state.phase === "failed" || state.phase === "removed") {
@@ -192,7 +177,7 @@ export class RegistrationRecord<Reference> {
   }
 
   activate() {
-    const authority = this.#attachedAuthority();
+    const authority = this.#grantedAuthority();
     if (!authority) return Promise.reject(this.unavailableError());
     const { port, admission } = authority;
     return this.#enqueueActivation(async (signal) => {
@@ -203,7 +188,7 @@ export class RegistrationRecord<Reference> {
   }
 
   async update(artifact: Artifact<Reference>): Promise<void> {
-    const authority = this.#attachedAuthority();
+    const authority = this.#grantedAuthority();
     if (!authority) throw this.unavailableError();
     const change = authority.port.change();
     change.update(this.facade, artifact);
@@ -211,7 +196,7 @@ export class RegistrationRecord<Reference> {
   }
 
   async remove(): Promise<void> {
-    const authority = this.#attachedAuthority();
+    const authority = this.#grantedAuthority();
     if (!authority) {
       if (this.#state.phase === "removed" || this.#state.phase === "failed") return;
       throw this.unavailableError();
@@ -222,7 +207,7 @@ export class RegistrationRecord<Reference> {
   }
 
   activateAsDependency(permit: ActivationPermit) {
-    const authority = this.#attachedAuthority();
+    const authority = this.#grantedAuthority();
     if (!authority) return Promise.reject(this.unavailableError());
     return this.#enqueueActivation((signal) =>
       authority.port.activateRegistration(this, signal, permit),
@@ -235,14 +220,14 @@ export class RegistrationRecord<Reference> {
 
   trackAdmission(operation: Promise<void>) {
     const authority = this.#authority;
-    if (authority.phase !== "attached") {
+    if (authority.phase !== "granted") {
       throw new Error(`Registration '${this.manifestName}' has no admission authority`);
     }
     authority.admission = operation;
   }
 
   commitActivation(installation: Installation) {
-    this.#state = { phase: "activated", installation };
+    this.#state = { phase: "installed", installation };
     // Waiters are forwarded to the Installation rather than resolved here.
     // `ready()` on a Registration means "its Plugin has started", and only Core
     // knows that — activation merely means the Installation now exists.
@@ -259,7 +244,7 @@ export class RegistrationRecord<Reference> {
    */
   prepareCommit(artifact: NormalizedArtifact<Reference>, state: RegistrationCommitState) {
     const authority = this.#authority;
-    if (authority.phase !== "attached") throw this.unavailableError();
+    if (authority.phase !== "granted") throw this.unavailableError();
     return () => {
       authority.admission = undefined;
       authority.artifact = artifact;
@@ -273,7 +258,7 @@ export class RegistrationRecord<Reference> {
     this.#state = {
       phase: "failed",
       installation: this.installation,
-      failure: { retention: "live", error: failure },
+      error: failure,
     };
     this.#clearAdmission();
     for (const waiter of this.#readyWaiters) waiter.reject(failure);
@@ -281,26 +266,13 @@ export class RegistrationRecord<Reference> {
     return failure;
   }
 
-  /**
-   * Terminal counterpart to `fail()`, for a Registration that never made it in.
-   * The failure is kept as an `ErrorSummary` so the record retains no live object
-   * graph, and `platformError` remembers which class to rebuild — a
-   * `PlatformError` must not come back as a plain Error and lose its code.
-   */
+  /** Terminal failures retain bounded diagnostics and release all authority. */
   discard(error: unknown) {
-    const failure = this.fail(error);
-    this.#state = {
-      phase: "failed",
-      installation: undefined,
-      failure: {
-        retention: "summary",
-        summary: {
-          summary: new ErrorSummary(failure),
-          platformError: failure instanceof PlatformError,
-        },
-      },
-    };
+    const failure = new RecordedFailure(normalizeRegistrationFailure(error, this.manifestName));
+    this.#state = { phase: "failed", installation: undefined, error: failure };
     this.#authority = { phase: "terminal" };
+    for (const waiter of this.#readyWaiters) waiter.reject(failure);
+    this.#readyWaiters.clear();
   }
 
   markRemoved() {
@@ -322,14 +294,14 @@ export class RegistrationRecord<Reference> {
     return this.#activationQueue.settled;
   }
 
-  #attachedAuthority() {
+  #grantedAuthority() {
     const authority = this.#authority;
-    return authority.phase === "attached" ? authority : undefined;
+    return authority.phase === "granted" ? authority : undefined;
   }
 
   #clearAdmission() {
     const authority = this.#authority;
-    if (authority.phase === "attached") authority.admission = undefined;
+    if (authority.phase === "granted") authority.admission = undefined;
   }
 
   #enqueueActivation(operation: (signal: AbortSignal) => Promise<void>) {

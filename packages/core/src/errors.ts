@@ -1,7 +1,7 @@
 // Error vocabulary for Core. Three jobs, kept apart on purpose:
 //
 //   DougongError      a failure with a stable machine-readable `code`
-//   ErrorSummary      a primitive-only record for objects that must not retain
+//   RecordedFailure   an Error with a bounded pure-value snapshot for objects that must not retain
 //                     the failed object graph
 //   normalizeFailure  the one place a non-Error rejection reason becomes an Error
 //
@@ -24,89 +24,138 @@ export class DougongError extends Error {
   }
 }
 
-type ErrorSummaryState =
-  | {
-      readonly category: "coded";
-      readonly name: string;
-      readonly message: string;
-      readonly code: string;
-    }
-  | {
-      readonly category: "typeError" | "error";
-      readonly name: string;
-      readonly message: string;
-    };
+/** Bounded diagnostic values, with no references to the failed object graph. */
+export interface ErrorSnapshot {
+  readonly name: string;
+  readonly message: string;
+  readonly code?: string;
+  readonly stack?: string;
+  readonly cause?: ErrorSnapshot;
+  readonly errors?: ReadonlyArray<ErrorSnapshot>;
+  readonly manifestName?: string;
+  readonly denied?: ReadonlyArray<string>;
+  readonly issues?: ReadonlyArray<{
+    readonly message: string;
+    readonly path?: ReadonlyArray<string | number>;
+  }>;
+  readonly truncated?: true;
+}
 
 /**
- * A primitive-only record of an Error for terminal objects that must not retain
- * the original stack, cause, subclass fields or the object graph behind them.
- *
- * A discarded Installation keeps its failure reason forever, and an Error's
- * `stack` and `cause` reach back into the Host, the payloads and the closures
- * that were live when it was thrown. Copying three strings out and dropping the
- * Error keeps the explanation and releases the graph. `restore()` rebuilds an
- * Error good enough to throw; the stack is deliberately not the original one.
+ * A terminal failure is a record, never a reconstruction of the original class.
+ * Operations still reject with their live error; retained terminal handles use
+ * this class so causes and custom fields cannot retain application resources.
  */
-export class ErrorSummary {
-  readonly #state: ErrorSummaryState;
+export class RecordedFailure extends Error {
+  override readonly name = "RecordedFailure";
+  readonly code: string | undefined;
+  readonly snapshot: ErrorSnapshot;
 
   constructor(error: Error) {
-    if (!(error instanceof Error)) throw new TypeError("ErrorSummary expects an Error");
-    const name = readErrorString(error, "name", "Error");
-    const message = readErrorString(error, "message", "");
-    const code = error instanceof DougongError ? readDougongErrorCode(error) : undefined;
-    this.#state = Object.freeze(
-      code === undefined
-        ? {
-            category: error instanceof TypeError ? "typeError" : "error",
-            name,
-            message,
-          }
-        : {
-            category: "coded",
-            name,
-            message,
-            code,
-          },
-    );
+    if (!(error instanceof Error)) throw new TypeError("RecordedFailure expects an Error");
+    const snapshot = error instanceof RecordedFailure ? error.snapshot : captureError(error);
+    super(snapshot.message);
+    this.code = snapshot.code;
+    this.snapshot = snapshot;
+    // Stack text is diagnostic data, not a reference to the original Error.
+    if (snapshot.stack !== undefined) this.stack = snapshot.stack;
     Object.freeze(this);
   }
+}
 
-  restore(
-    createCodedError: (code: string, message: string) => Error = (code, message) =>
-      new DougongError(code, message),
-  ) {
-    const state = this.#state;
-    const error =
-      state.category === "coded"
-        ? createCodedError(state.code, state.message)
-        : state.category === "typeError"
-          ? new TypeError(state.message)
-          : new Error(state.message);
-    if (!(error instanceof Error)) {
-      throw new TypeError("ErrorSummary coded error factory must return an Error");
+function captureError(error: Error): ErrorSnapshot {
+  const seen = new Set<unknown>();
+  let remaining = 32;
+  const visit = (value: unknown, depth: number): ErrorSnapshot => {
+    if (depth > 4 || remaining-- <= 0 || seen.has(value)) {
+      return Object.freeze({
+        name: "TruncatedError",
+        message: "Error chain truncated",
+        truncated: true,
+      });
     }
-    error.name = state.name;
-    return error;
-  }
+    if (!(value instanceof Error)) {
+      const message =
+        value === null ||
+        ["string", "number", "boolean", "undefined", "bigint", "symbol"].includes(typeof value)
+          ? String(value).slice(0, 4096)
+          : "Non-Error object omitted";
+      return Object.freeze({ name: "NonError", message });
+    }
+    seen.add(value);
+    let truncated = false;
+    const clip = (raw: string, limit: number) => {
+      if (raw.length > limit) truncated = true;
+      return raw.slice(0, limit);
+    };
+    const string = (key: string, limit: number) => {
+      const raw = readErrorProperty(value, key);
+      return typeof raw === "string" ? clip(raw, limit) : undefined;
+    };
+    const list = (key: string) => {
+      const raw = readErrorProperty(value, key);
+      if (!Array.isArray(raw)) return undefined;
+      if (raw.length > 8) truncated = true;
+      // Read each item through the same boundary as other error fields.
+      return Array.from({ length: Math.min(raw.length, 8) }, (_, index) =>
+        readErrorProperty(raw, index),
+      );
+    };
+    const name = string("name", 256) ?? "Error";
+    const message = string("message", 4096) ?? "";
+    const stack = string("stack", 16384);
+    const code = string("code", 256);
+    const cause = readErrorProperty(value, "cause");
+    const errors = list("errors");
+    const manifestName = string("manifestName", 256);
+    const denied = list("denied")
+      ?.filter((item): item is string => typeof item === "string")
+      .map((item) => clip(item, 256));
+    const issues = list("issues")?.map((issue) => {
+      const message = readErrorProperty(issue, "message");
+      const rawPath = readErrorProperty(issue, "path");
+      const path = Array.isArray(rawPath)
+        ? Array.from({ length: Math.min(rawPath.length, 16) }, (_, index) => {
+            const part = readErrorProperty(rawPath, index);
+            const key = part && typeof part === "object" ? readErrorProperty(part, "key") : part;
+            return typeof key === "number"
+              ? key
+              : typeof key === "string" || typeof key === "symbol"
+                ? clip(String(key), 256)
+                : "[omitted]";
+          })
+        : undefined;
+      if (Array.isArray(rawPath) && rawPath.length > 16) truncated = true;
+      return Object.freeze({
+        message: typeof message === "string" ? clip(message, 4096) : "",
+        ...(path ? { path: Object.freeze(path) } : {}),
+      });
+    });
+    return Object.freeze({
+      name,
+      message,
+      ...(code === undefined ? {} : { code }),
+      ...(stack === undefined ? {} : { stack }),
+      ...(cause === undefined ? {} : { cause: visit(cause, depth + 1) }),
+      ...(errors === undefined
+        ? {}
+        : { errors: Object.freeze(errors.map((error) => visit(error, depth + 1))) }),
+      ...(manifestName === undefined ? {} : { manifestName }),
+      ...(denied === undefined ? {} : { denied: Object.freeze(denied) }),
+      ...(issues === undefined ? {} : { issues: Object.freeze(issues) }),
+      ...(truncated ? { truncated: true as const } : {}),
+    });
+  };
+  return visit(error, 0);
 }
 
-// `name` and `message` can be getters on a hostile or merely clever subclass.
-// A summary that throws while recording a failure would replace the real error
-// with its own, so a broken accessor degrades to the fallback instead.
-function readErrorString(error: Error, key: "name" | "message", fallback: string) {
+// Error fields are a real external boundary. A throwing accessor must not
+// replace the failure being recorded with another failure in its recorder.
+function readErrorProperty(value: unknown, key: PropertyKey): unknown {
   try {
-    const value = error[key];
-    return typeof value === "string" ? value : fallback;
-  } catch {
-    return fallback;
-  }
-}
-
-function readDougongErrorCode(error: DougongError) {
-  try {
-    const code = error.code;
-    return typeof code === "string" && code.trim() === code && code.length > 0 ? code : undefined;
+    return value && typeof value === "object"
+      ? (value as Record<PropertyKey, unknown>)[key]
+      : undefined;
   } catch {
     return undefined;
   }

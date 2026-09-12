@@ -1,7 +1,7 @@
 import type { ContractKind } from "./contracts";
 import { rememberContractKind } from "./contract-registry";
 import { DougongError } from "./errors";
-import type { InstallationRecord } from "./installation";
+import type { InstallationDeclaration, InstallationRecord } from "./installation";
 
 // The dependency plan. Built fresh for every candidate state, never mutated:
 // a transition compares two whole graphs rather than editing one in place, which
@@ -14,12 +14,14 @@ import type { InstallationRecord } from "./installation";
 
 /** Immutable validated dependency plan over one Host-wide installation graph. */
 export class InstallationGraph {
+  readonly #declarations: ReadonlyMap<InstallationRecord, InstallationDeclaration>;
   readonly #resolvedProviders: ReadonlyMap<
     InstallationRecord,
     ReadonlyMap<string, InstallationRecord>
   >;
 
   private constructor(
+    declarations: ReadonlyMap<InstallationRecord, InstallationDeclaration>,
     readonly order: ReadonlyArray<InstallationRecord>,
     readonly layers: ReadonlyArray<ReadonlyArray<InstallationRecord>>,
     readonly providers: ReadonlyMap<string, InstallationRecord>,
@@ -27,6 +29,7 @@ export class InstallationGraph {
     readonly contractKinds: ReadonlyMap<string, ContractKind>,
     resolvedProviders: ReadonlyMap<InstallationRecord, ReadonlyMap<string, InstallationRecord>>,
   ) {
+    this.#declarations = declarations;
     this.#resolvedProviders = resolvedProviders;
   }
 
@@ -49,6 +52,7 @@ export class InstallationGraph {
     );
 
     return new InstallationGraph(
+      new Map(installations.map((installation) => [installation, installation.declaration])),
       Object.freeze(order),
       Object.freeze(layers.map((layer) => Object.freeze(layer))),
       providers,
@@ -56,6 +60,12 @@ export class InstallationGraph {
       contractKinds,
       dependencies.resolvedProviders,
     );
+  }
+
+  declarationFor(installation: InstallationRecord) {
+    const declaration = this.#declarations.get(installation);
+    if (!declaration) throw new Error(`Installation '${installation.id}' is not in this plan`);
+    return declaration;
   }
 
   providerFor(installation: InstallationRecord, serviceId: string) {
@@ -99,7 +109,7 @@ function collectProviders(
 ) {
   const providers = new Map<string, InstallationRecord>();
   for (const installation of installations) {
-    for (const token of Object.values(installation.declaration.plugin.provides ?? {})) {
+    for (const token of Object.values(installation.declaration.plugin.provides)) {
       rememberContractKind(contractKinds, token);
       const previous = providers.get(token.id);
       if (previous) {
@@ -124,7 +134,7 @@ function connectRequirements(
   const indegree = new Map(installations.map((installation) => [installation, 0]));
 
   for (const installation of installations) {
-    for (const requirement of Object.values(installation.declaration.plugin.requires ?? {})) {
+    for (const requirement of Object.values(installation.declaration.plugin.requires)) {
       const token = requirement.kind === "optional" ? requirement.service : requirement;
       rememberContractKind(contractKinds, token);
       if (token.kind === "extensionPoint") continue;

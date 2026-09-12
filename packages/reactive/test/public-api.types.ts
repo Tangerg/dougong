@@ -3,7 +3,7 @@ import type * as reactive from "@dougongjs/reactive";
 
 type NarrowOwner = {
   readonly cleanup: reactive.ObservationOwner["cleanup"];
-  lifetime(label: "known"): reactive.ObservationLifetime;
+  lifetime(label: "known"): reactive.AsyncDisposable;
   readonly spawn: reactive.ObservationOwner["spawn"];
 };
 expectTypeOf<NarrowOwner extends reactive.ObservationOwner ? true : false>().toEqualTypeOf<false>();
@@ -28,3 +28,11 @@ expectTypeOf<
 expectTypeOf<
   reactive.ReadonlySignal<Entity> extends reactive.ReadonlySignal<User> ? true : false
 >().toEqualTypeOf<false>();
+
+type MinimalChild = reactive.AsyncDisposable & { readonly value: string };
+expectTypeOf<
+  Parameters<reactive.Observer<number, MinimalChild>>[1]
+>().toEqualTypeOf<MinimalChild>();
+expectTypeOf<
+  ReturnType<reactive.ObservationOwner<MinimalChild>["lifetime"]>
+>().toEqualTypeOf<MinimalChild>();

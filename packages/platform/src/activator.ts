@@ -73,9 +73,9 @@ export class Activator<Reference> {
         `Registration '${registration.manifestName}' is being changed`,
       );
     }
-    // Already activated is success, not an error. Several activation events, or
+    // Already installed is success, not an error. Several activation events, or
     // several dependents, routinely ask for the same Registration.
-    if (registration.status === "activated") return;
+    if (registration.status === "installed") return;
 
     const permit = inheritedPermit ?? this.#gate.enter();
     if (!permit) {

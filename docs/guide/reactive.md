@@ -39,6 +39,8 @@ double.get()     // 42
 
 `computed` 是**惰性**的：没有订阅者时不会主动计算，只在 `get()` 时按需求值并缓存。依赖是**动态追踪**的——每次求值重新收集，分支里没走到的 signal 不会成为依赖。
 
+成功值和抛出的错误都会缓存，直到依赖变化。计算失败时仍记录已经读取的依赖；依赖变化后可以重新计算并恢复，外层 `computed` 也能用 `try/catch` 处理内层的错误。计算必须只读：在计算中调用 `signal.set()` 会在写入前抛出 `TypeError`，避免把旧读值与新版本一起缓存。
+
 ```ts
 const a = signal(1), b = signal(2), useA = signal(true)
 const value = computed(() => (useA.get() ? a.get() : b.get()))
@@ -91,6 +93,8 @@ interface Readable<T> {
 Core 的 `ContributionView` 和 `diagnostics` 用的是**同一个协议**。这意味着任何观察源都可以被同样的方式消费——不需要适配器。
 
 只读的 `ReadonlySignal<T>` 可以安全地按普通子类型关系拓宽；可写的 `Signal<T>` 则严格不变。否则把 `Signal<Admin>` 标成 `Signal<User>` 后就能写入一个并非 Admin 的 User。需要收窄写权限时，公开 `ReadonlySignal<T>`，不要靠更宽的泛型标注隐藏 `set()`。
+
+通知在发布时捕获订阅成员。回调里重新订阅不会重放同一次发布。内部依赖失效传播完成后，才运行外部订阅者，长短路径不同的菱形图也遵守这一顺序。通知中的写入进入同一排空队列，在当前回调返回后处理；嵌套 `batch()` 也不会重入回调。去重以订阅为单位，同一函数注册两次仍是两个订阅。
 
 ## observe：把值的变化编译成资源的重建
 
@@ -152,9 +156,9 @@ definePlugin({
 `observe` 不在 Core 里，Core 也不知道它存在。它靠的是结构化类型：
 
 ```ts
-interface ObservationOwner {
+interface ObservationOwner<Child extends AsyncDisposable = AsyncDisposable> {
   readonly cleanup: (fn) => AsyncDisposable
-  readonly lifetime: (label) => ObservationLifetime
+  readonly lifetime: (label) => Child
   readonly spawn: (fn) => ObservationTask
 }
 ```
@@ -162,6 +166,10 @@ interface ObservationOwner {
 插件的 `ctx` 恰好满足这个形状，所以 `observe(ctx, source, ...)` 直接能用——但这是**结构匹配**，不是继承或注册。
 
 结果是依赖方向保持单向：`reactive` 不依赖 `core`，`core` 也不依赖 `reactive`。你可以只用其中一个。
+
+`ObservationOwner<Child>` 只要求 `Child extends AsyncDisposable`；`Observer` 仍接收推导出的具体 Child 类型，因此 Core Lifetime 在回调中的完整能力会保留。异步清理完成后，`observe()` 重新读取 source，只为最新值创建资源。A 清理期间发生 A → B → C 变化时，观察结果为 A → C。
+
+初次观察先建立订阅，再创建子 Lifetime，最后读取 source 并调用 observer。后续替换同样在子 Lifetime 建立后读值，因此创建资源时由诊断回调触发的变化也不会遗漏。所有替换失败都进入同一个停止流程，原始错误和资源清理错误一起保留。
 
 ### 失败处理
 

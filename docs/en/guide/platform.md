@@ -7,7 +7,7 @@ Every Plugin so far has been **written by application code**: you `import` it, t
 1. What does this module **declare** (manifest)
 2. From where and when is it **loaded** (loader)
 3. What is it allowed to do (permissions)
-4. When is it **activated** (activation)
+4. When is it **installed** (activation)
 
 Platform compiles those four into Core operations. It **does not duplicate** Core's registries, dependency graph, transactions, resource ownership, observation protocol or error semantics.
 
@@ -121,7 +121,7 @@ Authorization runs at Artifact admission and activation boundaries; it does not 
 
 Once a JavaScript module is imported it shares the application's realm and reaches the same globals. Real isolation needs a Worker, iframe, process or separate Host — Platform does not pretend otherwise.
 
-Authorization is re-checked **immediately before** module execution, so revoking a permission takes effect at once for plugins that have not yet activated.
+Authorization is re-checked **immediately before** module execution, so revoking a permission takes effect at once for external Plugins whose modules have not yet executed.
 :::
 
 ## Register, placeholder, lazy activation
@@ -137,7 +137,7 @@ const registration = await platform.register({
 
 registration.status      // "registered" → not loaded yet
 await registration.activate()       // activate explicitly
-registration.status      // "activated"
+registration.status      // "installed"
 ```
 
 The `placeholder` is an **application-authored Plugin** standing in until the loaded Plugin activates. That is what makes "the command is already in the menu, but the implementation loads on click" possible — and the swap is **atomic**, through the same Core ChangeSet.
@@ -170,7 +170,7 @@ Platform activates them in dependency order and checks:
 | --- | --- |
 | `REGISTRATION_DEPENDENCY_MISSING` | the dependency has no Registration |
 | `REGISTRATION_DEPENDENCY_INCOMPATIBLE` | the dependency Registration is outside the version range |
-| `REGISTRATION_DEPENDENCY_INACTIVE` | the dependency Registration is not activated |
+| `REGISTRATION_DEPENDENCY_INACTIVE` | the dependency Registration is not installed |
 | `REGISTRATION_CYCLE` | manifest dependencies form a cycle in the candidate Registration graph |
 | `REGISTRATION_DUPLICATE` | a Registration with that manifest name already exists |
 
@@ -192,7 +192,7 @@ changes.remove(deprecated)
 await changes.commit()
 ```
 
-When execution begins, the change first fixes which updates remain activated. It then validates the candidate graph → authorizes every Manifest and preloads required modules → closes new activation admission → cancels explicit targets and awaits activation trees admitted earlier → revalidates stable state against the same plan → **compiles one Core ChangeSet** → commits.
+When execution begins, the change first fixes which updates remain installed. It then validates the candidate graph → authorizes every Manifest and preloads required modules → closes new activation admission → cancels explicit targets and awaits activation trees admitted earlier → revalidates stable state against the same plan → **compiles one Core ChangeSet** → commits.
 
 Failed preflight cancels no in-flight activation. If any later step fails, Core and Platform never expose a half-committed state.
 

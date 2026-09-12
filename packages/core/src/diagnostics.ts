@@ -37,6 +37,12 @@ export interface HostSnapshot {
   readonly groups: ReadonlyMap<string, GroupSnapshot>;
 }
 
+interface HostDiagnosticSource {
+  readonly status: HostStatus;
+  readonly installations: Iterable<InstallationRecord>;
+  readonly groups: Iterable<GroupNode>;
+}
+
 /**
  * Immutable operational read model; never a service locator or control plane.
  *
@@ -48,25 +54,21 @@ export interface HostSnapshot {
 export class HostDiagnostics {
   readonly #name: string;
   readonly #publisher: SnapshotPublisher<HostSnapshot>;
-  #snapshot: HostSnapshot;
   #revision = 0;
 
   readonly view: SnapshotView<HostSnapshot>;
 
-  constructor(name: string, groups: Iterable<GroupNode>, report: (error: unknown) => void) {
+  constructor(name: string, read: () => HostDiagnosticSource, report: (error: unknown) => void) {
     this.#name = name;
-    this.#snapshot = this.#createSnapshot("idle", [], groups);
-    this.#publisher = new SnapshotPublisher(() => this.#snapshot, report);
+    this.#publisher = new SnapshotPublisher(() => {
+      const { status, installations, groups } = read();
+      return this.#createSnapshot(status, installations, groups);
+    }, report);
     this.view = this.#publisher.view;
   }
 
-  publish(
-    status: HostStatus,
-    installations: Iterable<InstallationRecord>,
-    groups: Iterable<GroupNode>,
-  ) {
+  publish() {
     this.#revision++;
-    this.#snapshot = this.#createSnapshot(status, installations, groups);
     this.#publisher.invalidate();
   }
 
@@ -83,12 +85,12 @@ export class HostDiagnostics {
         groupId: installation.groupId,
         status: installation.status,
         requires: Object.freeze(
-          Object.values(installation.declaration.plugin.requires ?? {}).map((requirement) => {
+          Object.values(installation.declaration.plugin.requires).map((requirement) => {
             return requirement.kind === "optional" ? requirement.service.id : requirement.id;
           }),
         ),
         provides: Object.freeze(
-          Object.values(installation.declaration.plugin.provides ?? {}).map((token) => token.id),
+          Object.values(installation.declaration.plugin.provides).map((token) => token.id),
         ),
         ...(installation.instance ? { lifetime: installation.instance.lifetime.diagnostics } : {}),
       };

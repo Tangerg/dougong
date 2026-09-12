@@ -107,8 +107,8 @@ export type InstanceContext = LifetimeOperations &
 export interface NormalizedPlugin {
   readonly name: string;
   readonly config?: StandardSchemaV1<unknown, unknown>;
-  readonly requires?: Requirements;
-  readonly provides?: Provisions;
+  readonly requires: Requirements;
+  readonly provides: Provisions;
   readonly setup: (
     context: InstanceContext,
     config: unknown,
@@ -176,11 +176,11 @@ function normalizePluginDeclaration(plugin: AnyPlugin): AnyPlugin {
   }
   assertContractRecord(declaredRequirements, name, "requires");
   assertContractRecord(declaredProvisions, name, "provides");
-  const requires = declaredRequirements ? Object.freeze({ ...declaredRequirements }) : undefined;
-  const provides = declaredProvisions ? Object.freeze({ ...declaredProvisions }) : undefined;
+  const requires: Record<string, Requirement> = Object.create(null);
+  const provides: Record<string, Provisions[string]> = Object.create(null);
 
   const contracts = new Map<string, PluginContractDeclaration>();
-  for (const [key, requirement] of Object.entries(requires ?? {})) {
+  for (const [key, requirement] of Object.entries(declaredRequirements ?? {})) {
     if (!key.trim()) throw new TypeError("Plugin requirement alias cannot be empty");
     if (key !== key.trim()) {
       throw new TypeError("Plugin requirement alias cannot start or end with whitespace");
@@ -199,6 +199,13 @@ function normalizePluginDeclaration(plugin: AnyPlugin): AnyPlugin {
     } else if (!isContract(requirement, "service") && !isContract(requirement, "extensionPoint")) {
       throw new TypeError(`Plugin requirement '${key}' must be a Service or ExtensionPoint`);
     }
+    requires[key] =
+      requirement.kind === "optional"
+        ? (Object.freeze({
+            kind: "optional",
+            service: snapshotContract(requirement.service),
+          }) as Requirement)
+        : snapshotContract(requirement);
     rememberPluginContract(
       name,
       contracts,
@@ -208,24 +215,33 @@ function normalizePluginDeclaration(plugin: AnyPlugin): AnyPlugin {
     );
   }
 
-  for (const [key, provision] of Object.entries(provides ?? {})) {
+  for (const [key, provision] of Object.entries(declaredProvisions ?? {})) {
     if (!key.trim()) throw new TypeError("Plugin provision alias cannot be empty");
     if (key !== key.trim()) {
       throw new TypeError("Plugin provision alias cannot start or end with whitespace");
     }
+    if (key === "then") {
+      throw new TypeError("Plugin provision alias 'then' conflicts with the Promise protocol");
+    }
     if (!isContract(provision, "service")) {
       throw new TypeError(`Plugin provision '${key}' must be a Service`);
     }
-    rememberPluginContract(name, contracts, "provision", key, provision);
+    provides[key] = snapshotContract(provision);
+    rememberPluginContract(name, contracts, "provision", key, provides[key]);
   }
 
   return Object.freeze({
     name,
     ...(config === undefined ? {} : { config }),
-    ...(requires ? { requires } : {}),
-    ...(provides ? { provides } : {}),
+    requires: Object.freeze(requires),
+    provides: Object.freeze(provides),
     setup,
   });
+}
+
+// Only the identity is owned by Core. Config and service values remain opaque.
+function snapshotContract<T extends ContractIdentity>(token: T): T {
+  return Object.freeze({ id: token.id, kind: token.kind }) as T;
 }
 
 function assertPluginRecord(value: unknown): asserts value is Record<string, unknown> {

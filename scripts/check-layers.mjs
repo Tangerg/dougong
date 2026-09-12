@@ -61,6 +61,8 @@ const CORE_MODULE_LAYERS = {
   "core/src/contracts.ts": 0,
   "core/src/errors.ts": 0,
   "core/src/group.ts": 0,
+  // A configuration session owns an opaque Draft, independent of the ownership tree.
+  "core/src/group-configuration.ts": 0,
   "core/src/lifecycle-status.ts": 0,
   "core/src/record.ts": 0,
   "core/src/readonly-map.ts": 0,
@@ -327,9 +329,9 @@ const FILE_RULES = [
   {
     matches: (file) => file === "platform/src/registration.ts",
     test: (source) =>
-      !/\bErrorSummary\b/.test(source) ||
+      !/\bRecordedFailure\b/.test(source) ||
       /function\s+(?:snapshot|restore)(?:Failure|Error)\s*\(/.test(source),
-    message: "Platform terminal failures must reuse Core ErrorSummary",
+    message: "Platform terminal failures must reuse Core RecordedFailure",
   },
   {
     matches: (file) => file.startsWith("platform/src/"),

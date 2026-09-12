@@ -18,7 +18,7 @@ export interface Artifact<Reference> {
   /** Opaque input validated by the selected Plugin at the Core boundary. */
   readonly config?: unknown;
   /**
-   * Plugin supplied by application code until the external module is activated.
+   * Plugin supplied by application code until the external module is installed.
    *
    * This is what makes lazy activation invisible to the rest of the graph: the
    * placeholder occupies the Installation from registration, and activation

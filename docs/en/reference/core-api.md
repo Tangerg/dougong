@@ -489,7 +489,7 @@ Every `on()` call creates an independent Listener registration. Reusing the same
 An Event has exactly one dispatch semantic:
 
 - a single payload; use an object for complex arguments
-- asynchronous concurrent broadcast to every listener
+- asynchronous concurrent broadcast to the captured listener set; a registration disposed before its callback begins is skipped
 - awaits all of them
 - returns no business result
 - if any listener fails it throws an `AggregateError`, even with a single cause
@@ -590,13 +590,12 @@ Waiting is a structured-ownership guarantee, not a timeout policy. If a task is 
 A plugin's stop order is fixed and never depends on registration coincidence:
 
 ```text
-refuse new context work
-→ revoke Services
-→ revoke listeners, contributions and ContributionView subscriptions
-→ abort the root signal
-→ await background tasks
-→ release child lifetimes in reverse order
-→ run cleanups LIFO
+revoke Services
+→ seal Context work across the entire Lifetime subtree
+→ withdraw all listeners, subscriptions and views, then contributions
+→ abort the subtree signals
+→ drain tasks and descendant Lifetimes concurrently
+→ each Lifetime runs cleanups LIFO after its tasks and children settle
 ```
 
 Consequently a cleanup may not continue to `emit()` or acquire new resources; stopping has already crossed the "accept new work" boundary.
@@ -763,7 +762,11 @@ Acquired resources         all release attempted
 
 Host start, stop and a ChangeSet committed while active use ExtensionPoint batches: an observer sees only the pre-operation or post-operation snapshot, never per-plugin intermediates.
 
+Commit prepares every affected ExtensionPoint snapshot before delivering any notification. A subscriber to one collection therefore reads the committed values of the other collections too.
+
 ## 13. The unified observation protocol and the reactive layer
+
+Invalidations raised during notification are queued until the current callback returns. Each subscription awaiting delivery is queued once. This order also applies when a diagnostics callback changes another snapshot, preventing reentry across Publishers.
 
 `ContributionView`, Host diagnostics, Platform diagnostics and `@dougongjs/reactive` signals all adopt one structural protocol:
 
@@ -894,7 +897,7 @@ Because an Event by definition collects every listener failure, it always throws
 
 Errors from background tasks, subscribers and later observes cannot return to the original synchronous stack and are reported through `onError`. A failure inside `onError` itself must not change the Host command being observed.
 
-`ErrorSummary` is the minimal error-retention primitive shared by terminal handles. Its constructor accepts only an `Error` and stores only the primitive values needed to rebuild its `name`, `message`, `TypeError` category and any `DougongError.code`; it does not retain the original error, `stack`, `cause` or subclass payload. `restore()` rebuilds a `DougongError` by default, while a higher layer may supply its own coded-error factory to preserve the error domain without copying the summary algorithm. It is only for terminal state that must sever a historical object graph; normal propagation still delivers the original error.
+`RecordedFailure` is the shared terminal error type. Its `snapshot: ErrorSnapshot` contains frozen diagnostic values: original name, message, code, stack text, bounded cause and aggregate error trees, validation issues, and permission fields. It never reconstructs the original subclass or retains arbitrary error payloads. Operation failures and recoverable failures still propagate their original Error; `ready()` on a discarded Installation or Registration rejects with RecordedFailure.
 
 ## 16. Forbidden directions
 

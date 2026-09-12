@@ -50,6 +50,8 @@ Depends only on standard JavaScript and the Standard Schema type contract. It ow
 
 Core keeps the same division internally: Host serializes public commands and publishes status over three peer collaborators; InstallationRegistry owns declarations and public handle authority; GroupCoordinator owns only structural Groups; Engine owns the committed plan and its commit, rollback and fail-closed transitions. InstanceCoordinator, beneath Engine, owns live Instances and the Services, Events, ExtensionPoints and Lifetimes reachable from them. Platform reuses Core's serialization primitive directly rather than copying its failure-isolation state machine. Graph switching happens only in Engine and live execution happens only in InstanceCoordinator, so declaration state, transaction state and active execution state each have exactly one source of truth instead of accumulating in one class; runtime remains reserved for the JavaScript environment such as Node, a browser or a WebView.
 
+Host and Platform diagnostics materialize collections through SnapshotPublisher’s reader. Publishing only advances revision and invalidates the view; repeated unread changes do not build snapshots. `ContractRegistryWriter` has explicit staged, committed and discarded phases: after commit it writes directly to the same durable registry. Group configuration sessions live separately from the ownership tree and retain their generic Draft boundary to avoid depending on a specific ChangeSet implementation.
+
 ### `@dougongjs/reactive`
 
 A zero-dependency value layer providing:
@@ -280,6 +282,9 @@ A ChangeSet builds and validates the complete candidate graph before touching co
 
 Top-level side effects of a dynamic import, network requests and operating-system resources cannot be rolled back by an in-memory transaction. Those are the loader's or the plugin's compensation responsibility, and the documentation must not dress a framework transaction up as a distributed-transaction promise.
 
+
+An `InstallationGraph` captures a declaration version for each stable Installation identity. Activation reads that version from the plan; rollback can therefore execute the previous declaration even while Registry records contain the candidate declaration. Engine supplies every parsed config before stopping Instances, and rollback uses captured Instance configs. InstanceCoordinator rejects a missing prepared config and never invokes a schema as a fallback.
+
 ## 9. Why a Group is not a scope
 
 A Group solves:
@@ -372,7 +377,7 @@ untrusted UI          declarative data rendered by application code
 
 A Platform loader may return an application-authored RPC `Plugin`. Core then sees only ordinary Services and Lifetimes and never needs to know the transport.
 
-Platform activation and structural change are orthogonal command flows, but their committed state must agree. The internal `Activator` exclusively owns dependency activation, `ActivationGate` permits and change-target exclusion; Platform only serializes public commands and commits structural transactions. When a ChangeSet begins execution, it first fixes which updates remain activated, then completes candidate-graph, permission and module preflight. Through Activator's one-shot barrier it closes new activation, cancels explicit targets and awaits existing permits before revalidating stable state against that same plan and committing exactly one Core ChangeSet. A failed preflight therefore has no cancellation side effect, and a concurrent activation can neither change the meaning of the current change nor create a dangling dependency in the gap between validation and commit.
+Platform activation and structural change are orthogonal command flows, but their committed state must agree. The internal `Activator` exclusively owns dependency activation, `ActivationGate` permits and change-target exclusion; Platform only serializes public commands and commits structural transactions. When a ChangeSet begins execution, it first fixes which updates remain installed, then completes candidate-graph, permission and module preflight. Through Activator's one-shot barrier it closes new activation, cancels explicit targets and awaits existing permits before revalidating stable state against that same plan and committing exactly one Core ChangeSet. A failed preflight therefore has no cancellation side effect, and a concurrent activation can neither change the meaning of the current change nor create a dangling dependency in the gap between validation and commit.
 
 ## 12. Mapping to real projects
 

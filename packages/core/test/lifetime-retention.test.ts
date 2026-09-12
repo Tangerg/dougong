@@ -1,3 +1,4 @@
+import { normalizePlugin } from "../src/plugin";
 import { describe, expect, it } from "vitest";
 import {
   createHost,
@@ -166,7 +167,7 @@ describe("lifetime retention", () => {
     expect(fixture.references.every((ref) => ref.deref() === undefined)).toBe(true);
   });
 
-  it("releases registry authority from a discarded Contract draft", async () => {
+  it("releases registry authority from a discarded Contract writer", async () => {
     const forceGc = (globalThis as typeof globalThis & { gc?: () => void }).gc;
     if (!forceGc) throw new TypeError("Retention tests require Node.js --expose-gc");
 
@@ -210,8 +211,9 @@ describe("lifetime retention", () => {
     expect(fixture.installation.status).toBe("failed");
     expect(fixture.reference.deref()).toBeUndefined();
     await expect(fixture.installation.ready()).rejects.toMatchObject({
-      name: "Error",
+      name: "RecordedFailure",
       message: "abandoned plugin failed",
+      snapshot: { name: "Error" },
     });
   });
 
@@ -282,7 +284,7 @@ function releaseTerminalOwnershipTrees() {
     "retention.terminal-plugin:1",
     1,
     pluginGroup,
-    createInstallationDeclaration(plugin, undefined),
+    createInstallationDeclaration(normalizePlugin(plugin), undefined),
   );
   record.remove();
 
@@ -296,7 +298,7 @@ function releaseTerminalOwnershipTrees() {
 function createDiscardedContractDraft() {
   const registry = new ContractRegistry();
   const reference = new WeakRef(registry);
-  const draft = registry.draft(new Map());
+  const draft = registry.writer(new Map());
   draft.discard();
   return { draft, reference };
 }

@@ -150,18 +150,18 @@ A `placeholder` must be created by application-trusted code. It suits contributi
 
 | status | Meaning |
 | --- | --- |
-| `pending` | still owned by an uncommitted Platform ChangeSet, not yet in the registry |
+| `pending` | awaiting admission to the registry, including a committed ChangeSet still in the queue |
 | `registered` | the Artifact is recorded; no external Plugin selected. A placeholder may already be in Core |
 | `loading` | authorizing, activating dependencies or loading the module |
-| `activated` | the external Plugin is committed to Core; this does not imply the Host is currently `active` |
-| `failed` | the last activation failed; the error is retained for diagnostics and an explicit `activate()` may retry |
+| `installed` | the external Plugin is committed to Core; this does not imply the Host is currently `active` |
+| `failed` | admission or activation failed; admitted Registrations may retry `activate()`, while discarded admissions are terminal |
 | `removed` | removed from both Platform and the Core installation plan; not revivable |
 
-`activate()` can complete while the Host is `idle`: it commits the loaded Plugin into the installation plan and does not secretly start the Host. `status` becomes `"activated"`, but a `ready()` called before or after still waits for `host.start()`. This deliberately separates "the Registration is activated" from "the Instance is ready".
+`activate()` can complete while the Host is `idle`: it commits the loaded Plugin into the installation plan and does not secretly start the Host. `status` becomes `"installed"`, but a `ready()` called before or after still waits for `host.start()`. This deliberately separates "the Registration is installed" from "the Instance is ready".
 
 After the signal is aborted, only the exact `signal.reason` or an explicit `AbortError` is classified as a cancellation outcome. Another Loader error that merely occurs after abort remains a `MODULE_LOAD_FAILED` with its original `cause`; a racing cancellation reason never overwrites it.
 
-`ready()` waits for the first activation and the Core ready barrier while `pending` / `registered` / `loading`; delegates to the current Core Installation while `activated`; and rejects immediately while `failed` / `removed`. A failed wait is not revived by a later retry — call `ready()` again after a successful retry.
+`ready()` waits for the first activation and the Core ready barrier while `pending` / `registered` / `loading`; delegates to the current Core Installation while `installed`; and rejects immediately while `failed` / `removed`. A failed wait is not revived by a later retry — call `ready()` again after a successful retry.
 
 ## 6. Manifest dependencies and activation conditions
 
@@ -173,7 +173,7 @@ Before activating a Registration, Platform activates its Manifest-declared depen
 - version not satisfied: `REGISTRATION_DEPENDENCY_INCOMPATIBLE`
 - dependency cycle: `REGISTRATION_CYCLE`
 
-Registration order need not match dependency order: a not-yet-activated Registration may temporarily reference an absent dependency, which lets application code collect a batch of Manifests first. But once every node is present, any closed loop is rejected immediately at the candidate-graph stage of registration or change — Registrations are never left silently pending forever.
+Registration order need not match dependency order: a not-yet-installed Registration may temporarily reference an absent dependency, which lets application code collect a batch of Manifests first. But once every node is present, any closed loop is rejected immediately at the candidate-graph stage of registration or change — Registrations are never left silently pending forever.
 
 Activation of one Registration is serialized. One root activation and its recursive dependencies share an internal permit, so when several consumers concurrently require the same dependency, that dependency completes exactly one effective load. A Platform ChangeSet coordinates with those permits through an activation gate: a failed preflight cancels no in-flight activation; only a successful preflight closes admission for new roots, cancels explicit change targets and awaits already-admitted activation trees. Platform disposal instead becomes terminal and cancels every activation. A load result therefore cannot "revive" an old Artifact across a change boundary.
 
@@ -200,10 +200,10 @@ Calling `activate()` immediately after `commit()` returns does not depend on mic
 
 Commit order:
 
-1. Validate that every target still belongs to this Platform, snapshot which updates enter this transaction as activated, and form the complete candidate graph against the current registry.
-2. Against that plan, check duplicate identity, cycles and post-commit activated dependencies, then authorize new or updated Manifests and preload new Plugins for targets planned to remain activated; failure in this phase takes no lock and cancels no activation.
+1. Validate that every target still belongs to this Platform, snapshot which updates enter this transaction as installed, and form the complete candidate graph against the current registry.
+2. Against that plan, check duplicate identity, cycles and post-commit installed dependencies, then authorize new or updated Manifests and preload new Plugins for targets planned to remain installed; failure in this phase takes no lock and cancels no activation.
 3. Close admission for new root activations, lock and cancel targets being updated or removed, and await every activation tree admitted earlier.
-4. Revalidate the candidate against stable Registration state and the same activation plan, so an activation completing during preflight can neither change this update's meaning nor introduce a new activated dependency.
+4. Revalidate the candidate against stable Registration state and the same activation plan, so an activation completing during preflight can neither change this update's meaning nor introduce a new installed dependency.
 5. Compile placeholder installs, active Plugin updates and removals into **one Core ChangeSet** and commit it.
 6. After Core succeeds, switch Platform's Artifacts, Registrations and diagnostic state in one step, then reopen activation admission.
 
@@ -280,9 +280,9 @@ Platform's decidable errors use `PlatformError.code`. `PlatformError extends Dou
 | `REGISTRATION_DUPLICATE` | A duplicate identity appeared in the candidate Registration graph |
 | `ARTIFACT_IDENTITY` | Manifest, placeholder or loaded Plugin names disagree |
 | `REGISTRATION_IDENTITY` | An update's Artifact carries a different Manifest name |
-| `REGISTRATION_DEPENDENCY_MISSING` | An activated or activating Registration has no Registration for a manifest dependency |
+| `REGISTRATION_DEPENDENCY_MISSING` | An installed or activating Registration has no Registration for a manifest dependency |
 | `REGISTRATION_DEPENDENCY_INCOMPATIBLE` | A dependency Registration does not satisfy the manifest version range |
-| `REGISTRATION_DEPENDENCY_INACTIVE` | An activated candidate Registration depends on a Registration that is not activated |
+| `REGISTRATION_DEPENDENCY_INACTIVE` | An installed candidate Registration depends on a Registration that is not installed |
 | `REGISTRATION_CYCLE` | Manifest dependencies form a cycle in the candidate Registration graph |
 | `REGISTRATION_BUSY` | The target is changing, or a structural change has closed admission for new root activations |
 | `MODULE_LOAD_FAILED` | The loader itself failed |

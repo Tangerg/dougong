@@ -291,14 +291,21 @@ describe("computed", () => {
   });
 
   it("does not retain a subscriber when initial evaluation fails", () => {
+    const enabled = signal(false);
     const calculate = vi.fn<() => number>(() => {
-      throw new Error("cannot calculate");
+      if (!enabled.get()) throw new Error("cannot calculate");
+      return 1;
     });
     const broken = computed(calculate);
+    const listener = vi.fn<() => void>();
 
-    expect(() => broken.subscribe(() => {})).toThrow("cannot calculate");
-    expect(() => broken.subscribe(() => {})).toThrow("cannot calculate");
+    expect(() => broken.subscribe(listener)).toThrow("cannot calculate");
+    expect(() => broken.subscribe(listener)).toThrow("cannot calculate");
+    expect(calculate).toHaveBeenCalledOnce();
+    enabled.set(true);
+    expect(broken.get()).toBe(1);
     expect(calculate).toHaveBeenCalledTimes(2);
+    expect(listener).not.toHaveBeenCalled();
   });
 
   it("rejects a computed signal that reads itself", () => {

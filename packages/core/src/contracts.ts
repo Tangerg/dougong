@@ -95,8 +95,8 @@ function contract<T, K extends ContractKind>(kind: K, id: string): Contract<T, K
 
 /**
  * The brand is compile-time only, so a runtime check can be structural at best.
- * This rejects values that never came from a Contract factory; it does not — and
- * cannot — prove provenance.
+ * This validates identity shape, not factory provenance. Declaration
+ * normalization takes an owned identity snapshot of accepted values.
  */
 export function isContract(value: unknown, expected?: ContractKind): value is ContractIdentity {
   if (!value || typeof value !== "object") return false;
@@ -142,7 +142,7 @@ export function optional<T>(token: Service<T>): OptionalService<T> {
   if (!isContract(token, "service")) {
     throw new TypeError("optional() expects a Service");
   }
-  return Object.freeze({ kind: "optional", service: token }) as OptionalService<T>;
+  return Object.freeze({ kind: "optional", service: service<T>(token.id) }) as OptionalService<T>;
 }
 
 export function isOptionalService<T>(

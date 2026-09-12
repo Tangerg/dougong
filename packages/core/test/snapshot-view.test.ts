@@ -1,9 +1,81 @@
 import { describe, expect, it, vi } from "vitest";
 import { SnapshotPublisher } from "../src/index";
+import { batchSnapshotNotifications } from "../src/snapshot-view";
 
 const RELEASE_PASSES = 8;
 
 describe("SnapshotPublisher", () => {
+  it("settles nested snapshot batches and preserves both operation and reporter failures", () => {
+    const subscriberError = new Error("subscriber failed");
+    const reporterError = new Error("reporter failed");
+    const publisher = new SnapshotPublisher(
+      () => 1,
+      () => {
+        throw reporterError;
+      },
+    );
+    const listener = vi.fn<() => void>();
+    publisher.view.subscribe(() => {
+      throw subscriberError;
+    });
+    publisher.view.subscribe(listener);
+    const error = captureError(() =>
+      batchSnapshotNotifications(() => {
+        batchSnapshotNotifications(() => publisher.invalidate());
+        expect(listener).not.toHaveBeenCalled();
+        throw undefined;
+      }),
+    );
+    expect(error).toBeInstanceOf(AggregateError);
+    expect((error as AggregateError).errors).toEqual([
+      undefined,
+      new AggregateError([subscriberError, reporterError], "Snapshot error reporting failed"),
+    ]);
+    expect(listener).toHaveBeenCalledOnce();
+    publisher.dispose();
+  });
+
+  it("seals the final snapshot and withdraws queued callbacks when closed during notification", () => {
+    let value = 0;
+    const publisher = new SnapshotPublisher(
+      () => value,
+      () => undefined,
+    );
+    const listener = vi.fn<() => void>();
+    publisher.view.subscribe(() => {
+      value = 2;
+      publisher.invalidate();
+      publisher.dispose();
+    });
+    publisher.view.subscribe(listener);
+    value = 1;
+    publisher.invalidate();
+    expect(publisher.view.get()).toBe(2);
+    expect(listener).not.toHaveBeenCalled();
+  });
+
+  it("queues reentrant invalidations without reentering the subscriber", () => {
+    let value = 0;
+    const publisher = new SnapshotPublisher(
+      () => value,
+      () => undefined,
+    );
+    const trace: string[] = [];
+    publisher.view.subscribe(() => {
+      trace.push(`enter:${publisher.view.get()}`);
+      if (value === 1) {
+        value = 2;
+        publisher.invalidate();
+      }
+      trace.push(`leave:${publisher.view.get()}`);
+    });
+    publisher.view.subscribe(() => trace.push(`other:${publisher.view.get()}`));
+    value = 1;
+    publisher.invalidate();
+    expect(trace).toEqual(["enter:1", "leave:2", "other:2", "enter:2", "leave:2"]);
+    publisher.dispose();
+  });
+
   it("publishes invalidations through one read-only protocol", () => {
     let value = 1;
     const read = vi.fn<() => number>(() => value);

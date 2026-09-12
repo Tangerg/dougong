@@ -18,6 +18,7 @@ export interface SnapshotView<T> {
 
 interface SnapshotSubscriptionBinding {
   readonly listener: () => void;
+  readonly report: (error: unknown) => void;
   readonly detach: (subscription: SnapshotSubscription) => void;
 }
 
@@ -29,6 +30,54 @@ const snapshotSubscriptionBindings = new WeakMap<
   SnapshotSubscription,
   SnapshotSubscriptionBinding
 >();
+
+// Core commits all snapshot values before any observer runs. A subscription is
+// the notification identity; writes from a callback join the drain without
+// recursively entering application code. Core and reactive own separate queues.
+const pendingSubscriptions = new Set<SnapshotSubscription>();
+let batchDepth = 0;
+let flushing = false;
+
+/** Internal synchronous commit boundary for related snapshots. */
+export function batchSnapshotNotifications(operation: () => void) {
+  batchDepth++;
+  const errors: unknown[] = [];
+  try {
+    operation();
+  } catch (error) {
+    errors.push(error);
+  } finally {
+    batchDepth--;
+    if (!batchDepth) {
+      try {
+        flushNotifications();
+      } catch (error) {
+        errors.push(error);
+      }
+    }
+  }
+  if (errors.length === 1) throw errors[0];
+  if (errors.length > 1) throw new AggregateError(errors, "Snapshot batch failed");
+}
+
+function flushNotifications() {
+  if (flushing) return;
+  flushing = true;
+  const failures: unknown[] = [];
+  try {
+    while (pendingSubscriptions.size) {
+      const subscription = pendingSubscriptions.values().next().value!;
+      pendingSubscriptions.delete(subscription);
+      notifySnapshotSubscription(subscription, failures);
+    }
+  } finally {
+    flushing = false;
+    pendingSubscriptions.clear();
+  }
+  if (failures.length) {
+    throw new AggregateError(failures, "Snapshot error reporting failed");
+  }
+}
 
 type SnapshotPublisherState<T> =
   | {
@@ -61,30 +110,10 @@ export class SnapshotPublisher<T> implements Disposable {
   });
 
   invalidate() {
-    const { report } = this.#requireActive();
+    this.#requireActive();
     this.#dirty = true;
-    const reportingFailures: unknown[] = [];
-    // Iterate a copy: a subscriber is allowed to dispose itself, or another
-    // subscriber, while being notified. One subscriber's failure must not stop
-    // the rest from hearing about the change, so each is reported and the loop
-    // continues; only a failure of the reporter itself escapes.
-    for (const subscription of [...this.#subscriptions]) {
-      try {
-        notifySnapshotSubscription(subscription);
-      } catch (subscriberError) {
-        try {
-          assertSynchronous(
-            report(subscriberError),
-            "Snapshot error reporters must be synchronous",
-          );
-        } catch (reporterError) {
-          reportingFailures.push(subscriberError, reporterError);
-        }
-      }
-    }
-    if (reportingFailures.length) {
-      throw new AggregateError(reportingFailures, "Snapshot error reporting failed");
-    }
+    for (const subscription of this.#subscriptions) pendingSubscriptions.add(subscription);
+    if (!batchDepth) flushNotifications();
   }
 
   dispose() {
@@ -116,9 +145,9 @@ export class SnapshotPublisher<T> implements Disposable {
 
   #subscribe(listener: () => void): Disposable {
     if (typeof listener !== "function") throw new TypeError("Subscriber must be a function");
-    this.#requireActive();
+    const { report } = this.#requireActive();
 
-    const subscription = new SnapshotSubscription(listener, (current) => {
+    const subscription = new SnapshotSubscription(listener, report, (current) => {
       this.#subscriptions.delete(current);
     });
     this.#subscriptions.add(subscription);
@@ -139,15 +168,19 @@ export class SnapshotPublisher<T> implements Disposable {
 }
 
 class SnapshotSubscription implements Disposable {
-  constructor(listener: () => void, detach: (subscription: SnapshotSubscription) => void) {
-    snapshotSubscriptionBindings.set(this, { listener, detach });
+  constructor(
+    listener: () => void,
+    report: (error: unknown) => void,
+    detach: (subscription: SnapshotSubscription) => void,
+  ) {
+    snapshotSubscriptionBindings.set(this, { listener, report, detach });
     Object.freeze(this);
   }
 
   dispose() {
     const binding = snapshotSubscriptionBindings.get(this);
     if (!binding) return;
-    snapshotSubscriptionBindings.delete(this);
+    closeSnapshotSubscription(this);
     binding.detach(this);
   }
 
@@ -156,12 +189,24 @@ class SnapshotSubscription implements Disposable {
   }
 }
 
-function notifySnapshotSubscription(subscription: SnapshotSubscription) {
+function notifySnapshotSubscription(subscription: SnapshotSubscription, failures: unknown[]) {
   const binding = snapshotSubscriptionBindings.get(subscription);
   if (!binding) return;
-  assertSynchronous(binding.listener(), "Snapshot subscribers must be synchronous");
+  try {
+    assertSynchronous(binding.listener(), "Snapshot subscribers must be synchronous");
+  } catch (subscriberError) {
+    try {
+      assertSynchronous(
+        binding.report(subscriberError),
+        "Snapshot error reporters must be synchronous",
+      );
+    } catch (reporterError) {
+      failures.push(subscriberError, reporterError);
+    }
+  }
 }
 
 function closeSnapshotSubscription(subscription: SnapshotSubscription) {
+  pendingSubscriptions.delete(subscription);
   snapshotSubscriptionBindings.delete(subscription);
 }

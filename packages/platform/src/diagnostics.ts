@@ -4,12 +4,13 @@ import type { Manifest } from "./manifest";
 export type PlatformStatus = "active" | "disposing" | "disposed";
 
 /**
- * `registered` and `activated` are the distinction the whole Platform exists to
- * make: admitted, versus actually loaded and running. `loading` is visible in
+ * `registered` and `installed` are the distinction the whole Platform exists to
+ * make: admitted, versus loaded and committed as a Core Installation. Only
+ * `ready()` establishes execution readiness. `loading` is visible in
  * between so a slow import is observable rather than looking like a hang.
  */
 export type RegistrationStatus =
-  "pending" | "registered" | "loading" | "activated" | "failed" | "removed";
+  "pending" | "registered" | "loading" | "installed" | "failed" | "removed";
 
 export interface RegistrationSnapshot {
   readonly manifestName: string;
@@ -44,20 +45,27 @@ export class PlatformDiagnostics {
   readonly #apiVersion: string;
   readonly #publisher: SnapshotPublisher<PlatformSnapshot>;
   #revision = 0;
-  #snapshot: PlatformSnapshot;
 
   readonly view: SnapshotView<PlatformSnapshot>;
 
-  constructor(apiVersion: string, report: (error: unknown) => void) {
+  constructor(
+    apiVersion: string,
+    read: () => {
+      readonly status: PlatformStatus;
+      readonly registrations: Iterable<DiagnosableRegistration>;
+    },
+    report: (error: unknown) => void,
+  ) {
     this.#apiVersion = apiVersion;
-    this.#snapshot = this.#createSnapshot("active", []);
-    this.#publisher = new SnapshotPublisher(() => this.#snapshot, report);
+    this.#publisher = new SnapshotPublisher(() => {
+      const { status, registrations } = read();
+      return this.#createSnapshot(status, registrations);
+    }, report);
     this.view = this.#publisher.view;
   }
 
-  publish(status: PlatformStatus, registrations: Iterable<DiagnosableRegistration>) {
+  publish() {
     this.#revision++;
-    this.#snapshot = this.#createSnapshot(status, registrations);
     this.#publisher.invalidate();
   }
 

@@ -1,4 +1,4 @@
-import { DougongError, ErrorSummary, normalizeFailure } from "./errors";
+import { DougongError, RecordedFailure, normalizeFailure } from "./errors";
 import type { Lifetime } from "./lifetime";
 import type { LifecycleStatus } from "./lifecycle-status";
 import type { NormalizedPlugin } from "./plugin";
@@ -28,16 +28,6 @@ interface InstallationAttachment {
   notifyChanged: (() => void) | undefined;
 }
 
-/**
- * A failure that may recover keeps the live Error — its stack is the useful part
- * while the Installation is still in the graph. A discarded one keeps only an
- * `ErrorSummary`, because a terminal record must not retain the object graph
- * that was live when it failed.
- */
-type InstallationFailure =
-  | { readonly retention: "live"; readonly error: Error }
-  | { readonly retention: "summary"; readonly summary: ErrorSummary };
-
 type InstallationState =
   | { readonly phase: "pending" }
   | {
@@ -48,7 +38,7 @@ type InstallationState =
   | { readonly phase: "stopping"; readonly instance: Instance }
   | {
       readonly phase: "failed";
-      readonly failure: InstallationFailure;
+      readonly error: Error;
       readonly readiness: "unsettled" | "settled";
     }
   | { readonly phase: "removed"; readonly readiness: "unsettled" | "settled" };
@@ -91,7 +81,7 @@ export class InstallationRecord {
   }
 
   /** Whether the owning ChangeSet has granted this Installation Host authority. */
-  get attached() {
+  get hasAuthority() {
     return this.#attachment?.notifyChanged !== undefined;
   }
 
@@ -103,9 +93,7 @@ export class InstallationRecord {
   get error() {
     const state = this.#state;
     if (state.phase === "failed") {
-      return state.failure.retention === "live"
-        ? state.failure.error
-        : state.failure.summary.restore();
+      return state.error;
     }
     if (state.phase === "removed") {
       return new DougongError("INSTALLATION_REMOVED", `Installation '${this.id}' has been removed`);
@@ -161,7 +149,7 @@ export class InstallationRecord {
       },
       (error) => {
         if (this.#pendingReadiness?.attempt === attempt) this.#pendingReadiness = undefined;
-        if (this.#state.phase !== "active") throw error;
+        if (this.#state.phase !== "active") throw this.error ?? error;
       },
     );
     this.#pendingReadiness = { attempt, barrier };
@@ -236,14 +224,14 @@ export class InstallationRecord {
   /**
    * For an Installation that never made it into the graph. Unlike `fail()`, this
    * is terminal: readiness settles immediately, the attachment is dropped, and
-   * the reason is kept as a summary rather than a live Error. The handle the
+   * the reason is kept as a RecordedFailure rather than the live Error. The handle the
    * caller already holds stays usable and reports why it is dead.
    */
   discard(error: unknown) {
-    const failure = this.#normalizeFailure(error);
+    const failure = new RecordedFailure(this.#normalizeFailure(error));
     this.#transition({
       phase: "failed",
-      failure: { retention: "summary", summary: new ErrorSummary(failure) },
+      error: failure,
       readiness: "settled",
     });
     for (const waiter of this.#readyWaiters) waiter.reject(failure);
@@ -256,7 +244,7 @@ export class InstallationRecord {
     const failure = this.#normalizeFailure(error);
     this.#transition({
       phase: "failed",
-      failure: { retention: "live", error: failure },
+      error: failure,
       readiness: "unsettled",
     });
     return failure;

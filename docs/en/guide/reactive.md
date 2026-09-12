@@ -39,6 +39,8 @@ double.get()     // 42
 
 `computed` is **lazy**: with no subscribers it does not recompute eagerly; it evaluates on demand at `get()` and caches. Dependencies are **tracked dynamically** — collected fresh on each evaluation, so a signal in a branch that was not taken does not become a dependency.
 
+Both values and thrown errors are cached until a dependency changes. A failed calculation still records the dependencies it read, so later changes can recover it, and an outer `computed` can handle its error with `try/catch`. Calculations must be read-only: calling `signal.set()` during calculation throws a `TypeError` before writing, preventing an old value from being cached against a new version.
+
 ```ts
 const a = signal(1), b = signal(2), useA = signal(true)
 const value = computed(() => (useA.get() ? a.get() : b.get()))
@@ -91,6 +93,8 @@ interface Readable<T> {
 Core's `ContributionView` and `diagnostics` use the **same protocol**, so any observation source can be consumed the same way — no adapters.
 
 A read-only `ReadonlySignal<T>` may safely widen through ordinary subtype relationships; a writable `Signal<T>` is strictly invariant. Otherwise annotating `Signal<Admin>` as `Signal<User>` would permit writing a User that is not an Admin. Expose `ReadonlySignal<T>` when narrowing write authority instead of hiding `set()` behind a wider generic annotation.
+
+Notifications capture subscription membership at publication time. Subscribing again inside a callback does not replay that same publication. Internal dependency invalidations settle before external subscribers run, including unequal diamond paths. Writes during notification enter the same drain queue and are delivered after the current callback returns; nested `batch()` calls cannot reenter it. Deduplication is per subscription, so one callback registered twice remains two subscriptions.
 
 ## observe: compiling value change into resource rebuild
 
@@ -152,9 +156,9 @@ You never write "check whether there is a previous one, and if so clean it up fi
 `observe` does not live in Core, and Core does not know it exists. It relies on structural typing:
 
 ```ts
-interface ObservationOwner {
+interface ObservationOwner<Child extends AsyncDisposable = AsyncDisposable> {
   readonly cleanup: (fn) => AsyncDisposable
-  readonly lifetime: (label) => ObservationLifetime
+  readonly lifetime: (label) => Child
   readonly spawn: (fn) => ObservationTask
 }
 ```
@@ -162,6 +166,10 @@ interface ObservationOwner {
 A plugin's `ctx` happens to satisfy that shape, so `observe(ctx, source, ...)` works by **structural match**, not inheritance or registration.
 
 The result is a dependency direction that stays one-way: `reactive` does not depend on `core`, and `core` does not depend on `reactive`. You can use either alone.
+
+`ObservationOwner<Child>` only requires `Child extends AsyncDisposable`; `Observer` still receives the concrete child type, so a Core Lifetime retains all its capabilities in the callback. After asynchronous cleanup, `observe()` reads the source again and creates resources only for that latest value. Changes A → B → C while A is cleaning up produce A → C observations.
+
+Initial observation subscribes first, creates the child Lifetime, then reads the source and invokes the observer. Replacement also reads after child creation, so changes triggered by diagnostics during resource creation are included. Every replacement failure uses one stop procedure that preserves the original error and any cleanup failures together.
 
 ## Failure handling
 

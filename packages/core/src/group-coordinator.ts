@@ -6,7 +6,8 @@ import {
   type ChangeOperation,
 } from "./change-set";
 import { normalizeFailure } from "./errors";
-import { GroupConfigurationSession, GroupNode } from "./group";
+import { GroupNode } from "./group";
+import { GroupConfigurationSession } from "./group-configuration";
 import { groupRemovedError, GroupLifecycle } from "./group-lifecycle";
 import type { InstallationRecord } from "./installation";
 import type { LifecycleStatus } from "./lifecycle-status";
@@ -220,7 +221,7 @@ export class GroupCoordinator {
       resolve: (value) => {
         this.#requireLifecycle(group);
         const installation = this.#port.resolveInstallation(value);
-        if (!installation.attached) throw installation.unavailableError();
+        if (!installation.hasAuthority) throw installation.unavailableError();
         if (!group.contains(installation.group)) {
           throw new TypeError(`Installation '${installation.id}' is outside Group '${group.id}'`);
         }

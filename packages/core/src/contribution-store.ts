@@ -15,7 +15,7 @@
 import type { Requirement } from "./contracts";
 import { ReadonlyMapSnapshot } from "./readonly-map";
 import { disposeSymbol, type Disposable, type Publication, type StagedResource } from "./resource";
-import { SnapshotPublisher, type SnapshotView } from "./snapshot-view";
+import { batchSnapshotNotifications, SnapshotPublisher, type SnapshotView } from "./snapshot-view";
 
 /** A contributed entry the contributor may update or withdraw — nobody else can. */
 export interface Contribution<T> extends Disposable {
@@ -315,7 +315,9 @@ export class ContributionStore<T> {
     const nextEntries = [...this.#entries].map(([key, entry]) => [key, entry.value] as const);
     const unchanged =
       nextEntries.length === this.#snapshot.size &&
-      nextEntries.every(([key, value]) => Object.is(this.#snapshot.get(key), value));
+      nextEntries.every(
+        ([key, value]) => this.#snapshot.has(key) && Object.is(this.#snapshot.get(key), value),
+      );
     if (unchanged) return;
 
     this.#snapshot = new ReadonlyMapSnapshot(nextEntries);
@@ -458,18 +460,20 @@ export class ContributionRegistry {
     if (this.#batchDepth) return;
     const stores = [...this.#invalidated];
     this.#invalidated.clear();
-    const errors: unknown[] = [];
-    for (const store of stores) {
-      try {
-        store.publishSnapshot();
-      } catch (error) {
-        errors.push(error);
+    batchSnapshotNotifications(() => {
+      const errors: unknown[] = [];
+      for (const store of stores) {
+        try {
+          store.publishSnapshot();
+        } catch (error) {
+          errors.push(error);
+        }
       }
-    }
-    if (errors.length === 1) throw errors[0];
-    if (errors.length > 1) {
-      throw new AggregateError(errors, "Contribution batch publication failed");
-    }
+      if (errors.length === 1) throw errors[0];
+      if (errors.length > 1) {
+        throw new AggregateError(errors, "Contribution batch publication failed");
+      }
+    });
   }
 
   #invalidate(store: ContributionStore<unknown>) {

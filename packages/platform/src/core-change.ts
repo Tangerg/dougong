@@ -54,13 +54,13 @@ export function stageCoreChange<Reference>(
 
     const plugin = loadedPlugins.get(operation.registration);
     if (plugin) {
-      const installation = stageActivatedUpdate(
+      const installation = stageInstalledUpdate(
         requireChange,
         current,
         operation.artifact.config,
         plugin,
       );
-      registrationStates.push({ operation, state: { phase: "activated", installation } });
+      registrationStates.push({ operation, state: { phase: "installed", installation } });
     } else {
       const installation = stagePlaceholderUpdate(requireChange, current, operation.artifact);
       registrationStates.push({ operation, state: { phase: "registered", installation } });
@@ -73,7 +73,7 @@ export function stageCoreChange<Reference>(
   });
 }
 
-function stageActivatedUpdate(
+function stageInstalledUpdate(
   requireChange: () => ChangeSet,
   current: Installation | undefined,
   config: unknown,
@@ -86,7 +86,7 @@ function stageActivatedUpdate(
   return requireChange().install(plugin, config);
 }
 
-// Updating a Registration that is not activated, where the new Artifact may or
+// Updating a Registration that is not installed, where the new Artifact may or
 // may not carry a placeholder. Four cases, and the third is the interesting one:
 // dropping the placeholder from an inactive Registration removes the Installation
 // entirely, because there is nothing left for it to hold.

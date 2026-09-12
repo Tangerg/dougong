@@ -105,7 +105,7 @@ These errors arise while resolving manifest declarations in the candidate Regist
 | --- | --- |
 | `REGISTRATION_DEPENDENCY_MISSING` | A manifest dependency has no Registration |
 | `REGISTRATION_DEPENDENCY_INCOMPATIBLE` | The dependency Registration is outside the version range |
-| `REGISTRATION_DEPENDENCY_INACTIVE` | The dependency Registration exists but is not activated |
+| `REGISTRATION_DEPENDENCY_INACTIVE` | The dependency Registration exists but is not installed |
 | `REGISTRATION_CYCLE` | Manifest dependencies form a cycle in the candidate Registration graph; the message carries the real path |
 
 ### Loading and activation
@@ -181,15 +181,13 @@ const host = createHost({
 
 The channel is fail-safe: an `onError` that throws or rejects falls back to the logger; a logger that itself throws or rejects is observed and then falls silent as the terminal sink — **observing an error never changes the Host command being observed**.
 
-### How much a terminal failure retains
+### Terminal diagnostic records
 
-Once an Installation detaches from its Host (removed or discarded), it keeps only a plain-data summary: `name`, `message`, the minimal constructor category, and `code` when available. A later read rebuilds the correct `DougongError` or `TypeError`; every other failure becomes a plain `Error`.
+Discarded Installations and Registrations reject `ready()` with `RecordedFailure`. Its `name` is always `RecordedFailure`; its optional `code` and frozen `snapshot: ErrorSnapshot` describe the original failure. It does not claim `instanceof TypeError`, `DougongError` or `PermissionDeniedError`. The command that failed and recoverable live failures still deliver the original Error.
 
-The reason is that JavaScript's `Error.stack` can carry the whole orchestration call frame from where the error was created, letting one historical object keep an entire Host alive.
+The snapshot preserves original name, message, code and stack text, plus bounded `cause` and `errors` trees. Permission failures retain `manifestName` and `denied`; config failures retain issue messages and paths. Arbitrary objects, callbacks and custom payloads are omitted. Text is copied as strings, so historical errors cannot retain the Host, Installer, Loader or Platform through their object graph.
 
-**The normal path is unaffected**: a caller awaiting `ready()` always receives the original `Error`, and a failed Installation still attached to a live Host keeps its original error too. Only an after-the-fact read of a detached Installation whose caller never awaited `ready()` gets the summary — and there subclass data such as `ConfigValidationError.issues` is no longer available.
-
-Terminal Installations and Registrations share Core's `ErrorSummary` instead of implementing error classification independently. A Registration records only whether a coded error belonged to Core or Platform, then selects the correct `DougongError` or `PlatformError` factory during `restore()`; it also preserves the caller-error category of `TypeError`, while subclass-specific fields remain absent from the summary. It never keeps an Installer, Loader or Platform alive merely to preserve a historical `stack` or `cause`.
+Recording expands at most 32 error nodes, descends at most four edges, and takes at most eight items per error list. Messages are capped at 4,096 characters, stack text at 16,384, and names, codes and permission fields at 256. Validation paths keep at most 16 segments. `truncated` marks bounded records and cut-off chains. These are diagnostic limits, not a serializer for application state.
 
 ## Related
 

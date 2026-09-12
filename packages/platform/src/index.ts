@@ -12,7 +12,7 @@
 //   Manifest + Reference  ->  Artifact  ->  Registration
 //   what it claims to be      one candidate   its stable identity here
 //
-// A Registration is admitted, which is not the same as activated. Registering
+// A Registration is admitted, which is not the same as installed. Registering
 // installs at most a placeholder; the real module is loaded when an activation
 // event fires.
 

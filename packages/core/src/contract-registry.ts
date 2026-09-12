@@ -26,8 +26,8 @@ export class ContractRegistry {
     rememberContractKind(this.#kinds, contract);
   }
 
-  draft(candidateKinds: ReadonlyMap<string, ContractKind>) {
-    return new ContractRegistryDraft(this, candidateKinds);
+  writer(candidateKinds: ReadonlyMap<string, ContractKind>) {
+    return new ContractRegistryWriter(this, candidateKinds);
   }
 
   commit(kinds: ReadonlyMap<string, ContractKind>) {
@@ -36,36 +36,36 @@ export class ContractRegistry {
   }
 }
 
-/** Transaction-local Contract identities that become durable only after commit. */
-type ContractRegistryDraftState =
+/** Staged identities become durable at commit; the same writer then writes directly. */
+type ContractRegistryWriterState =
   | {
-      readonly phase: "open";
+      readonly phase: "staged";
       readonly registry: ContractRegistry;
       readonly pending: Map<string, ContractKind>;
     }
   | { readonly phase: "committed"; readonly registry: ContractRegistry }
   | { readonly phase: "discarded" };
 
-export class ContractRegistryDraft {
-  #state: ContractRegistryDraftState;
+export class ContractRegistryWriter {
+  #state: ContractRegistryWriterState;
 
   constructor(registry: ContractRegistry, candidateKinds: ReadonlyMap<string, ContractKind>) {
-    this.#state = { phase: "open", registry, pending: new Map() };
+    this.#state = { phase: "staged", registry, pending: new Map() };
     for (const [id, kind] of candidateKinds) this.remember({ id, kind });
   }
 
   remember(contract: ContractIdentity) {
     const state = this.#state;
     // A live Instance keeps its port after its change commits, so a Contract
-    // first named by a later `emit()` or `contribute()` arrives here through an
-    // already-committed draft. There is no transaction left to stage it in, so
+    // first named by a later `emit()` or `contribute()` arrives here through a
+    // committed writer. There is no transaction left to stage it in, so
     // it goes straight to the durable registry — still kind-checked.
     if (state.phase === "committed") {
       state.registry.remember(contract);
       return;
     }
     if (state.phase === "discarded") {
-      throw new Error("Contract registry draft has been discarded");
+      throw new Error("Contract registry writer has been discarded");
     }
 
     state.registry.assertCompatible(contract);
@@ -75,13 +75,13 @@ export class ContractRegistryDraft {
 
   commit() {
     const state = this.#state;
-    if (state.phase !== "open") return;
+    if (state.phase !== "staged") return;
     state.registry.commit(state.pending);
     this.#state = { phase: "committed", registry: state.registry };
   }
 
   discard() {
-    if (this.#state.phase === "open") this.#state = { phase: "discarded" };
+    if (this.#state.phase === "staged") this.#state = { phase: "discarded" };
   }
 }
 

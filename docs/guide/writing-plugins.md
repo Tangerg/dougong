@@ -19,6 +19,8 @@ const plugin = definePlugin({
 
 `definePlugin` 保留声明的 Plugin 形状用于**类型推导**，同时在边界把它规范化为仅含 `name`、`config`、`requires`、`provides`、`setup` 的不可变普通数据 record。声明不能使用 Symbol、隐藏属性、accessor、类实例或未知字段；`requires` 与 `provides` 也只能是由可枚举字符串 own key 构成的普通数据 record。错误因此留在定义处，而不是拖到 Host 启动时。
 
+声明归一化会复制并冻结每个 Contract 身份，包括 `optional()` 内部的 Service。之后修改传入的结构化 token 不会改变已接纳的声明。内部 `requires` 与 `provides` 总是存在，缺省值统一为冻结的空映射；config 与 Service 值仍由应用代码拥有。
+
 ## 声明依赖
 
 ```ts
@@ -97,6 +99,8 @@ setup() {},        // ❌ Type '() => void' is not assignable to
 ```
 
 同一个 Contract 被两个 Plugin 的 `provides` 声明占用，会在构图时抛 `SERVICE_CONFLICT`——在任何 Instance 启动之前。
+
+输出别名 `then` 被保留，因为 `setup()` 支持 Promise 返回值；`app.then` 这样的 Service ID 仍然合法，只需使用 `thenService` 等输出别名。
 
 ## 贡献到 ExtensionPoint
 

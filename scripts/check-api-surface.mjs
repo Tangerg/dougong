@@ -48,7 +48,6 @@ const PACKAGES = {
     types: [
       "AsyncDisposable",
       "Disposable",
-      "ObservationLifetime",
       "ObservationOwner",
       "ObservationTask",
       "Observer",
@@ -63,7 +62,7 @@ const PACKAGES = {
     values: [
       "ConfigValidationError",
       "DougongError",
-      "ErrorSummary",
+      "RecordedFailure",
       "ReadonlyMapSnapshot",
       "SerialQueue",
       "SnapshotPublisher",
@@ -80,6 +79,7 @@ const PACKAGES = {
       "service",
     ],
     types: [
+      "ErrorSnapshot",
       // Contract identity.
       "ContractKind",
       "ContractValue",

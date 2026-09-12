@@ -169,7 +169,7 @@ async setup(ctx) {
 
 Lifetime 有三个阶段：`active` → `disposing` → `disposed`。
 
-进入 `disposing` 后，全部 Context 操作都关闭，包括 `emit()`。停止顺序会先撤回监听、贡献、订阅与 View，再 abort `signal`，最后等待任务、子 Lifetime 和 cleanup；cleanup 是释放资源的阶段，不是继续广播事实的阶段。
+调用 `dispose()` 会同步封住整棵所有权子树，全部 Context 操作随之关闭，包括 `emit()`。Dougong 先撤销所有后代的监听、订阅与 View，再撤回贡献，然后取消 signal；入口全部关闭后，任务与各后代 Lifetime 并行收尾，子级按创建逆序开始关闭；每个 Lifetime 都在自身任务与子级结束后执行 cleanup。父任务收尾缓慢也不会使子级继续接收事件。cleanup 只负责释放资源。
 
 `emit()` 在这个边界返回以 `LIFETIME_DISPOSED` 拒绝的 Promise，不会同步抛出。因此有意忽略终止竞态时可以明确写 `void ctx.emit(STOPPED).catch(report)`；若某个“已停止”状态必须始终可读，应把它放在 Service/Signal，而不是 cleanup Event。
 

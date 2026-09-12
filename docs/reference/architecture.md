@@ -50,6 +50,8 @@ core 与 reactive 互不依赖
 
 Core 内部也保持同一分工：Host 在三个平级协作者之上串行化公共命令并发布状态；InstallationRegistry 拥有声明与公共 handle 权限；GroupCoordinator 只拥有结构 Group；Engine 只拥有已提交计划及其 commit、rollback、fail-closed 转换。Engine 下层的 InstanceCoordinator 只拥有活动 Instance，以及从中可达的 Service、Event、ExtensionPoint 与 Lifetime。Platform 直接复用 Core 的同一串行原语，不复制失败隔离状态机。图切换只在 Engine 中执行，活动执行只在 InstanceCoordinator 中发生，因此声明状态、事务状态和活动执行状态各有一个真相源，而不是堆进一个总类；runtime 一词只保留给 Node、浏览器或 WebView 等 JavaScript 环境。
 
+Host 与 Platform 诊断通过 SnapshotPublisher 的 reader 构造集合。publish 只推进 revision 并使视图失效，未被读取的连续变化不会构造快照。`ContractRegistryWriter` 明确区分 staged、committed、discarded 阶段；提交后直接写入同一份持久注册表。Group 配置会话与所有权树分文件，保留 Draft 泛型以避免依赖具体 ChangeSet 实现。
+
 ### `@dougongjs/reactive`
 
 零依赖值层，负责：
@@ -280,6 +282,9 @@ ChangeSet 先构造和验证完整候选图，再触碰已提交执行状态。�
 
 动态 import 的模块顶层副作用、网络请求或操作系统资源本身无法由内存事务回滚。这些属于 Loader/插件的补偿责任，文档不能把框架事务包装成分布式事务承诺。
 
+
+`InstallationGraph` 为每个稳定 Installation 身份捕获对应声明版本。激活从计划读取该版本，因此即使 Registry 记录仍指向候选声明，回滚也能执行旧声明。Engine 在停止 Instance 前提供全部已解析 config，回滚使用旧 Instance 捕获的 config；InstanceCoordinator 对缺失的预解析配置直接报错，不再调用 schema 兜底。
+
 ## 九、Group 为什么不是 Scope
 
 Group 解决：
@@ -372,7 +377,7 @@ Effect-TS 与 Core 在 DI、Scope、Fiber 和错误执行模型上高度重叠�
 
 Platform 的 Loader 可以返回应用代码编写的 RPC Plugin。Core 只看到普通 Service 与 Lifetime，不需要认识传输协议。
 
-Platform 的激活与结构变更是两条正交命令流，但提交状态必须一致。内部 `Activator` 独占依赖激活、`ActivationGate` permit 和变更目标排他；Platform 只串行公共命令并提交结构事务。ChangeSet 开始执行时先固定哪些更新保持 activated，再完成候选图、权限和模块预检，随后通过 Activator 的一次性屏障关闭新激活、取消明确目标并等待既有 permit 释放，最后按同一份计划在稳定状态上复验候选图并提交唯一一份 Core ChangeSet。这样预检失败没有取消副作用，并发激活既不能改变当前变更的含义，也不能在“验证完成、提交尚未发生”的窗口制造悬空依赖。
+Platform 的激活与结构变更是两条正交命令流，但提交状态必须一致。内部 `Activator` 独占依赖激活、`ActivationGate` permit 和变更目标排他；Platform 只串行公共命令并提交结构事务。ChangeSet 开始执行时先固定哪些更新保持 installed，再完成候选图、权限和模块预检，随后通过 Activator 的一次性屏障关闭新激活、取消明确目标并等待既有 permit 释放，最后按同一份计划在稳定状态上复验候选图并提交唯一一份 Core ChangeSet。这样预检失败没有取消副作用，并发激活既不能改变当前变更的含义，也不能在“验证完成、提交尚未发生”的窗口制造悬空依赖。
 
 ## 十二、真实项目映射
 

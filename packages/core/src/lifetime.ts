@@ -14,7 +14,7 @@
 //
 // Disposal order is fixed and not alphabetical:
 //
-//   1. listeners, contributions, subscriptions, views   withdraw capabilities
+//   1. seal the subtree; listeners, subscriptions, views, contributions withdraw
 //   2. abort the signal                                 cancel in-flight work
 //   3. tasks, children, cleanups                        await completion
 //
@@ -138,6 +138,14 @@ interface LifetimeOptions {
   };
 }
 
+interface LifetimeDisposal {
+  readonly lifetime: Lifetime;
+  readonly errors: unknown[];
+  readonly binding: LifetimeBinding;
+  readonly controller: AbortController;
+  readonly finish: () => void;
+}
+
 interface LifetimeBinding {
   readonly port: LifetimePort;
   readonly diagnostics: LifetimeDiagnostics;
@@ -183,6 +191,23 @@ class LifetimeResources<T extends Resource> implements Iterable<T> {
       for (const resource of [...this.#resources].reverse()) {
         try {
           await resource.dispose();
+        } catch (error) {
+          errors.push(error);
+        } finally {
+          this.release(resource);
+        }
+      }
+    } finally {
+      this.#accounting = undefined;
+    }
+  }
+
+  /** Capability withdrawal must finish without yielding to callbacks or tasks. */
+  disposeSynchronously<U extends Disposable>(this: LifetimeResources<U>, errors: unknown[]) {
+    try {
+      for (const resource of [...this.#resources].reverse()) {
+        try {
+          resource.dispose();
         } catch (error) {
           errors.push(error);
         } finally {
@@ -399,7 +424,7 @@ export class Lifetime implements LifetimeContext {
   }
 
   get diagnostics() {
-    return this.#requireActive().diagnostics.view;
+    return this.#requireBinding().diagnostics.view;
   }
 
   /** A facade whose only InstanceCoordinator edge disappears when this Lifetime terminates. */
@@ -545,51 +570,72 @@ export class Lifetime implements LifetimeContext {
     const state = this.#state;
     if (state.phase === "disposing") return state.completion;
     if (state.phase === "disposed") return Promise.resolve();
-    const binding = this.#requireBinding();
-    const completion = Promise.resolve()
-      .then(async () => {
-        const errors: unknown[] = [];
-        // 1. Withdraw capabilities: nothing new can arrive after this point.
-        await this.#listeners.dispose(errors);
-        await this.#contributions.dispose(errors);
-        await this.#subscriptions.dispose(errors);
-        await this.#contributionViews.dispose(errors);
 
-        // 2. Cancel. Before awaiting anything, or a task that waits on its own
-        //    signal would deadlock the teardown that is trying to stop it.
-        state.controller.abort(disposalReason);
-        this.detachStartupSignal();
-
-        // 3. Await completion, innermost work first. User cleanups run last,
-        //    when the resources they might reach are already quiet.
-        await this.#tasks.dispose(errors);
-        await this.#children.dispose(errors);
-        await this.#cleanups.dispose(errors);
-
-        if (errors.length === 1) throw errors[0];
-        if (errors.length > 1) throw new AggregateError(errors, "Lifetime cleanup failed");
-      })
-      .finally(() => {
-        // A standalone aborted signal replaces the controller's, so `signal`
-        // keeps answering after disposal without the Lifetime retaining the
-        // controller — and everything the old signal had listeners for is gone.
-        this.#state = { phase: "disposed", signal: AbortSignal.abort(disposalReason) };
-        const detach = this.#detachFromParent;
-        this.#detachFromParent = undefined;
-        try {
-          detach?.(this);
-          if (this.#kind === "root") binding.diagnostics.finishRoot();
-        } finally {
-          this.#binding = undefined;
-        }
-      });
-    // The phase moves to `disposing` synchronously, before the body above runs.
-    // That is what rejects new work — `#requireActive` fails immediately — and
-    // what lets a reentrant `dispose()` from inside a cleanup join this
-    // completion instead of starting a second teardown.
-    this.#state = { phase: "disposing", controller: state.controller, completion };
-    binding.diagnostics.beginDisposing(binding.diagnosticNode);
+    const closing: LifetimeDisposal[] = [];
+    const completion = this.#prepareDisposal(closing);
+    // Seal the whole subtree before any withdrawal can call application code.
+    // Revoke all incoming callbacks before contributions publish their removal.
+    for (const { lifetime, errors } of closing) {
+      lifetime.#listeners.disposeSynchronously(errors);
+      lifetime.#subscriptions.disposeSynchronously(errors);
+      lifetime.#contributionViews.disposeSynchronously(errors);
+    }
+    for (const { lifetime, errors } of closing) {
+      lifetime.#contributions.disposeSynchronously(errors);
+    }
+    for (const { lifetime, binding, controller } of closing) {
+      binding.diagnostics.beginDisposing(binding.diagnosticNode);
+      controller.abort(disposalReason);
+      lifetime.detachStartupSignal();
+    }
+    for (const disposal of closing) disposal.finish();
     return completion;
+  }
+
+  /** Stages joinable completions without running any externally observable work. */
+  #prepareDisposal(closing: LifetimeDisposal[]): Promise<void> {
+    const state = this.#state;
+    if (state.phase === "disposing") return state.completion;
+    if (state.phase === "disposed") return Promise.resolve();
+    const binding = this.#requireBinding();
+    const completion = Promise.withResolvers<void>();
+    const errors: unknown[] = [];
+    this.#state = {
+      phase: "disposing",
+      controller: state.controller,
+      completion: completion.promise,
+    };
+    // Observe child completions immediately, including failures that settle
+    // while this parent's tasks are still draining. Descendants drain on their
+    // own so a cancelling parent task may await child.dispose() without a cycle.
+    const children = Promise.allSettled(
+      [...this.#children].reverse().map((child) => child.#prepareDisposal(closing)),
+    );
+    const finish = () => {
+      void (async () => {
+        try {
+          await this.#tasks.dispose(errors);
+          for (const result of await children) {
+            if (result.status === "rejected") errors.push(result.reason);
+          }
+          await this.#cleanups.dispose(errors);
+          if (errors.length === 1) throw errors[0];
+          if (errors.length > 1) throw new AggregateError(errors, "Lifetime cleanup failed");
+        } finally {
+          this.#state = { phase: "disposed", signal: AbortSignal.abort(disposalReason) };
+          const detach = this.#detachFromParent;
+          this.#detachFromParent = undefined;
+          try {
+            detach?.(this);
+            if (this.#kind === "root") binding.diagnostics.finishRoot();
+          } finally {
+            this.#binding = undefined;
+          }
+        }
+      })().then(completion.resolve, completion.reject);
+    };
+    closing.push({ lifetime: this, errors, binding, controller: state.controller, finish });
+    return completion.promise;
   }
 
   [asyncDisposeSymbol]() {
@@ -598,8 +644,7 @@ export class Lifetime implements LifetimeContext {
 
   // The gate on every operation that creates a resource. `signal.aborted` is
   // checked as well as the phase, because a parent's disposal aborts this signal
-  // before this Lifetime's own teardown has begun — work must be refused from
-  // that moment, not from when the cascade reaches here.
+  // during startup cancellation as well as disposal. Both boundaries close work.
   #requireActive() {
     const binding = this.#binding;
     if (this.#state.phase !== "active" || this.signal.aborted || !binding) {

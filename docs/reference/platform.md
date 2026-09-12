@@ -150,18 +150,18 @@ Artifact 是外部交付边界，不重复 Core 的 Plugin 作者期泛型：加
 
 | status | 含义 |
 | --- | --- |
-| `pending` | 仍由未提交的 Platform ChangeSet 拥有，尚未进入注册表 |
+| `pending` | 等待接纳进入注册表，包括已提交但仍在队列中的 ChangeSet |
 | `registered` | Artifact 已登记，外部 Plugin 尚未选中；placeholder 可能已在 Core 中 |
 | `loading` | 正在授权、激活依赖或加载模块 |
-| `activated` | 外部 Plugin 已提交到 Core；不代表 Host 此刻一定处于 `active` |
-| `failed` | 最近一次激活失败；保留错误供诊断，允许再次显式 `activate()` |
+| `installed` | 外部 Plugin 已提交到 Core；不代表 Host 此刻一定处于 `active` |
+| `failed` | 接纳或激活失败；已接纳的 Registration 可重试 `activate()`，被丢弃的接纳句柄为终态 |
 | `removed` | 已从 Platform 与 Core 安装计划移除，不可复活 |
 
-`activate()` 在 Host 为 `idle` 时也可以完成：它负责把加载所得 Plugin 提交进安装计划，不偷偷启动 Host。此时 `status === "activated"`，但先前或随后调用的 `ready()` 仍会等待 `host.start()`；这明确分开“Registration 已激活”和“Instance 已就绪”。
+`activate()` 在 Host 为 `idle` 时也可以完成：它负责把加载所得 Plugin 提交进安装计划，不偷偷启动 Host。此时 `status === "installed"`，但先前或随后调用的 `ready()` 仍会等待 `host.start()`；这明确分开“Registration 已激活”和“Instance 已就绪”。
 
 signal 已 aborted 后，取消加载只把与 `signal.reason` 相同的值或明确的 `AbortError` 识别为取消结果。Loader 仅仅在 abort 后抛出的其他错误仍保留为 `MODULE_LOAD_FAILED` 及其 `cause`，不会被竞态中的取消原因覆盖。
 
-`ready()` 在 `pending` / `registered` / `loading` 时等待首次激活及 Core ready barrier；在 `activated` 时委托当前 Core Installation；在 `failed` / `removed` 时立即拒绝。一次失败的等待不会因以后重试自动复活，重试成功后应重新调用 `ready()`。
+`ready()` 在 `pending` / `registered` / `loading` 时等待首次激活及 Core ready barrier；在 `installed` 时委托当前 Core Installation；在 `failed` / `removed` 时立即拒绝。一次失败的等待不会因以后重试自动复活，重试成功后应重新调用 `ready()`。
 
 ## 六、Manifest 依赖与激活条件
 
@@ -200,8 +200,8 @@ await change.commit();
 
 提交顺序：
 
-1. 验证全部目标仍属于当前 Platform，快照哪些更新以 activated 身份进入本次事务，并在当前注册表上形成完整候选图；
-2. 按该计划检查重复身份、依赖环和提交后的 activated 依赖，再对新增/更新 Manifest 授权并预加载计划保持 activated 的目标的新 Plugin；此阶段失败不会加锁或取消激活；
+1. 验证全部目标仍属于当前 Platform，快照哪些更新以 installed 身份进入本次事务，并在当前注册表上形成完整候选图；
+2. 按该计划检查重复身份、依赖环和提交后的 installed 依赖，再对新增/更新 Manifest 授权并预加载计划保持 installed 的目标的新 Plugin；此阶段失败不会加锁或取消激活；
 3. 关闭新根激活入口，锁定并取消待更新/删除目标，等待此前已获准的整棵激活树结算；
 4. 在稳定的 Registration 状态上按同一份激活计划重新验证候选图，防止并发激活改变本次更新语义，或在预检与提交之间引入新的已激活依赖；
 5. 把 placeholder 安装、活动 Plugin 更新和删除编译进**一份 Core ChangeSet**并提交；
@@ -280,9 +280,9 @@ Platform 的可判定错误使用 `PlatformError.code`。`PlatformError extends 
 | `REGISTRATION_DUPLICATE` | 候选 Registration 图出现重复身份 |
 | `ARTIFACT_IDENTITY` | Manifest、placeholder 或加载所得 Plugin 的 name 不一致 |
 | `REGISTRATION_IDENTITY` | 更新时新 Artifact 的 Manifest name 与原 Registration 不同 |
-| `REGISTRATION_DEPENDENCY_MISSING` | activated/待激活 Registration 缺少 Manifest 依赖对应的 Registration |
+| `REGISTRATION_DEPENDENCY_MISSING` | installed/待激活 Registration 缺少 Manifest 依赖对应的 Registration |
 | `REGISTRATION_DEPENDENCY_INCOMPATIBLE` | 依赖 Registration 的版本不满足 Manifest 范围 |
-| `REGISTRATION_DEPENDENCY_INACTIVE` | activated 候选 Registration 依赖尚未 activated 的 Registration |
+| `REGISTRATION_DEPENDENCY_INACTIVE` | installed 候选 Registration 依赖尚未 installed 的 Registration |
 | `REGISTRATION_CYCLE` | 候选 Registration 图中的 Manifest 依赖存在闭环 |
 | `REGISTRATION_BUSY` | 目标正在变更，或结构变更已关闭新的根激活入口 |
 | `MODULE_LOAD_FAILED` | Loader 自身失败 |

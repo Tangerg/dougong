@@ -19,6 +19,8 @@ const plugin = definePlugin({
 
 `definePlugin` preserves the declared Plugin shape for **type inference** while normalizing it at the boundary into an immutable plain data record containing only `name`, `config`, `requires`, `provides` and `setup`. Declarations cannot use symbols, hidden properties, accessors, class instances or unknown fields; `requires` and `provides` must likewise be plain data records containing only enumerable string own keys. Mistakes therefore surface where the Plugin is written rather than when the Host starts.
 
+Declaration normalization copies and freezes each Contract identity, including the Service inside `optional()`. Later mutation of a structural input token cannot change an admitted declaration. Internal `requires` and `provides` maps always exist, including frozen empty maps; config and Service values remain opaque application-owned values.
+
 ## Declaring dependencies
 
 ```ts
@@ -97,6 +99,8 @@ setup() {},        // ❌ Type '() => void' is not assignable to
 ```
 
 Two Plugin declarations providing the same Contract throw `SERVICE_CONFLICT` while the graph is built — before any Instance starts.
+
+The output alias `then` is reserved because `setup()` supports Promise results. A Service ID such as `app.then` is valid when exposed under another alias, for example `thenService`.
 
 ## Contributing to an ExtensionPoint
 

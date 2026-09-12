@@ -11,7 +11,7 @@ import { disposeSymbol, type Disposable, type Publication, type StagedResource }
 export type EventListener<T> = (payload: T) => unknown;
 
 interface ListenerSlot<T> {
-  readonly listener: EventListener<T>;
+  listener: EventListener<T> | undefined;
 }
 
 type ListenerRegistrationState<T> =
@@ -69,6 +69,7 @@ class ListenerRegistration<T> implements StagedResource<Disposable> {
     const state = this.#state;
     if (state.phase === "removed") return;
     this.#state = { phase: "removed" };
+    state.slot.listener = undefined;
     try {
       if (state.phase === "published") state.hub.delete(this.#eventId, state.slot);
     } finally {
@@ -107,22 +108,20 @@ export class EventHub {
   }
 
   /**
-   * Every listener runs, then failures are aggregated. Three details, all
+   * Every still-subscribed listener runs, then failures are aggregated. Three details, all
    * deliberate:
    *
-   * - the listener set is copied first, so a listener that subscribes or
-   *   unsubscribes during delivery does not change who receives this emission;
+   * - the listener set is copied first; a new subscription does not join this
+   *   emission. A disposed slot is skipped if its callback has not started;
    * - each call is wrapped in a resolved promise, so a listener that throws
    *   synchronously is collected like one that rejects;
    * - `allSettled`, so one broken listener cannot stop the others from being
    *   told. The emitter still learns about it — every error comes back.
    */
   async emit<T>(eventId: string, payload: T) {
-    const listeners = [...(this.#listeners.get(eventId) ?? [])].map(
-      (slot) => slot.listener as EventListener<T>,
-    );
+    const listeners = [...(this.#listeners.get(eventId) ?? [])];
     const results = await Promise.allSettled(
-      listeners.map((listener) => Promise.resolve().then(() => listener(payload))),
+      listeners.map((slot) => Promise.resolve().then(() => slot.listener?.(payload))),
     );
     const errors = results
       .filter((result): result is PromiseRejectedResult => result.status === "rejected")

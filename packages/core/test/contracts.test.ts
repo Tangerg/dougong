@@ -42,7 +42,8 @@ describe("Contract identity", () => {
     const relaxed = optional(token);
 
     expect(relaxed).not.toBe(token);
-    expect(relaxed.service).toBe(token);
+    expect(relaxed.service).toEqual(token);
+    expect(Object.isFrozen(relaxed.service)).toBe(true);
     expect(token.kind).toBe("service");
     expect(() => optional(event("contract/not-a-service") as never)).toThrowError(
       new TypeError("optional() expects a Service"),

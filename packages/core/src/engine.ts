@@ -1,5 +1,5 @@
 import { resolvePluginConfig } from "./configuration";
-import { ContractRegistry, type ContractRegistryDraft } from "./contract-registry";
+import { ContractRegistry, type ContractRegistryWriter } from "./contract-registry";
 import {
   assertContract,
   isOptionalService,
@@ -87,7 +87,7 @@ export class Engine {
   }
 
   async start(plan: InstallationGraph) {
-    const contracts = this.#contracts.draft(plan.contractKinds);
+    const contracts = this.#contracts.writer(plan.contractKinds);
     try {
       await this.#instances.withContributionBatch(() => this.#activateInitialPlan(plan, contracts));
       this.#plan = plan;
@@ -131,12 +131,13 @@ export class Engine {
       // takes down whatever consumed it, and whatever will consume it next.
       const affected = previousPlan.affectedByTransitionTo(nextPlan, changed);
       let nextConfigs: ReadonlyMap<InstallationRecord, unknown>;
-      let contracts: ContractRegistryDraft;
+      let contracts: ContractRegistryWriter;
       try {
         nextConfigs = await this.#resolveConfigs(
+          nextPlan,
           nextPlan.order.filter((installation) => affected.has(installation)),
         );
-        contracts = this.#contracts.draft(nextPlan.contractKinds);
+        contracts = this.#contracts.writer(nextPlan.contractKinds);
       } catch (error) {
         restoreDeclarations();
         throw error;
@@ -181,9 +182,9 @@ export class Engine {
     });
   }
 
-  async #activateInitialPlan(plan: InstallationGraph, contracts: ContractRegistryDraft) {
+  async #activateInitialPlan(plan: InstallationGraph, contracts: ContractRegistryWriter) {
     const installations = new Set(plan.order);
-    const configs = await this.#resolveConfigs(plan.order);
+    const configs = await this.#resolveConfigs(plan, plan.order);
     this.#instances.resetActivationState();
     try {
       await this.#instances.activate(plan, installations, configs, contracts);
@@ -219,8 +220,8 @@ export class Engine {
 
   /**
    * Restores the previous plan using the configs captured before the change, not
-   * the declarations — those have already been rolled back by
-   * `restoreDeclarations`, and re-validating them could fail for a second,
+   * mutable records. Declaration versions belong to the plan; re-validating
+   * configs could fail for a second,
    * unrelated reason while trying to recover from the first.
    *
    * A rollback that itself fails escalates to fail-closed by throwing.
@@ -233,7 +234,7 @@ export class Engine {
     causes: ReadonlyArray<unknown>,
   ): Promise<TransitionOutcome> {
     restoreDeclarations();
-    const contracts = this.#contracts.draft(previousPlan.contractKinds);
+    const contracts = this.#contracts.writer(previousPlan.contractKinds);
     try {
       await this.#instances.activate(previousPlan, affected, previousConfigs, contracts);
       contracts.commit();
@@ -253,17 +254,14 @@ export class Engine {
     return Object.freeze({ kind: "rolled-back", affected, error });
   }
 
-  async #resolveConfigs(installations: ReadonlyArray<InstallationRecord>) {
+  async #resolveConfigs(plan: InstallationGraph, installations: ReadonlyArray<InstallationRecord>) {
     const configs = new Map<InstallationRecord, unknown>();
     for (const installation of installations) {
       try {
+        const declaration = plan.declarationFor(installation);
         configs.set(
           installation,
-          await resolvePluginConfig(
-            installation.declaration.plugin.config,
-            installation.declaration.config,
-            installation.id,
-          ),
+          await resolvePluginConfig(declaration.plugin.config, declaration.config, installation.id),
         );
       } catch (error) {
         throw normalizeFailure(

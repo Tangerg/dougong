@@ -4,8 +4,8 @@ import {
   createHost,
   definePlugin,
   observe,
+  signal,
   type Logger,
-  type ObservationLifetime,
   type ObservationOwner,
   type Readable,
 } from "../src/index";
@@ -73,7 +73,7 @@ function errorTree(error: unknown): unknown[] {
 }
 
 function manualOwner(
-  child: ObservationLifetime,
+  child: AsyncDisposable,
   onLifetime: (label: string) => void = () => undefined,
 ): ObservationOwner {
   return {
@@ -108,24 +108,44 @@ function manualOwner(
   };
 }
 
-function manualLifetime(dispose: () => void | Promise<void>): ObservationLifetime {
+function manualLifetime(dispose: () => void | Promise<void>): AsyncDisposable {
   const release = async () => {
     await dispose();
   };
-  const lifetime: ObservationLifetime = {
-    ...asyncDisposable(release),
-    cleanup: () => {
-      throw new Error("Unexpected cleanup registration");
-    },
-    lifetime: (_label) => lifetime,
-    spawn: () => {
-      throw new Error("Unexpected background task");
-    },
-  };
+  const lifetime: AsyncDisposable = asyncDisposable(release);
   return lifetime;
 }
 
 describe("observe composition", () => {
+  it("reads the initial value after ownership and subscription have been established", async () => {
+    const host = createHost();
+    const source = signal(0);
+    const seen: number[] = [];
+    let begin!: () => AsyncDisposable;
+    const installation = host.install(
+      definePlugin({
+        name: "observe.initial-boundary",
+        setup(ctx) {
+          begin = () => observe(ctx, source, (value) => seen.push(value));
+        },
+      }),
+    );
+    await host.start();
+    const diagnostics = host.diagnostics.get().installations.get(installation.id)!.lifetime!;
+    const subscription = diagnostics.subscribe(() => {
+      if (diagnostics.get().children.length) source.set(1);
+    });
+    try {
+      const observation = begin();
+      await tick();
+      expect(seen).toEqual([1]);
+      await observation.dispose();
+    } finally {
+      subscription.dispose();
+      await host.stop();
+    }
+  });
+
   it("validates its public protocols before creating work", async () => {
     const unusedOwner = {} as ObservationOwner;
     expect(() => observe(unusedOwner, undefined as never, () => {})).toThrow(
@@ -162,7 +182,7 @@ describe("observe composition", () => {
             asyncDisposable(async () => {
               await dispose();
             }),
-          lifetime: (_label) => ({ dispose() {} }) as unknown as ObservationLifetime,
+          lifetime: (_label) => ({ dispose() {} }) as unknown as AsyncDisposable,
           spawn: () => {
             throw new Error("Unexpected background task");
           },
@@ -170,7 +190,7 @@ describe("observe composition", () => {
         source,
         () => {},
       ),
-    ).toThrow("ObservationOwner.lifetime() must return an ObservationLifetime");
+    ).toThrow("ObservationOwner.lifetime() must return an AsyncDisposable");
 
     const owner = manualOwner(
       manualLifetime(() => {
@@ -261,7 +281,7 @@ describe("observe composition", () => {
     host.install(plugin);
 
     await expect(host.start()).rejects.toThrow(
-      "Observers must be synchronous; use lifetime.spawn() for async work",
+      "Observers must be synchronous; use owner.spawn() for async work",
     );
     expect(source.subscriptionsDisposed).toBe(1);
   });
@@ -446,7 +466,7 @@ describe("observe composition", () => {
     expect(spawnCount).toBe(1);
     release();
     await tick();
-    expect(values).toEqual([0, 1, 20]);
+    expect(values).toEqual([0, 20]);
     await observation.dispose();
   });
 
@@ -547,6 +567,8 @@ describe("observe composition", () => {
     const source = new ControlledReadable(1);
     const trace: string[] = [];
     const log = logger();
+    const observerFailure = new Error("observer failed");
+    const cleanupFailure = new Error("partial cleanup failed");
     const plugin = definePlugin({
       name: "observe.failed-replacement-cleanup",
       setup(ctx) {
@@ -554,9 +576,9 @@ describe("observe composition", () => {
           trace.push(`start:${value}`);
           lifetime.cleanup(() => {
             trace.push(`stop:${value}`);
-            if (value === 2) throw new Error("partial cleanup failed");
+            if (value === 2) throw cleanupFailure;
           });
-          if (value === 2) throw new Error("observer failed");
+          if (value === 2) throw observerFailure;
         });
       },
     });
@@ -573,7 +595,7 @@ describe("observe composition", () => {
     expect(source.subscriptionsDisposed).toBe(1);
     expect(log.error).toHaveBeenCalledWith(
       expect.objectContaining({
-        message: "Observation callback failed and its resources could not be cleaned up",
+        errors: [observerFailure, cleanupFailure],
       }),
     );
     await host.stop();
@@ -621,3 +643,37 @@ async function createStoppedObservationRetentionFixture() {
   value = undefined;
   return { host, references };
 }
+
+it("observes only the latest value after asynchronous cleanup completes", async () => {
+  const source = new ControlledReadable("A");
+  const cleaning = Promise.withResolvers<void>();
+  const release = Promise.withResolvers<void>();
+  const seen: string[] = [];
+  const host = createHost();
+  host.install(
+    definePlugin({
+      name: "observe.latest",
+      setup(ctx) {
+        observe(ctx, source, (value, child) => {
+          seen.push(value);
+          child.cleanup(async () => {
+            if (value === "A") {
+              cleaning.resolve();
+              await release.promise;
+            }
+          });
+        });
+      },
+    }),
+  );
+  await host.start();
+  source.value = "B";
+  source.notify();
+  await cleaning.promise;
+  source.value = "C";
+  source.notify();
+  release.resolve();
+  await tick();
+  expect(seen).toEqual(["A", "C"]);
+  await host.stop();
+});

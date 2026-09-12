@@ -489,7 +489,7 @@ subscription.dispose()
 Event 只有一种派发语义：
 
 - 单 payload；复杂参数使用对象；
-- 异步并发广播全部监听器；
+- 按捕获的监听器集合异步并发广播；回调开始前已撤销的注册会被跳过；
 - 等待全部完成；
 - 不返回业务结果；
 - 任意监听器失败时抛 `AggregateError`，即使只有一个原因；
@@ -590,13 +590,12 @@ await task.dispose()
 Instance 停止时顺序固定，不依赖注册巧合：
 
 ```text
-拒绝新 Context 工作
-→ 撤销 Service
-→ 撤销 Listener、Contribution 与 ExtensionPoint 订阅
-→ abort 根 signal
-→ 等待后台任务
-→ 逆序释放子 Lifetime
-→ LIFO 执行 cleanup
+撤销 Service
+→ 封住整棵 Lifetime 子树的 Context 工作入口
+→ 撤销全部监听、订阅和 View，再撤回贡献
+→ 取消子树 signal
+→ 任务与各后代 Lifetime 并行收尾
+→ 各 Lifetime 在自身任务与子级结束后 LIFO 执行 cleanup
 ```
 
 因此 cleanup 中不能继续 `emit()` 或申请新资源；停止已经越过“接受新工作”边界。
@@ -763,7 +762,11 @@ prepare 阶段失败时：
 
 Host start、stop 和 active 状态下提交的 ChangeSet 使用 ExtensionPoint 批次：观察者只能看到操作前或操作后的快照，不看到逐插件半成品。
 
+批次提交先准备所有受影响 ExtensionPoint 的快照，再交付任何通知。一个集合的订阅者读取另一个集合时，同样只能读到整批提交后的值。
+
 ## 十三、统一观察协议与 reactive 层
+
+快照通知中的再次失效会排队，在当前回调返回后处理；尚未轮到的同一订阅只排入一次。该顺序也适用于诊断回调引起的另一份快照变化，避免跨 Publisher 重入应用代码。
 
 ContributionView、Host diagnostics、Platform diagnostics 和 `@dougongjs/reactive` Signal 统一采用结构协议：
 
@@ -894,7 +897,7 @@ Event 因定义要求收集全部监听器失败，总是抛 AggregateError。Li
 
 后台任务、订阅者和后续 observe 的错误无法回到原同步调用栈，通过 `onError` 上报。`onError` 自身失败也不得改变正在观察的 Host 命令。
 
-`ErrorSummary` 是终态句柄共享的最小错误保留原语。构造函数只接受 `Error`，仅保存重建 `name`、`message`、`TypeError` 类别以及 `DougongError.code` 所需的原始值；不保存原错误、`stack`、`cause` 或子类载荷。`restore()` 默认重建 `DougongError`，高层可传入自己的 coded-error 工厂来保留所属错误域，而不复制摘要算法。它只适用于必须切断历史对象图的终态；正常传播路径仍应交付原始错误。
+`RecordedFailure` 是共享的终态错误类型。其 `snapshot: ErrorSnapshot` 保存冻结的诊断值：原始名称、消息、错误码、栈文本、有界 cause 和聚合错误树、校验问题与权限字段。它不重建原错误子类，也不保留任意错误载荷。操作本身和可恢复失败仍传播原始 Error；被丢弃的 Installation 或 Registration 的 `ready()` 拒绝值为 RecordedFailure。
 
 ## 十六、禁止方向
 

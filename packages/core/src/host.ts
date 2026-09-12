@@ -109,8 +109,14 @@ class HostImpl implements Host {
       removeInstallations: (operations) => this.#removeInstallations(operations),
       notifyChanged: () => this.#publishDiagnostics(),
     });
-    this.#diagnosticModel = new HostDiagnostics(name, this.#groups.nodes(), (error) =>
-      this.#report(error),
+    this.#diagnosticModel = new HostDiagnostics(
+      name,
+      () => ({
+        status: this.#status,
+        installations: this.#installations.values(),
+        groups: this.#groups.nodes(),
+      }),
+      (error) => this.#report(error),
     );
     this.diagnostics = this.#diagnosticModel.view;
     Object.freeze(this);
@@ -294,7 +300,7 @@ class HostImpl implements Host {
   }
 
   #publishDiagnostics() {
-    this.#diagnosticModel.publish(this.#status, this.#installations.values(), this.#groups.nodes());
+    this.#diagnosticModel.publish();
   }
 }
 

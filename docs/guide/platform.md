@@ -137,7 +137,7 @@ const registration = await platform.register({
 
 registration.status      // "registered" → 尚未加载
 await registration.activate()       // 显式激活
-registration.status      // "activated"
+registration.status      // "installed"
 ```
 
 `placeholder` 是一个**应用代码编写的 Plugin**，在加载所得 Plugin 激活之前占位。它让「命令已经在菜单里，但点击时才加载实现」这类体验成为可能——而且两者替换是**原子**的，走同一笔 Core ChangeSet。
@@ -192,7 +192,7 @@ changes.remove(deprecated)
 await changes.commit()
 ```
 
-变更命令开始执行时先固定哪些更新保持 activated，然后依次：校验候选依赖图 → 授权全部 Manifest 并预加载所需模块 → 关闭新激活入口 → 取消明确目标并等待此前已进入的激活树 → 按同一计划复验稳定候选图 → **编译成一笔 Core ChangeSet** → 提交。
+变更命令开始执行时先固定哪些更新保持 installed，然后依次：校验候选依赖图 → 授权全部 Manifest 并预加载所需模块 → 关闭新激活入口 → 取消明确目标并等待此前已进入的激活树 → 按同一计划复验稳定候选图 → **编译成一笔 Core ChangeSet** → 提交。
 
 预检失败不会取消任何在途激活；任何一步失败，Core 与 Platform 都不会呈现半提交状态。
 

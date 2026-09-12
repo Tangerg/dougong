@@ -1,5 +1,4 @@
-import { resolvePluginConfig } from "./configuration";
-import type { ContractRegistryDraft } from "./contract-registry";
+import type { ContractRegistryWriter } from "./contract-registry";
 import { assertContract, type Event, type ExtensionPoint, type Requirement } from "./contracts";
 import { ContributionRegistry, type ContributionView } from "./contribution-store";
 import { DougongError, isCancellationReason } from "./errors";
@@ -96,7 +95,7 @@ export class InstanceCoordinator {
     plan: InstallationGraph,
     installations: ReadonlySet<InstallationRecord>,
     configs: ReadonlyMap<InstallationRecord, unknown>,
-    contracts: ContractRegistryDraft,
+    contracts: ContractRegistryWriter,
   ) {
     const port = this.#createLifetimePort(contracts);
     for (const layer of plan.layers) {
@@ -115,13 +114,10 @@ export class InstanceCoordinator {
       const results = await Promise.allSettled(
         candidates.map(async (installation) => {
           try {
-            const config = configs.has(installation)
-              ? configs.get(installation)
-              : await resolvePluginConfig(
-                  installation.declaration.plugin.config,
-                  installation.declaration.config,
-                  installation.id,
-                );
+            if (!configs.has(installation)) {
+              throw new Error(`Installation '${installation.id}' has no prepared config`);
+            }
+            const config = configs.get(installation);
             return await this.#prepareActivation(
               plan,
               installation,
@@ -239,7 +235,7 @@ export class InstanceCoordinator {
     port: LifetimePort,
   ): Promise<PreparedActivation> {
     installation.deactivate();
-    const plugin = installation.declaration.plugin;
+    const plugin = plan.declarationFor(installation).plugin;
     const lifetime = new Lifetime(port, installation.id, { parentSignal: startupSignal });
 
     try {
@@ -257,7 +253,7 @@ export class InstanceCoordinator {
       // or from a Plugin loaded at runtime, where nothing checked them. A missing
       // Service has to fail here rather than surface later as an `undefined`
       // dependency inside whatever consumed it.
-      for (const [alias, token] of Object.entries(plugin.provides ?? {})) {
+      for (const [alias, token] of Object.entries(plugin.provides)) {
         if (typeof output !== "object" || output === null || !Object.hasOwn(output, alias)) {
           throw new DougongError(
             "SERVICE_NOT_RETURNED",
@@ -330,7 +326,7 @@ export class InstanceCoordinator {
     // A null prototype because these keys come from the declaration: an alias
     // called `toString` must be a requirement, not an inherited method.
     const values: Record<string, unknown> = Object.create(null);
-    for (const [alias, requirement] of Object.entries(plugin.requires ?? {})) {
+    for (const [alias, requirement] of Object.entries(plugin.requires)) {
       if (requirement.kind === "optional") {
         const provider = plan.providerFor(installation, requirement.service.id);
         if (!provider) {
@@ -383,7 +379,7 @@ export class InstanceCoordinator {
     });
   }
 
-  #createLifetimePort(contracts: ContractRegistryDraft): LifetimePort {
+  #createLifetimePort(contracts: ContractRegistryWriter): LifetimePort {
     return {
       stageOn: (installationId, token, listener, release) => {
         return this.#stageOn(installationId, token, listener, release, contracts);
@@ -408,7 +404,7 @@ export class InstanceCoordinator {
     token: Event<T>,
     listener: EventListener<T>,
     release: (publication: Publication) => void,
-    contracts: ContractRegistryDraft,
+    contracts: ContractRegistryWriter,
   ) {
     this.#assertInstallation(installationId);
     assertContract(token, "event");
@@ -416,7 +412,7 @@ export class InstanceCoordinator {
     return this.#events.stage(token.id, listener, release);
   }
 
-  #emit<T>(installationId: string, token: Event<T>, payload: T, contracts: ContractRegistryDraft) {
+  #emit<T>(installationId: string, token: Event<T>, payload: T, contracts: ContractRegistryWriter) {
     this.#assertInstallation(installationId);
     assertContract(token, "event");
     contracts.remember(token);
@@ -429,7 +425,7 @@ export class InstanceCoordinator {
     key: string,
     value: T,
     release: (publication: Publication) => void,
-    contracts: ContractRegistryDraft,
+    contracts: ContractRegistryWriter,
   ) {
     this.#assertInstallation(installationId);
     assertContract(token, "extensionPoint");

@@ -447,7 +447,10 @@ describe("Platform", () => {
     }
 
     expect(fixture.registration.status).toBe("failed");
-    await expect(fixture.registration.ready()).rejects.toBeInstanceOf(PlatformError);
+    await expect(fixture.registration.ready()).rejects.toMatchObject({
+      name: "RecordedFailure",
+      snapshot: { name: "PlatformError" },
+    });
     expect(
       Object.fromEntries(
         Object.entries(fixture.references).map(([name, ref]) => [name, ref.deref() === undefined]),
@@ -458,7 +461,7 @@ describe("Platform", () => {
     });
   });
 
-  it("preserves Core error identity after a Registration becomes terminal", async () => {
+  it("records Core error identity after a Registration becomes terminal", async () => {
     const missing = service<string>("terminal/core-missing");
     const placeholder = definePlugin({
       name: "terminal.core-failure",
@@ -481,8 +484,9 @@ describe("Platform", () => {
 
     await expect(change.commit()).rejects.toMatchObject({ code: "SERVICE_MISSING" });
     await expect(registration.ready()).rejects.toMatchObject({
-      name: "DougongError",
+      name: "RecordedFailure",
       code: "SERVICE_MISSING",
+      snapshot: { name: "DougongError" },
     });
     await platform.dispose();
     await host.stop();
@@ -710,7 +714,7 @@ describe("Platform", () => {
     await platform.trigger("command:open");
     await ready;
 
-    expect(registration.status).toBe("activated");
+    expect(registration.status).toBe("installed");
     expect(trace).toEqual(["placeholder:start", "placeholder:stop", "active:start"]);
     expect([...host.diagnostics.get().installations.keys()]).toEqual([installationId]);
 
@@ -823,8 +827,8 @@ describe("Platform", () => {
     await platform.trigger("startup");
 
     expect(trace).toEqual(["database", "consumer:value"]);
-    expect(dependency.status).toBe("activated");
-    expect(dependent.status).toBe("activated");
+    expect(dependency.status).toBe("installed");
+    expect(dependent.status).toBe("installed");
     await host.stop();
   });
 
@@ -900,7 +904,8 @@ describe("Platform", () => {
     });
     const stableFailure = await registration.ready().catch((error: unknown) => error);
     expect(stableFailure).toMatchObject({
-      name: "PlatformError",
+      name: "RecordedFailure",
+      snapshot: { name: "PlatformError" },
       code: "REGISTRATION_UNAVAILABLE",
     });
     expect(stableFailure).not.toBe(commandFailure);
@@ -937,7 +942,10 @@ describe("Platform", () => {
       message: "Platform change failed with a non-Error value",
       cause: undefined,
     });
-    await expect(registration.ready()).rejects.toBeInstanceOf(TypeError);
+    await expect(registration.ready()).rejects.toMatchObject({
+      name: "RecordedFailure",
+      snapshot: { name: "TypeError" },
+    });
   });
 
   it("restores an active Platform after a custom Installer rejects disposal", async () => {
@@ -1083,7 +1091,7 @@ describe("Platform", () => {
     ).rejects.toMatchObject({ code: "CONFIG_INVALID" });
 
     expect(registration.manifest.version).toBe("1.0.0");
-    expect(registration.status).toBe("activated");
+    expect(registration.status).toBe("installed");
     expect(trace).toEqual(["v1:1"]);
     await platform.dispose();
     await host.stop();
@@ -1162,7 +1170,7 @@ describe("Platform", () => {
     await host.stop();
   });
 
-  it("rejects an activated Registration whose dependency Registration is inactive", async () => {
+  it("rejects an installed Registration whose dependency Registration is inactive", async () => {
     const consumerPlugin = definePlugin({ name: "inactive.consumer", setup() {} });
     const dependencyPlugin = definePlugin({ name: "inactive.dependency", setup() {} });
     const host = createHost();
@@ -1312,7 +1320,7 @@ describe("Platform", () => {
 
     await registration.activate();
     await Promise.resolve();
-    expect(registration.status).toBe("activated");
+    expect(registration.status).toBe("installed");
     expect(ready).toBe(false);
 
     await host.start();
@@ -1320,7 +1328,7 @@ describe("Platform", () => {
     const snapshot = platform.diagnostics.get();
     expect(snapshot.registrations.get("demo.lifecycle")).toMatchObject({
       manifestName: "demo.lifecycle",
-      status: "activated",
+      status: "installed",
       version: "1.0.0",
     });
     expect(Object.isFrozen(snapshot)).toBe(true);
@@ -1493,7 +1501,7 @@ describe("Platform", () => {
     const activating = registration.activate();
     await expect(Promise.all([committing, activating])).resolves.toEqual([undefined, undefined]);
     await expect(registration.ready()).resolves.toBeUndefined();
-    expect(registration.status).toBe("activated");
+    expect(registration.status).toBe("installed");
 
     await platform.dispose();
     await host.stop();
@@ -1702,7 +1710,7 @@ describe("Platform", () => {
       expect(registration.status).toBe("loading");
       releaseLoad?.();
       await expect(activation).resolves.toBeUndefined();
-      expect(registration.status).toBe("activated");
+      expect(registration.status).toBe("installed");
       expect(registration.manifest.version).toBe("1.0.0");
     } finally {
       releaseLoad?.();
@@ -1753,12 +1761,12 @@ describe("Platform", () => {
     await new Promise<void>((resolve) => setTimeout(resolve, 0));
 
     try {
-      expect(dependency.status).toBe("activated");
+      expect(dependency.status).toBe("installed");
       releaseConsumer?.();
       await expect(activation).resolves.toBeUndefined();
       await expect(removal).rejects.toMatchObject({ code: "REGISTRATION_DEPENDENCY_MISSING" });
-      expect(dependency.status).toBe("activated");
-      expect(consumer.status).toBe("activated");
+      expect(dependency.status).toBe("installed");
+      expect(consumer.status).toBe("installed");
     } finally {
       releaseConsumer?.();
       await activation.catch(() => undefined);
