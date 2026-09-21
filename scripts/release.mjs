@@ -334,9 +334,11 @@ console.log(
  * after its first successful upload. Poll instead of asking once.
  */
 function awaitRegistry(name) {
-  for (let attempt = 0; attempt < 10; attempt++) {
+  // npm may accept an upload before its processing queue makes it readable.
+  for (let attempt = 0; attempt < 20; attempt++) {
     if (registryField(name, "version") === version) return true;
-    execFileSync("sleep", ["2"]);
+    if (attempt === 0) console.log(`  waiting for ${name}@${version} to become readable...`);
+    execFileSync("sleep", ["15"]);
   }
   return false;
 }
