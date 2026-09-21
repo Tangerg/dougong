@@ -16,16 +16,11 @@ import {
   type InstanceCoordinatorPort,
 } from "./instance-coordinator";
 
-/**
- * A rolled-back transition is a returned value, not a thrown error: the Host
- * still has to settle readiness for everything the attempt touched before the
- * caller's rejection is raised. Only fail-closed — where no consistent state
- * could be restored — throws out of `transition()`.
- */
+/** Every execution terminal outcome carries the records whose readiness must settle. */
 export type TransitionOutcome =
   | { readonly kind: "committed"; readonly affected: ReadonlySet<InstallationRecord> }
   | {
-      readonly kind: "rolled-back";
+      readonly kind: "rolled-back" | "failed-closed";
       readonly affected: ReadonlySet<InstallationRecord>;
       readonly error: unknown;
     };
@@ -149,6 +144,7 @@ export class Engine {
         contracts.discard();
         return this.#failClosed(
           restoreDeclarations,
+          new Set([...previousPlan.order, ...affected]),
           stopErrors,
           "Installation change could not cleanly stop the affected Instances",
         );
@@ -170,6 +166,7 @@ export class Engine {
         if (changeError instanceof IncompleteActivationCleanupError || nextStopErrors.length) {
           return this.#failClosed(
             restoreDeclarations,
+            new Set([...previousPlan.order, ...affected]),
             [changeError, ...nextStopErrors],
             "Installation change failed and its partial activation could not be cleanly disposed",
           );
@@ -209,13 +206,18 @@ export class Engine {
    */
   async #failClosed(
     restoreDeclarations: () => void,
+    affected: ReadonlySet<InstallationRecord>,
     causes: ReadonlyArray<unknown>,
     message: string,
-  ): Promise<never> {
+  ): Promise<TransitionOutcome> {
     restoreDeclarations();
     const shutdownErrors = await this.#instances.deactivateAll();
     this.#plan = undefined;
-    throw new AggregateError([...causes, ...shutdownErrors], message);
+    return {
+      kind: "failed-closed",
+      affected,
+      error: new AggregateError([...causes, ...shutdownErrors], message),
+    };
   }
 
   /**
@@ -224,7 +226,7 @@ export class Engine {
    * configs could fail for a second,
    * unrelated reason while trying to recover from the first.
    *
-   * A rollback that itself fails escalates to fail-closed by throwing.
+   * A rollback that itself fails returns a fail-closed outcome for the entire graph.
    */
   async #rollback(
     restoreDeclarations: () => void,
@@ -241,11 +243,11 @@ export class Engine {
       this.#instances.commitActivationOrder(previousPlan.order);
       this.#plan = previousPlan;
     } catch (rollbackError) {
-      const shutdownErrors = await this.#instances.deactivateAll();
       contracts.discard();
-      this.#plan = undefined;
-      throw new AggregateError(
-        [...causes, rollbackError, ...shutdownErrors],
+      return this.#failClosed(
+        restoreDeclarations,
+        new Set([...previousPlan.order, ...affected]),
+        [...causes, rollbackError],
         "Installation change failed and the previous Instances could not be restored",
       );
     }

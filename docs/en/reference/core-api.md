@@ -722,7 +722,7 @@ Group rules:
 
 - may nest
 - every installation inside configure shares one commit
-- `ready()` awaits the installations produced by configure crossing the ready barrier
+- `ready()` awaits changes already submitted anywhere in the subtree, including dynamic child changes queued before the call, then waits for the subtree installations to become ready
 - `remove()` deletes the whole subtree in one Core transaction
 - a Group ChangeSet may only modify Installations in its own subtree
 - `Group` and `Installation` share `status/ready/remove`; only `Installation` adds `update`
@@ -956,3 +956,9 @@ Lifetime that created it.
 A Service change rebuilds consumers, an ExtensionPoint change notifies subscribers,
 and an Event only broadcasts this one fact.
 ```
+
+### Transaction failure boundaries
+
+Candidate validation does not revoke running Instances: Event and Contribution operations remain authorized by their Lifetime until disposal starts. Cleanup integrity survives aggregation of concurrent startup failures; any incomplete cleanup forbids automatic rollback.
+
+Fail-closed ends readiness for the entire stopped graph, including indirect consumers and otherwise unaffected Installations. They become `failed` and pending `ready()` calls reject after the command finishes. Declarations remain installed and a later successful `start()` restores readiness. Ordinary `stop()` leaves Installations pending for the next start. An earlier successful Group commit establishes its baseline even when a later submitted change already owns the current barrier.

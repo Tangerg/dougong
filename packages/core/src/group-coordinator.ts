@@ -290,8 +290,9 @@ export class GroupCoordinator {
       for (const child of node.walk()) {
         const childFacade = this.#facades.get(child);
         if (childFacade) groupControls.get(childFacade)?.finishConfiguration();
-        this.#track(child, operation);
+        this.#requireLifecycle(child).track(operation);
       }
+      this.#track(parent, operation);
       observeReadinessOperation(operation);
     }
     this.#port.notifyChanged();
@@ -315,7 +316,7 @@ export class GroupCoordinator {
       this.#revoke([group]);
       return Promise.resolve();
     }
-    return this.#port.runExclusive(async () => {
+    const operation = this.#port.runExclusive(async () => {
       if (!group.attached) {
         this.#revoke([group]);
         return;
@@ -330,6 +331,8 @@ export class GroupCoordinator {
       this.#revoke(removedGroups);
       this.#port.notifyChanged();
     });
+    this.#track(group, operation);
+    return operation;
   }
 
   #installationsIn(group: GroupNode) {
@@ -358,7 +361,9 @@ export class GroupCoordinator {
   }
 
   #track(group: GroupNode, operation: Promise<void>) {
-    this.#requireLifecycle(group).track(operation);
+    for (let node: GroupNode | undefined = group; node; node = node.parent) {
+      this.#requireLifecycle(node).track(operation);
+    }
   }
 
   #requireLifecycle(group: GroupNode) {

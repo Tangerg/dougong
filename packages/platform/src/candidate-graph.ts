@@ -47,6 +47,9 @@ function buildCandidateGraph<Reference>(
   );
 
   for (const operation of operations) {
+    if (operation.kind === "remove") candidate.delete(operation.registration.manifestName);
+  }
+  for (const operation of operations) {
     if (operation.kind === "register") {
       if (candidate.has(operation.registration.manifestName)) {
         throw new PlatformError(
@@ -63,8 +66,6 @@ function buildCandidateGraph<Reference>(
         artifact: operation.artifact,
         installed: installedUpdates.has(operation.registration),
       });
-    } else {
-      candidate.delete(operation.registration.manifestName);
     }
   }
   return candidate;

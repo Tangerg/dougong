@@ -722,7 +722,7 @@ Group 的规则：
 
 - 可嵌套；
 - configure 内全部安装共享一次提交；
-- `ready()` 等待 configure 产生的安装越过 ready barrier；
+- `ready()` 等待调用前已在整棵子树提交的变更（包括仍在排队的动态子 Group 变更），再等待子树中的安装就绪；
 - `remove()` 用一次 Core 事务删除整棵子树；
 - Group ChangeSet 只能修改自身子树的 Installation；
 - Group 与 Installation 共享 `status/ready/remove`，只有 Installation 增加 `update`；
@@ -951,3 +951,9 @@ Plugin =
 所有监听、贡献、任务和 cleanup 自动属于创建它们的 Lifetime。
 Service 变化重建消费者，ExtensionPoint 变化通知订阅者，Event 只广播本次事实。
 ```
+
+### 事务失败边界
+
+候选配置验证不撤销运行中 Instance 的能力：Event 与 Contribution 操作由 Lifetime 授权，直到开始释放。并发启动错误的聚合必须保留清理完整性；任何不完整清理都禁止自动回滚。
+
+fail-closed 终结整张已停止图的 readiness，包括间接消费者和原本不受变更影响的 Installation。它们进入 `failed`，已有 `ready()` 等待在命令完成后拒绝；声明仍然安装，后续成功 `start()` 可恢复就绪。普通 `stop()` 则让 Installation 保持 pending，等待下一次启动。较早的 Group 提交成功，即使较晚变更已经拥有当前屏障，也必须推进已建立基线。

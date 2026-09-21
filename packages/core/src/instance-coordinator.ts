@@ -21,10 +21,10 @@ type ExtensionPointIdentity = Extract<Requirement, { readonly kind: "extensionPo
 export interface InstanceCoordinatorPort {
   readonly hostName: string;
   readonly logger: Logger;
-  readonly isInstalled: (installationId: string) => boolean;
   readonly report: (error: unknown) => void;
 }
 
+/** Every activation aggregation must preserve this classification before returning to Engine. */
 export class IncompleteActivationCleanupError extends AggregateError {}
 
 /**
@@ -43,7 +43,6 @@ export class IncompleteActivationCleanupError extends AggregateError {}
 export class InstanceCoordinator {
   readonly #hostName: string;
   readonly #logger: Logger;
-  readonly #isInstalled: (installationId: string) => boolean;
   readonly #report: (error: unknown) => void;
   readonly #services = new Map<InstallationRecord, ReadonlyMap<string, unknown>>();
   readonly #events = new EventHub();
@@ -53,7 +52,6 @@ export class InstanceCoordinator {
   constructor(port: InstanceCoordinatorPort) {
     this.#hostName = port.hostName;
     this.#logger = port.logger;
-    this.#isInstalled = port.isInstalled;
     this.#report = port.report;
     this.#contributions = new ContributionRegistry(port.report);
   }
@@ -146,7 +144,10 @@ export class InstanceCoordinator {
           errors.length === 1
             ? errors[0]
             : new AggregateError(errors, "Installation startup layer failed");
-        if (cleanupErrors.length) {
+        if (
+          cleanupErrors.length ||
+          errors.some((error) => error instanceof IncompleteActivationCleanupError)
+        ) {
           throw new IncompleteActivationCleanupError(
             [startupError, ...cleanupErrors],
             "Installation startup layer failed and could not be cleanly disposed",
@@ -381,11 +382,10 @@ export class InstanceCoordinator {
 
   #createLifetimePort(contracts: ContractRegistryWriter): LifetimePort {
     return {
-      stageOn: (installationId, token, listener, release) => {
-        return this.#stageOn(installationId, token, listener, release, contracts);
+      stageOn: (token, listener, release) => {
+        return this.#stageOn(token, listener, release, contracts);
       },
-      emit: (installationId, token, payload) =>
-        this.#emit(installationId, token, payload, contracts),
+      emit: (token, payload) => this.#emit(token, payload, contracts),
       stageContribution: (installationId, token, key, value, release) => {
         return this.#stageContribution(installationId, token, key, value, release, contracts);
       },
@@ -400,20 +400,17 @@ export class InstanceCoordinator {
   }
 
   #stageOn<T>(
-    installationId: string,
     token: Event<T>,
     listener: EventListener<T>,
     release: (publication: Publication) => void,
     contracts: ContractRegistryWriter,
   ) {
-    this.#assertInstallation(installationId);
     assertContract(token, "event");
     contracts.remember(token);
     return this.#events.stage(token.id, listener, release);
   }
 
-  #emit<T>(installationId: string, token: Event<T>, payload: T, contracts: ContractRegistryWriter) {
-    this.#assertInstallation(installationId);
+  #emit<T>(token: Event<T>, payload: T, contracts: ContractRegistryWriter) {
     assertContract(token, "event");
     contracts.remember(token);
     return this.#events.emit(token.id, payload);
@@ -427,7 +424,6 @@ export class InstanceCoordinator {
     release: (publication: Publication) => void,
     contracts: ContractRegistryWriter,
   ) {
-    this.#assertInstallation(installationId);
     assertContract(token, "extensionPoint");
     contracts.remember(token);
     return this.#contributions.get<T>(token).stage(installationId, key, value, release);
@@ -437,12 +433,6 @@ export class InstanceCoordinator {
     return this.#contributions
       .get(token)
       .view((resource, kind) => lifetime.ownLease(resource, kind));
-  }
-
-  #assertInstallation(installationId: string) {
-    if (!this.#isInstalled(installationId)) {
-      throw new Error(`Installation '${installationId}' is not installed`);
-    }
   }
 }
 

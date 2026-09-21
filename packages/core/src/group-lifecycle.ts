@@ -38,19 +38,6 @@ export class GroupLifecycle {
     await readyContents();
   }
 
-  /**
-   * `preserveCommittedState` is the whole point of this class.
-   *
-   * A Group that has already committed something is established, and a later
-   * failed change does not un-establish it — the transaction rolled back, so the
-   * state the Group describes is still the one that was committed. Such a
-   * failure leaves the phase at `established` and does not rethrow, because the
-   * caller of the failed change already has the error.
-   *
-   * A Group whose *first* change fails never had a committed state, so it does
-   * become `failed` and the failure propagates: there is nothing to report but
-   * the failure.
-   */
   track(operation: Promise<void>) {
     this.node.assertAttached();
     const current = this.#state;
@@ -61,8 +48,13 @@ export class GroupLifecycle {
 
     const barrier = operation.then(
       () => {
-        if (!this.#isCurrent(attempt)) return;
-        this.#state = { phase: "established" };
+        const state = this.#state;
+        if (state.phase === "released") return;
+        // A queued barrier may supersede this attempt, but cannot erase its commit.
+        this.#state =
+          state.phase === "pending" && state.attempt !== attempt
+            ? { ...state, baseline: "established" }
+            : { phase: "established" };
         this.#notifyChanged?.();
       },
       (error) => {
@@ -71,13 +63,17 @@ export class GroupLifecycle {
           "GROUP_UNAVAILABLE",
           `Group '${this.node.id}' operation failed with a non-Error value`,
         );
+        const state = this.#state;
+        const established =
+          state.phase === "established" ||
+          (state.phase === "pending" && state.baseline === "established");
         if (this.#isCurrent(attempt)) {
-          this.#state = preserveCommittedState
+          this.#state = established
             ? { phase: "established" }
             : { phase: "failed", error: failure };
           this.#notifyChanged?.();
         }
-        if (!preserveCommittedState) throw failure;
+        if (!established) throw failure;
       },
     );
     this.#state = {

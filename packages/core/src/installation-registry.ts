@@ -130,10 +130,6 @@ export class InstallationRegistry {
     return this.#records.values();
   }
 
-  has(id: string) {
-    return this.#records.has(id);
-  }
-
   contains(installation: InstallationRecord) {
     return this.#records.get(installation.id) === installation;
   }

@@ -94,7 +94,6 @@ class HostImpl implements Host {
     this.#engine = new Engine({
       hostName: name,
       logger: this.#logger,
-      isInstalled: (installationId) => this.#installations.has(installationId),
       report: (error) => this.#report(error),
     });
     this.#groups = new GroupCoordinator(name, {
@@ -239,8 +238,11 @@ class HostImpl implements Host {
 
   async #transact(operations: ReadonlyArray<ChangeOperation>) {
     const outcome = await this.#runTransaction(operations);
+    if (outcome.kind === "failed-closed") {
+      for (const installation of outcome.affected) installation.fail(outcome.error);
+    }
     this.#installations.settleReadiness(outcome.affected);
-    if (outcome.kind === "rolled-back") throw outcome.error;
+    if (outcome.kind !== "committed") throw outcome.error;
     this.#installations.settleChanges(operations, true);
   }
 
@@ -274,7 +276,7 @@ class HostImpl implements Host {
       const outcome = await this.#engine.transition(nextPlan, changed, () =>
         this.#installations.restore(snapshot),
       );
-      this.#setStatus("active");
+      this.#setStatus(this.#engine.hasCommittedPlan ? "active" : "idle");
       return outcome;
     } catch (error) {
       this.#setStatus(this.#engine.hasCommittedPlan ? "active" : "idle");

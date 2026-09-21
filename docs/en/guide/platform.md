@@ -237,3 +237,7 @@ Disposal cancels in-flight activations, removes every Core Installation and clos
 - [Platform specification](../reference/platform.md) — exact semantics and edge cases
 - [Error codes](../reference/errors.md) — stable codes and their trigger conditions
 - [Runnable examples 08 / 12](../examples.md) — lazy activation and module-graph HMR end to end
+
+### Same-name replacement
+
+A Platform ChangeSet validates the final candidate graph. Removing an old Registration and registering its replacement under the same manifest name is atomic and independent of staging order. The old handle becomes removed only after commit. Duplicate names in the final graph still reject; installed dependents must still have installed, version-compatible dependencies.

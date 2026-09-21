@@ -237,3 +237,7 @@ await using platform = createPlatform({ ... })
 - [Platform 规范](../reference/platform.md) —— 精确语义与边界情形
 - [错误码](../reference/errors.md) —— 稳定错误码及触发条件
 - [可执行示例 08 / 12](../examples.md) —— 懒激活与模块图 HMR 的完整场景
+
+### 同名替换
+
+Platform ChangeSet 按最终候选图校验。移除旧 Registration 并以相同 manifest 名称注册新项，是与 staging 顺序无关的原子操作；旧句柄只在提交成功后变成 removed。最终图仍有重复名称时拒绝；已安装消费者仍要求依赖已安装且版本兼容。

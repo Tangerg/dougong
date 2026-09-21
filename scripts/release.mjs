@@ -380,7 +380,7 @@ step("Recording the release");
 
 originalManifests.clear();
 run("git", ["add", ...PACKAGES.map(({ dir }) => manifestPath(dir))]);
-run("git", ["commit", "--no-verify", "-m", `chore: release ${version}`]);
+run("git", ["commit", "-m", `chore: release ${version}`]);
 run("git", ["tag", "-a", tag, "-m", `Dougong ${version}`]);
 run("git", ["push", "origin", "main", "--follow-tags"]);
 

@@ -1336,8 +1336,10 @@ describe("Host", () => {
     );
 
     expect(host.status).toBe("idle");
-    expect(workerInstallation.status).toBe("pending");
-    expect(unrelatedInstallation.status).toBe("pending");
+    expect(workerInstallation.status).toBe("failed");
+    expect(unrelatedInstallation.status).toBe("failed");
+    await expect(workerInstallation.ready()).rejects.toThrow("could not cleanly stop");
+    await expect(unrelatedInstallation.ready()).rejects.toThrow("could not cleanly stop");
     expect(workerStarts).toBe(1);
     expect(unrelatedStops).toBe(1);
   });

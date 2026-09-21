@@ -106,12 +106,11 @@ export interface LifetimeContext extends LifetimeOperations, AsyncDisposable {}
 
 export interface LifetimePort {
   readonly stageOn: <T>(
-    installationId: string,
     token: Event<T>,
     listener: EventListener<T>,
     release: (publication: Publication) => void,
   ) => StagedResource<Disposable>;
-  readonly emit: <T>(installationId: string, token: Event<T>, payload: T) => Promise<void>;
+  readonly emit: <T>(token: Event<T>, payload: T) => Promise<void>;
   readonly stageContribution: <T>(
     installationId: string,
     token: ExtensionPoint<T>,
@@ -494,12 +493,7 @@ export class Lifetime implements LifetimeContext {
 
   on<T>(token: Event<T>, listener: EventListener<T>) {
     const { port } = this.#requireActive();
-    const publication = port.stageOn(
-      this.#installationId,
-      token,
-      listener,
-      this.#listeners.release,
-    );
+    const publication = port.stageOn(token, listener, this.#listeners.release);
     this.#listeners.add(publication);
     if (this.#declarations() === "published") publication.publish();
     return publication.handle;
@@ -507,7 +501,7 @@ export class Lifetime implements LifetimeContext {
 
   async emit<T>(token: Event<T>, ...payload: EventArguments<T>) {
     const { port } = this.#requireActive();
-    await port.emit(this.#installationId, token, payload[0] as T);
+    await port.emit(token, payload[0] as T);
   }
 
   contribute<T>(token: ExtensionPoint<T>, key: string, value: T) {
