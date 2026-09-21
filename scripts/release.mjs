@@ -334,8 +334,9 @@ console.log(
  * after its first successful upload. Poll instead of asking once.
  */
 function awaitRegistry(name) {
-  // npm may accept an upload before its processing queue makes it readable.
-  for (let attempt = 0; attempt < 20; attempt++) {
+  // Publish-time scanning commonly takes five minutes and can exceed fifteen.
+  // https://github.blog/changelog/2026-07-28-npm-publish-time-malware-scanning-and-dual-use-metadata/
+  for (let attempt = 0; attempt < 120; attempt++) {
     if (registryField(name, "version") === version) return true;
     if (attempt === 0) console.log(`  waiting for ${name}@${version} to become readable...`);
     execFileSync("sleep", ["15"]);
@@ -355,7 +356,7 @@ for (const { name } of PACKAGES) {
   const result = spawnSync("npm", publishArgs, { stdio: "inherit" });
   if (result.status === 0 && !awaitRegistry(name)) {
     console.error(
-      `\n✗ ${name}: npm reported success but ${version} never appeared on the registry.`,
+      `\n✗ ${name}: npm accepted ${version}, but it was not readable within 30 minutes; processing may still be pending.`,
     );
     if (published.length) console.error(`  Already published: ${published.join(", ")}`);
     console.error(`  Re-running \`pnpm release ${version}\` resumes from here.`);
