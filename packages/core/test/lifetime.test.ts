@@ -775,4 +775,87 @@ describe("structured lifetime", () => {
     expect([...view.get().values()]).toEqual([undefined]);
     await host.stop();
   });
+
+  // A child scope disposed during `setup()` detaches only once its own teardown
+  // drains, so publication finds it still attached. Failing there would turn an
+  // ordinary Plugin action — and every `observe()` whose source changes during
+  // setup — into a Host that refuses to start.
+  it("publishes an Instance whose child scope is still disposing", async () => {
+    const items = extensionPoint<string>("lifetime/disposing-child");
+    const draining = Promise.withResolvers<void>();
+    const plugin = definePlugin({
+      name: "lifetime.disposing-child",
+      setup(ctx) {
+        const child = ctx.lifetime("child");
+        const grandchild = child.lifetime("grandchild");
+        grandchild.cleanup(() => draining.promise);
+        void grandchild.dispose();
+        child.contribute(items, "kept", "value");
+      },
+    });
+
+    const host = createHost();
+    host.install(plugin);
+
+    await expect(host.start()).resolves.toBeUndefined();
+    expect([...host.contributions(items).get().values()]).toEqual(["value"]);
+
+    draining.resolve();
+    await expect(host.stop()).resolves.toBeUndefined();
+  });
+
+  // The publication phase belongs to the Instance, not to each scope, so a scope
+  // opened after the activation committed must not re-stage what is already live.
+  it("declares visibly at once from a scope created after publication", async () => {
+    const late = extensionPoint<string>("lifetime/late-scope");
+    let declareLate: (() => void) | undefined;
+    const host = createHost();
+    host.install(
+      definePlugin({
+        name: "lifetime.late-scope",
+        setup(ctx) {
+          declareLate = () => {
+            ctx.lifetime("outer").lifetime("inner").contribute(late, "key", "value");
+          };
+        },
+      }),
+    );
+    await host.start();
+    if (!declareLate) throw new TypeError("Late scope fixture did not initialize");
+
+    expect(host.contributions(late).get().size).toBe(0);
+    declareLate();
+    expect([...host.contributions(late).get().values()]).toEqual(["value"]);
+    await host.stop();
+  });
+
+  it("publishes a whole staged scope tree in one step", async () => {
+    const staged = extensionPoint<string>("lifetime/staged-tree");
+    const sizes: number[] = [];
+    const host = createHost();
+    host.install(
+      definePlugin({
+        name: "lifetime.staged-tree-reader",
+        requires: { list: staged },
+        setup(ctx) {
+          ctx.list.subscribe(() => sizes.push(ctx.list.get().size));
+        },
+      }),
+    );
+    host.install(
+      definePlugin({
+        name: "lifetime.staged-tree-writer",
+        setup(ctx) {
+          ctx.contribute(staged, "root", "1");
+          ctx.lifetime("first").contribute(staged, "child", "2");
+          ctx.lifetime("second").lifetime("nested").contribute(staged, "grandchild", "3");
+        },
+      }),
+    );
+
+    await host.start();
+    expect(host.contributions(staged).get().size).toBe(3);
+    expect(sizes).toEqual([3]);
+    await host.stop();
+  });
 });

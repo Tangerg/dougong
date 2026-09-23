@@ -127,13 +127,36 @@ export interface LifetimePort {
   readonly report: (error: unknown) => void;
 }
 
+/**
+ * Whether this Instance's declarations are visible yet — one cell, owned by the
+ * root Lifetime and read by every scope beneath it.
+ *
+ * Staging belongs to the activation, not to an individual scope: everything
+ * declared during `setup()` becomes visible together, and anything declared
+ * afterwards is visible at once. Giving each Lifetime its own copy would let one
+ * fact advance in as many places as there are scopes, and a scope that could not
+ * advance its copy — one that began disposing during `setup()` — would have to
+ * be arbitrated instead of simply reading the owner.
+ */
+class DeclarationPhase {
+  #published = false;
+
+  get published() {
+    return this.#published;
+  }
+
+  publish() {
+    this.#published = true;
+  }
+}
+
 interface LifetimeOptions {
   readonly parentSignal?: AbortSignal;
-  readonly declarations?: "staged" | "published";
   readonly parent?: {
     readonly detach: (lifetime: Lifetime) => void;
     readonly diagnostics: LifetimeDiagnostics;
     readonly diagnosticNode: LifetimeDiagnosticNode;
+    readonly declarations: DeclarationPhase;
   };
 }
 
@@ -375,6 +398,7 @@ export class Lifetime implements LifetimeContext {
   readonly #children: LifetimeResources<Lifetime>;
   readonly #cleanups: LifetimeResources<AsyncDisposable>;
   readonly #kind: "root" | "child";
+  readonly #declarations: DeclarationPhase;
   #detachParentAbortListener: (() => void) | undefined;
   #detachFromParent: ((lifetime: Lifetime) => void) | undefined;
   readonly handle: LifetimeContext;
@@ -384,12 +408,9 @@ export class Lifetime implements LifetimeContext {
     this.#installationId = installationId;
     this.handle = new LifetimeHandle(this);
     const controller = new AbortController();
-    this.#state = {
-      phase: "active",
-      controller,
-      declarations: options.declarations ?? "staged",
-    };
+    this.#state = { phase: "active", controller };
     const parent = options.parent;
+    this.#declarations = parent?.declarations ?? new DeclarationPhase();
     this.#detachFromParent = parent?.detach;
     this.#kind = parent ? "child" : "root";
     const diagnostics =
@@ -463,10 +484,10 @@ export class Lifetime implements LifetimeContext {
     const diagnosticNode = diagnostics.createNode(label);
     const child = new Lifetime(port, this.#installationId, {
       parentSignal: this.signal,
-      declarations: this.#declarations(),
       parent: {
         diagnostics,
         diagnosticNode,
+        declarations: this.#declarations,
         detach: (lifetime) => {
           if (!this.#children.release(lifetime)) return;
           diagnostics.detach(parentNode, diagnosticNode);
@@ -495,7 +516,7 @@ export class Lifetime implements LifetimeContext {
     const { port } = this.#requireActive();
     const publication = port.stageOn(token, listener, this.#listeners.release);
     this.#listeners.add(publication);
-    if (this.#declarations() === "published") publication.publish();
+    if (this.#declarations.published) publication.publish();
     return publication.handle;
   }
 
@@ -514,7 +535,7 @@ export class Lifetime implements LifetimeContext {
       this.#contributions.release,
     );
     this.#contributions.add(publication);
-    if (this.#declarations() === "published") publication.publish();
+    if (this.#declarations.published) publication.publish();
     return publication.handle;
   }
 
@@ -533,22 +554,28 @@ export class Lifetime implements LifetimeContext {
   }
 
   /**
-   * Atomically makes all declarations staged during setup visible.
+   * Atomically makes everything staged during setup visible.
    *
-   * Children publish too, recursively, so a Lifetime created inside `setup()`
-   * becomes visible with its parent rather than being stranded staged. Called by
-   * the InstanceCoordinator once the whole activation layer has succeeded —
-   * which is what makes "no half-built Instance is observable" true.
+   * Advancing the shared phase is the whole state change; the walk that follows
+   * only flushes what each scope already staged. Called by the
+   * InstanceCoordinator once the whole activation layer has succeeded — which is
+   * what makes "no half-built Instance is observable" true.
    */
   publish() {
-    const state = this.#state;
-    if (state.phase !== "active") throw lifetimeDisposedError();
     this.#requireActive();
-    if (state.declarations === "published") return;
+    if (this.#declarations.published) return;
+    this.#declarations.publish();
+    this.#flushStaged();
+  }
+
+  // Disposing a child scope during `setup()` is ordinary, and a child detaches
+  // only once its own teardown has drained, so one can still be attached here.
+  // It needs no special case: `dispose()` empties a scope's publication sets
+  // synchronously, so a draining child contributes nothing to this walk.
+  #flushStaged() {
     for (const publication of this.#listeners) publication.publish();
     for (const publication of this.#contributions) publication.publish();
-    for (const child of this.#children) child.publish();
-    this.#state = { ...state, declarations: "published" };
+    for (const child of this.#children) child.#flushStaged();
   }
 
   /**
@@ -652,20 +679,10 @@ export class Lifetime implements LifetimeContext {
     if (!binding) throw lifetimeDisposedError();
     return binding;
   }
-
-  #declarations() {
-    const state = this.#state;
-    if (state.phase !== "active") throw lifetimeDisposedError();
-    return state.declarations;
-  }
 }
 
 type LifetimeState =
-  | {
-      readonly phase: "active";
-      readonly controller: AbortController;
-      readonly declarations: "staged" | "published";
-    }
+  | { readonly phase: "active"; readonly controller: AbortController }
   | {
       readonly phase: "disposing";
       readonly controller: AbortController;

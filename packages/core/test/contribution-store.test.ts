@@ -142,6 +142,24 @@ describe("ContributionStore invariants", () => {
     expect(firstStore.snapshot().get("owner/item")).toBe(1);
     expect(secondStore.snapshot().get("owner/item")).toBe(2);
   });
+
+  it("releases a Store whose only claim was rejected, and keeps one that holds a claim", () => {
+    const registry = new ContributionRegistry(() => undefined);
+    const rejected = extensionPoint<number>("contribution/rejected-claim");
+    const claimed = extensionPoint<number>("contribution/duplicate-claim");
+
+    const unused = registry.get(rejected);
+    expect(() => unused.stage("owner", "  ", 1, () => undefined)).toThrow(TypeError);
+    expect(registry.get(rejected)).not.toBe(unused);
+
+    const held = registry.get(claimed);
+    const claim = held.stage("owner", "item", 1, () => undefined);
+    expect(() => held.stage("owner", "item", 2, () => undefined)).toThrow(TypeError);
+    expect(registry.get(claimed)).toBe(held);
+
+    claim.dispose();
+    expect(registry.get(claimed)).not.toBe(held);
+  });
 });
 
 function createStore<T>() {

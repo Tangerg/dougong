@@ -187,14 +187,23 @@ export class ContributionStore<T> {
     value: T,
     release: (publication: Publication) => void,
   ): ContributionRecord<T> {
-    validateKey(key);
-    const id = contributionId(installationId, key);
-    if (this.#claims.has(id)) {
-      throw new TypeError(`Duplicate contribution '${id}'`);
+    // The registry creates a Store for whichever reference asked for it, so a
+    // claim that never materializes leaves that Store at zero references without
+    // any release having happened. Liveness is checked wherever the count can
+    // reach zero, and a failed acquisition is one of those places.
+    try {
+      validateKey(key);
+      const id = contributionId(installationId, key);
+      if (this.#claims.has(id)) {
+        throw new TypeError(`Duplicate contribution '${id}'`);
+      }
+      const contribution = new ContributionRecord(this, id, value, release);
+      this.#claims.set(id, contribution);
+      return contribution;
+    } catch (error) {
+      this.#notifyIfUnused();
+      throw error;
     }
-    const contribution = new ContributionRecord(this, id, value, release);
-    this.#claims.set(id, contribution);
-    return contribution;
   }
 
   view(
