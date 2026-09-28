@@ -103,41 +103,17 @@ await task.dispose() // abort 并等待结束
 
 优先把 signal 传给真正支持取消的适配器。如果第三方操作确实不可取消，而且它在停止后的完成与失败都可以安全忽略，可以在应用代码中明确采用“放弃等待”策略：
 
+<<< ../../packages/examples/src/abandon-on-abort.ts
+
 ```ts
-function abandonOnAbort<T>(
-  signal: AbortSignal,
-  start: () => PromiseLike<T>,
-): Promise<T> {
-  return new Promise<T>((resolve, reject) => {
-    const abort = () => reject(signal.reason)
-    signal.addEventListener("abort", abort, { once: true })
-    if (signal.aborted) {
-      abort()
-      return
-    }
-
-    void Promise.resolve()
-      .then(() => signal.throwIfAborted())
-      .then(start)
-      .then(
-        (value) => {
-          signal.removeEventListener("abort", abort)
-          resolve(value)
-        },
-        (error: unknown) => {
-          signal.removeEventListener("abort", abort)
-          reject(error)
-        },
-      )
-  })
-}
-
 ctx.spawn((signal) =>
   abandonOnAbort(signal, () => legacyClient.flush()),
 )
 ```
 
-这个 helper 只让 Dougong 的 Task 放弃**等待**，不会终止底层操作；链上的拒绝处理器仍会观察它以后发生的失败，避免产生无关的 unhandled rejection。不要用它遗弃持有独占资源、必须收尾或停止后仍可能改写已释放状态的工作；这类操作需要一个真正可取消的适配器。
+这份代码直接引用受测示例源码。预取消时不会注册监听器，也不会调用 `start`；取消、成功和失败都会解除监听。取消检查和 `start()` 在同一个回调中执行，不留出检查通过后再取消、却仍启动操作的 microtask 间隙。
+
+这个 helper 只让 Dougong 的 Task 放弃**等待**，不会终止底层操作；拒绝处理器仍会观察它以后发生的失败，避免产生无关的 unhandled rejection。它适用于迟到值与失败都可以安全忽略、且没有资源需要释放的操作。资源获取需要下面的[晚到资源交接范式](#retired-acquisition)；停止后仍可能改写已释放状态的操作需要真正可取消的适配器。
 
 ## 子生命周期
 
@@ -164,6 +140,69 @@ async setup(ctx) {
 `label` 是必填的非空字符串，只用于诊断，不参与任何查找或身份判定，同级重名合法。
 
 子 Lifetime 提前 `dispose()` 后会从父级摘除；父级释放时会递归释放所有存活的子树。
+
+## 等待退役与晚到资源交接 {#retired-acquisition}
+
+有些外部操作不能取消，却会返回必须关闭的资源，例如异步打开 stream。视图更换时，旧 generation 需要退出等待，操作晚到的结果仍需要有人释放。这时不能直接忽略 `abandonOnAbort` 遗弃的值。
+
+下面是受测的应用组合范式，只使用公开 Lifetime API，不是新增的 Core 或 facade API。应用明确提供两个不同的 owner：
+
+- `generation` 拥有这次等待，以及及时取得的资源。取消后不再接收结果；成功交付前先同步注册 `generation.cleanup()`。
+- `operations` 拥有真实的底层操作、晚到资源处置，以及它们的错误上报。它必须是比 generation 更长寿的祖先或独立 Lifetime，不能是 generation 本身或其后代。
+
+`operations` 必须保持 active，直到实际建立底层 Task。若它已经开始释放，`spawn()` 会在创建 Task 前同步抛出 `LIFETIME_DISPOSED`；等待尚未取消时，该错误使调用方的 Promise 拒绝，由调用方处理，而不会返回 `failed` 投影。
+
+源码直接来自示例包，和回归测试使用同一份实现：
+
+<<< ../../packages/examples/src/retired-acquisition.ts
+
+底层 Task 的结果使用以下只读投影：
+
+| 结果 | 调用方应如何处理 |
+| --- | --- |
+| `acquired` | 资源已经归 generation 所有，可以在仍有使用资格时消费 |
+| `failed` | 操作错误已进入 `operations` 所属 Host 的上报通道；可显示失败状态，不要再次抛出或重复上报 `error` |
+| `retired` | 底层任务不再交付资源，必要的晚到处置已完成 |
+
+generation 取消时，对调用方的 Promise 仍以 `generation.signal.reason` 拒绝，让所属 Task 按既有取消规则结束；调用方不需要等待底层任务返回 `retired`。外部操作或晚到处置的失败包装为 `Error("External resource operation failed", { cause })`，原始错误保留在 `cause`。这样即使适配器抛出的错误叫 `AbortError`，也不会在最终停止 `operations` 时被误当成该 Task 的协作取消而漏报。`failed.error` 是已经上报的这个错误。
+
+如果底层 Task 已创建，但在任务体开始前被取消，它不会调用 `start()`；仍然活动的 generation 会收到 `retired`。操作一旦开始，`operations` 继续等待它和必要的晚到处置结束。
+
+例如，把底层操作和可替换视图放在同一应用 Lifetime 的不同子树中：
+
+```ts
+const operations = ctx.lifetime("external-operations")
+const generation = ctx.lifetime("view:1")
+
+generation.spawn(async (signal) => {
+  const result = await acquireForLifetime(
+    generation,
+    operations,
+    () => legacyClient.openStream(),
+    (stream) => stream.close(),
+  )
+  signal.throwIfAborted()
+  if (result.status !== "acquired") return
+  await consumeStream(result.value, signal)
+})
+```
+
+应用替换视图时，只释放当前 generation，然后建立后任：
+
+```ts
+await generation.dispose()
+const nextGeneration = ctx.lifetime("view:2")
+```
+
+旧操作即使尚未完成，也不会阻塞这个切换。若它晚到成功，资源直接在 `operations` 的 Task 内关闭，不交给后任 generation；操作失败与晚到 disposer 失败也由该 Task 通过既有 Host 通道上报。已经正常交付的资源继续由 `generation.cleanup()` 释放，其失败遵循普通 Lifetime cleanup 的聚合规则。不要等旧 generation 已释放后，再向它注册晚到 cleanup 或让它承担错误上报。
+
+::: warning 等待退役没有改变最终 join
+`operations` 仍然完整拥有底层工作。如果操作永不 settle，`operations.dispose()` 和最终的 `host.stop()` 仍会保持 pending；晚到 disposer 不结束也会如此。这个范式只允许短寿命 generation 先退出，并不承诺应用可以跳过最终收尾。普通 `ctx.spawn()`、Task、Lifetime 和 Host 的 abort + join 契约保持不变。
+:::
+
+退役边界是 generation 的 signal。单独对等待者调用 `task.dispose()` 不会取消仍然活动的 generation，这种情况下该 Task 仍会等待获取完成或 generation 退役。
+
+这里没有取消远端执行，也不会重发任何命令。远端服务是否已接受命令、能否重试、哪个 generation 可以提交 UI，以及同一领域 identity 内的串行顺序与不同 identity 之间的并发，都由应用决定。取得资源不自动授予 UI 提交资格；应用仍须在提交边界检查自己的当前身份。
 
 ## 三个阶段
 

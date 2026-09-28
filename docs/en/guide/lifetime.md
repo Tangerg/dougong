@@ -104,41 +104,17 @@ Exceptions thrown by tasks are never swallowed; they surface through the Host's 
 
 Prefer passing the signal to an adapter that genuinely supports cancellation. If a third-party operation cannot be cancelled and both its late completion and failure are safe to ignore, application code can make an explicit “abandon the wait” policy:
 
+<<< ../../../packages/examples/src/abandon-on-abort.ts
+
 ```ts
-function abandonOnAbort<T>(
-  signal: AbortSignal,
-  start: () => PromiseLike<T>,
-): Promise<T> {
-  return new Promise<T>((resolve, reject) => {
-    const abort = () => reject(signal.reason)
-    signal.addEventListener("abort", abort, { once: true })
-    if (signal.aborted) {
-      abort()
-      return
-    }
-
-    void Promise.resolve()
-      .then(() => signal.throwIfAborted())
-      .then(start)
-      .then(
-        (value) => {
-          signal.removeEventListener("abort", abort)
-          resolve(value)
-        },
-        (error: unknown) => {
-          signal.removeEventListener("abort", abort)
-          reject(error)
-        },
-      )
-  })
-}
-
 ctx.spawn((signal) =>
   abandonOnAbort(signal, () => legacyClient.flush()),
 )
 ```
 
-This helper only lets the Dougong Task abandon the **wait**; it does not stop the underlying operation. The rejection handler remains attached and observes a later failure rather than creating an unrelated unhandled rejection. Never use this pattern for work that holds exclusive resources, requires cleanup, or may mutate disposed state after shutdown; such work needs a genuinely cancellable adapter.
+This code is included directly from the tested example source. An already-aborted signal registers no listener and never calls `start`; cancellation, success and failure all remove the listener. The cancellation check and `start()` run in the same callback, leaving no microtask gap in which cancellation could occur after the check yet still allow the operation to start.
+
+This helper only lets the Dougong Task abandon the **wait**; it does not stop the underlying operation. The rejection handler remains attached and observes a later failure rather than creating an unrelated unhandled rejection. Use it only when late values and failures are safe to ignore and no resource needs releasing. Resource acquisition needs the [late resource handoff recipe](#retired-acquisition) below; work that may mutate disposed state after shutdown needs an adapter that supports cancellation.
 
 ## Child lifetimes
 
@@ -165,6 +141,69 @@ async setup(ctx) {
 `label` is a required non-empty string used only for diagnostics. It takes no part in lookup or identity, and duplicates among siblings are legal.
 
 A child that is disposed early detaches from its parent; releasing a parent recursively releases every live subtree.
+
+## Retiring a wait and handing off late resources {#retired-acquisition}
+
+Some external operations cannot be cancelled but return resources that must be closed, such as asynchronously opened streams. Replacing a view should let the old generation leave its wait while someone remains responsible for releasing a late result. Simply ignoring the value abandoned by `abandonOnAbort` is insufficient here.
+
+This tested application recipe composes the public Lifetime API; it is not a new Core or facade API. The application explicitly supplies two different owners:
+
+- `generation` owns the wait and resources acquired in time. It stops accepting results on cancellation, and `generation.cleanup()` is registered synchronously before a resource is delivered.
+- `operations` owns the underlying operation, late resource disposal and their error reporting. It must be a longer-lived ancestor or an independent Lifetime, never the generation itself or its descendant.
+
+`operations` must remain active until the underlying Task is created. If it has already started disposing, `spawn()` throws `LIFETIME_DISPOSED` synchronously before creating a Task. If the wait has not already been cancelled, the caller's Promise rejects with that error for the caller to handle, rather than returning a `failed` projection.
+
+The code is included directly from the example package, using the same implementation as its regression tests:
+
+<<< ../../../packages/examples/src/retired-acquisition.ts
+
+The underlying Task's result uses the following read-only projection:
+
+| Result | What the caller should do |
+| --- | --- |
+| `acquired` | The generation already owns the resource; consume it while still eligible to do so |
+| `failed` | The operation error has entered the `operations` Host's reporting channel; display failure state without throwing or reporting `error` again |
+| `retired` | The underlying task will deliver no resource and any required late disposal has completed |
+
+When the generation is cancelled, the caller's Promise still rejects with `generation.signal.reason`, letting its owning Task finish under the existing cancellation rules. The caller need not wait for the underlying task to return `retired`. Failures of the external operation or late disposal are wrapped in `Error("External resource operation failed", { cause })`, preserving the original error as `cause`. This prevents an adapter error named `AbortError` from being mistaken for cooperative cancellation of the Task when `operations` is eventually stopped. `failed.error` is this already-reported error.
+
+If the underlying Task is created but cancelled before its body begins, it does not call `start()`; a still-active generation receives `retired`. Once an operation starts, `operations` continues to join it and any required late disposal.
+
+For example, place underlying operations and replaceable views in separate child Lifetimes of the same application Lifetime:
+
+```ts
+const operations = ctx.lifetime("external-operations")
+const generation = ctx.lifetime("view:1")
+
+generation.spawn(async (signal) => {
+  const result = await acquireForLifetime(
+    generation,
+    operations,
+    () => legacyClient.openStream(),
+    (stream) => stream.close(),
+  )
+  signal.throwIfAborted()
+  if (result.status !== "acquired") return
+  await consumeStream(result.value, signal)
+})
+```
+
+When replacing the view, the application releases only the current generation, then creates its successor:
+
+```ts
+await generation.dispose()
+const nextGeneration = ctx.lifetime("view:2")
+```
+
+This transition can proceed while the old operation is still pending. A late success is closed inside the `operations` Task and never handed to the next generation. Operation failures and late disposer failures are reported by that Task through the existing Host channel. Resources already delivered successfully are released by `generation.cleanup()`, whose failures follow ordinary Lifetime cleanup aggregation. Do not register a late cleanup with a disposed generation or assign late error reporting to it.
+
+::: warning Retiring the wait preserves the final join
+`operations` continues to own the underlying work in full. If the operation never settles, `operations.dispose()` and the final `host.stop()` remain pending; the same applies to a late disposer that never finishes. This recipe lets the shorter-lived generation leave first without promising that the application can skip final cleanup. Ordinary `ctx.spawn()`, Task, Lifetime and Host abort + join contracts are unchanged.
+:::
+
+The retirement boundary is the generation's signal. Disposing only the waiting Task does not cancel an active generation, so that Task still waits for acquisition to finish or for the generation to retire.
+
+Nothing here cancels remote execution or resends a command. Whether the remote service accepted a command, whether retry is allowed, which generation may commit UI state, serial ordering within a domain identity and concurrency between different identities all remain application decisions. Acquiring a resource does not grant permission to commit UI state; the application must still check its current identity at the commit boundary.
 
 ## Three phases
 

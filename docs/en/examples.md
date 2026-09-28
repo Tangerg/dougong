@@ -96,6 +96,14 @@ The `facts` in the returned value record what the run **actually observed**, not
 - [Example sources](https://github.com/Tangerg/dougong/tree/main/packages/examples/src)
 - [Package README](https://github.com/Tangerg/dougong/blob/main/packages/examples/README.md)
 
+## Additional recipes: non-cooperative asynchronous operations
+
+The [Lifetime guide](./guide/lifetime.md#retired-acquisition) also provides tested recipes for explicitly abandoning a wait, assigning promptly acquired resources and releasing late resources. They compose the public Lifetime API without adding a syllabus chapter or extending the Core or facade public API. Both language guides include the same source files exercised by these tests:
+
+```sh
+pnpm test packages/examples/test/abandon-on-abort.test.ts packages/examples/test/retired-acquisition.test.ts --coverage.enabled=false
+```
+
 ## Startup-topology benchmark
 
 The repository also includes a startup benchmark for the independent and chained topologies:

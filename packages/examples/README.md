@@ -108,6 +108,19 @@ console.log(result.facts)
 
 这两章各约 200 行，做的是成熟框架里动辄上千行的事（声明式配置加载器、热更新引擎），而且**没有引入任何新原语**。它们先作为可执行应用参考；只有多个真实应用复用出稳定边界后，才值得提炼成独立包。
 
+### 补充范式：非协作异步操作
+
+十二章之外，[生命周期指南](../../docs/guide/lifetime.md#retired-acquisition) 补充了显式放弃等待与晚到资源交接的受测范式：
+
+- [`abandon-on-abort.ts`](./src/abandon-on-abort.ts)：取消后退出等待，适用于迟到值与错误可以安全忽略的操作。
+- [`retired-acquisition.ts`](./src/retired-acquisition.ts)：generation 拥有等待与及时取得的资源，独立的长寿命 Lifetime 拥有底层操作与晚到处置。
+
+中英文指南直接引用这些源码；它们是应用组合示例，没有加入 Core 或 facade 公共 API。运行定向回归：
+
+```sh
+pnpm test packages/examples/test/abandon-on-abort.test.ts packages/examples/test/retired-acquisition.test.ts --coverage.enabled=false
+```
+
 ### 启动拓扑基准
 
 ```sh
@@ -221,6 +234,19 @@ console.log(result.facts)
 - Several affected Registrations update through one ChangeSet, so consumers see only the pre-commit or post-commit snapshot.
 
 Each is roughly 200 lines, doing what mature frameworks spend thousands of lines on (a declarative config loader, a hot-reload engine), and **introducing no new primitive**. They serve first as executable application references; only after several real applications converge on a stable boundary is one worth extracting into its own package.
+
+### Additional recipes: non-cooperative asynchronous operations
+
+Alongside the twelve chapters, the [Lifetime guide](../../docs/en/guide/lifetime.md#retired-acquisition) provides tested recipes for explicitly abandoning a wait and handing off late resources:
+
+- [`abandon-on-abort.ts`](./src/abandon-on-abort.ts): leave a cancelled wait when late values and errors are safe to ignore.
+- [`retired-acquisition.ts`](./src/retired-acquisition.ts): the generation owns the wait and promptly acquired resources; a separate, longer-lived Lifetime owns the underlying operation and late disposal.
+
+Both language guides include these source files directly. They are application composition examples, with no addition to the Core or facade public API. Run their focused regressions with:
+
+```sh
+pnpm test packages/examples/test/abandon-on-abort.test.ts packages/examples/test/retired-acquisition.test.ts --coverage.enabled=false
+```
 
 ### Startup-topology benchmark
 

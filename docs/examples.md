@@ -96,6 +96,14 @@ console.log(result.facts)
 - [示例源码](https://github.com/Tangerg/dougong/tree/main/packages/examples/src)
 - [示例包说明](https://github.com/Tangerg/dougong/blob/main/packages/examples/README.md)
 
+## 补充范式：非协作异步操作
+
+[生命周期指南](./guide/lifetime.md#retired-acquisition) 另有受测范式，演示显式放弃等待、及时资源归属与晚到资源释放。它们直接复用公开 Lifetime API，没有增加教学大纲中的章节，也没有扩展 Core 或 facade 公共 API。中英文文档引用测试执行的同一份源码：
+
+```sh
+pnpm test packages/examples/test/abandon-on-abort.test.ts packages/examples/test/retired-acquisition.test.ts --coverage.enabled=false
+```
+
 ## 启动拓扑基准
 
 仓库还包含独立拓扑与链式拓扑的启动基准：

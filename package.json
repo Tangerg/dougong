@@ -47,6 +47,7 @@
     "*.{json,ts,mjs}": "prettier --write"
   },
   "devDependencies": {
+    "@types/node": "^22.20.4",
     "@vitest/coverage-istanbul": "^3.2.7",
     "husky": "^9.1.7",
     "knip": "^6.32.2",
