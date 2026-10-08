@@ -25,7 +25,16 @@
 // the first irreversible action (publish, tag, push).
 
 import { execFileSync, spawnSync } from "node:child_process";
-import { existsSync, globSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  globSync,
+  lstatSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { createInterface } from "node:readline/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -75,6 +84,18 @@ function readManifest(dir) {
 
 function writeManifest(dir, manifest) {
   writeFileSync(manifestPath(dir), `${JSON.stringify(manifest, null, 2)}\n`);
+}
+
+function readPackageFiles(root) {
+  return new Map(
+    readdirSync(root, { recursive: true }).flatMap((file) => {
+      const path = join(root, file);
+      const entry = lstatSync(path);
+      if (entry.isDirectory()) return [];
+      if (!entry.isFile()) fail(`Package entry '${file}' must be a regular file`);
+      return [[file, readFileSync(path)]];
+    }),
+  );
 }
 
 // 1 · Inputs
@@ -287,10 +308,12 @@ for (const { dir, name } of PACKAGES) {
     if (!archive) fail(`${name}: cannot download the published ${version} to compare`);
     execFileSync("tar", ["-xzf", archive, "-C", downloaded]);
     const publishedRoot = join(downloaded, "package");
-    for (const file of ["dist/index.js", "dist/index.d.ts", "package.json"]) {
-      if (
-        readFileSync(join(publishedRoot, file), "utf8") !== readFileSync(join(root, file), "utf8")
-      )
+    const publishedFiles = readPackageFiles(publishedRoot);
+    const candidateFiles = readPackageFiles(root);
+    for (const file of new Set([...publishedFiles.keys(), ...candidateFiles.keys()])) {
+      const publishedContents = publishedFiles.get(file);
+      const candidateContents = candidateFiles.get(file);
+      if (!publishedContents || !candidateContents || !publishedContents.equals(candidateContents))
         fail(
           `${name}@${version} is published but its ${file} differs from this build; ` +
             `release a new version instead of resuming`,
