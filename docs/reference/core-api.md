@@ -644,6 +644,8 @@ await commands.settled                 // 等待读取时已经排入的全部�
 
 ```ts
 installation.status
+installation.diagnostics.get()
+installation.diagnostics.subscribe(notify)
 installation.ready()
 installation.update({ plugin })
 installation.update({ config })
@@ -666,6 +668,8 @@ Installation 进入 `removed` 后撤销对 Host 的控制引用并释放 Plugin 
 
 Installation 在提交前失败时，已经等待 `ready()` 的调用方仍收到原始 `Error`；setup 或配置校验器抛出非 `Error` 值时，首次公开命令与稳定失败状态共享同一个 `INSTALLATION_UNAVAILABLE` 错误，原值保存在 `cause`。Installation 脱离 Host 后，只保留错误的 `name/message/code` 纯数据摘要，后续 `ready()` 在调用边界重建错误。JavaScript `Error` 的调用栈可能保留整个编排对象图，不能成为终态 Installation 的隐藏所有权边。仍附着于活动 Host 的失败 Installation 继续保留原始错误，供诊断和重试语义使用。Platform 的终态 Registration 遵守相同规则。
 
+`installation.diagnostics` 暴露 Host 诊断使用的同一份不可变 `InstallationSnapshot`，在已提交声明或生命周期变化时失效。移除先发布终态快照，在命令 readiness settle 时释放 reader、reporter 和订阅。终态诊断错误使用 `RecordedFailure`，避免保留的快照通过 JavaScript 惰性调用栈持有执行对象。
+
 ### 10.3 canonical ChangeSet
 
 ```ts
@@ -684,6 +688,7 @@ await change.commit()
 - 空 ChangeSet 不制造伪 `changing` 状态或诊断 revision，但仍按提交顺序经过 Host 命令队列与 owner authority 边界；先提交的 Group 删除会使随后提交的旧空草稿以 `GROUP_REMOVED` 拒绝；
 - 同一 Installation 在一份 ChangeSet 中只能出现一次；
 - 拒绝其他 Host 的 Installation；
+- 候选声明与成员关系保留在事务草稿中；Group 和诊断公开读取在 Engine 提交前只使用已提交声明；
 - 候选依赖图和全部受影响配置在停止任何实例前完成校验；
 - 执行期间 Host 为 `changing`，应用代码的 Service 读取关闭；
 - active 变更只重建目标和新旧图中受影响的传递消费者；
@@ -722,17 +727,17 @@ Group 的规则：
 
 - 可嵌套；
 - configure 内全部安装共享一次提交；
-- `ready()` 等待调用前已在整棵子树提交的变更（包括仍在排队的动态子 Group 变更），再等待子树中的安装就绪；
+- `ready()` 等待调用前已在整棵子树提交的变更（包括父级 ChangeSet 对子树安装的变更，以及仍在排队的动态子 Group 变更），再等待子树中的安装就绪；
 - `remove()` 用一次 Core 事务删除整棵子树；
 - Group ChangeSet 只能修改自身子树的 Installation；
-- Group 与 Installation 共享 `status/ready/remove`，只有 Installation 增加 `update`；
+- Group 与 Installation 共享 `status/ready/remove`，Installation 另有 `update` 与 `diagnostics`；
 - Group 不改变能力可见性：Service、ExtensionPoint 和 Event 都属于整个 Host。
 
 嵌套 Group configure 共享同一个显式配置会话。任一子级失败都会把整份会话置为 `failed`，即使调用方在外层捕获了该异常，也不能继续向已经失败的草稿追加声明或提交部分配置。非 `Error` 的失败值在配置和运行事务边界统一分类为 `GROUP_UNAVAILABLE`；`ready()` 失败后 Group 状态必须是 `failed`，不能因为失败值恰好为 `undefined` 而呈现为健康。
 
 每个 Group 只保留一份当前 readiness barrier。尚未成功建立的 Group 在提交失败后保持 `failed`，后续成功变更会替换旧 barrier 并建立 Group；已经建立的 Group 若变更失败且 Core 恢复了原提交状态，则继续保持健康。`status` 与 `ready()` 始终读取同一份生命周期状态。
 
-删除 Group 会同时撤销整棵子树的权限，包括删除前已经创建但尚未提交的 ChangeSet；这些旧草稿的后续 `install/update/remove/commit` 都统一以 `GROUP_REMOVED` 拒绝，不能越过 Group 边界进入 Host。终态 Group 只保留身份和 `removed` 状态，`remove()` 幂等；它不再持有 Host、配置会话或历史失败调用栈，也不能创建 Installation、子 Group 或 ChangeSet。
+删除 Group 会在清理完成后，按本次 detach 实际终止的子树统一撤权，异步清理期间新建的后代同样终止；删除前已经创建但尚未提交的 ChangeSet 也会失去权限；这些旧草稿的后续 `install/update/remove/commit` 都统一以 `GROUP_REMOVED` 拒绝，不能越过 Group 边界进入 Host。终态 Group 只保留身份和 `removed` 状态，`remove()` 幂等；它不再持有 Host、配置会话或历史失败调用栈，也不能创建 Installation、子 Group 或 ChangeSet。
 
 需要工作区或租户区分时，根据语义选择：固定且需要独立依赖图的少量实例使用显式 Contract family；请求期选择的数据使用带 tenant/workspace 参数的 Service；完全独立的能力图使用多个 Host；安全隔离使用 Worker/iframe/进程。不要把 Group 冒充解析或安全边界。
 
@@ -768,7 +773,7 @@ Host start、stop 和 active 状态下提交的 ChangeSet 使用 ExtensionPoint 
 
 快照通知中的再次失效会排队，在当前回调返回后处理；尚未轮到的同一订阅只排入一次。该顺序也适用于诊断回调引起的另一份快照变化，避免跨 Publisher 重入应用代码。
 
-ContributionView、Host diagnostics、Platform diagnostics 和 `@dougongjs/reactive` Signal 统一采用结构协议：
+ContributionView、Installation diagnostics、Host diagnostics、Platform diagnostics 和 `@dougongjs/reactive` Signal 统一采用结构协议：
 
 ```ts
 interface Readable<T> {
@@ -787,7 +792,7 @@ snapshots.invalidate()                     // 标记失效并通知
 snapshots.dispose()                        // 固化终态并切断闭包
 ```
 
-`view` 是权限收窄，不是第二套观察 API：读取方只能 `get/subscribe`，拥有方只能通过 `SnapshotPublisher` 驱动失效和终止。每次订阅都有独立身份；释放会立即撤回尚未轮到的通知。订阅者与错误 reporter 都必须同步；意外返回的 thenable 会被观察并作为精确 `TypeError` 进入同一个错误边界，不能变成无关的 unhandled rejection。订阅者失败交给显式 reporter 后仍继续通知其余订阅者；若 reporter 自身失败，Publisher 完成整轮通知后用 `AggregateError` 同时保留订阅者错误与 reporter 错误。`dispose()` 会在切断 reader、reporter 与现有订阅前固化最后一份快照；历史 view 因而仍可读取终态，但不能反向保活拥有方。Host、Lifetime 与 Platform diagnostics 直接走这条路径；`ContributionStore` 同样组合这一个 Publisher，只在订阅外层增加 Lifetime 所有权，因而重复注册同一个函数仍是两份独立订阅。任何高层都不得重写订阅注册表和错误边界。
+`view` 是权限收窄，不是第二套观察 API：读取方只能 `get/subscribe`，拥有方只能通过 `SnapshotPublisher` 驱动失效和终止。每次订阅都有独立身份；释放会立即撤回尚未轮到的通知。订阅者与错误 reporter 都必须同步；意外返回的 thenable 会被观察并作为精确 `TypeError` 进入同一个错误边界，不能变成无关的 unhandled rejection。订阅者失败交给显式 reporter 后仍继续通知其余订阅者；若 reporter 自身失败，Publisher 完成整轮通知后用 `AggregateError` 同时保留订阅者错误与 reporter 错误。`dispose()` 会在切断 reader、reporter 与现有订阅前固化最后一份快照；历史 view 因而仍可读取终态，但不能反向保活拥有方。Host、Installation、Lifetime 与 Platform diagnostics 直接走这条路径；`ContributionStore` 同样组合这一个 Publisher，只在订阅外层增加 Lifetime 所有权，因而重复注册同一个函数仍是两份独立订阅。任何高层都不得重写订阅注册表和错误边界。
 
 快照需要 Map 语义时统一使用 `ReadonlyMapSnapshot`。它只接受类型声明中的 Map 或条目 iterable，复制输入并只暴露 `ReadonlyMap` 方法，避免 `Object.freeze(new Map())` 仍可调用 `set/delete/clear` 的伪不可变性；它只保证容器结构不可变，条目值仍应在进入快照时自行冻结。
 

@@ -1,7 +1,5 @@
 import type { GroupNode } from "./group";
-import type { InstallationRecord } from "./installation";
-import type { LifetimeSnapshot } from "./lifetime";
-import type { LifecycleStatus } from "./lifecycle-status";
+import type { InstallationRecord, InstallationSnapshot } from "./installation";
 import { ReadonlyMapSnapshot } from "./readonly-map";
 import { SnapshotPublisher, type SnapshotView } from "./snapshot-view";
 
@@ -12,16 +10,7 @@ import { SnapshotPublisher, type SnapshotView } from "./snapshot-view";
  */
 export type HostStatus = "idle" | "starting" | "active" | "changing" | "stopping";
 
-export interface InstallationSnapshot {
-  readonly id: string;
-  readonly pluginName: string;
-  readonly groupId: string;
-  readonly status: LifecycleStatus;
-  readonly requires: ReadonlyArray<string>;
-  readonly provides: ReadonlyArray<string>;
-  readonly lifetime?: SnapshotView<LifetimeSnapshot>;
-  readonly error?: Error;
-}
+export type { InstallationSnapshot } from "./installation";
 
 export interface GroupSnapshot {
   readonly id: string;
@@ -79,26 +68,7 @@ export class HostDiagnostics {
   ) {
     const installations = new Map<string, InstallationSnapshot>();
     for (const installation of records) {
-      const base = {
-        id: installation.id,
-        pluginName: installation.declaration.plugin.name,
-        groupId: installation.groupId,
-        status: installation.status,
-        requires: Object.freeze(
-          Object.values(installation.declaration.plugin.requires).map((requirement) => {
-            return requirement.kind === "optional" ? requirement.service.id : requirement.id;
-          }),
-        ),
-        provides: Object.freeze(
-          Object.values(installation.declaration.plugin.provides).map((token) => token.id),
-        ),
-        ...(installation.instance ? { lifetime: installation.instance.lifetime.diagnostics } : {}),
-      };
-      const error = installation.error;
-      installations.set(
-        installation.id,
-        Object.freeze(error === undefined ? base : { ...base, error }) as InstallationSnapshot,
-      );
+      installations.set(installation.id, installation.diagnostics.get());
     }
 
     const groups = new Map<string, GroupSnapshot>();

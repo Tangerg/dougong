@@ -31,9 +31,11 @@
     "docs:build": "vitepress build docs",
     "docs:preview": "vitepress preview docs",
     "docs:check": "pnpm docs:build",
-    "check": "pnpm typecheck && pnpm lint && pnpm format:check && pnpm test && pnpm knip && pnpm check:circular && pnpm check:layers && pnpm build && pnpm check:api && pnpm docs:check",
+    "check": "pnpm check:generated && pnpm typecheck && pnpm lint && pnpm format:check && pnpm test && pnpm knip && pnpm check:circular && pnpm check:layers && pnpm build && pnpm check:api && pnpm docs:check",
     "release": "node scripts/release.mjs",
-    "prepare": "husky"
+    "prepare": "husky",
+    "generate:internal": "node scripts/generate-internal.mjs",
+    "check:generated": "node scripts/generate-internal.mjs --check"
   },
   "lint-staged": {
     "packages/*/{src,test}/**/*.ts": [

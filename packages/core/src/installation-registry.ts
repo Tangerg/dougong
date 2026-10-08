@@ -8,23 +8,20 @@ import {
   InstallationRecord,
 } from "./installation";
 import type { AnyPlugin, NormalizedPlugin } from "./plugin";
+import { batchSnapshotNotifications } from "./snapshot-view";
 
 type AnyInstallation = Installation<AnyPlugin>;
 type AnyInstallationUpdate = InstallationUpdate<AnyPlugin>;
 
 interface InstallationRegistryPort {
   readonly notifyChanged: () => void;
+  readonly report: (error: unknown) => void;
   readonly update: (
     installation: InstallationRecord,
     facade: AnyInstallation,
     update: AnyInstallationUpdate,
   ) => Promise<void>;
   readonly remove: (installation: InstallationRecord, facade: AnyInstallation) => Promise<void>;
-}
-
-interface InstallationCapture {
-  readonly installation: InstallationRecord;
-  readonly declaration: InstallationDeclaration;
 }
 
 interface InstallationControl {
@@ -84,6 +81,10 @@ class InstallationFacade<Declaration extends AnyPlugin> {
 
   get status() {
     return this.#installation.status;
+  }
+
+  get diagnostics() {
+    return this.#installation.diagnostics;
   }
 
   ready() {
@@ -162,71 +163,68 @@ export class InstallationRegistry {
     if (!facade) throw new Error(`Installation '${installation.id}' has no public facade`);
     const control = installationControls.get(facade);
     if (!control) throw new Error(`Installation '${installation.id}' has no draft control`);
-    installation.attach(this.#port.notifyChanged);
+    installation.attach(this.#port.notifyChanged, this.#port.report);
     control.attach(
       (update) => this.#port.update(installation, facade, update),
       () => this.#port.remove(installation, facade),
     );
   }
 
-  /**
-   * Validates the whole batch, then applies the whole batch. The two loops are
-   * not a style choice: a rejected operation halfway through a single loop would
-   * leave the earlier ones already written, and this method has no way to undo
-   * them. Checking first means `apply` either changes everything or nothing.
-   */
-  apply(operations: ReadonlyArray<ChangeOperation>) {
+  /** Builds a candidate without changing committed declarations or membership. */
+  draft(operations: ReadonlyArray<ChangeOperation>) {
+    const declarations = this.declarations();
     for (const operation of operations) {
+      const installation = operation.installation;
       if (operation.kind === "install") {
-        operation.installation.group.assertAttached();
-        if (this.#records.has(operation.installation.id)) {
-          throw new Error(`Installation '${operation.installation.id}' is already installed`);
+        installation.group.assertAttached();
+        if (this.#records.has(installation.id)) {
+          throw new Error(`Installation '${installation.id}' is already installed`);
         }
+        declarations.set(installation, installation.declaration);
         continue;
       }
-
-      if (!this.contains(operation.installation)) {
-        throw operation.installation.unavailableError();
+      if (!this.contains(installation)) throw installation.unavailableError();
+      if (operation.kind === "remove") {
+        declarations.delete(installation);
+        continue;
       }
-      if (
-        operation.kind === "update" &&
-        operation.declaration.kind !== "config" &&
-        operation.declaration.plugin.name !== operation.installation.declaration.plugin.name
-      ) {
+      const current = installation.declaration;
+      const plugin =
+        operation.declaration.kind === "config" ? current.plugin : operation.declaration.plugin;
+      if (plugin.name !== current.plugin.name) {
         throw new DougongError(
           "INSTALLATION_IDENTITY",
-          `Installation '${operation.installation.id}' cannot change name from ` +
-            `'${operation.installation.declaration.plugin.name}' to '${operation.declaration.plugin.name}'`,
+          `Installation '${installation.id}' cannot change name from '${current.plugin.name}' to '${plugin.name}'`,
         );
       }
+      const config =
+        operation.declaration.kind === "plugin" ? current.config : operation.declaration.config;
+      declarations.set(installation, createInstallationDeclaration(plugin, config));
     }
-
-    for (const operation of operations) {
-      if (operation.kind === "install") {
-        this.#records.set(operation.installation.id, operation.installation);
-      } else if (operation.kind === "update") {
-        const current = operation.installation.declaration;
-        const plugin =
-          operation.declaration.kind === "config" ? current.plugin : operation.declaration.plugin;
-        const config =
-          operation.declaration.kind === "plugin" ? current.config : operation.declaration.config;
-        operation.installation.replaceDeclaration(createInstallationDeclaration(plugin, config));
-      } else if (this.contains(operation.installation)) {
-        this.#records.delete(operation.installation.id);
-      }
-    }
+    return declarations;
   }
 
-  settleChanges(operations: ReadonlyArray<ChangeOperation>, active: boolean) {
-    for (const operation of operations) {
-      if (operation.kind === "remove") {
-        operation.installation.remove();
-        operation.installation.settleReady();
-        this.#revoke(operation.installation);
-      } else if (!active) {
-        operation.installation.deactivate();
+  commit(
+    declarations: ReadonlyMap<InstallationRecord, InstallationDeclaration>,
+    operations: ReadonlyArray<ChangeOperation>,
+    active: boolean,
+  ) {
+    batchSnapshotNotifications(() => {
+      this.#records.clear();
+      for (const [installation, declaration] of declarations) {
+        if (installation.declaration !== declaration) installation.replaceDeclaration(declaration);
+        this.#records.set(installation.id, installation);
       }
-    }
+      for (const operation of operations) {
+        if (operation.kind === "remove") {
+          operation.installation.remove();
+          this.#revoke(operation.installation);
+        } else if (!active) {
+          operation.installation.deactivate();
+        }
+      }
+      this.#port.notifyChanged();
+    });
   }
 
   settleReadiness(records: Iterable<InstallationRecord>) {
@@ -238,22 +236,8 @@ export class InstallationRegistry {
     this.#revoke(installation);
   }
 
-  // Captures declarations only, since that is all a rollback restores. Instances
-  // belong to the InstanceCoordinator and are rebuilt from the previous plan
-  // rather than snapshotted — a live Instance is not a value that can be copied.
-  capture(): ReadonlyArray<InstallationCapture> {
-    return [...this.#records.values()].map((installation) => ({
-      installation,
-      declaration: installation.declaration,
-    }));
-  }
-
-  restore(snapshot: ReadonlyArray<InstallationCapture>) {
-    this.#records.clear();
-    for (const item of snapshot) {
-      item.installation.replaceDeclaration(item.declaration);
-      this.#records.set(item.installation.id, item.installation);
-    }
+  declarations() {
+    return new Map([...this.#records.values()].map((record) => [record, record.declaration]));
   }
 
   #revoke(installation: InstallationRecord) {

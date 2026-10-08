@@ -1,10 +1,11 @@
-import { RecordedFailure, SerialQueue, type Installation } from "@dougongjs/core";
+import { RecordedFailure, SerialQueue, type Disposable, type Installation } from "@dougongjs/core";
 import type { Registration, NormalizedArtifact, PlatformChangeSet, Artifact } from "./platform-api";
 import { PlatformError } from "./errors";
 import type { ActivationPermit } from "./activation-gate";
 
 export interface RegistrationPort<Reference> {
   readonly change: () => PlatformChangeSet<Reference>;
+  readonly notifyChanged: () => void;
   readonly activateRegistration: (
     registration: RegistrationRecord<Reference>,
     signal: AbortSignal,
@@ -26,7 +27,7 @@ type RegistrationState =
   | { readonly phase: "pending" }
   | { readonly phase: "registered"; readonly installation: Installation | undefined }
   | { readonly phase: "loading"; readonly installation: Installation | undefined }
-  | { readonly phase: "installed"; readonly installation: Installation }
+  | { readonly phase: "loaded"; readonly installation: Installation }
   | {
       readonly phase: "failed";
       readonly installation: Installation | undefined;
@@ -36,7 +37,7 @@ type RegistrationState =
 
 export type RegistrationCommitState = Extract<
   RegistrationState,
-  { readonly phase: "registered" | "installed" }
+  { readonly phase: "registered" | "loaded" }
 >;
 
 class RegistrationFacade<Reference> implements Registration<Reference> {
@@ -78,7 +79,7 @@ class RegistrationFacade<Reference> implements Registration<Reference> {
  * Two independent axes, which is why there are two state fields:
  *
  *   #authority   draft -> granted -> terminal    may this Registration act?
- *   #state       pending -> registered -> loading -> installed | failed | removed
+ *   #state       pending -> registered -> loading -> loaded | failed | removed
  *
  * A Registration can hold authority and be failed at once — still ours, currently
  * broken, retryable. Collapsing the two would make that state unrepresentable.
@@ -91,6 +92,7 @@ export class RegistrationRecord<Reference> {
   #authority: RegistrationAuthority<Reference>;
   #manifest: NormalizedArtifact<Reference>["manifest"];
   #state: RegistrationState = { phase: "pending" };
+  #installationSubscription: Disposable | undefined;
   readonly #activationQueue = new SerialQueue();
   #activationController: AbortController | undefined;
   readonly #readyWaiters = new Set<{ resolve: () => void; reject: (error: unknown) => void }>();
@@ -130,7 +132,12 @@ export class RegistrationRecord<Reference> {
   }
 
   get status() {
-    return this.#state.phase;
+    if (this.installation?.status === "removed") return "unavailable";
+    return this.#state.phase === "loaded" ? "installed" : this.#state.phase;
+  }
+
+  assertInstallable() {
+    if (this.status === "unavailable") throw this.unavailableError();
   }
 
   /** Whether the owning ChangeSet has granted this Registration Platform authority. */
@@ -139,6 +146,12 @@ export class RegistrationRecord<Reference> {
   }
 
   get error() {
+    if (this.status === "unavailable") {
+      return new PlatformError(
+        "REGISTRATION_UNAVAILABLE",
+        `Registration '${this.manifestName}' lost its Core Installation`,
+      );
+    }
     const state = this.#state;
     if (state.phase === "failed") {
       return state.error;
@@ -158,8 +171,9 @@ export class RegistrationRecord<Reference> {
   }
 
   ready() {
+    if (this.status === "unavailable") return Promise.reject(this.unavailableError());
     const state = this.#state;
-    if (state.phase === "installed") {
+    if (state.phase === "loaded") {
       return state.installation.ready();
     }
     if (state.phase === "failed" || state.phase === "removed") {
@@ -227,7 +241,9 @@ export class RegistrationRecord<Reference> {
   }
 
   commitActivation(installation: Installation) {
-    this.#state = { phase: "installed", installation };
+    this.#state = { phase: "loaded", installation };
+    this.#observeInstallation();
+    this.assertInstallable();
     // Waiters are forwarded to the Installation rather than resolved here.
     // `ready()` on a Registration means "its Plugin has started", and only Core
     // knows that — activation merely means the Installation now exists.
@@ -250,6 +266,7 @@ export class RegistrationRecord<Reference> {
       authority.artifact = artifact;
       this.#manifest = artifact.manifest;
       this.#state = state;
+      this.#observeInstallation();
     };
   }
 
@@ -270,6 +287,8 @@ export class RegistrationRecord<Reference> {
   discard(error: unknown) {
     const failure = new RecordedFailure(normalizeRegistrationFailure(error, this.manifestName));
     this.#state = { phase: "failed", installation: undefined, error: failure };
+    this.#installationSubscription?.dispose();
+    this.#installationSubscription = undefined;
     this.#authority = { phase: "terminal" };
     for (const waiter of this.#readyWaiters) waiter.reject(failure);
     this.#readyWaiters.clear();
@@ -280,6 +299,8 @@ export class RegistrationRecord<Reference> {
       "REGISTRATION_REMOVED",
       `Registration '${this.manifestName}' has been removed`,
     );
+    this.#installationSubscription?.dispose();
+    this.#installationSubscription = undefined;
     this.#authority = { phase: "terminal" };
     this.#state = { phase: "removed" };
     for (const waiter of this.#readyWaiters) waiter.reject(error);
@@ -292,6 +313,25 @@ export class RegistrationRecord<Reference> {
 
   whenActivationSettled() {
     return this.#activationQueue.settled;
+  }
+
+  #observeInstallation() {
+    this.#installationSubscription?.dispose();
+    this.#installationSubscription = undefined;
+    const installation = this.installation;
+    const authority = this.#grantedAuthority();
+    const rejectUnavailable = () => {
+      if (this.status !== "unavailable") return;
+      const error = this.unavailableError();
+      for (const waiter of this.#readyWaiters) waiter.reject(error);
+      this.#readyWaiters.clear();
+    };
+    rejectUnavailable();
+    if (!installation || installation.status === "removed" || !authority) return;
+    this.#installationSubscription = installation.diagnostics.subscribe(() => {
+      rejectUnavailable();
+      authority.port.notifyChanged();
+    });
   }
 
   #grantedAuthority() {

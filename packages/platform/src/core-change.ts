@@ -60,7 +60,7 @@ export function stageCoreChange<Reference>(
         operation.artifact.config,
         plugin,
       );
-      registrationStates.push({ operation, state: { phase: "installed", installation } });
+      registrationStates.push({ operation, state: { phase: "loaded", installation } });
     } else {
       const installation = stagePlaceholderUpdate(requireChange, current, operation.artifact);
       registrationStates.push({ operation, state: { phase: "registered", installation } });

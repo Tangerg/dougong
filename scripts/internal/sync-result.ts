@@ -1,4 +1,3 @@
-// Generated from scripts/internal/sync-result.ts. Run pnpm generate:internal.
 // The boundary that keeps a synchronous contract honest.
 //
 // Several protocols in Dougong require synchronous callbacks — snapshot

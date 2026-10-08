@@ -73,8 +73,8 @@ interface Manifest {
 规则：
 
 - `name`、激活条件、权限名、依赖名和版本范围必须非空且首尾无空白；不做静默 trim。
-- `version` 必须是完整语义版本；`apiVersion` 和每个依赖值必须是受支持的版本范围，`*` 明确表示任意版本。
-- Manifest 是仅由可枚举字符串 own data property 构成的普通数据 record，未知字段、Symbol、隐藏属性、accessor、数组与类实例都会被拒绝，而不是悄悄丢弃、执行 getter 或从原型链读取配置；`dependencies` 使用同一 record 规则。
+- `version` 和 Platform 实际 `apiVersion` 必须是完整语义版本，不能含通配符或省略版本段。Manifest 的 `apiVersion` 与依赖值使用 npm 语义版本范围，并在接纳前解析全部分支；`*` 匹配稳定版本，预发布版本必须由显式匹配的预发布比较条件接纳。
+- Manifest 是仅由可枚举字符串 own data property 构成的普通数据 record，未知字段、Symbol、隐藏属性、accessor、数组与类实例都会被拒绝，而不是悄悄丢弃、执行 getter 或从原型链读取配置；`dependencies` 使用同一 record 规则。依赖键 `__proto__` 因 record 验证器无法保留而以 `MANIFEST_INVALID` 明确拒绝；其他被接受的自有键完整保留。
 - 同一激活条件或权限不得重复。
 - 返回对象、数组和依赖映射都冻结；Manifest 是值，不持有执行状态。
 - `Manifest.name` 是 Registration 身份，也必须与 placeholder 及加载模块的 `Plugin.name` 完全一致。
@@ -154,14 +154,17 @@ Artifact 是外部交付边界，不重复 Core 的 Plugin 作者期泛型：加
 | `registered` | Artifact 已登记，外部 Plugin 尚未选中；placeholder 可能已在 Core 中 |
 | `loading` | 正在授权、激活依赖或加载模块 |
 | `installed` | 外部 Plugin 已提交到 Core；不代表 Host 此刻一定处于 `active` |
+| `unavailable` | 对应 Core Installation 被外部移除；Artifact 仍被接纳，但 activate、update、ready 以 `REGISTRATION_UNAVAILABLE` 拒绝 |
 | `failed` | 接纳或激活失败；已接纳的 Registration 可重试 `activate()`，被丢弃的接纳句柄为终态 |
 | `removed` | 已从 Platform 与 Core 安装计划移除，不可复活 |
+
+安装存在性由 Core 拥有。Platform 记录外部 Plugin 是否已加载，并从对应 Core Installation 派生 `installed` / `unavailable`；Core 生命周期失效也会使 Platform 诊断失效。外部删除后，`remove()` 或 `dispose()` 释放剩余 Platform 元数据；恢复需要移除该 Registration 并登记新的 Artifact。
 
 `activate()` 在 Host 为 `idle` 时也可以完成：它负责把加载所得 Plugin 提交进安装计划，不偷偷启动 Host。此时 `status === "installed"`，但先前或随后调用的 `ready()` 仍会等待 `host.start()`；这明确分开“Registration 已激活”和“Instance 已就绪”。
 
 signal 已 aborted 后，取消加载只把与 `signal.reason` 相同的值或明确的 `AbortError` 识别为取消结果。Loader 仅仅在 abort 后抛出的其他错误仍保留为 `MODULE_LOAD_FAILED` 及其 `cause`，不会被竞态中的取消原因覆盖。
 
-`ready()` 在 `pending` / `registered` / `loading` 时等待首次激活及 Core ready barrier；在 `installed` 时委托当前 Core Installation；在 `failed` / `removed` 时立即拒绝。一次失败的等待不会因以后重试自动复活，重试成功后应重新调用 `ready()`。
+`ready()` 在 `pending` / `registered` / `loading` 时等待首次激活及 Core ready barrier；在 `installed` 时委托当前 Core Installation；在 `unavailable` / `failed` / `removed` 时立即拒绝。一次失败的等待不会因以后重试自动复活，重试成功后应重新调用 `ready()`。
 
 ## 六、Manifest 依赖与激活条件
 

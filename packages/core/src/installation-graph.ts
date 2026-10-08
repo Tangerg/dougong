@@ -34,17 +34,17 @@ export class InstallationGraph {
   }
 
   static build(
-    source: Iterable<InstallationRecord>,
+    declarations: ReadonlyMap<InstallationRecord, InstallationDeclaration>,
     committedKinds: ReadonlyMap<string, ContractKind>,
   ) {
     // Sorted by installation index so the plan is a function of the declarations
     // alone. Two Hosts given the same installs in the same order produce the
     // same layers, which is what makes an activation order reproducible rather
     // than dependent on Map iteration.
-    const installations = [...source].sort((left, right) => left.index - right.index);
+    const installations = [...declarations.keys()].sort((left, right) => left.index - right.index);
     const contractKinds = new Map(committedKinds);
-    const providers = collectProviders(installations, contractKinds);
-    const dependencies = connectRequirements(installations, providers, contractKinds);
+    const providers = collectProviders(declarations, contractKinds);
+    const dependencies = connectRequirements(declarations, providers, contractKinds);
     const { order, layers } = sortDependencies(
       installations,
       dependencies.dependents,
@@ -52,7 +52,7 @@ export class InstallationGraph {
     );
 
     return new InstallationGraph(
-      new Map(installations.map((installation) => [installation, installation.declaration])),
+      new Map(declarations),
       Object.freeze(order),
       Object.freeze(layers.map((layer) => Object.freeze(layer))),
       providers,
@@ -104,12 +104,12 @@ export class InstallationGraph {
 }
 
 function collectProviders(
-  installations: ReadonlyArray<InstallationRecord>,
+  declarations: ReadonlyMap<InstallationRecord, InstallationDeclaration>,
   contractKinds: Map<string, ContractKind>,
 ) {
   const providers = new Map<string, InstallationRecord>();
-  for (const installation of installations) {
-    for (const token of Object.values(installation.declaration.plugin.provides)) {
+  for (const [installation, declaration] of declarations) {
+    for (const token of Object.values(declaration.plugin.provides)) {
       rememberContractKind(contractKinds, token);
       const previous = providers.get(token.id);
       if (previous) {
@@ -125,16 +125,16 @@ function collectProviders(
 }
 
 function connectRequirements(
-  installations: ReadonlyArray<InstallationRecord>,
+  declarations: ReadonlyMap<InstallationRecord, InstallationDeclaration>,
   providers: ReadonlyMap<string, InstallationRecord>,
   contractKinds: Map<string, ContractKind>,
 ) {
   const resolvedProviders = new Map<InstallationRecord, Map<string, InstallationRecord>>();
   const dependents = new Map<InstallationRecord, Set<InstallationRecord>>();
-  const indegree = new Map(installations.map((installation) => [installation, 0]));
+  const indegree = new Map([...declarations.keys()].map((installation) => [installation, 0]));
 
-  for (const installation of installations) {
-    for (const requirement of Object.values(installation.declaration.plugin.requires)) {
+  for (const [installation, declaration] of declarations) {
+    for (const requirement of Object.values(declaration.plugin.requires)) {
       const token = requirement.kind === "optional" ? requirement.service : requirement;
       rememberContractKind(contractKinds, token);
       if (token.kind === "extensionPoint") continue;

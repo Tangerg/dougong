@@ -9,7 +9,7 @@ import {
 } from "./contracts";
 import { DougongError, normalizeFailure } from "./errors";
 import { InstallationGraph } from "./installation-graph";
-import type { InstallationRecord } from "./installation";
+import type { InstallationDeclaration, InstallationRecord } from "./installation";
 import {
   IncompleteActivationCleanupError,
   InstanceCoordinator,
@@ -77,8 +77,8 @@ export class Engine {
     return this.#instances.contributions(token);
   }
 
-  buildPlan(installations: Iterable<InstallationRecord>) {
-    return InstallationGraph.build(installations, this.#contracts.kinds);
+  buildPlan(declarations: ReadonlyMap<InstallationRecord, InstallationDeclaration>) {
+    return InstallationGraph.build(declarations, this.#contracts.kinds);
   }
 
   async start(plan: InstallationGraph) {
@@ -118,32 +118,24 @@ export class Engine {
   async transition(
     nextPlan: InstallationGraph,
     changed: ReadonlySet<InstallationRecord>,
-    restoreDeclarations: () => void,
+    commitDeclarations: () => void,
   ): Promise<TransitionOutcome> {
     return this.#instances.withContributionBatch(async () => {
       const previousPlan = this.#requirePlan();
       // Dependents are affected too, in both plans: a Service being replaced
       // takes down whatever consumed it, and whatever will consume it next.
       const affected = previousPlan.affectedByTransitionTo(nextPlan, changed);
-      let nextConfigs: ReadonlyMap<InstallationRecord, unknown>;
-      let contracts: ContractRegistryWriter;
-      try {
-        nextConfigs = await this.#resolveConfigs(
-          nextPlan,
-          nextPlan.order.filter((installation) => affected.has(installation)),
-        );
-        contracts = this.#contracts.writer(nextPlan.contractKinds);
-      } catch (error) {
-        restoreDeclarations();
-        throw error;
-      }
+      const nextConfigs = await this.#resolveConfigs(
+        nextPlan,
+        nextPlan.order.filter((installation) => affected.has(installation)),
+      );
+      const contracts = this.#contracts.writer(nextPlan.contractKinds);
 
       const previousConfigs = this.#instances.captureConfigs(affected);
       const stopErrors = await this.#instances.deactivate(affected);
       if (stopErrors.length) {
         contracts.discard();
         return this.#failClosed(
-          restoreDeclarations,
           new Set([...previousPlan.order, ...affected]),
           stopErrors,
           "Installation change could not cleanly stop the affected Instances",
@@ -155,6 +147,7 @@ export class Engine {
         contracts.commit();
         this.#instances.commitActivationOrder(nextPlan.order);
         this.#plan = nextPlan;
+        commitDeclarations();
         return Object.freeze({ kind: "committed", affected });
       } catch (changeError) {
         const nextStopErrors = await this.#instances.deactivate(affected);
@@ -165,13 +158,12 @@ export class Engine {
         // run two owners of the same thing at once — fail closed instead.
         if (changeError instanceof IncompleteActivationCleanupError || nextStopErrors.length) {
           return this.#failClosed(
-            restoreDeclarations,
             new Set([...previousPlan.order, ...affected]),
             [changeError, ...nextStopErrors],
             "Installation change failed and its partial activation could not be cleanly disposed",
           );
         }
-        return this.#rollback(restoreDeclarations, previousPlan, affected, previousConfigs, [
+        return this.#rollback(previousPlan, affected, previousConfigs, [
           changeError,
           ...nextStopErrors,
         ]);
@@ -205,12 +197,10 @@ export class Engine {
    * point of failing closed is that the report is complete.
    */
   async #failClosed(
-    restoreDeclarations: () => void,
     affected: ReadonlySet<InstallationRecord>,
     causes: ReadonlyArray<unknown>,
     message: string,
   ): Promise<TransitionOutcome> {
-    restoreDeclarations();
     const shutdownErrors = await this.#instances.deactivateAll();
     this.#plan = undefined;
     return {
@@ -229,13 +219,11 @@ export class Engine {
    * A rollback that itself fails returns a fail-closed outcome for the entire graph.
    */
   async #rollback(
-    restoreDeclarations: () => void,
     previousPlan: InstallationGraph,
     affected: ReadonlySet<InstallationRecord>,
     previousConfigs: ReadonlyMap<InstallationRecord, unknown>,
     causes: ReadonlyArray<unknown>,
   ): Promise<TransitionOutcome> {
-    restoreDeclarations();
     const contracts = this.#contracts.writer(previousPlan.contractKinds);
     try {
       await this.#instances.activate(previousPlan, affected, previousConfigs, contracts);
@@ -245,7 +233,6 @@ export class Engine {
     } catch (rollbackError) {
       contracts.discard();
       return this.#failClosed(
-        restoreDeclarations,
         new Set([...previousPlan.order, ...affected]),
         [...causes, rollbackError],
         "Installation change failed and the previous Instances could not be restored",

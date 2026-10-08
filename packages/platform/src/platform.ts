@@ -8,7 +8,7 @@ import {
   SerialQueue,
   type SnapshotView,
 } from "@dougongjs/core";
-import { validate } from "compare-versions";
+import { isConcreteVersion } from "./manifest";
 import { Activator, type ActivationBarrier } from "./activator";
 import { loadPlugin, normalizeArtifact } from "./artifact";
 import { validateCandidateGraph } from "./candidate-graph";
@@ -99,7 +99,7 @@ class PlatformImpl<Reference> implements Platform<Reference> {
     const loader = Object.hasOwn(options, "loader") ? options.loader : undefined;
     const authorizer = Object.hasOwn(options, "authorizer") ? options.authorizer : undefined;
     const logger = Object.hasOwn(options, "logger") ? options.logger : undefined;
-    if (typeof apiVersion !== "string" || !validate(apiVersion)) {
+    if (typeof apiVersion !== "string" || !isConcreteVersion(apiVersion)) {
       throw new TypeError("Platform apiVersion must be a semantic version");
     }
     if (!installer || typeof installer.change !== "function") {
@@ -154,6 +154,10 @@ class PlatformImpl<Reference> implements Platform<Reference> {
       () => this.#publish(),
     );
     this.#registrationPort = {
+      notifyChanged: () => {
+        const platform = authority.current;
+        if (platform) platform.#publish();
+      },
       change: () => requirePlatform(authority).change(),
       activateRegistration: (registration, signal, permit) => {
         const platform = requirePlatform(authority);
@@ -343,6 +347,7 @@ class PlatformImpl<Reference> implements Platform<Reference> {
       const registration = operation.registration;
       assertCurrentRegistration(this.#registrations, registration);
       targets.push(registration);
+      if (operation.kind === "update") registration.assertInstallable();
       if (operation.kind === "update" && registration.status === "installed") {
         installedUpdates.add(registration);
       }

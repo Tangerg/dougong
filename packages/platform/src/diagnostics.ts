@@ -10,7 +10,7 @@ export type PlatformStatus = "active" | "disposing" | "disposed";
  * between so a slow import is observable rather than looking like a hang.
  */
 export type RegistrationStatus =
-  "pending" | "registered" | "loading" | "installed" | "failed" | "removed";
+  "pending" | "registered" | "loading" | "installed" | "unavailable" | "failed" | "removed";
 
 export interface RegistrationSnapshot {
   readonly manifestName: string;

@@ -70,11 +70,14 @@ export class GroupNode {
   // path back to the root.
   detach() {
     const state = this.#state;
-    if (state.phase === "detached") return;
-    for (const child of this.#children.values()) child.detach();
+    if (state.phase === "detached") return [];
+    const detached: GroupNode[] = [];
+    for (const child of this.#children.values()) detached.push(...child.detach());
     this.#children.clear();
     this.#state = { phase: "detached" };
     if (state.parent) state.parent.#children.delete(this.name);
+    detached.push(this);
+    return detached;
   }
 
   walk() {

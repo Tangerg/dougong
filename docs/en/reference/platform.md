@@ -73,8 +73,8 @@ interface Manifest {
 Rules:
 
 - `name`, activation conditions, permission names, dependency names and version ranges must be non-empty with no leading or trailing whitespace. Nothing is silently trimmed.
-- `version` must be a complete semantic version. `apiVersion` and every dependency value must be a supported range; `*` explicitly means any version.
-- A Manifest is a plain data record made only of enumerable string own data properties. Unknown fields, symbols, hidden properties, accessors, arrays and class instances are rejected rather than silently dropped, executed as getters or read through the prototype chain; `dependencies` follows the same record rule.
+- `version` and Platform’s actual `apiVersion` must be complete semantic versions without wildcards or omitted components. Manifest `apiVersion` and dependency values use npm semantic version ranges, parsed in full before admission. `*` matches stable releases; prereleases require an explicit matching prerelease comparator.
+- A Manifest is a plain data record made only of enumerable string own data properties. Unknown fields, symbols, hidden properties, accessors, arrays and class instances are rejected rather than silently dropped, executed as getters or read through the prototype chain; `dependencies` follows the same record rule. The dependency key `__proto__` is rejected with `MANIFEST_INVALID` because the record validator cannot preserve it; other accepted own keys are preserved.
 - No activation condition or permission may repeat.
 - The returned object, arrays and dependency map are frozen. A Manifest is a value; it holds no execution state.
 - `Manifest.name` is the Registration identity and must match the `Plugin.name` of both the placeholder and the loaded module exactly.
@@ -154,14 +154,17 @@ A `placeholder` must be created by application-trusted code. It suits contributi
 | `registered` | the Artifact is recorded; no external Plugin selected. A placeholder may already be in Core |
 | `loading` | authorizing, activating dependencies or loading the module |
 | `installed` | the external Plugin is committed to Core; this does not imply the Host is currently `active` |
+| `unavailable` | the corresponding Core Installation was removed externally; Artifact admission remains, but activation, update and readiness reject with `REGISTRATION_UNAVAILABLE` |
 | `failed` | admission or activation failed; admitted Registrations may retry `activate()`, while discarded admissions are terminal |
 | `removed` | removed from both Platform and the Core installation plan; not revivable |
+
+Installation existence is owned by Core. Platform records whether the external Plugin was loaded and derives `installed` / `unavailable` from its Core Installation. Core lifecycle invalidations also invalidate Platform diagnostics. After external removal, `remove()` or `dispose()` releases the remaining Platform metadata; restoring a Registration requires removing it and registering a new Artifact.
 
 `activate()` can complete while the Host is `idle`: it commits the loaded Plugin into the installation plan and does not secretly start the Host. `status` becomes `"installed"`, but a `ready()` called before or after still waits for `host.start()`. This deliberately separates "the Registration is installed" from "the Instance is ready".
 
 After the signal is aborted, only the exact `signal.reason` or an explicit `AbortError` is classified as a cancellation outcome. Another Loader error that merely occurs after abort remains a `MODULE_LOAD_FAILED` with its original `cause`; a racing cancellation reason never overwrites it.
 
-`ready()` waits for the first activation and the Core ready barrier while `pending` / `registered` / `loading`; delegates to the current Core Installation while `installed`; and rejects immediately while `failed` / `removed`. A failed wait is not revived by a later retry — call `ready()` again after a successful retry.
+`ready()` waits for the first activation and the Core ready barrier while `pending` / `registered` / `loading`; delegates to the current Core Installation while `installed`; and rejects immediately while `unavailable` / `failed` / `removed`. A failed wait is not revived by a later retry — call `ready()` again after a successful retry.
 
 ## 6. Manifest dependencies and activation conditions
 

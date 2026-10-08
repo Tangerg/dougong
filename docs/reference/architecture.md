@@ -65,7 +65,7 @@ Core 不导入 reactive。二者通过结构化 `get()/subscribe()` 和 Lifetime
 
 `Disposable` / `AsyncDisposable` 等极小协议会在两个基础包中分别声明。它们不携带状态或实现，TypeScript 依靠结构类型互通。这是有意的协议声明重复，用来换取双向零依赖；单路径原则禁止的是重复状态机和执行语义，不是要求独立基础包共享一个类型来源。
 
-唯一携带执行行为的镜像是两边的 `sync-result.ts`：同步回调意外返回 thenable 时，两者都必须先观察潜在 rejection，再同步抛出 `TypeError`。为这十余行建立第三个共享运行时包会制造比它消除的更多概念，因此两个零依赖基础包各自持有一份；架构门禁要求它们逐字节相同。这里仍然只有一种执行语义，只是在两个独立发布边界中机械复制，不能各自演化。
+同步回调政策只有一份权威源码：`scripts/internal/sync-result.ts`。`pnpm generate:internal` 生成 Core 与 reactive 的 `sync-result.ts`，两个包分别内联这些投影，不新增共享运行时依赖；`pnpm check:generated` 拒绝偏离权威源码的生成结果。规则修改只编辑一次源码，再生成两份发布投影。
 
 ### `@dougongjs/platform`
 

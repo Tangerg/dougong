@@ -29,8 +29,8 @@
   },
   "dependencies": {
     "@dougongjs/core": "workspace:*",
-    "compare-versions": "^6.1.1",
-    "zod": "^4.4.3"
+    "zod": "^4.4.3",
+    "semver": "^7.7.4"
   },
   "description": "External plugin distribution layer compiled onto @dougongjs/core.",
   "license": "MIT",
@@ -54,5 +54,8 @@
   ],
   "publishConfig": {
     "access": "public"
+  },
+  "devDependencies": {
+    "@types/semver": "^7.7.1"
   }
 }

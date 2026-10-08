@@ -215,15 +215,6 @@ const FILE_RULES = [
     message: "the dougong facade must contain only re-exports",
   },
   {
-    matches: (file) => file === "core/src/sync-result.ts",
-    // Core and reactive are independent zero-dependency foundations. This one
-    // tiny behavior is mirrored deliberately, so it must remain one definition
-    // in substance rather than evolving into two synchronization semantics.
-    test: (source) =>
-      source !== readFileSync(join(PACKAGES_DIR, "reactive/src/sync-result.ts"), "utf8"),
-    message: "Core and reactive synchronous-result boundaries must remain byte-identical",
-  },
-  {
     matches: (file) => file === "core/src/index.ts",
     // `Host` is deliberately an interface; `createHost()` is the only
     // constructor. Exporting the class would re-expose `LifetimePort` and the

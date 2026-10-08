@@ -436,18 +436,19 @@ export class ContributionRegistry {
   }
 
   get<T = unknown>(token: ExtensionPointIdentity): ContributionStore<T> {
-    const current = this.#stores.get(token.id);
+    const id = token.id;
+    const current = this.#stores.get(id);
     if (current) return current as ContributionStore<T>;
     const store = new ContributionStore<T>(
       (item) => this.#invalidate(item),
       this.#report,
       (item) => {
-        if (this.#stores.get(token.id) !== item) return;
+        if (this.#stores.get(id) !== item) return;
         this.#invalidated.delete(item);
-        this.#stores.delete(token.id);
+        this.#stores.delete(id);
       },
     );
-    this.#stores.set(token.id, store as ContributionStore<unknown>);
+    this.#stores.set(id, store as ContributionStore<unknown>);
     return store;
   }
 

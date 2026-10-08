@@ -65,7 +65,7 @@ Core does not import reactive. The two compose through the structural `get()/sub
 
 Minimal protocols such as `Disposable` / `AsyncDisposable` are declared separately in both foundation packages. They carry no state or implementation, and TypeScript makes them interoperate structurally. This is deliberate duplication of a protocol declaration, traded for zero dependencies in both directions. The single-path principle forbids duplicated state machines and execution semantics, not shared type sources between independent foundation packages.
 
-The only mirrored behavior is `sync-result.ts` in both packages: when a synchronous callback accidentally returns a thenable, each must observe a possible rejection before throwing a synchronous `TypeError`. Creating a third shared runtime package for those few lines would add more concepts than it removes, so each zero-dependency foundation carries one copy; the architecture gate requires the files to remain byte-identical. There is still one execution semantic, mechanically mirrored across two independent publication boundaries, never two implementations allowed to evolve separately.
+Synchronous callback policy has one authoritative source, `scripts/internal/sync-result.ts`. `pnpm generate:internal` produces Core and reactive’s `sync-result.ts`; package builds inline these independent projections without a shared runtime dependency. `pnpm check:generated` rejects drift from the source. Update the source once and regenerate both publication projections.
 
 ### `@dougongjs/platform`
 

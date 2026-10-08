@@ -644,6 +644,8 @@ await commands.settled                 // await everything queued at read time
 
 ```ts
 installation.status
+installation.diagnostics.get()
+installation.diagnostics.subscribe(notify)
 installation.ready()
 installation.update({ plugin })
 installation.update({ config })
@@ -666,6 +668,8 @@ Once an Installation reaches `removed` it revokes its control reference to the H
 
 When an Installation fails before commit, a caller already awaiting `ready()` still receives the original `Error`. If setup or a config validator throws a non-`Error` value, the first public command and the stable failure state share the same `INSTALLATION_UNAVAILABLE` error, with the original value in `cause`. After the Installation detaches from the Host, it keeps only a `name/message/code` data summary and reconstructs an error at the call boundary on a later `ready()`. A JavaScript `Error`'s stack may retain the whole orchestration object graph and must not become a hidden ownership edge on a terminal Installation. Failed Installations still attached to an active Host keep the original error for diagnostics and retry semantics. Platform's terminal `Registration` follows the same rule.
 
+`installation.diagnostics` exposes the same immutable `InstallationSnapshot` used by Host diagnostics. It invalidates when the committed declaration or lifecycle changes. Removal publishes a final snapshot, then releases the reader, reporter and subscriptions when the command’s readiness settles. Terminal diagnostic errors use `RecordedFailure`, so retained snapshots do not retain execution objects through lazy JavaScript stacks.
+
 ### 10.3 The canonical ChangeSet
 
 ```ts
@@ -684,6 +688,7 @@ Rules:
 - an empty ChangeSet manufactures neither a fake `changing` status nor a diagnostics revision, but still crosses the Host command queue and owner-authority boundary in submission order; an earlier Group removal makes a subsequently submitted stale empty draft reject with `GROUP_REMOVED`
 - one Installation may appear only once per ChangeSet
 - Installations from another Host are rejected
+- candidate declarations and membership remain in a transaction draft; public Group and diagnostics reads keep using committed declarations until the Engine commits
 - the candidate dependency graph and every affected config are validated before any Instance stops
 - during execution the Host is `changing` and application-code Service reads are closed
 - an active change rebuilds only the targets and the affected transitive consumers in the old and new graphs
@@ -722,17 +727,17 @@ Group rules:
 
 - may nest
 - every installation inside configure shares one commit
-- `ready()` awaits changes already submitted anywhere in the subtree, including dynamic child changes queued before the call, then waits for the subtree installations to become ready
+- `ready()` awaits changes already submitted anywhere in the subtree, including parent ChangeSets targeting subtree Installations and dynamic child changes queued before the call, then waits for the subtree installations to become ready
 - `remove()` deletes the whole subtree in one Core transaction
 - a Group ChangeSet may only modify Installations in its own subtree
-- `Group` and `Installation` share `status/ready/remove`; only `Installation` adds `update`
+- `Group` and `Installation` share `status/ready/remove`; `Installation` also has `update` and `diagnostics`
 - a Group changes no capability visibility: Services, ExtensionPoints and Events belong to the whole Host
 
 Nested Group configures share one explicit configuration session. Any child failure marks the entire session `failed`, so even a caller that catches the exception in an outer scope cannot keep appending declarations or commit a partial configuration. Non-`Error` failure values are classified at the configuration and Host transaction boundaries as `GROUP_UNAVAILABLE`; after a failed `ready()` the Group status must be `failed` and may not appear healthy merely because the failure value happened to be `undefined`.
 
 Each Group keeps exactly one current readiness barrier. A Group that has not yet been established stays `failed` after a failed commit, and a later successful change replaces the old barrier and establishes it. An already-established Group whose change failed and whose previously committed state Core restored stays healthy. `status` and `ready()` always read the same lifecycle state.
 
-Removing a Group revokes authority for the whole subtree at once, including ChangeSets created before removal but not yet committed. Every later `install/update/remove/commit` on one of those stale drafts consistently rejects with `GROUP_REMOVED`; it cannot cross the Group boundary into the Host. A terminal `Group` keeps only its identity and the `removed` status, `remove()` stays idempotent, and it no longer holds the Host, the configuration session or a historical failure stack, nor can it create Installations, child Groups or ChangeSets.
+Removing a Group revokes authority for the subtree actually detached at completion, including descendants created during asynchronous cleanup, including ChangeSets created before removal but not yet committed. Every later `install/update/remove/commit` on one of those stale drafts consistently rejects with `GROUP_REMOVED`; it cannot cross the Group boundary into the Host. A terminal `Group` keeps only its identity and the `removed` status, `remove()` stays idempotent, and it no longer holds the Host, the configuration session or a historical failure stack, nor can it create Installations, child Groups or ChangeSets.
 
 When workspace or tenant separation is needed, choose by semantics: a small fixed number of capability variants uses an explicit Contract family; data selected per request uses a Service taking a tenant/workspace parameter; a fully independent capability graph uses multiple Hosts; security isolation uses a Worker, iframe or process. Never pass a Group off as a resolution or security boundary.
 
@@ -768,7 +773,7 @@ Commit prepares every affected ExtensionPoint snapshot before delivering any not
 
 Invalidations raised during notification are queued until the current callback returns. Each subscription awaiting delivery is queued once. This order also applies when a diagnostics callback changes another snapshot, preventing reentry across Publishers.
 
-`ContributionView`, Host diagnostics, Platform diagnostics and `@dougongjs/reactive` signals all adopt one structural protocol:
+`ContributionView`, Installation diagnostics, Host diagnostics, Platform diagnostics and `@dougongjs/reactive` signals all adopt one structural protocol:
 
 ```ts
 interface Readable<T> {
@@ -787,7 +792,7 @@ snapshots.invalidate()                     // mark invalid and notify
 snapshots.dispose()                        // freeze the terminal state and sever closures
 ```
 
-`view` is an authority narrowing, not a second observation API: a reader may only `get/subscribe`, and the owner may drive invalidation and termination only through `SnapshotPublisher`. Every subscription has independent identity; disposal immediately withdraws a notification whose turn has not started. Subscribers and the error reporter must be synchronous; an accidental thenable is observed and enters the same error boundary as a precise `TypeError`, never as an unrelated unhandled rejection. A subscriber failure is handed to the explicit reporter without preventing later subscribers from being notified; if the reporter itself fails, the Publisher finishes the notification pass and then preserves both failures in an `AggregateError`. `dispose()` freezes the last snapshot before severing the reader, reporter and existing subscriptions, so a historical view can still read the terminal state without keeping the owner alive. Host, Lifetime and Platform diagnostics take this path directly; `ContributionStore` composes the same Publisher and adds only Lifetime ownership around each subscription, so registering one function twice still creates two independent subscriptions. No higher layer may rewrite the subscription registry or error boundary.
+`view` is an authority narrowing, not a second observation API: a reader may only `get/subscribe`, and the owner may drive invalidation and termination only through `SnapshotPublisher`. Every subscription has independent identity; disposal immediately withdraws a notification whose turn has not started. Subscribers and the error reporter must be synchronous; an accidental thenable is observed and enters the same error boundary as a precise `TypeError`, never as an unrelated unhandled rejection. A subscriber failure is handed to the explicit reporter without preventing later subscribers from being notified; if the reporter itself fails, the Publisher finishes the notification pass and then preserves both failures in an `AggregateError`. `dispose()` freezes the last snapshot before severing the reader, reporter and existing subscriptions, so a historical view can still read the terminal state without keeping the owner alive. Host, Installation, Lifetime and Platform diagnostics take this path directly; `ContributionStore` composes the same Publisher and adds only Lifetime ownership around each subscription, so registering one function twice still creates two independent subscriptions. No higher layer may rewrite the subscription registry or error boundary.
 
 Where a snapshot needs map semantics it uniformly uses `ReadonlyMapSnapshot`. It accepts only the Map or entry-iterable inputs admitted by its type, copies the input and exposes only `ReadonlyMap` methods, avoiding the fake immutability of `Object.freeze(new Map())`, on which `set/delete/clear` still work. It guarantees only the container's structural immutability; entry values should be frozen as they enter the snapshot.
 

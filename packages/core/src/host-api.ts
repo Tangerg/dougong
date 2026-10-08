@@ -1,4 +1,4 @@
-import type { HostSnapshot, HostStatus } from "./diagnostics";
+import type { HostSnapshot, HostStatus, InstallationSnapshot } from "./diagnostics";
 import type { Logger } from "./lifetime";
 import type { LifecycleStatus } from "./lifecycle-status";
 import type { AnyPlugin, Plugin, Provisions, Requirements } from "./plugin";
@@ -71,6 +71,7 @@ export interface Installation<Declaration extends AnyPlugin = AnyPlugin> {
   readonly id: string;
   readonly groupId: string;
   readonly status: LifecycleStatus;
+  readonly diagnostics: SnapshotView<InstallationSnapshot>;
   ready(): Promise<void>;
   readonly update: (update: InstallationUpdate<Declaration>) => Promise<void>;
   remove(): Promise<void>;

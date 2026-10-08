@@ -67,6 +67,7 @@ export class Activator<Reference> {
     inheritedPermit?: ActivationPermit,
   ) {
     assertCurrentRegistration(this.#registrations, registration);
+    registration.assertInstallable();
     if (this.#locked.has(registration)) {
       throw new PlatformError(
         "REGISTRATION_BUSY",
@@ -91,6 +92,7 @@ export class Activator<Reference> {
       this.#publish();
       try {
         const { installer, loader, authorizer } = this.#ports();
+        const change = installer.change();
         await authorizer.authorize(registration.manifest, signal);
         await this.#activateDependencies(registration, signal, permit);
         const plugin = await loadPlugin(loader, registration.artifact, signal);
@@ -98,7 +100,6 @@ export class Activator<Reference> {
         // The update path is the whole point of placeholders: the Installation
         // identity survives activation, so dependents see the Service change
         // rather than an Installation appear.
-        const change = installer.change();
         let installation = registration.installation;
         if (installation) {
           change.update(installation, { plugin, config: registration.artifact.config });

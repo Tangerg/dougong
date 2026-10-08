@@ -1,8 +1,20 @@
 import { DougongError, RecordedFailure, normalizeFailure } from "./errors";
-import type { Lifetime } from "./lifetime";
+import type { Lifetime, LifetimeSnapshot } from "./lifetime";
 import type { LifecycleStatus } from "./lifecycle-status";
 import type { NormalizedPlugin } from "./plugin";
 import type { GroupNode } from "./group";
+import { SnapshotPublisher, type SnapshotView } from "./snapshot-view";
+
+export interface InstallationSnapshot {
+  readonly id: string;
+  readonly pluginName: string;
+  readonly groupId: string;
+  readonly status: LifecycleStatus;
+  readonly requires: ReadonlyArray<string>;
+  readonly provides: ReadonlyArray<string>;
+  readonly lifetime?: SnapshotView<LifetimeSnapshot>;
+  readonly error?: Error;
+}
 
 export interface InstallationDeclaration {
   readonly plugin: NormalizedPlugin;
@@ -26,6 +38,7 @@ interface InstallationAttachment {
   declaration: InstallationDeclaration;
   readonly group: GroupNode;
   notifyChanged: (() => void) | undefined;
+  report: ((error: unknown) => void) | undefined;
 }
 
 type InstallationState =
@@ -53,6 +66,10 @@ export class InstallationRecord {
   #pendingReadiness: { readonly attempt: object; readonly barrier: Promise<void> } | undefined;
   #attachment: InstallationAttachment | undefined;
 
+  readonly #publisher: SnapshotPublisher<InstallationSnapshot>;
+  readonly #pluginName: string;
+  readonly diagnostics: SnapshotView<InstallationSnapshot>;
+
   readonly groupId: string;
 
   readonly #readyWaiters = new Set<{
@@ -67,13 +84,20 @@ export class InstallationRecord {
     declaration: InstallationDeclaration,
   ) {
     this.groupId = group.id;
-    this.#attachment = { declaration, group, notifyChanged: undefined };
+    this.#attachment = { declaration, group, notifyChanged: undefined, report: undefined };
+    this.#pluginName = declaration.plugin.name;
+    this.#publisher = new SnapshotPublisher(
+      () => this.#snapshot(),
+      (error) => this.#attachment?.report?.(error),
+    );
+    this.diagnostics = this.#publisher.view;
   }
 
-  attach(notifyChanged: () => void) {
+  attach(notifyChanged: () => void, report: (error: unknown) => void) {
     const attachment = this.#requireAttachment();
     if (attachment.notifyChanged) throw new Error(`Installation '${this.id}' is already attached`);
     attachment.notifyChanged = notifyChanged;
+    attachment.report = report;
   }
 
   get status(): LifecycleStatus {
@@ -111,6 +135,7 @@ export class InstallationRecord {
 
   replaceDeclaration(declaration: InstallationDeclaration) {
     this.#requireAttachment().declaration = declaration;
+    this.#publisher.invalidate();
   }
 
   ready() {
@@ -204,6 +229,7 @@ export class InstallationRecord {
       for (const waiter of this.#readyWaiters) waiter.reject(error);
     }
     this.#readyWaiters.clear();
+    if (state.phase === "removed") this.#publisher.dispose();
   }
 
   beginStopping() {
@@ -238,6 +264,7 @@ export class InstallationRecord {
     this.#readyWaiters.clear();
     this.#pendingReadiness = undefined;
     this.#attachment = undefined;
+    this.#publisher.dispose();
   }
 
   #transitionToFailed(error: unknown) {
@@ -258,7 +285,30 @@ export class InstallationRecord {
 
   #transition(state: InstallationState) {
     this.#state = state;
+    this.#publisher.invalidate();
     this.#attachment?.notifyChanged?.();
+  }
+
+  #snapshot(): InstallationSnapshot {
+    const plugin = this.#attachment?.declaration.plugin;
+    const instance = this.instance;
+    const error = this.error;
+    return Object.freeze({
+      id: this.id,
+      pluginName: this.#pluginName,
+      groupId: this.groupId,
+      status: this.status,
+      requires: Object.freeze(
+        Object.values(plugin?.requires ?? {}).map((requirement) =>
+          requirement.kind === "optional" ? requirement.service.id : requirement.id,
+        ),
+      ),
+      provides: Object.freeze(Object.values(plugin?.provides ?? {}).map((token) => token.id)),
+      ...(instance ? { lifetime: instance.lifetime.diagnostics } : {}),
+      ...(error
+        ? { error: this.#state.phase === "removed" ? new RecordedFailure(error) : error }
+        : {}),
+    });
   }
 
   #normalizeFailure(error: unknown) {

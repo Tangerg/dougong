@@ -1,3 +1,4 @@
+// Generated from scripts/internal/sync-result.ts. Run pnpm generate:internal.
 // The boundary that keeps a synchronous contract honest.
 //
 // Several protocols in Dougong require synchronous callbacks — snapshot
@@ -6,11 +7,6 @@
 // time an async continuation would resume, so returning a promise is not slower,
 // it is wrong.
 //
-// This file is duplicated verbatim in @dougongjs/core and @dougongjs/reactive.
-// The two packages are independent foundations — neither may import the other —
-// and `check-layers.mjs` asserts the copies stay byte-identical, so an edit here
-// must be applied to both.
-
 export function assertSynchronous(value: unknown, message: string): void {
   if (!isThenable(value)) return;
 

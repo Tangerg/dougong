@@ -335,13 +335,25 @@ class TaskRecord<T> implements Task<T> {
     // rather than running unowned.
     if (parentSignal.aborted) abort();
 
-    this.result = Promise.resolve().then(() => task(controller.signal));
+    // Disposal cannot reclassify a failure that has already happened.
+    let cancelled = false;
+    this.result = Promise.resolve().then(() => {
+      try {
+        return Promise.resolve(task(controller.signal)).catch((error: unknown) => {
+          cancelled = isCancellationReason(controller.signal, error);
+          throw error;
+        });
+      } catch (error) {
+        cancelled = isCancellationReason(controller.signal, error);
+        throw error;
+      }
+    });
     void this.result
       .then(
         () => this.#settle(),
         (error) => {
           try {
-            if (!isCancellationReason(controller.signal, error)) report(error);
+            if (!cancelled) report(error);
           } finally {
             this.#settle();
           }

@@ -8,7 +8,7 @@
 // manifest is an error the author sees instead of a setting that silently does
 // nothing.
 
-import { satisfies, validate } from "compare-versions";
+import { satisfies, valid, validRange } from "semver";
 import { z } from "zod";
 import { assertPlainRecord } from "@dougongjs/core";
 import { PlatformError } from "./errors";
@@ -20,12 +20,15 @@ const identifier = z
     message: "cannot start or end with whitespace",
   });
 
-const versionRange = identifier.refine(isVersionRange, "must be a valid semantic version range");
+const versionRange = identifier.refine(
+  (range) => validRange(range) !== null,
+  "must be a valid semantic version range",
+);
 
 const manifestSchema = z
   .object({
     name: identifier,
-    version: identifier.refine(validate, "must be a valid semantic version"),
+    version: identifier.refine(isConcreteVersion, "must be a valid semantic version"),
     apiVersion: versionRange.default("*"),
     activation: z.array(identifier).default(["startup"]),
     permissions: z.array(identifier).default([]),
@@ -42,18 +45,12 @@ export interface Manifest {
   readonly dependencies: Readonly<Record<string, string>>;
 }
 
-export function matchesVersion(version: string, range: string) {
-  return range === "*" || satisfies(version, range);
+export function isConcreteVersion(version: string) {
+  return version === version.trim() && valid(version) !== null;
 }
 
-function isVersionRange(range: string) {
-  if (range === "*") return true;
-  try {
-    satisfies("0.0.0", range);
-    return true;
-  } catch {
-    return false;
-  }
+export function matchesVersion(version: string, range: string) {
+  return satisfies(version, range);
 }
 
 export type ManifestInput = z.input<typeof manifestSchema>;
@@ -111,7 +108,14 @@ function snapshotManifestDeclaration(input: unknown) {
   const declaration: Record<string, unknown> = Object.fromEntries(Object.entries(input));
   if (Object.hasOwn(declaration, "dependencies") && declaration.dependencies !== undefined) {
     assertManifestRecord(declaration.dependencies, "Manifest dependencies");
-    declaration.dependencies = Object.fromEntries(Object.entries(declaration.dependencies));
+    const dependencies = Object.entries(declaration.dependencies);
+    if (dependencies.some(([name]) => name === "__proto__")) {
+      throw new PlatformError(
+        "MANIFEST_INVALID",
+        "Manifest dependency '__proto__' is not supported",
+      );
+    }
+    declaration.dependencies = Object.fromEntries(dependencies);
   }
   return declaration;
 }

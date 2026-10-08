@@ -8,22 +8,27 @@ This page lists every check `pnpm check` actually runs, and the invariant each o
 pnpm check
 ```
 
-Ten steps in order, aborting on the first failure:
+Eleven steps in order, aborting on the first failure:
 
 | # | Step | Protects |
 | --- | --- | --- |
-| 1 | `typecheck` | Five tsconfig projects plus the test project, all `--noEmit` |
-| 2 | `lint` | oxlint, `--deny-warnings` |
-| 3 | `format:check` | prettier |
-| 4 | `test` | Behavioural semantics and the coverage floors |
-| 5 | `knip` | Unused exports and dependencies |
-| 6 | `check:circular` | Dependency cycles |
-| 7 | `check:layers` | Import direction, module layering, architecture invariants, vocabulary |
-| 8 | `build` | Dist and declaration files for the four published packages plus examples |
-| 9 | `check:api` | Built-declaration type contracts, public surface, retired vocabulary, documentation coverage |
-| 10 | `docs:check` | Documentation site build and dead links |
+| 1 | `check:generated` | Generated synchronous callback policy matches its single authoritative source |
+| 2 | `typecheck` | Five tsconfig projects plus the test project, all `--noEmit` |
+| 3 | `lint` | oxlint, `--deny-warnings` |
+| 4 | `format:check` | prettier |
+| 5 | `test` | Behavioural semantics and the coverage floors |
+| 6 | `knip` | Unused exports and dependencies |
+| 7 | `check:circular` | Dependency cycles |
+| 8 | `check:layers` | Import direction, module layering, architecture invariants, vocabulary |
+| 9 | `build` | Dist and declaration files for the four published packages plus examples |
+| 10 | `check:api` | Built-declaration type contracts, public surface, retired vocabulary, documentation coverage |
+| 11 | `docs:check` | Documentation site build and dead links |
 
-Step 8 must precede step 9: `dist/index.d.ts` is **the only place the complete type surface exists as an artifact**. Source cannot show what an `export *` expands to.
+Step 9 must precede step 10: `dist/index.d.ts` is **the only place the complete type surface exists as an artifact**. Source cannot show what an `export *` expands to.
+
+## `check:generated`
+
+`scripts/generate-internal.mjs --check` verifies Core and reactive’s `sync-result.ts` against `scripts/internal/sync-result.ts`, the only editable definition of synchronous callback policy. Matching each other is insufficient: both projections must match their source. `pnpm generate:internal` regenerates the projections; package builds run the same generator before bundling.
 
 ## `check:layers`
 
@@ -58,7 +63,6 @@ Constraints the type system cannot express but source text can decide. Two kinds
 | `@dougongjs/reactive` has zero external imports | It is an independent foundation |
 | Resource implementations do not use `[Symbol.dispose]` / `[Symbol.asyncDispose]` directly | Foundation protocol modules must select stable keys instead of degrading a missing symbol into an `"undefined"` property |
 | The facade contains re-exports only | Logic there is a second execution path |
-| Core and reactive `sync-result.ts` stay byte-identical | The deliberate zero-dependency mirror cannot evolve into two synchronous-boundary semantics |
 | `HostImpl` must not be exported | `Host` is an interface; `createHost()` is the only constructor |
 | Only `InstanceCoordinator` and `Lifetime` itself may construct a Lifetime | Anywhere else produces a resource tree nobody disposes |
 

@@ -8,22 +8,27 @@ Dougong 的架构主张只有一条能被检验：**能机械判断的约束，�
 pnpm check
 ```
 
-十步依次执行，任一步失败即中止：
+十一步依次执行，任一步失败即中止：
 
 | # | 步骤 | 保护什么 |
 | --- | --- | --- |
-| 1 | `typecheck` | 五个 tsconfig 项目 + 测试项目，全部 `--noEmit` |
-| 2 | `lint` | oxlint，`--deny-warnings` |
-| 3 | `format:check` | prettier |
-| 4 | `test` | 行为语义 + 覆盖率地板 |
-| 5 | `knip` | 未使用的导出与依赖 |
-| 6 | `check:circular` | 循环依赖 |
-| 7 | `check:layers` | 依赖方向、模块分层、架构不变量、词汇 |
-| 8 | `build` | 四个发布包与 examples 的 dist、声明文件 |
-| 9 | `check:api` | 构建声明的类型契约、公共面、退役词汇、文档覆盖 |
-| 10 | `docs:check` | 文档站构建与死链 |
+| 1 | `check:generated` | 生成的同步回调规则与唯一权威源码一致 |
+| 2 | `typecheck` | 五个 tsconfig 项目 + 测试项目，全部 `--noEmit` |
+| 3 | `lint` | oxlint，`--deny-warnings` |
+| 4 | `format:check` | prettier |
+| 5 | `test` | 行为语义 + 覆盖率地板 |
+| 6 | `knip` | 未使用的导出与依赖 |
+| 7 | `check:circular` | 循环依赖 |
+| 8 | `check:layers` | 依赖方向、模块分层、架构不变量、词汇 |
+| 9 | `build` | 四个发布包与 examples 的 dist、声明文件 |
+| 10 | `check:api` | 构建声明的类型契约、公共面、退役词汇、文档覆盖 |
+| 11 | `docs:check` | 文档站构建与死链 |
 
-第 8 步必须在第 9 步之前：`dist/index.d.ts` 是**完整类型面唯一被物化成产物的地方**，源码里看不到 `export *` 展开后的最终结果。
+第 9 步必须在第 10 步之前：`dist/index.d.ts` 是**完整类型面唯一被物化成产物的地方**，源码里看不到 `export *` 展开后的最终结果。
+
+## `check:generated`
+
+`scripts/generate-internal.mjs --check` 将 Core 和 reactive 的 `sync-result.ts` 分别与 `scripts/internal/sync-result.ts` 校验；后者是同步回调政策唯一的编辑源。两份投影彼此相同并不够，它们必须都来自权威源码。`pnpm generate:internal` 重新生成投影，包构建也在打包前运行同一生成器。
 
 ## `check:layers`
 
@@ -58,7 +63,6 @@ pnpm check
 | `@dougongjs/reactive` 零外部导入 | 它是独立基础包 |
 | 资源实现不直接使用 `[Symbol.dispose]` / `[Symbol.asyncDispose]` | 必须经过基础协议模块选择稳定 key，避免缺失 Symbol 退化成 `"undefined"` 属性 |
 | facade 只含 re-export | 有逻辑就是第二条执行路径 |
-| Core / reactive 的 `sync-result.ts` 必须逐字节相同 | 零依赖基础包中的刻意镜像不能演化成两套同步边界语义 |
 | `HostImpl` 不得导出 | `Host` 是接口，`createHost()` 是唯一构造入口 |
 | Lifetime 只能由 `InstanceCoordinator` 和 `Lifetime` 自身构造 | 别处构造会产生无人释放的资源树 |
 

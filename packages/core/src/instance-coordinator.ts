@@ -16,6 +16,13 @@ interface PreparedActivation {
   readonly services: ReadonlyMap<string, unknown>;
 }
 
+class ActivationFailure {
+  constructor(
+    readonly error: unknown,
+    readonly cancelled: boolean,
+  ) {}
+}
+
 type ExtensionPointIdentity = Extract<Requirement, { readonly kind: "extensionPoint" }>;
 
 export interface InstanceCoordinatorPort {
@@ -102,41 +109,43 @@ export class InstanceCoordinator {
       );
       if (!candidates.length) continue;
 
-      // One controller per layer, aborted by the first failure. Siblings run
-      // concurrently, so a long `setup()` next to one that failed immediately
-      // would otherwise keep the whole layer waiting for work whose result is
-      // already going to be thrown away. `allSettled` rather than `all` because
-      // every started Instance must be collected for cleanup, including the ones
-      // that finished after the abort.
+      // Siblings share cancellation, but each failure fixes its attribution
+      // before cleanup or another sibling can abort its signal. Every setup
+      // returns an explicit outcome so all resources remain available for disposal.
       const controller = new AbortController();
-      const results = await Promise.allSettled(
+      const results = await Promise.all(
         candidates.map(async (installation) => {
           try {
             if (!configs.has(installation)) {
               throw new Error(`Installation '${installation.id}' has no prepared config`);
             }
             const config = configs.get(installation);
-            return await this.#prepareActivation(
+            const result = await this.#prepareActivation(
               plan,
               installation,
               config,
               controller.signal,
               port,
             );
+            if (result instanceof ActivationFailure) controller.abort(result.error);
+            return result;
           } catch (error) {
+            const failure = new ActivationFailure(
+              error,
+              isCancellationReason(controller.signal, error),
+            );
             controller.abort(error);
-            throw error;
+            return failure;
           }
         }),
       );
 
-      const errors = collectActivationFailures(results, controller.signal);
-      const prepared = results
-        .filter(
-          (result): result is PromiseFulfilledResult<PreparedActivation> =>
-            result.status === "fulfilled",
-        )
-        .map((result) => result.value);
+      const errors = results.flatMap((result) =>
+        result instanceof ActivationFailure && !result.cancelled ? [result.error] : [],
+      );
+      const prepared = results.filter(
+        (result): result is PreparedActivation => !(result instanceof ActivationFailure),
+      );
 
       if (errors.length) {
         const cleanupErrors = await this.#disposePreparedActivations(prepared);
@@ -234,7 +243,7 @@ export class InstanceCoordinator {
     config: unknown,
     startupSignal: AbortSignal,
     port: LifetimePort,
-  ): Promise<PreparedActivation> {
+  ): Promise<PreparedActivation | ActivationFailure> {
     installation.deactivate();
     const plugin = plan.declarationFor(installation).plugin;
     const lifetime = new Lifetime(port, installation.id, { parentSignal: startupSignal });
@@ -270,6 +279,7 @@ export class InstanceCoordinator {
         services,
       });
     } catch (error) {
+      const cancelled = isCancellationReason(lifetime.signal, error);
       const failure = installation.fail(error);
       try {
         await lifetime.dispose();
@@ -278,12 +288,15 @@ export class InstanceCoordinator {
         // cleanups. If disposing them also fails, this Installation is not
         // merely broken — something it created is still alive and unowned. The
         // distinct error type is what tells the Engine that rollback is unsafe.
-        throw new IncompleteActivationCleanupError(
-          [failure, cleanupError],
-          `Installation '${installation.id}' failed to start and could not be cleanly disposed`,
+        return new ActivationFailure(
+          new IncompleteActivationCleanupError(
+            [failure, cleanupError],
+            `Installation '${installation.id}' failed to start and could not be cleanly disposed`,
+          ),
+          false,
         );
       }
-      throw failure;
+      return new ActivationFailure(failure, cancelled);
     }
   }
 
@@ -434,29 +447,4 @@ export class InstanceCoordinator {
       .get(token)
       .view((resource, kind) => lifetime.ownLease(resource, kind));
   }
-}
-
-// Separates real failures from the cancellations they caused.
-//
-// When one Instance in a layer fails, the shared controller aborts and every
-// sibling rejects with that same reason. Reporting all of them would turn one
-// root cause into N identical errors, so the root is kept once and the derived
-// cancellations are dropped. A sibling that failed for its own reason is still
-// reported — two genuine failures in one layer are two errors.
-function collectActivationFailures<T>(
-  results: ReadonlyArray<PromiseSettledResult<T>>,
-  signal: AbortSignal,
-) {
-  const errors: unknown[] = [];
-  let rootObserved = false;
-  for (const result of results) {
-    if (result.status === "fulfilled") continue;
-    if (Object.is(result.reason, signal.reason)) {
-      if (!rootObserved) errors.push(result.reason);
-      rootObserved = true;
-    } else if (!isCancellationReason(signal, result.reason)) {
-      errors.push(result.reason);
-    }
-  }
-  return errors;
 }

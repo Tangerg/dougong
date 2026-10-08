@@ -29,10 +29,10 @@ export class GroupLifecycle {
   }
 
   async ready(readyContents: () => Promise<void>) {
-    this.node.assertAttached();
+    if (!this.node.attached) throw groupRemovedError(this.node);
     const state = this.#state;
     if (state.phase === "pending") await state.barrier;
-    this.node.assertAttached();
+    if (!this.node.attached) throw groupRemovedError(this.node);
     const settled = this.#state;
     if (settled.phase === "failed") throw settled.error;
     await readyContents();

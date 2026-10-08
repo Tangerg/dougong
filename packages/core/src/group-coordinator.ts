@@ -231,7 +231,9 @@ export class GroupCoordinator {
         this.#requireLifecycle(group);
         const operation = this.#port.executeChanges(group, operations);
         for (const change of operations) change.installation.trackReadiness(operation);
-        if (operations.length && tracking === "immediate") this.#track(group, operation);
+        if (operations.length && tracking === "immediate") {
+          this.#track([group, ...operations.map((change) => change.installation.group)], operation);
+        }
         return operation;
       },
       attach: (installation) => {
@@ -277,9 +279,7 @@ export class GroupCoordinator {
       if (failure) throw failure;
     } catch (error) {
       const failure = configuration.fail(error);
-      const removedGroups = node.walk();
-      node.detach();
-      this.#revoke(removedGroups);
+      this.#revoke(node.detach());
       if (ownsConfiguration) configuration.discard(failure);
       this.#port.notifyChanged();
       throw failure;
@@ -290,9 +290,8 @@ export class GroupCoordinator {
       for (const child of node.walk()) {
         const childFacade = this.#facades.get(child);
         if (childFacade) groupControls.get(childFacade)?.finishConfiguration();
-        this.#requireLifecycle(child).track(operation);
       }
-      this.#track(parent, operation);
+      this.#track(node.walk(), operation);
       observeReadinessOperation(operation);
     }
     this.#port.notifyChanged();
@@ -321,17 +320,15 @@ export class GroupCoordinator {
         this.#revoke([group]);
         return;
       }
-      const removedGroups = group.walk();
       const operations = this.#installationsIn(group).map((installation): ChangeOperation => ({
         kind: "remove",
         installation,
       }));
       await this.#port.removeInstallations(operations);
-      group.detach();
-      this.#revoke(removedGroups);
+      this.#revoke(group.detach());
       this.#port.notifyChanged();
     });
-    this.#track(group, operation);
+    this.#track(group.walk(), operation);
     return operation;
   }
 
@@ -360,10 +357,12 @@ export class GroupCoordinator {
     return installations.length ? "pending" : "active";
   }
 
-  #track(group: GroupNode, operation: Promise<void>) {
-    for (let node: GroupNode | undefined = group; node; node = node.parent) {
-      this.#requireLifecycle(node).track(operation);
+  #track(groups: Iterable<GroupNode>, operation: Promise<void>) {
+    const ancestors = new Set<GroupNode>();
+    for (const group of groups) {
+      for (let node: GroupNode | undefined = group; node; node = node.parent) ancestors.add(node);
     }
+    for (const group of ancestors) this.#requireLifecycle(group).track(operation);
   }
 
   #requireLifecycle(group: GroupNode) {

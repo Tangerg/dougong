@@ -232,6 +232,19 @@ describe("lifetime retention", () => {
     expect(fixture.reference.deref()).toBeUndefined();
   });
 
+  it("revokes descendants created while ancestor cleanup is pending", async () => {
+    const forceGc = (globalThis as typeof globalThis & { gc?: () => void }).gc;
+    if (!forceGc) throw new TypeError("Retention tests require Node.js --expose-gc");
+    const fixture = await createGroupDuringRemoval();
+    for (let pass = 0; pass < RELEASE_PASSES && fixture.reference.deref(); pass++) {
+      await nextTurn();
+      forceGc();
+      forceGc();
+    }
+    expect(fixture.group.status).toBe("removed");
+    expect(fixture.reference.deref()).toBeUndefined();
+  });
+
   it("does not retain configuration authority through a revoked Group", async () => {
     const forceGc = (globalThis as typeof globalThis & { gc?: () => void }).gc;
     if (!forceGc) throw new TypeError("Retention tests require Node.js --expose-gc");
@@ -342,6 +355,34 @@ async function createRemovedGroup() {
   });
   await group.ready().catch(() => undefined);
   await group.remove();
+  await host.stop();
+  return { group, reference: new WeakRef(host) };
+}
+
+async function createGroupDuringRemoval() {
+  const entered = Promise.withResolvers<void>();
+  const resume = Promise.withResolvers<void>();
+  const host = createHost();
+  const parent = host.group("removing", (group) => {
+    group.install(
+      definePlugin({
+        name: "retention.removing",
+        setup(ctx) {
+          ctx.cleanup(async () => {
+            entered.resolve();
+            await resume.promise;
+          });
+        },
+      }),
+    );
+  });
+  await host.start();
+  await parent.ready();
+  const removal = parent.remove();
+  await entered.promise;
+  const group = parent.group("late", () => undefined);
+  resume.resolve();
+  await removal;
   await host.stop();
   return { group, reference: new WeakRef(host) };
 }

@@ -81,12 +81,16 @@ importers:
       '@dougongjs/core':
         specifier: workspace:*
         version: link:../core
-      compare-versions:
-        specifier: ^6.1.1
-        version: 6.1.1
+      semver:
+        specifier: ^7.7.4
+        version: 7.7.4
       zod:
         specifier: ^4.4.3
         version: 4.4.3
+    devDependencies:
+      '@types/semver':
+        specifier: ^7.7.1
+        version: 7.8.0
 
   packages/reactive: {}
 
@@ -1067,6 +1071,9 @@ packages:
 
   '@types/node@22.20.4':
     resolution: {integrity: sha512-zJRE40jpHtKqE/C4fgHrAKQLJuSpzEnP9ff9Y7YtoR3Wd2pwqzlekDeEuUQXjRd+QCYnVnNwuJYmhdk9XV8gvA==}
+
+  '@types/semver@7.8.0':
+    resolution: {integrity: sha512-1mAINjtQCXXeLkJ9ehXkwOcBpqtLxiVtKhpUf83DdRNdQKV0iXZpaHYqRr7nj+wvxuJzoAmAwXI+sCNMv1CzLQ==}
 
   '@types/unist@3.0.3':
     resolution: {integrity: sha512-ko/gIFJRv177XgZsZcBwnqJN5x/Gien8qNOn0D5bQU/zAzVf9Zt3BlcUiLqhV9y4ARk0GbT3tnUiPNgnTXzc/Q==}
@@ -3320,6 +3327,8 @@ snapshots:
   '@types/node@22.20.4':
     dependencies:
       undici-types: 6.21.0
+
+  '@types/semver@7.8.0': {}
 
   '@types/unist@3.0.3': {}
 

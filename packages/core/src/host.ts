@@ -10,7 +10,7 @@ import { InstallationRegistry } from "./installation-registry";
 import { isLogger, type Logger } from "./lifetime";
 import type { AnyPlugin } from "./plugin";
 import { SerialQueue } from "./serial-queue";
-import type { SnapshotView } from "./snapshot-view";
+import { batchSnapshotNotifications, type SnapshotView } from "./snapshot-view";
 import { assertPlainRecord } from "./record";
 
 export type { LifecycleStatus } from "./lifecycle-status";
@@ -79,6 +79,7 @@ class HostImpl implements Host {
     this.#logger = configuredLogger ?? defaultLogger;
     this.#onError = configuredOnError ?? ((error) => this.#logger.error(error));
     this.#installations = new InstallationRegistry({
+      report: (error) => this.#report(error),
       notifyChanged: () => this.#publishDiagnostics(),
       update: (installation, facade, update) => {
         const change = this.#groups.change(installation.group);
@@ -161,7 +162,7 @@ class HostImpl implements Host {
       if (this.#status === "active") return;
       this.#setStatus("starting");
       try {
-        const plan = this.#engine.buildPlan(this.#installations.values());
+        const plan = this.#engine.buildPlan(this.#installations.declarations());
         await this.#engine.start(plan);
         this.#setStatus("active");
         this.#installations.settleReadiness(plan.order);
@@ -209,8 +210,10 @@ class HostImpl implements Host {
         if (this.#status === "active") {
           await this.#transact(operations);
         } else {
-          this.#installations.apply(operations);
-          this.#installations.settleChanges(operations, false);
+          this.#installations.commit(this.#installations.draft(operations), operations, false);
+          this.#installations.settleReadiness(
+            operations.map((operation) => operation.installation),
+          );
         }
         this.#publishDiagnostics();
       } catch (error) {
@@ -231,8 +234,8 @@ class HostImpl implements Host {
     if (operations.length && this.#status === "active") {
       await this.#transact(operations);
     } else {
-      this.#installations.apply(operations);
-      this.#installations.settleChanges(operations, false);
+      this.#installations.commit(this.#installations.draft(operations), operations, false);
+      this.#installations.settleReadiness(operations.map((operation) => operation.installation));
     }
   }
 
@@ -243,44 +246,22 @@ class HostImpl implements Host {
     }
     this.#installations.settleReadiness(outcome.affected);
     if (outcome.kind !== "committed") throw outcome.error;
-    this.#installations.settleChanges(operations, true);
   }
 
-  // Three failure levels, in the order they are attempted:
-  //
-  //   1. the new plan does not even build       restore declarations, stay active
-  //   2. the plan builds but activation fails   Engine rolls back to the previous
-  //                                             Instances and reports the cause
-  //   3. rollback itself cannot complete        fail closed: everything stops and
-  //                                             the Host reports `idle`
-  //
-  // Level 3 is the one worth stating out loud. A Host that cannot restore its
-  // previous state is not healthy, so it refuses to present itself as active —
-  // `hasCommittedPlan` is what distinguishes the two outcomes here.
   async #runTransaction(operations: ReadonlyArray<ChangeOperation>): Promise<TransitionOutcome> {
-    const snapshot = this.#installations.capture();
     const changed = new Set(operations.map((operation) => operation.installation));
     this.#setStatus("changing");
-
-    let nextPlan;
     try {
-      this.#installations.apply(operations);
-      nextPlan = this.#engine.buildPlan(this.#installations.values());
-    } catch (error) {
-      this.#installations.restore(snapshot);
-      this.#setStatus("active");
-      throw error;
-    }
-
-    try {
-      const outcome = await this.#engine.transition(nextPlan, changed, () =>
-        this.#installations.restore(snapshot),
-      );
+      const draft = this.#installations.draft(operations);
+      const nextPlan = this.#engine.buildPlan(draft);
+      return await this.#engine.transition(nextPlan, changed, () => {
+        batchSnapshotNotifications(() => {
+          this.#installations.commit(draft, operations, true);
+          this.#setStatus("active");
+        });
+      });
+    } finally {
       this.#setStatus(this.#engine.hasCommittedPlan ? "active" : "idle");
-      return outcome;
-    } catch (error) {
-      this.#setStatus(this.#engine.hasCommittedPlan ? "active" : "idle");
-      throw error;
     }
   }
 
