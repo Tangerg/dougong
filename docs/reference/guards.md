@@ -167,6 +167,12 @@ facade 的面不重述而是**算出来**：它必须恰好等于 core + platfor
 
 `packages/core/test/api-surface.test.ts` 断言 `Object.keys()` 的精确结果：Context 暴露哪些键、Handle 是否冻结、内部编排方法是否泄露。`check:api` 保护构建声明的类型关系、导出词汇与 `any`，运行期测试保护实际对象形状——两者互补，因为类型擦除后 `Object.keys` 才是消费者真正看得到的东西。
 
+### 发布查询边界
+
+`scripts/release.mjs` 的预检和上传确认共用 `registryHasVersion`。发布事实属于 npm 注册表；查询失败不能生成“版本不存在”的事实。成功响应必须精确返回所查询版本，只有结构化的 `E404` 才表示不存在。网络、权限、进程启动或响应格式失败都立即中止；上传后的等待也只允许重查明确的 `E404`。
+
+`scripts/test/release.test.mjs` 通过临时工作区和只包含测试命令的进程搜索路径运行真实发布 CLI，验证未知状态不能越过预检。这些用例纳入 `pnpm test`，不会访问注册表、发布包或修改真实 Git 状态。
+
 ### 覆盖率地板
 
 `vitest.config.ts` 按包设置阈值，取值贴着实测地板（裕度 ≤ 1 个点）：

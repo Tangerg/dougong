@@ -1,0 +1,91 @@
+import { spawnSync } from "node:child_process";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { expect, it } from "vitest";
+
+const release = fileURLToPath(new URL("../release.mjs", import.meta.url));
+const version = "0.7.2";
+
+const command = `#!${process.execPath}
+import { readFileSync, writeFileSync } from "node:fs";
+import { basename } from "node:path";
+const name = basename(process.argv[1]);
+const args = process.argv.slice(2);
+if (name === "git") {
+  if (args[0] === "rev-parse") console.log(args.includes("--abbrev-ref") ? "main" : "a".repeat(40));
+  else if (args[0] === "rev-list") console.log("0");
+  else if (!["status", "fetch", "tag"].includes(args[0])) process.exit(99);
+} else if (name === "npm") {
+  const response = JSON.parse(readFileSync("response.json", "utf8"));
+  if (response.signal) process.kill(process.pid, response.signal);
+  process.stdout.write(args.includes("--json") ? response.stdout : (response.plain ?? response.stdout));
+  process.exit(response.status);
+} else if (name === "pnpm") {
+  writeFileSync("gate-started", JSON.stringify(args));
+  process.exit(1);
+} else process.exit(99);
+`;
+
+function runRelease(response) {
+  const workspace = mkdtempSync(join(tmpdir(), "dougong-release-test-"));
+  try {
+    const bin = join(workspace, "bin");
+    mkdirSync(bin);
+    mkdirSync(join(workspace, "packages/reactive"), { recursive: true });
+    writeFileSync(join(workspace, "packages/reactive/package.json"), '{"version":"0.7.1"}');
+    writeFileSync(join(workspace, "response.json"), JSON.stringify(response));
+    for (const name of ["git", "pnpm", ...(response.missing ? [] : ["npm"])]) {
+      writeFileSync(join(bin, name), command, { mode: 0o755 });
+    }
+    const result = spawnSync(process.execPath, [release, version, "--dry-run"], {
+      cwd: workspace,
+      env: { ...process.env, PATH: bin },
+      encoding: "utf8",
+      timeout: 5000,
+    });
+    if (result.error) throw result.error;
+    return { ...result, gateStarted: existsSync(join(workspace, "gate-started")) };
+  } finally {
+    rmSync(workspace, { recursive: true, force: true });
+  }
+}
+
+it.each(["E503", "ENOTFOUND", "E401"])(
+  "stops release preflight when the registry reports %s",
+  (code) => {
+    const result = runRelease({ status: 1, stdout: JSON.stringify({ error: { code } }) });
+    expect(result.status).toBe(1);
+    expect(result.gateStarted).toBe(false);
+    expect(result.stdout).not.toContain(`${version} is unused on the registry`);
+    expect(result.stderr).toContain(code);
+  },
+);
+
+it.each([
+  { label: "an unavailable npm executable", missing: true, status: 1, stdout: "" },
+  { label: "a terminated query", signal: "SIGTERM", status: 1, stdout: "" },
+  { label: "malformed output", status: 1, stdout: "not JSON" },
+  { label: "empty successful output", status: 0, stdout: "" },
+  { label: "a different version", status: 0, stdout: JSON.stringify("0.7.3"), plain: "0.7.3" },
+])("stops release preflight on $label", (response) => {
+  const result = runRelease(response);
+  expect(result.status).toBe(1);
+  expect(result.gateStarted).toBe(false);
+  expect(result.stdout).not.toContain(`${version} is unused on the registry`);
+});
+
+it("continues to verification only for an explicit missing version", () => {
+  const result = runRelease({ status: 1, stdout: JSON.stringify({ error: { code: "E404" } }) });
+  expect(result.status).toBe(1);
+  expect(result.gateStarted).toBe(true);
+  expect(result.stdout).toContain(`${version} is unused on the registry`);
+});
+
+it("recognizes an existing version before starting verification", () => {
+  const result = runRelease({ status: 0, stdout: JSON.stringify(version), plain: version });
+  expect(result.status).toBe(1);
+  expect(result.gateStarted).toBe(false);
+  expect(result.stderr).toContain(`${version} is already published for every package`);
+});

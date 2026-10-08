@@ -21,7 +21,7 @@ export default defineConfig({
   },
 
   test: {
-    include: ["packages/*/test/**/*.test.ts"],
+    include: ["packages/*/test/**/*.test.ts", "scripts/test/**/*.test.mjs"],
 
     // Resource-retention tests need an explicit GC boundary. Forked workers
     // are required because V8 flags cannot be added to an existing thread.

@@ -140,11 +140,11 @@ TypeScript 消费者的 `tsconfig.json` 需要：
 
 ```sh
 pnpm install
-pnpm check      # 10 步验证门禁
+pnpm check      # 完整验证门禁
 pnpm docs:dev   # 本地文档站
 ```
 
-`pnpm check` 依次执行：类型检查 → lint → 格式检查 → 测试与覆盖率 → 死代码检查 → 循环依赖检查 → 架构层级检查 → 发布构建 → 公共声明面检查 → 文档构建。
+`package.json` 中的 `check` 是统一验证入口，执行生成源码校验、类型与静态检查、行为测试、构建及文档检查。
 
 架构约束不只写在文档里。包依赖方向、模块 rank、固定 Contract ID 唯一性、退役词汇，以及一组**反向规则**（例如「Platform 命令串行化必须用 Core 的 `SerialQueue`」——缺了就说明有人另起了一条状态机）都会变成 CI 失败。完整清单见[机械守卫](https://tangerg.github.io/dougong/reference/guards)。
 

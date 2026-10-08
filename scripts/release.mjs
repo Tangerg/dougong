@@ -127,12 +127,30 @@ if (!dryRun) {
   console.log(`  publishing as ${whoami.stdout.trim()}`);
 }
 
-/** Reads a published field, always from the network. A cached miss once aborted a good release. */
-function registryField(name, field) {
-  const result = spawnSync("npm", ["view", `${name}@${version}`, field, "--prefer-online"], {
-    encoding: "utf8",
-  });
-  return result.status === 0 ? result.stdout.trim() : "";
+/** Only an explicit registry miss permits absence; failed observation leaves publication unknown. */
+function registryHasVersion(name) {
+  const result = spawnSync(
+    "npm",
+    ["view", `${name}@${version}`, "version", "--prefer-online", "--json"],
+    { encoding: "utf8" },
+  );
+  const unreadable = (reason) =>
+    fail(`Cannot determine whether ${name}@${version} is published: ${reason}`);
+  if (result.error) unreadable(result.error.message);
+  if (result.signal) unreadable(`npm query terminated by ${result.signal}`);
+
+  let response;
+  try {
+    response = JSON.parse(result.stdout);
+  } catch {
+    unreadable("npm query returned invalid JSON");
+  }
+  if (result.status === 0) {
+    if (response !== version) unreadable("npm query returned an unexpected version");
+    return true;
+  }
+  if (response?.error?.code === "E404") return false;
+  unreadable(`npm query failed (${response?.error?.code ?? result.status})`);
 }
 
 // A release can stop midway — npm's two-factor wait is interruptible and
@@ -141,7 +159,7 @@ function registryField(name, field) {
 // compared with what this run would upload.
 const alreadyPublished = new Set();
 for (const { name } of PACKAGES) {
-  if (registryField(name, "version") === version) alreadyPublished.add(name);
+  if (registryHasVersion(name)) alreadyPublished.add(name);
 }
 if (alreadyPublished.size === PACKAGES.length) {
   fail(`${version} is already published for every package`);
@@ -337,7 +355,7 @@ function awaitRegistry(name) {
   // Publish-time scanning commonly takes five minutes and can exceed fifteen.
   // https://github.blog/changelog/2026-07-28-npm-publish-time-malware-scanning-and-dual-use-metadata/
   for (let attempt = 0; attempt < 120; attempt++) {
-    if (registryField(name, "version") === version) return true;
+    if (registryHasVersion(name)) return true;
     if (attempt === 0) console.log(`  waiting for ${name}@${version} to become readable...`);
     execFileSync("sleep", ["15"]);
   }

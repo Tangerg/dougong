@@ -143,11 +143,11 @@ TypeScript consumers need this in `tsconfig.json`:
 
 ```sh
 pnpm install
-pnpm check      # the 10-step verification gate
+pnpm check      # the full verification gate
 pnpm docs:dev   # the documentation site locally
 ```
 
-`pnpm check` runs, in order: type check → lint → format check → tests and coverage → dead-code check → circular-dependency check → architecture layer check → release build → public declaration check → documentation build.
+The `check` script in `package.json` is the verification entry point for generated sources, types, static checks, behavioural tests, builds and documentation.
 
 Architectural constraints do not live only in prose. Package dependency direction, module ranks, fixed Contract ID uniqueness, retired vocabulary and a set of **inverted rules** (such as "Platform command serialization must use Core's `SerialQueue`" — an absence means somebody started a second state machine) all become CI failures. The full list is in [Mechanical guards](https://tangerg.github.io/dougong/en/reference/guards).
 

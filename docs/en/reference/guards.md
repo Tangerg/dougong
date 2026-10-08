@@ -167,6 +167,12 @@ Each package's `public-api.types.ts` uses `expectTypeOf` and TypeScript expected
 
 `packages/core/test/api-surface.test.ts` asserts exact `Object.keys()` results: which keys a Context exposes, whether handles are frozen, whether internal orchestration methods leak. `check:api` guards built-declaration type relationships, exported vocabulary and `any`, while runtime tests guard actual object shape. They are complementary, because after type erasure `Object.keys` is what a consumer can actually see.
 
+### Release query boundary
+
+Preflight and upload confirmation in `scripts/release.mjs` share `registryHasVersion`. The npm registry owns publication facts; a failed query cannot create a missing-version fact. Successful output must return exactly the requested version, and only a structured `E404` means absence. Network, permission, process-start and response-format failures stop immediately; upload polling retries only explicit `E404` responses.
+
+`scripts/test/release.test.mjs` runs the actual release CLI in a temporary workspace with an executable search path containing only test commands, verifying that unknown state cannot pass preflight. These cases run under `pnpm test` without accessing the registry, publishing packages or changing real Git state.
+
 ### Coverage floors
 
 `vitest.config.ts` sets per-package thresholds pinned to the measured floors, with at most one point of slack:
