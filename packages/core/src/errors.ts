@@ -49,14 +49,18 @@ export interface ErrorSnapshot {
 export class RecordedFailure extends Error {
   override readonly name = "RecordedFailure";
   readonly code: string | undefined;
-  readonly snapshot: ErrorSnapshot;
+  readonly #snapshot: ErrorSnapshot;
+
+  get snapshot() {
+    return this.#snapshot;
+  }
 
   constructor(error: Error) {
     if (!(error instanceof Error)) throw new TypeError("RecordedFailure expects an Error");
-    const snapshot = error instanceof RecordedFailure ? error.snapshot : captureError(error);
+    const snapshot = #snapshot in error ? error.#snapshot : captureError(error);
     super(snapshot.message);
     this.code = snapshot.code;
-    this.snapshot = snapshot;
+    this.#snapshot = snapshot;
     // Always replace V8's constructor trace: even a missing source stack must
     // not leave native frames retaining the application that records this failure.
     this.stack = snapshot.stack ?? `${this.name}: ${snapshot.message}`;
@@ -206,7 +210,7 @@ export function isCancellationReason(signal: AbortSignal, error: unknown) {
   }
   if (!signal.aborted) return false;
   if (Object.is(error, signal.reason)) return true;
-  return error instanceof Error && error.name === "AbortError";
+  return error instanceof Error && readErrorProperty(error, "name") === "AbortError";
 }
 
 export class ConfigValidationError extends DougongError {
@@ -236,14 +240,14 @@ function snapshotValidationIssues(issues: unknown): ReadonlyArray<StandardSchema
         throw new TypeError(`Config validation issue at index ${index} must be an object`);
       }
       const candidate = issue as { readonly message?: unknown; readonly path?: unknown };
-      if (typeof candidate.message !== "string") {
+      const message = candidate.message;
+      if (typeof message !== "string") {
         throw new TypeError(`Config validation issue at index ${index} message must be a string`);
       }
+      const path = candidate.path;
       return Object.freeze({
-        message: candidate.message,
-        ...(candidate.path === undefined
-          ? {}
-          : { path: snapshotValidationPath(candidate.path, index) }),
+        message,
+        ...(path === undefined ? {} : { path: snapshotValidationPath(path, index) }),
       });
     }),
   );

@@ -1,6 +1,134 @@
 import { expect, it, vi } from "vitest";
-import { createHost, definePlugin } from "@dougongjs/core";
+import { createHost, definePlugin, type ChangeSet } from "@dougongjs/core";
 import { createPlatform, defineManifest, MemoryLoader } from "../src";
+
+it("does not commit a loaded Plugin when cancellation arrives before the Core handoff", async () => {
+  const host = createHost();
+  await host.start();
+  const setup = vi.fn<() => void>(() => undefined);
+  const plugin = definePlugin({ name: "audit.cancelled-handoff", setup });
+  let disposal: Promise<void> | undefined;
+  const platform = createPlatform({
+    installer: host,
+    apiVersion: "1.0.0",
+    loader: {
+      load() {
+        queueMicrotask(() => {
+          queueMicrotask(() => {
+            disposal = platform.dispose();
+          });
+        });
+        return { default: plugin };
+      },
+    },
+  });
+  const registration = await platform.register({
+    manifest: defineManifest({ name: plugin.name, version: "1.0.0" }),
+    reference: "plugin",
+  });
+  const [activation] = await Promise.allSettled([registration.activate()]);
+  await disposal;
+  await host.stop();
+  expect(activation).toMatchObject({ status: "rejected", reason: { name: "AbortError" } });
+  expect(setup).not.toHaveBeenCalled();
+  expect(platform.status).toBe("disposed");
+  expect(host.diagnostics.get().installations.size).toBe(0);
+});
+
+it("does not start another authorization after its Platform change was cancelled", async () => {
+  const host = createHost();
+  let disposal: Promise<void> | undefined;
+  const authorize = vi.fn<() => void>(() => {
+    disposal = platform.dispose();
+  });
+  const platform = createPlatform({
+    installer: host,
+    apiVersion: "1.0.0",
+    loader: new MemoryLoader(new Map()),
+    authorizer: { authorize },
+  });
+  const change = platform.change();
+  for (const name of ["audit.cancelled-first", "audit.cancelled-second"]) {
+    change.register({ manifest: defineManifest({ name, version: "1.0.0" }), reference: name });
+  }
+  const [admission] = await Promise.allSettled([change.commit()]);
+  await disposal;
+  expect(admission).toMatchObject({ status: "rejected", reason: { name: "AbortError" } });
+  expect(authorize).toHaveBeenCalledTimes(1);
+  expect(platform.status).toBe("disposed");
+});
+
+it("does not start authorization when a loading observer cancels activation", async () => {
+  const authorize = vi.fn<() => void>(() => undefined);
+  const platform = createPlatform({
+    installer: createHost(),
+    apiVersion: "1.0.0",
+    loader: new MemoryLoader(new Map()),
+    authorizer: { authorize },
+  });
+  const registration = await platform.register({
+    manifest: defineManifest({ name: "audit.cancelled-authorization", version: "1.0.0" }),
+    reference: "plugin",
+  });
+  authorize.mockClear();
+  let disposal: Promise<void> | undefined;
+  platform.diagnostics.subscribe(() => {
+    if (platform.status === "active" && registration.status === "loading") {
+      disposal = platform.dispose();
+    }
+  });
+  const [activation] = await Promise.allSettled([registration.activate()]);
+  await disposal;
+  expect(activation).toMatchObject({ status: "rejected", reason: { name: "AbortError" } });
+  expect(authorize).not.toHaveBeenCalled();
+  expect(platform.status).toBe("disposed");
+});
+
+it.each(["activation", "admission"])(
+  "checks cancellation after Core staging during %s",
+  async (phase) => {
+    const host = createHost();
+    await host.start();
+    const setup = vi.fn<() => void>(() => undefined);
+    const plugin = definePlugin({ name: "audit.cancelled-staging", setup });
+    let disposal: Promise<void> | undefined;
+    const installer = {
+      change(): ChangeSet {
+        const change = host.change();
+        return {
+          install(declaration, ...config) {
+            const installation = change.install(declaration, ...config);
+            disposal = platform.dispose();
+            return installation;
+          },
+          update: change.update.bind(change),
+          remove: change.remove.bind(change),
+          commit: change.commit.bind(change),
+        };
+      },
+    };
+    const platform = createPlatform({
+      installer,
+      apiVersion: "1.0.0",
+      loader: new MemoryLoader(new Map([["plugin", { default: plugin }]])),
+    });
+    const artifact = {
+      manifest: defineManifest({ name: plugin.name, version: "1.0.0" }),
+      reference: "plugin",
+    };
+    const operation =
+      phase === "admission"
+        ? platform.register({ ...artifact, placeholder: plugin })
+        : (await platform.register(artifact)).activate();
+    const [result] = await Promise.allSettled([operation]);
+    await disposal;
+    await host.stop();
+    expect(result).toMatchObject({ status: "rejected", reason: { name: "AbortError" } });
+    expect(setup).not.toHaveBeenCalled();
+    expect(platform.status).toBe("disposed");
+    expect(host.diagnostics.get().installations.size).toBe(0);
+  },
+);
 
 it("does not retain a Host through a historical failed Registration snapshot", async () => {
   const forceGc = (globalThis as typeof globalThis & { gc?: () => void }).gc;

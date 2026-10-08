@@ -93,9 +93,11 @@ export class Activator<Reference> {
       try {
         const { installer, loader, authorizer } = this.#ports();
         const change = installer.change();
+        signal.throwIfAborted();
         await authorizer.authorize(registration.manifest, signal);
         await this.#activateDependencies(registration, signal, permit);
         const plugin = await loadPlugin(loader, registration.artifact, signal);
+        signal.throwIfAborted();
         // Update when a placeholder is already installed, install when it is not.
         // The update path is the whole point of placeholders: the Installation
         // identity survives activation, so dependents see the Service change
@@ -106,6 +108,7 @@ export class Activator<Reference> {
         } else {
           installation = change.install(plugin, registration.artifact.config);
         }
+        signal.throwIfAborted();
         await change.commit();
         registration.commitActivation(installation);
         this.#publish();

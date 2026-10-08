@@ -320,6 +320,7 @@ class PlatformImpl<Reference> implements Platform<Reference> {
         operations,
         coreChange.registrationStates,
       );
+      controller.signal.throwIfAborted();
       await coreChange.commit();
       commitPlatformChange();
       this.#publish();
@@ -354,6 +355,7 @@ class PlatformImpl<Reference> implements Platform<Reference> {
   ) {
     for (const operation of operations) {
       if (operation.kind !== "remove") {
+        signal.throwIfAborted();
         try {
           await authorizer.authorize(operation.artifact.manifest, signal);
         } catch (error) {

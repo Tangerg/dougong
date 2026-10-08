@@ -66,6 +66,8 @@ Mutable owners and projections are separated for each fact:
 | Event listener publication visibility | EventHub membership | ListenerRegistration holds only its callback and revocable resource binding |
 | Current Contribution value | ContributionRecord | Store snapshots and ContributionView |
 | Contribution claims and publication order | ContributionStore | Record requests publication without storing a publication phase |
+| Frozen terminal failure record | RecordedFailure private snapshot | Read-only getter, diagnostics and discarded handles; prototype inheritance grants no record authority |
+| Accepted configuration issue fields | ConfigValidationError frozen issues | Capture third-party fields once, then validate and store those values |
 | Current Registration Artifact | RegistrationRecord authority | Manifest getter and diagnostics; terminal state retains only immutable Manifest data |
 | Promise and disposal Symbol runtime rules | scripts/internal/disposal-runtime.ts | Generated Core / reactive modules |
 

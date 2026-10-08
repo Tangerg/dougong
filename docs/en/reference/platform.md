@@ -98,7 +98,7 @@ Built-in implementations:
 - `ImportLoader` — dynamic `import()`, for trusted same-realm ESM. Explicitly **not a sandbox**.
 - `MemoryLoader` — copies and reads an application-supplied read-only Map, for embedded bundles, deterministic tests and application built-in plugins; it rejects `null`, arrays and other inputs its type does not admit.
 
-A loader must check its `AbortSignal` during expensive phases. Platform reuses Core's `isCancellationReason()` classifier and checks the signal again after the loader returns, so an uncooperative loader cannot commit a module into Core after cancellation — but the I/O and module top-level side effects it already performed cannot be undone.
+A loader must check its `AbortSignal` during expensive phases. Platform reuses Core's `isCancellationReason()` classifier, checks the signal before invoking each Authorizer, and checks again after the loader returns and immediately before calling Core commit. Collaborators may cancel during Core staging, so the current signal determines submission authority. Cancellation before the Core handoff prevents submission, even when the loader ignores the signal. Once Core commit starts, Core owns its outcome; Platform publishes that outcome before completing queued disposal. I/O and module top-level side effects that already occurred cannot be undone.
 
 Cancellation is cooperative for both Loaders and Authorizers. If a returned Promise ignores the signal and never settles, the activation, structural change or Platform disposal waiting for it cannot settle either. Application code may explicitly adapt the operation to abandon its wait only when every late result, failure and side effect is safe to ignore; Platform never disguises still-running external work as released.
 
@@ -291,7 +291,7 @@ Platform's decidable errors use `PlatformError.code`. `PlatformError extends Dou
 | `MODULE_LOAD_FAILED` | The loader itself failed |
 | `MODULE_INVALID` | The module or its default export is not a valid Plugin |
 | `REGISTRATION_REMOVED` | An operation on a removed Registration |
-| `REGISTRATION_UNAVAILABLE` | The Registration is uncommitted or unavailable; when activation / admission throws a non-`Error` value, the first public command and `ready()` use the same classification. An uncommitted terminal Registration keeps only an error summary, so a later `ready()` reconstructs an equivalent error without retaining the original Error stack |
+| `REGISTRATION_UNAVAILABLE` | The Registration is uncommitted or unavailable; when activation / admission throws a non-`Error` value, the first public command and `ready()` use the same classification. An uncommitted terminal Registration keeps a frozen, bounded error record in `RecordedFailure`; later `ready()` calls neither reconstruct the original class nor retain the original Error object |
 | `PLATFORM_UNAVAILABLE` | The Platform is disposing or already disposed |
 
 Error messages are for humans; they are not a stable parsing protocol. Programming-shape errors, cross-Platform Registrations, duplicate ChangeSet targets and modification after submission use `TypeError`; a custom Installer rejecting with a non-`Error` value is also classified at the Platform command boundary as a `TypeError` carrying the original `cause`.

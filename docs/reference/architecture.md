@@ -66,6 +66,8 @@ Host 与 Platform 诊断通过 SnapshotPublisher 的 reader 构造集合。publi
 | Event listener 的发布可见性 | EventHub 成员集合 | ListenerRegistration 只保存回调与可撤销资源绑定 |
 | Contribution 当前值 | ContributionRecord | Store 快照与 ContributionView |
 | Contribution claim 与发布顺序 | ContributionStore | Record 请求发布，不保存发布阶段 |
+| 冻结的终态错误记录 | RecordedFailure 私有 snapshot | 只读 getter、诊断与被丢弃句柄；原型继承不授予记录所有权 |
+| 已接受的配置校验问题字段 | ConfigValidationError 冻结的 issues | 第三方字段一次性捕获后验证与保存，不再重复读取 |
 | Registration 当前 Artifact | RegistrationRecord 的 authority | manifest getter 与诊断；终态仅保留不可变 Manifest |
 | 运行时 Promise 与释放 Symbol 规则 | scripts/internal/disposal-runtime.ts | Core / reactive 生成模块 |
 

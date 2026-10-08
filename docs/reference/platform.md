@@ -98,7 +98,7 @@ Loader 返回的模块必须以 own `default` 属性导出唯一的 `Plugin`，�
 - `ImportLoader`：使用动态 `import()`，用于受信任的同 Realm ESM；明确**不是沙箱**。
 - `MemoryLoader`：复制应用代码提供的只读 Map 并从中取模块，用于嵌入式 bundle、确定性测试和应用内建插件；它拒绝 `null`、数组等类型声明并未接受的输入。
 
-Loader 必须在耗时阶段检查 `AbortSignal`。Platform 复用 Core 的 `isCancellationReason()` 判定取消，并在 Loader 返回后再次检查 signal；因此一个不合作的 Loader 不能在取消后把模块提交进 Core，但它自身已发生的 I/O 或模块顶层副作用无法撤销。
+Loader 必须在耗时阶段检查 `AbortSignal`。Platform 复用 Core 的 `isCancellationReason()` 判定取消，在调用每项 Authorizer 前检查 signal，并在 Loader 返回后、调用 Core commit 前检查 signal。Core staging 的外部协作者也可能触发取消，因此提交权限由当前 signal 决定。若取消发生在提交给 Core 之前，即使 Loader 忽略 signal，也不能继续提交。Core commit 一旦开始，其结果由 Core 事务决定，Platform 同步该结果后再完成排队释放。已经发生的 I/O 或模块顶层副作用无法撤销。
 
 取消对 Loader 与 Authorizer 都是协作式的。若返回的 Promise 忽略 signal 且永不 settle，正在等待它的激活、结构变更或 Platform 释放也无法 settle。只有在迟到结果、失败和副作用都确认可安全忽略时，应用代码才可显式采用“放弃等待”适配；Platform 不会暗中把仍在执行的外部工作伪装成已释放。
 
@@ -291,7 +291,7 @@ Platform 的可判定错误使用 `PlatformError.code`。`PlatformError extends 
 | `MODULE_LOAD_FAILED` | Loader 自身失败 |
 | `MODULE_INVALID` | 模块或默认导出不是合法 Plugin |
 | `REGISTRATION_REMOVED` | 对已移除的 Registration 操作 |
-| `REGISTRATION_UNAVAILABLE` | Registration 尚未提交或不可用；activation / admission 抛出非 `Error` 值时，首次公开命令和 `ready()` 使用同一分类。未提交的终态 Registration 只保留错误摘要，因此后续 `ready()` 会重建等价错误而不保留原始 Error stack |
+| `REGISTRATION_UNAVAILABLE` | Registration 尚未提交或不可用；activation / admission 抛出非 `Error` 值时，首次公开命令和 `ready()` 使用同一分类。未提交的终态 Registration 以 `RecordedFailure` 保存冻结、有界的错误记录，后续 `ready()` 不重建原异常类，也不保留原始 Error 对象 |
 | `PLATFORM_UNAVAILABLE` | Platform 正在释放或已经释放 |
 
 错误消息用于人读，不是稳定解析协议。编程形状错误、跨 Platform Registration、重复 ChangeSet 目标和 submitted 后继续修改使用 `TypeError`；自定义 Installer 以非 `Error` 值拒绝时也会在 Platform 命令边界分类成带原始 `cause` 的 `TypeError`。

@@ -183,9 +183,9 @@ const host = createHost({
 
 ### 诊断失败记录
 
-Installation 与 Registration 的诊断错误始终使用 `RecordedFailure`，被丢弃句柄的后续 `ready()` 也会拒绝为该类型。它的 `name` 固定为 `RecordedFailure`，可选 `code` 与冻结的 `snapshot: ErrorSnapshot` 描述原始失败；它不声称自己是 `TypeError`、`DougongError` 或 `PermissionDeniedError` 子类。失败命令本身和仍可恢复的活动失败继续交付原始 Error。
+Installation 与 Registration 的诊断错误始终使用 `RecordedFailure`，被丢弃句柄的后续 `ready()` 也会拒绝为该类型。它的 `name` 固定为 `RecordedFailure`，可选 `code` 与冻结的 `snapshot: ErrorSnapshot` 描述原始失败；它不声称自己是 `TypeError`、`DougongError` 或 `PermissionDeniedError` 子类。失败命令本身和仍可恢复的活动失败继续交付原始 Error。SnapshotPublisher 最终读取失败后，首次 dispose 抛原始值，终态 get 抛 RecordedFailure，且不再保留旧快照载荷或失败 reader。
 
-快照保留原始名称、消息、错误码和栈文本，以及有界的 `cause` 与 `errors` 树。权限失败保留 `manifestName` 和 `denied`；配置失败保留 issue 消息与路径。任意对象、回调和自定义载荷会被省略。栈文本复制为字符串；原始错误缺少 stack 时也清除记录构造器的原生栈，历史错误不会通过原错误对象图保活 Host、Installer、Loader 或 Platform。
+快照保留原始名称、消息、错误码和栈文本，以及有界的 `cause` 与 `errors` 树。权限失败保留 `manifestName` 和 `denied`；配置失败保留 issue 消息与路径。任意对象、回调和自定义载荷会被省略。只读 snapshot getter 返回 RecordedFailure 私有拥有的记录，不信任外部同名字段或原型继承；枚举和序列化记录应显式使用 `error.snapshot`，而非错误实例的可枚举字段。栈文本复制为字符串；原始错误缺少 stack 时也清除记录构造器的原生栈，历史错误不会通过原错误对象图保活 Host、Installer、Loader 或 Platform。
 
 记录最多展开 32 个错误节点，递归最多四条边，每个错误列表最多八项。消息上限为 4,096 字符，栈文本为 16,384，名称、错误码与权限字段为 256；校验路径最多 16 段。`truncated` 标记发生截断的记录与错误链。这是诊断记录协议，不是应用状态序列化器。
 

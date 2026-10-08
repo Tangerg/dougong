@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { SnapshotPublisher } from "../src/index";
+import { RecordedFailure, SnapshotPublisher } from "../src/index";
 import { batchSnapshotNotifications } from "../src/snapshot-view";
 
 const RELEASE_PASSES = 8;
@@ -277,6 +277,41 @@ describe("SnapshotPublisher", () => {
     expect(() => subscription.dispose()).not.toThrow();
   });
 
+  it.each([new Error("final reader failed"), undefined])(
+    "keeps a failed final read explicit instead of returning the previous snapshot (%s)",
+    (failure) => {
+      let fail = false;
+      const publisher = new SnapshotPublisher(
+        () => {
+          if (fail) throw failure;
+          return 1;
+        },
+        () => undefined,
+      );
+      fail = true;
+      publisher.invalidate();
+      expect(captureError(() => publisher.dispose())).toBe(failure);
+      expect(captureError(() => publisher.view.get())).toBeInstanceOf(RecordedFailure);
+      expect(() => publisher.dispose()).not.toThrow();
+      expect(() => publisher.view.subscribe(() => undefined)).toThrow(
+        "Snapshot publisher is disposed",
+      );
+    },
+  );
+
+  it("releases the failed reader and previous snapshot from a retained terminal view", async () => {
+    const forceGc = (globalThis as typeof globalThis & { gc?: () => void }).gc;
+    if (!forceGc) throw new TypeError("Retention tests require Node.js --expose-gc");
+    const fixture = createFailedTerminalPublisherFixture();
+    for (let pass = 0; pass < RELEASE_PASSES && fixture.reference.deref(); pass++) {
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+      forceGc();
+      forceGc();
+    }
+    expect(fixture.reference.deref()).toBeUndefined();
+    expect(() => fixture.view.get()).toThrow(RecordedFailure);
+  });
+
   it("is owned by a using declaration through the disposal protocol", () => {
     // SnapshotPublisher is public, so application code building its own
     // diagnostics surface owns one. Requiring both `dispose()` and the
@@ -341,6 +376,27 @@ describe("SnapshotPublisher", () => {
     ).toEqual({ reader: true, reporter: true, listener: true });
   });
 });
+
+function createFailedTerminalPublisherFixture() {
+  const owner = {};
+  const failure = new Error("final reader failed", { cause: owner });
+  let fail = false;
+  const publisher = new SnapshotPublisher(
+    () => {
+      if (fail) throw failure;
+      return { owner };
+    },
+    () => void owner,
+  );
+  fail = true;
+  publisher.invalidate();
+  try {
+    publisher.dispose();
+  } catch (error) {
+    if (error !== failure) throw error;
+  }
+  return { view: publisher.view, reference: new WeakRef(owner) };
+}
 
 function createTerminalPublisherFixture() {
   const reader = {};

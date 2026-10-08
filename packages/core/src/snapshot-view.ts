@@ -10,6 +10,7 @@
 
 import { disposeSymbol, type Disposable } from "./resource";
 import { assertSynchronous } from "./sync-result";
+import { RecordedFailure } from "./errors";
 
 export interface SnapshotView<T> {
   get(): T;
@@ -87,11 +88,15 @@ type SnapshotPublisherState<T> =
     }
   | { readonly phase: "disposed" };
 
+type SnapshotResult<T> =
+  | { readonly phase: "value"; readonly value: T }
+  | { readonly phase: "error"; readonly error: RecordedFailure };
+
 /** Synchronous writer for immutable operational snapshots. */
 export class SnapshotPublisher<T> implements Disposable {
   readonly #subscriptions = new Set<SnapshotSubscription>();
   #state: SnapshotPublisherState<T>;
-  #snapshot: T;
+  #snapshot: SnapshotResult<T>;
   #dirty = false;
 
   constructor(read: () => T, report: (error: unknown) => void) {
@@ -100,7 +105,7 @@ export class SnapshotPublisher<T> implements Disposable {
       throw new TypeError("Snapshot error reporter must be a function");
     }
     this.#state = { phase: "active", read, report };
-    this.#snapshot = read();
+    this.#snapshot = { phase: "value", value: read() };
     Object.freeze(this);
   }
 
@@ -121,9 +126,8 @@ export class SnapshotPublisher<T> implements Disposable {
     if (state.phase === "disposed") return;
     this.#state = { phase: "disposed" };
     try {
-      // Materialize one last time so `get()` keeps answering after disposal with
-      // the final state rather than a stale one. A disposed publisher stops
-      // accepting writes; it does not stop being readable.
+      // Seal the final value or failure before severing the reader. A retained
+      // view must not present a stale value as a successful final result.
       this.#materialize(state.read);
     } finally {
       this.#dirty = false;
@@ -140,7 +144,9 @@ export class SnapshotPublisher<T> implements Disposable {
   #get() {
     const state = this.#state;
     if (state.phase === "active") this.#materialize(state.read);
-    return this.#snapshot;
+    const snapshot = this.#snapshot;
+    if (snapshot.phase === "error") throw snapshot.error;
+    return snapshot.value;
   }
 
   #subscribe(listener: () => void): Disposable {
@@ -161,9 +167,16 @@ export class SnapshotPublisher<T> implements Disposable {
       // reads this one. Commit this result before notifications can reenter it.
       this.#dirty = false;
       try {
-        this.#snapshot = read();
+        this.#snapshot = { phase: "value", value: read() };
       } catch (error) {
         this.#dirty = true;
+        if (this.#state.phase === "disposed") {
+          // A terminal view cannot retry or retain an obsolete value and the
+          // failed reader's object graph as though the final read succeeded.
+          const failure =
+            error instanceof Error ? error : new Error("Snapshot reader failed", { cause: error });
+          this.#snapshot = { phase: "error", error: new RecordedFailure(failure) };
+        }
         throw error;
       }
     });

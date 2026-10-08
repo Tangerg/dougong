@@ -291,7 +291,7 @@ StandardSchemaV1<ConfigInput, Config>
 - `install(plugin, input)` 接收 `ConfigInput`。
 - `setup(ctx, config)` 接收校验或转换后的 `Config`。
 - Schema 可以异步校验。
-- 配置结果只用 own `value` / `issues` 判别成功与失败，不读取原型链；失败抛含冻结 `issues` 的 `ConfigValidationError`。
+- 配置结果只用 own `value` / `issues` 判别成功与失败，不读取原型链；失败抛含冻结 `issues` 的 `ConfigValidationError`。每个 issue 的 message / path 只读取一次，验证与保存使用同一份捕获值，不保留第三方附带载荷。
 - Schema 结果必须是含 `value` 的成功对象，或含数组 `issues` 的失败对象；畸形 issue、message 或 path 会在 setup 前以精确 `TypeError` 拒绝。
 - Core 不克隆或深冻结配置；防御性转换属于 Schema。
 
@@ -580,7 +580,7 @@ await task.dispose()
 
 释放任务先 abort，再等待结果 settle。未被调用方同步处理的后台失败通过 Host `onError` 上报。只有与 `signal.reason` 相同的拒绝值或明确的 `AbortError` 才分类为取消；仅仅发生在 abort 之后的其他失败仍会上报，避免把取消期间的真实收尾故障静默吞掉。
 
-`isCancellationReason(signal, error)` 是这条规则唯一的公开判定器，Platform Loader 和下游适配器复用它，而不是各自复制一份“看起来像取消”的启发式逻辑。
+`isCancellationReason(signal, error)` 是这条规则唯一的公开判定器，Platform Loader 和下游适配器复用它，而不是各自复制一份“看起来像取消”的启发式逻辑。异常的 name 无法读取时不构成取消证据，原始失败继续传播；与 signal.reason 相同的值仍按身份判定。
 
 任务自然 settle 后会立即从父 Lifetime 的拥有集合和 AbortSignal 监听器中脱离；之后调用该 Task 的 `dispose()` 只是幂等完成，不会追溯性 abort 已结束任务的 signal。已完成任务不会在长生命周期中按历史次数累积；父释放仍会 abort 并等待当时尚未 settle 的全部任务。
 
@@ -772,7 +772,7 @@ Host start、stop 和 active 状态下提交的 ChangeSet 使用 ExtensionPoint 
 
 ## 十三、统一观察协议与 reactive 层
 
-读取快照期间发生的失效不会被读取完成覆盖；先提交本次读取结果，再处理读取引起的通知，避免重入读取后用旧结果覆盖新投影。读取失败保留失效状态并原样抛出。快照通知中的再次失效会排队，在当前回调返回后处理；尚未轮到的同一订阅只排入一次。该顺序也适用于诊断回调引起的另一份快照变化，避免跨 Publisher 重入应用代码。
+读取快照期间发生的失效不会被读取完成覆盖；先提交本次读取结果，再处理读取引起的通知，避免重入读取后用旧结果覆盖新投影。活动状态下读取失败保留失效状态并原样抛出。若释放时最终读取失败，首次 dispose 仍抛原值，后续 get 抛有界 RecordedFailure；终态释放旧快照、reader、reporter 与订阅，不把过期值伪装成成功结果。快照通知中的再次失效会排队，在当前回调返回后处理；尚未轮到的同一订阅只排入一次。该顺序也适用于诊断回调引起的另一份快照变化，避免跨 Publisher 重入应用代码。
 
 ContributionView、Installation diagnostics、Host diagnostics、Platform diagnostics 和 `@dougongjs/reactive` Signal 统一采用结构协议：
 
@@ -793,7 +793,7 @@ snapshots.invalidate()                     // 标记失效并通知
 snapshots.dispose()                        // 固化终态并切断闭包
 ```
 
-`view` 是权限收窄，不是第二套观察 API：读取方只能 `get/subscribe`，拥有方只能通过 `SnapshotPublisher` 驱动失效和终止。每次订阅都有独立身份；释放会立即撤回尚未轮到的通知。订阅者与错误 reporter 都必须同步；意外返回的 thenable 会被观察并作为精确 `TypeError` 进入同一个错误边界，不能变成无关的 unhandled rejection。订阅者失败交给显式 reporter 后仍继续通知其余订阅者；若 reporter 自身失败，Publisher 完成整轮通知后用 `AggregateError` 同时保留订阅者错误与 reporter 错误。`dispose()` 会在切断 reader、reporter 与现有订阅前固化最后一份快照；历史 view 因而仍可读取终态，但不能反向保活拥有方。Host、Installation、Lifetime 与 Platform diagnostics 直接走这条路径；`ContributionStore` 同样组合这一个 Publisher，只在订阅外层增加 Lifetime 所有权，因而重复注册同一个函数仍是两份独立订阅。任何高层都不得重写订阅注册表和错误边界。
+`view` 是权限收窄，不是第二套观察 API：读取方只能 `get/subscribe`，拥有方只能通过 `SnapshotPublisher` 驱动失效和终止。每次订阅都有独立身份；释放会立即撤回尚未轮到的通知。订阅者与错误 reporter 都必须同步；意外返回的 thenable 会被观察并作为精确 `TypeError` 进入同一个错误边界，不能变成无关的 unhandled rejection。订阅者失败交给显式 reporter 后仍继续通知其余订阅者；若 reporter 自身失败，Publisher 完成整轮通知后用 `AggregateError` 同时保留订阅者错误与 reporter 错误。`dispose()` 会固化最终读取的结果并切断 reader、reporter 与现有订阅；历史 view 在成功终态读取最后快照，失败终态则抛 RecordedFailure，不保留过期快照载荷或原始异常对象。Host、Installation、Lifetime 与 Platform diagnostics 直接走这条路径；`ContributionStore` 同样组合这一个 Publisher，只在订阅外层增加 Lifetime 所有权，因而重复注册同一个函数仍是两份独立订阅。任何高层都不得重写订阅注册表和错误边界。
 
 快照需要 Map 语义时统一使用 `ReadonlyMapSnapshot`。它只接受类型声明中的 Map 或条目 iterable，复制输入并只暴露 `ReadonlyMap` 方法，避免 `Object.freeze(new Map())` 仍可调用 `set/delete/clear` 的伪不可变性；它只保证容器结构不可变，条目值仍应在进入快照时自行冻结。
 
@@ -903,7 +903,7 @@ Event 因定义要求收集全部监听器失败，总是抛 AggregateError。Li
 
 后台任务、订阅者和后续 observe 的错误无法回到原同步调用栈，通过 `onError` 上报。`onError` 自身失败也不得改变正在观察的 Host 命令。
 
-`RecordedFailure` 是共享的终态错误类型。其 `snapshot: ErrorSnapshot` 保存冻结的诊断值：原始名称、消息、错误码、栈文本、有界 cause 和聚合错误树、校验问题与权限字段。它不重建原错误子类，也不保留任意错误载荷。操作本身和可恢复失败仍传播原始 Error；被丢弃的 Installation 或 Registration 的 `ready()` 拒绝值为 RecordedFailure。
+`RecordedFailure` 是共享的终态错误类型。其只读 `snapshot: ErrorSnapshot` getter 返回私有拥有的冻结记录；只有真实 RecordedFailure 的私有记录可直接复用，继承其原型的外部 Error 仍须重新捕获。记录保存诊断值：原始名称、消息、错误码、栈文本、有界 cause 和聚合错误树、校验问题与权限字段。它不重建原错误子类，也不保留任意错误载荷。操作本身和可恢复失败仍传播原始 Error；被丢弃的 Installation 或 Registration 的 `ready()` 拒绝值为 RecordedFailure。需要枚举或序列化诊断数据时显式使用 `error.snapshot`；snapshot 不再是可枚举的实例数据字段。
 
 ## 十六、禁止方向
 

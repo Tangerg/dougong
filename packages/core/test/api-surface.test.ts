@@ -63,6 +63,23 @@ describe("public API surface", () => {
     });
   });
 
+  it("records errors that inherit a RecordedFailure prototype without trusting their payload", () => {
+    const payload = { name: "ForgedFailure", message: "mutable snapshot", owner: {} };
+    const original = new Error("actual failure", { cause: payload.owner });
+    Object.setPrototypeOf(original, core.RecordedFailure.prototype);
+    Object.defineProperty(original, "snapshot", { value: payload, enumerable: true });
+    const recorded = new core.RecordedFailure(original);
+    payload.message = "changed later";
+    expect(recorded.snapshot).toMatchObject({
+      name: "Error",
+      message: "actual failure",
+      cause: { name: "NonError", message: "Non-Error object omitted" },
+    });
+    expect(recorded.snapshot).not.toBe(payload);
+    expect(recorded.snapshot).not.toHaveProperty("owner");
+    expect(Object.isFrozen(recorded.snapshot)).toBe(true);
+  });
+
   it("bounds diagnostic chains and preserves aggregate causes and validation issues", () => {
     const config = new core.ConfigValidationError([
       { message: "expected integer", path: [{ key: "port" }] },
@@ -131,6 +148,36 @@ describe("public API surface", () => {
     expect(() => new core.DougongError("TEST", null as never)).toThrowError(
       new TypeError("DougongError message must be a string"),
     );
+  });
+
+  it("does not replace a failure when its cancellation name cannot be read", () => {
+    const failure = Object.defineProperty(new Error("original failure"), "name", {
+      get() {
+        throw new Error("name accessor failed");
+      },
+    });
+    expect(core.isCancellationReason(AbortSignal.abort(), failure)).toBe(false);
+    expect(core.isCancellationReason(AbortSignal.abort(failure), failure)).toBe(true);
+  });
+
+  it("owns the exact validation issue fields that it accepted", () => {
+    let messageReads = 0;
+    let pathReads = 0;
+    const payload = { retained: "application state" };
+    const issue = Object.defineProperties(
+      { message: "unused", path: ["unused"] },
+      {
+        message: {
+          get: () => (messageReads++ === 0 ? "expected value" : payload),
+        },
+        path: {
+          get: () => (pathReads++ === 0 ? ["original"] : ["changed"]),
+        },
+      },
+    );
+    const failure = new core.ConfigValidationError([issue]);
+    expect(failure.issues).toEqual([{ message: "expected value", path: ["original"] }]);
+    expect(failure.message).toBe("Invalid Plugin config:\n  - expected value");
   });
 
   it("does not leak orchestrator internals through public objects", async () => {
