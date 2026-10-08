@@ -32,7 +32,7 @@ pnpm check
 
 ## `check:layers`
 
-`scripts/check-layers.mjs`。四类检查。
+`scripts/check-layers.mjs`。四类检查。它与循环依赖检查共用 `scripts/analyze-dependencies.mjs`：扫描范围、TypeScript 解析配置和产物排除规则只有一个配置源，两个门禁只读取 madge 分析结果的不同投影。分析异常或任何无法解析的导入都中止检查，不能将缺失的边解释为“没有违规”。
 
 ### 1 · 依赖方向
 
@@ -127,6 +127,8 @@ PluginHandle             类型标识符              → 失败
 ## `check:circular`
 
 `scripts/check-circular.mjs`，madge，**允许列表为空**。
+
+通过共享分析边界读取循环结果，不再从失败的 CLI 进程中抢救输出。`scripts/test/dependency-guards.test.mjs` 在临时源码副本中运行真实门禁，验证无法解析的导入不会误通过，同时保留有效图、真实循环和向上依赖的行为覆盖。
 
 每个包都作为库发布，`@dougongjs/core` 两个模块之间的值级循环会在消费者的打包器里表现为**半初始化的绑定**，而不是在我们的测试里报错。所以这里比在应用里更严格。
 

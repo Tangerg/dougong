@@ -1,12 +1,12 @@
 #!/usr/bin/env node
-// Run madge --circular over the workspace and fail on any cycle not on the
+// Analyze the workspace and fail on any cycle not on the
 // allowlist. Allowlist entries are full file-sets of a known, benign cycle.
 //
 // Cycles matter more here than in an app: every package ships as a library, and
 // a value-level cycle between two modules of `@dougongjs/core` would surface as a
 // partially-initialised binding in a consumer's bundler, not in our tests.
 
-import { execFileSync } from "node:child_process";
+import { analyzeDependencies } from "./analyze-dependencies.mjs";
 
 // Each entry is the full set of files in a known cycle, sorted. A reported
 // cycle matches if its sorted file list deep-equals one of these. Paths are
@@ -21,40 +21,7 @@ const ALLOWED = [];
 
 const allowedKeys = new Set(ALLOWED.map((cycle) => [...cycle].sort().join("|")));
 
-let raw;
-try {
-  raw = execFileSync(
-    "pnpm",
-    [
-      "exec",
-      "madge",
-      "--circular",
-      "--extensions",
-      "ts",
-      "--ts-config",
-      "tsconfig.base.json",
-      // `dist/` holds emitted .d.ts files that mirror src; including them would
-      // double every edge and report the same cycle twice.
-      "--exclude",
-      "(^|/)dist/",
-      "--json",
-      "packages/",
-    ],
-    { encoding: "utf8" },
-  );
-} catch (err) {
-  // madge exits non-zero when it finds cycles, but still writes the JSON.
-  raw = err.stdout?.toString() ?? "";
-}
-
-let cycles;
-try {
-  cycles = JSON.parse(raw);
-} catch {
-  console.error("[check-circular] madge did not produce valid JSON:");
-  console.error(raw);
-  process.exit(2);
-}
+const cycles = (await analyzeDependencies()).circular();
 
 const unexpected = cycles.filter((cycle) => !allowedKeys.has([...cycle].sort().join("|")));
 

@@ -13,17 +13,14 @@
 // Every invariant below is either stated in docs/reference/architecture.md or was a
 // deliberate narrowing that the compiler would happily let us undo.
 
-import { execFileSync } from "node:child_process";
 import { createRequire } from "node:module";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { retiredVocabulary } from "./vocabulary.mjs";
+import { analyzeDependencies, packagesDirectory } from "./analyze-dependencies.mjs";
 
 const ts = createRequire(import.meta.url)("typescript");
 const retiredTerms = new Set(retiredVocabulary);
-
-// madge reports paths relative to `packages/`, e.g. `core/src/host.ts`.
-const PACKAGES_DIR = "packages";
 
 // Package layers
 
@@ -411,37 +408,7 @@ const FILE_RULES = [
 
 // Build the graph
 
-let raw = "";
-try {
-  raw = execFileSync(
-    "pnpm",
-    [
-      "exec",
-      "madge",
-      "--extensions",
-      "ts",
-      "--ts-config",
-      "tsconfig.base.json",
-      "--exclude",
-      "(^|/)dist/",
-      "--json",
-      PACKAGES_DIR + "/",
-    ],
-    { encoding: "utf8", stdio: ["ignore", "pipe", "inherit"] },
-  );
-} catch (err) {
-  // madge can exit non-zero on warnings yet still write a full graph.
-  raw = err.stdout?.toString() ?? "";
-}
-
-let graph;
-try {
-  graph = JSON.parse(raw);
-} catch {
-  console.error("[check-layers] madge did not produce valid JSON:");
-  console.error(raw);
-  process.exit(2);
-}
+const graph = (await analyzeDependencies()).obj();
 
 // Apply the rules
 
@@ -457,7 +424,7 @@ for (const file of Object.keys(MODULE_LAYERS)) {
 
 for (const [file, deps] of Object.entries(graph)) {
   const sourceText = file.endsWith(".ts")
-    ? readFileSync(join(PACKAGES_DIR, file), "utf8")
+    ? readFileSync(join(packagesDirectory, file), "utf8")
     : undefined;
   const sourceFile =
     sourceText === undefined
@@ -635,7 +602,7 @@ const LIFETIME_CONSTRUCTORS = new Set(["core/src/instance-coordinator.ts", "core
 for (const file of Object.keys(graph)) {
   if (!SOURCE_RE.test(file) || TEST_RE.test(file)) continue;
   if (LIFETIME_CONSTRUCTORS.has(file)) continue;
-  const source = readFileSync(join(PACKAGES_DIR, file), "utf8");
+  const source = readFileSync(join(packagesDirectory, file), "utf8");
   if (/\bnew\s+Lifetime\s*\(/.test(source)) {
     architectureViolations.push(`${file}: constructs a Lifetime outside the orchestrator`);
   }

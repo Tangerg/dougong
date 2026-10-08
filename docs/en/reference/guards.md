@@ -32,7 +32,7 @@ Step 9 must precede step 10: `dist/index.d.ts` is **the only place the complete 
 
 ## `check:layers`
 
-`scripts/check-layers.mjs`. Four families of check.
+`scripts/check-layers.mjs`. Four families of check. It shares `scripts/analyze-dependencies.mjs` with the circular-dependency guard: scan scope, TypeScript resolution configuration and artifact exclusions have one configuration source, while the guards read different projections of the madge analysis. Analysis errors or any unresolved import stop verification; missing edges cannot be interpreted as an absence of violations.
 
 ### 1 · Import direction
 
@@ -127,6 +127,8 @@ Recognising a call requires tracing the factory to its import, so both `import {
 ## `check:circular`
 
 `scripts/check-circular.mjs`, madge, with an **empty allowlist**.
+
+It reads cycles through the shared analysis boundary, without recovering output from a failed CLI process. `scripts/test/dependency-guards.test.mjs` runs the real guards against temporary source copies, verifying that unresolved imports cannot pass while retaining coverage for valid graphs, actual cycles and upward dependencies.
 
 Every package ships as a library, and a value-level cycle between two modules of `@dougongjs/core` surfaces as a **partially-initialised binding in a consumer's bundler**, not as a failure in our tests. That is why this is stricter here than it would be in an application.
 
