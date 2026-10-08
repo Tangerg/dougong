@@ -67,6 +67,7 @@ Mutable owners and projections are separated for each fact:
 | Current Contribution value | ContributionRecord | Store snapshots and ContributionView |
 | Contribution claims and publication order | ContributionStore | Record requests publication without storing a publication phase |
 | Frozen terminal failure record | RecordedFailure private snapshot | Read-only getter, diagnostics and discarded handles; prototype inheritance grants no record authority |
+| Snapshot materialization and closure boundary | SnapshotPublisher | A view cannot return its previous cache during its own read or seal an unfinished result |
 | Accepted configuration issue fields | ConfigValidationError frozen issues | Capture third-party fields once, then validate and store those values |
 | Current Registration Artifact | RegistrationRecord authority | Manifest getter and diagnostics; terminal state retains only immutable Manifest data |
 | Promise and disposal Symbol runtime rules | scripts/internal/disposal-runtime.ts | Generated Core / reactive modules |

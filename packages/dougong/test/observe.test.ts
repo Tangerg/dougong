@@ -117,6 +117,39 @@ function manualLifetime(dispose: () => void | Promise<void>): AsyncDisposable {
 }
 
 describe("observe composition", () => {
+  it.each([undefined, new Error("late subscription disposal failed")])(
+    "releases a subscription returned after observation disposal has already started (%s)",
+    async (failure) => {
+      const base = manualOwner(manualLifetime(() => undefined));
+      let cleanup!: AsyncDisposable;
+      let disposal!: Promise<void>;
+      const owner: ObservationOwner = {
+        ...base,
+        cleanup(dispose) {
+          cleanup = base.cleanup(dispose);
+          return cleanup;
+        },
+      };
+      const release = vi.fn<() => void>(() => {
+        if (failure) throw failure;
+      });
+      const observer = vi.fn<() => void>();
+      const source: Readable<number> = {
+        get: () => 1,
+        subscribe() {
+          disposal = cleanup.dispose();
+          return disposable(release);
+        },
+      };
+      expect(() => observe(owner, source, observer)).toThrow(
+        failure ?? "Observation is not active",
+      );
+      await disposal;
+      expect(release).toHaveBeenCalledOnce();
+      expect(observer).not.toHaveBeenCalled();
+    },
+  );
+
   it("does not establish a replacement after cancellation during the previous cleanup", async () => {
     const entered = Promise.withResolvers<void>();
     const resume = Promise.withResolvers<void>();

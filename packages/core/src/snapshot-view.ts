@@ -98,6 +98,7 @@ export class SnapshotPublisher<T> implements Disposable {
   #state: SnapshotPublisherState<T>;
   #snapshot: SnapshotResult<T>;
   #dirty = false;
+  #reading = false;
 
   constructor(read: () => T, report: (error: unknown) => void) {
     if (typeof read !== "function") throw new TypeError("Snapshot reader must be a function");
@@ -124,6 +125,9 @@ export class SnapshotPublisher<T> implements Disposable {
   dispose() {
     const state = this.#state;
     if (state.phase === "disposed") return;
+    if (this.#reading) {
+      throw new TypeError("Cannot dispose a snapshot publisher while its reader is running");
+    }
     this.#state = { phase: "disposed" };
     try {
       // Seal the final value or failure before severing the reader. A retained
@@ -142,6 +146,7 @@ export class SnapshotPublisher<T> implements Disposable {
   }
 
   #get() {
+    if (this.#reading) throw new TypeError("Circular snapshot read");
     const state = this.#state;
     if (state.phase === "active") this.#materialize(state.read);
     const snapshot = this.#snapshot;
@@ -166,6 +171,7 @@ export class SnapshotPublisher<T> implements Disposable {
       // A read may invalidate another snapshot and trigger a subscriber that
       // reads this one. Commit this result before notifications can reenter it.
       this.#dirty = false;
+      this.#reading = true;
       try {
         this.#snapshot = { phase: "value", value: read() };
       } catch (error) {
@@ -178,6 +184,8 @@ export class SnapshotPublisher<T> implements Disposable {
           this.#snapshot = { phase: "error", error: new RecordedFailure(failure) };
         }
         throw error;
+      } finally {
+        this.#reading = false;
       }
     });
   }

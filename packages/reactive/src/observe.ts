@@ -75,6 +75,13 @@ class Observation<T, Child extends AsyncDisposable> {
     const { owner, source } = this.#requireBinding();
     const subscription = source.subscribe(() => this.#invalidate());
     assertDisposable(subscription, "Readable.subscribe()");
+    if (this.#state.phase !== "active") {
+      assertSynchronous(
+        subscription.dispose(),
+        "Readable subscriptions must dispose synchronously",
+      );
+      throw new Error("Observation is not active");
+    }
     this.#subscription = subscription;
 
     this.#createCurrent();

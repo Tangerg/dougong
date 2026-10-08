@@ -774,6 +774,8 @@ Commit prepares every affected ExtensionPoint snapshot before delivering any not
 
 An invalidation arriving during a snapshot read is preserved. The read commits before delivering notifications it raised, so an older result cannot overwrite a newer projection produced by reentrant reading. A failed read while active retains its invalid state and throws the original error. If the final read during disposal fails, the first dispose still throws the original value and later get calls throw a bounded RecordedFailure. The terminal state releases the previous snapshot, reader, reporter and subscriptions rather than returning an obsolete value as a successful result. Invalidations raised during notification are queued until the current callback returns. Each subscription awaiting delivery is queued once. This order also applies when a diagnostics callback changes another snapshot, preventing reentry across Publishers.
 
+SnapshotPublisher owns its read execution boundary. A reader that directly or indirectly reads the same view while it is being materialized throws `TypeError` (Circular snapshot read), rather than receiving the previous cache as a result. The first disposal cannot begin inside that Publisher’s reader; release it after the read finishes. Invalidations raised by a reader remain preserved, and subscriber callbacks delivered after the read may still dispose the Publisher.
+
 `ContributionView`, Installation diagnostics, Host diagnostics, Platform diagnostics and `@dougongjs/reactive` signals all adopt one structural protocol:
 
 ```ts
@@ -821,6 +823,8 @@ observe(ctx, endpoint, (url, lifetime) => {
 ```
 
 `observe()` uses only the public `get/subscribe/lifetime/spawn/cleanup`, so it is neither a Core privilege nor a second execution engine. Core does not depend on reactive, and third-party `Readable`s are structurally compatible.
+
+When a third-party `source.subscribe()` returns a subscription, Observation checks its own current phase before accepting it. If it closed during that call, it immediately disposes the returned subscription and fails construction, rather than attaching a resource after disposal has already passed it. A failure of that subscription’s disposer propagates synchronously too.
 
 Structural compatibility unifies only the observation protocol; it does not flatten the ownership boundary of a resource's origin. A ContributionView injected through the context is a live capability bound to the current Lifetime, and a subscription created directly on it is owned by that Lifetime automatically. A standalone signal or third-party `Readable` has no implicit owner, so a direct subscriber holds the returned `Disposable` itself, or hands it to `observe(owner, source, observer)` to be composed into an explicit Lifetime. Both still have one `subscribe()` and one `dispose()`; the only difference is whether a clear structural owner already exists.
 

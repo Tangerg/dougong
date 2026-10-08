@@ -134,13 +134,12 @@ async setup(ctx) {
   }
 
   await connect(initialUrl)
-  ctx.cleanup(() => current?.dispose())
 }
 ```
 
 `label` is a required non-empty string used only for diagnostics. It takes no part in lookup or identity, and duplicates among siblings are legal.
 
-A child that is disposed early detaches from its parent; releasing a parent recursively releases every live subtree.
+A child that is disposed early detaches from its parent; releasing a parent recursively releases every live subtree. No additional cleanup is needed to dispose an already-owned child.
 
 ## Retiring a wait and handing off late resources {#retired-acquisition}
 
@@ -250,10 +249,10 @@ Concretely:
 - terminal resources clear their references to owner, store, callback and payload
 - a terminal Installation keeps only immutable identity data, not the GroupNode
 - a detached Group clears its parent link, so a historical Group cannot reach sibling subtrees through the ownership tree
-- **terminal failures keep only a `name` / `message` / `code` data summary** — a JavaScript `Error.stack` can carry the entire orchestration frame that created it, and must not become an invisible ownership edge
+- terminal failures keep a frozen, bounded `RecordedFailure` record with stack text and value-only cause data, without retaining the original Error object or its application payloads
 - a historical diagnostic view severs its reporting callback when it closes
 
-Failed Installations that remain attached to a live Host keep the original error for diagnostics and retry. Callers awaiting `ready()` always receive the original `Error` too — the summary only affects reads made **after** the Installation has detached from the Host.
+Recoverable failed Installations attached to a live Host retain the original Error for `ready()` and retry. Diagnostics always expose `RecordedFailure`. A discarded Installation releases its authority and stores only that record, so later `ready()` calls reject with `RecordedFailure`; it never reconstructs the original class. See the [error record contract](../reference/errors.md#diagnostic-failure-records).
 
 ## Common mistakes
 

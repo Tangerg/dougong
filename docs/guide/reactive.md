@@ -169,6 +169,8 @@ interface ObservationOwner<Child extends AsyncDisposable = AsyncDisposable> {
 
 `ObservationOwner<Child>` 只要求 `Child extends AsyncDisposable`；`Observer` 仍接收推导出的具体 Child 类型，因此 Core Lifetime 在回调中的完整能力会保留。异步清理完成后，`observe()` 重新读取 source，只为最新值创建资源。A 清理期间发生 A → B → C 变化时，观察结果为 A → C。
 
+若第三方 source 在 `subscribe()` 返回前关闭了观察，`observe()` 会立即释放刚返回的订阅并拒绝构造，避免订阅落在释放过程之外；该订阅的释放失败也会同步交给调用方。
+
 初次观察先建立订阅，再创建子 Lifetime，最后读取 source 并调用 observer。后续替换同样在子 Lifetime 建立后读值，因此创建资源时由诊断回调触发的变化也不会遗漏。所有替换失败都进入同一个停止流程，原始错误和资源清理错误一起保留。
 
 ### 失败处理

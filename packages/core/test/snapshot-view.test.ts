@@ -5,6 +5,73 @@ import { batchSnapshotNotifications } from "../src/snapshot-view";
 const RELEASE_PASSES = 8;
 
 describe("SnapshotPublisher", () => {
+  it("rejects a circular reader instead of returning its previous cached value", () => {
+    let value = 0;
+    const publisher = new SnapshotPublisher(
+      (): number => (value === 1 ? publisher.view.get() : value),
+      () => undefined,
+    );
+    value = 1;
+    publisher.invalidate();
+    expect(() => publisher.view.get()).toThrow("Circular snapshot read");
+    value = 2;
+    expect(publisher.view.get()).toBe(2);
+    publisher.dispose();
+  });
+
+  it("rejects an indirect read cycle and recovers once its source model is acyclic", () => {
+    let circular = false;
+    const first = new SnapshotPublisher(
+      (): number => (circular ? second.view.get() : 0),
+      () => undefined,
+    );
+    const second = new SnapshotPublisher(
+      () => first.view.get() + 1,
+      () => undefined,
+    );
+    circular = true;
+    first.invalidate();
+    second.invalidate();
+    expect(() => second.view.get()).toThrow("Circular snapshot read");
+    circular = false;
+    expect(second.view.get()).toBe(1);
+    first.dispose();
+    second.dispose();
+  });
+
+  it("records a circular final read instead of sealing its previous cached value", () => {
+    let circular = false;
+    const publisher = new SnapshotPublisher(
+      (): number => (circular ? publisher.view.get() : 1),
+      () => undefined,
+    );
+    circular = true;
+    publisher.invalidate();
+    expect(() => publisher.dispose()).toThrow("Circular snapshot read");
+    expect(() => publisher.view.get()).toThrow(RecordedFailure);
+  });
+
+  it("does not seal an unfinished reader as a terminal snapshot", () => {
+    let value = 0;
+    const publisher = new SnapshotPublisher(
+      () => {
+        if (value === 1) publisher.dispose();
+        return value;
+      },
+      () => undefined,
+    );
+    value = 1;
+    publisher.invalidate();
+    expect(() => publisher.view.get()).toThrow(
+      "Cannot dispose a snapshot publisher while its reader is running",
+    );
+    value = 2;
+    expect(publisher.view.get()).toBe(2);
+    publisher.dispose();
+    value = 3;
+    expect(publisher.view.get()).toBe(2);
+  });
+
   it("preserves invalidation that arrives while a snapshot is being read", () => {
     let value = 0;
     const publisher = new SnapshotPublisher(

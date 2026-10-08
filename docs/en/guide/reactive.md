@@ -169,6 +169,8 @@ The result is a dependency direction that stays one-way: `reactive` does not dep
 
 `ObservationOwner<Child>` only requires `Child extends AsyncDisposable`; `Observer` still receives the concrete child type, so a Core Lifetime retains all its capabilities in the callback. After asynchronous cleanup, `observe()` reads the source again and creates resources only for that latest value. Changes A → B → C while A is cleaning up produce A → C observations.
 
+If a third-party source closes the observation before `subscribe()` returns, `observe()` immediately disposes that subscription and rejects construction. A failure of the subscription’s disposer also reaches the caller synchronously.
+
 Initial observation subscribes first, creates the child Lifetime, then reads the source and invokes the observer. Replacement also reads after child creation, so changes triggered by diagnostics during resource creation are included. Every replacement failure uses one stop procedure that preserves the original error and any cleanup failures together.
 
 ## Failure handling

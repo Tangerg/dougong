@@ -133,13 +133,12 @@ async setup(ctx) {
   }
 
   await connect(initialUrl)
-  ctx.cleanup(() => current?.dispose())
 }
 ```
 
 `label` 是必填的非空字符串，只用于诊断，不参与任何查找或身份判定，同级重名合法。
 
-子 Lifetime 提前 `dispose()` 后会从父级摘除；父级释放时会递归释放所有存活的子树。
+子 Lifetime 提前 `dispose()` 后会从父级摘除；父级释放时会递归释放所有存活的子树。已经归父级所有的子级不需要再注册 cleanup 来释放。
 
 ## 等待退役与晚到资源交接 {#retired-acquisition}
 
@@ -249,10 +248,10 @@ lifetime.subscribe(() => render())   // 资源变化时通知
 - 终态资源清空自己对 owner、Store、回调和 payload 的引用
 - 终态 Installation 只保留不可变身份数据，不持有 GroupNode
 - 已分离的 Group 清空 parent 引用，历史 Group 不能经所有权树保活兄弟子树
-- **终态失败只保留 `name` / `message` / `code` 纯数据摘要**——JavaScript 的 `Error.stack` 可能携带创建错误时的整个编排调用帧，不能成为一条隐形的所有权边
+- 终态失败保留冻结、有界的 `RecordedFailure` 记录，含栈文本和纯值 cause，不保留原始 Error 对象及其应用载荷
 - 历史诊断视图在关闭时切断上报回调
 
-仍附着于活动 Host 的失败 Installation 继续保留原始错误，供诊断和重试使用。等待 `ready()` 的调用方也总是收到原始 `Error`——摘要只影响 Installation **脱离 Host 之后**的事后读取。
+仍附着于活动 Host、可恢复的失败 Installation 保留原始 Error，供 `ready()` 和重试使用；诊断始终暴露 `RecordedFailure`。被丢弃的 Installation 释放权限并只保存该记录，后续 `ready()` 拒绝为 `RecordedFailure`，不重建原异常类。精确边界见[错误记录契约](../reference/errors.md#诊断失败记录)。
 
 ## 常见错误
 

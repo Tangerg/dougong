@@ -774,6 +774,8 @@ Host start、stop 和 active 状态下提交的 ChangeSet 使用 ExtensionPoint 
 
 读取快照期间发生的失效不会被读取完成覆盖；先提交本次读取结果，再处理读取引起的通知，避免重入读取后用旧结果覆盖新投影。活动状态下读取失败保留失效状态并原样抛出。若释放时最终读取失败，首次 dispose 仍抛原值，后续 get 抛有界 RecordedFailure；终态释放旧快照、reader、reporter 与订阅，不把过期值伪装成成功结果。快照通知中的再次失效会排队，在当前回调返回后处理；尚未轮到的同一订阅只排入一次。该顺序也适用于诊断回调引起的另一份快照变化，避免跨 Publisher 重入应用代码。
 
+SnapshotPublisher 自己拥有读取执行边界：reader 直接或间接读取正在物化的同一 view 时抛 `TypeError`（Circular snapshot read），不以旧缓存代替结果；reader 运行期间不能首次 dispose 该 Publisher，必须在读取结束后释放。reader 引起的失效仍会保留，读取完成后的订阅通知仍可释放 Publisher。
+
 ContributionView、Installation diagnostics、Host diagnostics、Platform diagnostics 和 `@dougongjs/reactive` Signal 统一采用结构协议：
 
 ```ts
@@ -821,6 +823,8 @@ observe(ctx, endpoint, (url, lifetime) => {
 ```
 
 `observe()` 只使用公开 `get/subscribe/lifetime/spawn/cleanup`，因此不是 Core 特权或第二套执行引擎。Core 不依赖 reactive，第三方 Readable 也可结构兼容。
+
+第三方 `source.subscribe()` 返回订阅时，Observation 根据自己的当前阶段决定是否接收；若调用期间观察已关闭，立即释放返回的订阅并使构造失败，不会把资源挂到已经完成释放的状态上。释放订阅本身的失败也会同步传播。
 
 结构兼容只统一观察协议，不抹平资源来源的所有权边界：Context 注入的 ContributionView 是绑定当前 Lifetime 的 live capability，直接 `subscribe()` 产生的订阅会自动归该 Lifetime 所有；独立 Signal 或第三方 Readable 没有隐含 owner，直接订阅时由调用方持有返回的 Disposable，或交给 `observe(owner, source, observer)` 组合进显式 Lifetime。两者仍只有同一个 `subscribe()` 和同一个 `dispose()`，差异只在是否已经存在明确的结构化 owner。
 

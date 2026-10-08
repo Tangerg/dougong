@@ -136,8 +136,7 @@ export async function hmrModuleGraph(): Promise<ExampleResult> {
             .join("+"),
         );
       };
-      const subscription = ctx.views.subscribe(capture);
-      ctx.cleanup(() => subscription.dispose());
+      ctx.views.subscribe(capture);
     },
   });
 
