@@ -37,14 +37,14 @@ import {
 } from "node:fs";
 import { createInterface } from "node:readline/promises";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { basename, join, resolve } from "node:path";
 
 // Dependency order: a package is published only after everything it depends on.
-const PACKAGES = [
-  { dir: "packages/reactive", name: "@dougongjs/reactive" },
-  { dir: "packages/core", name: "@dougongjs/core" },
-  { dir: "packages/platform", name: "@dougongjs/platform" },
-  { dir: "packages/dougong", name: "dougong" },
+const PACKAGE_DIRECTORIES = [
+  "packages/reactive",
+  "packages/core",
+  "packages/platform",
+  "packages/dougong",
 ];
 
 const args = process.argv.slice(2);
@@ -106,6 +106,16 @@ if (!version) {
 if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(version)) {
   fail(`'${version}' is not a semantic version`);
 }
+
+const PACKAGES = PACKAGE_DIRECTORIES.map((dir) => {
+  const { name } = readManifest(dir);
+  if (typeof name !== "string" || !name || name !== name.trim()) {
+    fail(`${dir}/package.json must declare a non-empty trimmed package name`);
+  }
+  return { dir, name };
+});
+const packageNames = new Set(PACKAGES.map(({ name }) => name));
+if (packageNames.size !== PACKAGES.length) fail("Release package names must be unique");
 
 const current = readManifest(PACKAGES[0].dir).version;
 console.log(`\nDougong release: ${current} → ${version}${dryRun ? "  (dry run)" : ""}`);
@@ -256,7 +266,7 @@ for (const { dir, name } of PACKAGES) {
   if (!existsSync(tarball)) fail(`${name}: pnpm pack did not produce ${tarball}`);
   tarballs.set(name, tarball);
 
-  const extracted = join(stage, name.replace("/", "__"));
+  const extracted = join(stage, `candidate__${basename(dir)}`);
   execFileSync("mkdir", ["-p", extracted]);
   // Extract rather than list: `tar --wildcards` is not portable, and a listing
   // filter that silently matched nothing once reported a broken tarball as clean.
@@ -264,6 +274,9 @@ for (const { dir, name } of PACKAGES) {
   const root = join(extracted, "package");
 
   const packedManifest = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
+  if (packedManifest.name !== name) {
+    fail(`${name}: tarball declares name ${packedManifest.name}`);
+  }
   if (packedManifest.version !== version) {
     fail(`${name}: tarball declares version ${packedManifest.version}`);
   }
@@ -271,10 +284,8 @@ for (const { dir, name } of PACKAGES) {
     if (range.startsWith("workspace:")) {
       fail(`${name}: tarball still depends on ${dependency}@${range}`);
     }
-    if (dependency.startsWith("@dougongjs/") || dependency === "dougong") {
-      if (!range.includes(version)) {
-        fail(`${name}: tarball pins ${dependency}@${range}, expected ${version}`);
-      }
+    if (packageNames.has(dependency) && range !== version) {
+      fail(`${name}: tarball pins ${dependency}@${range}, expected ${version}`);
     }
   }
   for (const required of ["dist/index.js", "dist/index.d.ts", "README.md", "LICENSE"]) {
@@ -299,7 +310,7 @@ for (const { dir, name } of PACKAGES) {
   // registry matches what this run would upload. Contents are compared rather
   // than tarball bytes, because archive metadata is not reproducible.
   if (alreadyPublished.has(name)) {
-    const downloaded = join(stage, `published__${name.replace("/", "__")}`);
+    const downloaded = join(stage, `published__${basename(dir)}`);
     execFileSync("mkdir", ["-p", downloaded]);
     execFileSync("npm", ["pack", `${name}@${version}`, "--pack-destination", downloaded], {
       stdio: "ignore",

@@ -171,11 +171,13 @@ Each package's `public-api.types.ts` uses `expectTypeOf` and TypeScript expected
 
 ### Release query and artifact boundaries
 
+Each package's `package.json` owns its publication identity. The release script declares only directories and publication order, captures package names before preflight, and rejects missing or duplicate identities. Queries, downloads, upload confirmation and internal dependency membership use those captured names. Each tarball's name, version and exact internal dependency versions must match the release; a second hardcoded package name or a version substring cannot prove artifact correctness.
+
 Preflight and upload confirmation in `scripts/release.mjs` share `registryHasVersion`. The npm registry owns publication facts; a failed query cannot create a missing-version fact. Successful output must return exactly the requested version, and only a structured `E404` means absence. Network, permission, process-start and response-format failures stop immediately; upload polling retries only explicit `E404` responses.
 
 When resuming a partial release, npm also owns the contents of an already published version. A local candidate may skip upload only if the complete extracted file set and the bytes of every file match. Comparing entry points alone cannot prove this: declarations referenced by those entries are also public contracts. Missing, additional or different files require a new version; archive metadata is excluded from the comparison.
 
-`scripts/test/release.test.mjs` runs the actual release CLI in a temporary workspace with an executable search path containing only test commands, verifying that unknown state cannot pass preflight. `scripts/test/release-artifacts.test.mjs` uses isolated commands and real temporary archives to check complete content equality, missing and additional files, and changes to declarations, documentation and binary contents when resuming a partial release. These cases run under `pnpm test` without accessing the registry, publishing packages or changing real Git state.
+`scripts/test/release.test.mjs` runs the actual release CLI in a temporary workspace with an executable search path containing only test commands, verifying that declarations supply package identities, missing or duplicate identities are rejected, and unknown state cannot pass preflight. `scripts/test/release-artifacts.test.mjs` uses isolated commands and real temporary archives to check package identity and exact internal dependency versions, as well as complete content equality, missing and additional files, and changes to declarations, documentation and binary contents when resuming a partial release. These cases run under `pnpm test` without accessing the registry, publishing packages or changing real Git state.
 
 ### Coverage floors
 

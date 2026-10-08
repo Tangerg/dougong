@@ -38,6 +38,15 @@ if (name === "git") {
   const source = join(workspace, name === "pnpm" ? "local" : "published", packageName);
   if (name === "pnpm") {
     cpSync(join(process.cwd(), "package.json"), join(source, "package/package.json"));
+    if (packageName === "core") {
+      const manifestPath = join(source, "package/package.json");
+      const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+      if (process.env.DOUGONG_RELEASE_PACKED_NAME) manifest.name = process.env.DOUGONG_RELEASE_PACKED_NAME;
+      if (process.env.DOUGONG_RELEASE_PACKED_DEPENDENCIES) {
+        manifest.dependencies = JSON.parse(process.env.DOUGONG_RELEASE_PACKED_DEPENDENCIES);
+      }
+      writeFileSync(manifestPath, JSON.stringify(manifest));
+    }
     writeFileSync(join(workspace, "release-stage"), stage);
   }
   const archive = join(stage, packageName + ".tgz");
@@ -53,7 +62,7 @@ if (name === "git") {
 } else process.exit(99);
 `;
 
-function runRelease(mutate) {
+function runRelease(mutate, { packedName = "", packedDependencies } = {}) {
   const workspace = mkdtempSync(join(tmpdir(), "dougong-release-artifacts-test-"));
   try {
     const bin = join(workspace, "bin");
@@ -72,7 +81,8 @@ function runRelease(mutate) {
 
     const originals = new Map();
     for (const name of packages) {
-      const manifest = `${JSON.stringify({ name, version: "0.7.1" }, null, 2)}\n`;
+      const packageName = name === "dougong" ? name : `@dougongjs/${name}`;
+      const manifest = `${JSON.stringify({ name: packageName, version: "0.7.1" }, null, 2)}\n`;
       const path = join(workspace, "packages", name, "package.json");
       mkdirSync(join(workspace, "packages", name), { recursive: true });
       writeFileSync(path, manifest);
@@ -85,7 +95,7 @@ function runRelease(mutate) {
         "dist/payload.bin": Buffer.from([0xff, 0x00, 0x01]),
         "README.md": "Fixture documentation\n",
         LICENSE: "Fixture license\n",
-        "package.json": `${JSON.stringify({ name, version }, null, 2)}\n`,
+        "package.json": `${JSON.stringify({ name: packageName, version }, null, 2)}\n`,
       };
       for (const side of ["local", "published"]) {
         const root = join(workspace, side, name, "package");
@@ -98,7 +108,14 @@ function runRelease(mutate) {
     mutate(join(workspace, "published/reactive/package"));
     const result = spawnSync(process.execPath, [release, version, "--dry-run"], {
       cwd: workspace,
-      env: { ...process.env, PATH: bin, DOUGONG_RELEASE_FIXTURE: workspace },
+      env: {
+        ...process.env,
+        PATH: bin,
+        DOUGONG_RELEASE_FIXTURE: workspace,
+        DOUGONG_RELEASE_PACKED_NAME: packedName,
+        DOUGONG_RELEASE_PACKED_DEPENDENCIES:
+          packedDependencies === undefined ? "" : JSON.stringify(packedDependencies),
+      },
       encoding: "utf8",
       timeout: 10000,
     });
@@ -143,4 +160,22 @@ it("resumes packaging only when the complete published package matches", () => {
   expect(result.status).toBe(0);
   expect(result.stdout).toContain("already published, contents match");
   expect(result.stdout).toContain("Dry run complete");
+});
+
+it("rejects a tarball carrying another package's identity before publication", () => {
+  const result = runRelease(() => undefined, { packedName: "@fixture/unexpected" });
+  expect(result.status).toBe(1);
+  expect(result.stderr).toContain("tarball declares name @fixture/unexpected");
+  expect(result.stdout).not.toContain("Dry run complete");
+});
+
+it.each([
+  { range: version, status: 0, output: "stdout", message: "Dry run complete" },
+  { range: "^0.7.20", status: 1, output: "stderr", message: `expected ${version}` },
+])("checks the packed internal dependency version $range", ({ range, status, output, message }) => {
+  const result = runRelease(() => undefined, {
+    packedDependencies: { "@dougongjs/reactive": range },
+  });
+  expect(result.status).toBe(status);
+  expect(result[output]).toContain(message);
 });

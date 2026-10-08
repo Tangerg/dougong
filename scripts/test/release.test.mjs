@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -18,6 +18,9 @@ if (name === "git") {
   else if (args[0] === "rev-list") console.log("0");
   else if (!["status", "fetch", "tag"].includes(args[0])) process.exit(99);
 } else if (name === "npm") {
+  const queries = JSON.parse(readFileSync("queries.json", "utf8"));
+  queries.push(args[1]);
+  writeFileSync("queries.json", JSON.stringify(queries));
   const response = JSON.parse(readFileSync("response.json", "utf8"));
   if (response.signal) process.kill(process.pid, response.signal);
   process.stdout.write(args.includes("--json") ? response.stdout : (response.plain ?? response.stdout));
@@ -28,13 +31,23 @@ if (name === "git") {
 } else process.exit(99);
 `;
 
-function runRelease(response) {
+function runRelease(
+  response,
+  names = ["@dougongjs/reactive", "@dougongjs/core", "@dougongjs/platform", "dougong"],
+) {
   const workspace = mkdtempSync(join(tmpdir(), "dougong-release-test-"));
   try {
     const bin = join(workspace, "bin");
     mkdirSync(bin);
-    mkdirSync(join(workspace, "packages/reactive"), { recursive: true });
-    writeFileSync(join(workspace, "packages/reactive/package.json"), '{"version":"0.7.1"}');
+    for (const [index, directory] of ["reactive", "core", "platform", "dougong"].entries()) {
+      const path = join(workspace, "packages", directory);
+      mkdirSync(path, { recursive: true });
+      writeFileSync(
+        join(path, "package.json"),
+        JSON.stringify({ name: names[index], version: "0.7.1" }),
+      );
+    }
+    writeFileSync(join(workspace, "queries.json"), "[]");
     writeFileSync(join(workspace, "response.json"), JSON.stringify(response));
     for (const name of ["git", "pnpm", ...(response.missing ? [] : ["npm"])]) {
       writeFileSync(join(bin, name), command, { mode: 0o755 });
@@ -46,7 +59,11 @@ function runRelease(response) {
       timeout: 5000,
     });
     if (result.error) throw result.error;
-    return { ...result, gateStarted: existsSync(join(workspace, "gate-started")) };
+    return {
+      ...result,
+      gateStarted: existsSync(join(workspace, "gate-started")),
+      queries: JSON.parse(readFileSync(join(workspace, "queries.json"), "utf8")),
+    };
   } finally {
     rmSync(workspace, { recursive: true, force: true });
   }
@@ -88,4 +105,28 @@ it("recognizes an existing version before starting verification", () => {
   expect(result.status).toBe(1);
   expect(result.gateStarted).toBe(false);
   expect(result.stderr).toContain(`${version} is already published for every package`);
+});
+
+it("queries the release identities captured from package manifests", () => {
+  const names = ["@fixture/reactive", "@fixture/core", "@fixture/platform", "fixture-facade"];
+  const result = runRelease(
+    { status: 1, stdout: JSON.stringify({ error: { code: "E404" } }) },
+    names,
+  );
+  expect(result.queries).toEqual(names.map((name) => `${name}@${version}`));
+  expect(result.gateStarted).toBe(true);
+});
+
+it.each([
+  { label: "missing", names: [undefined, "core", "platform", "facade"], error: "package name" },
+  { label: "duplicate", names: ["shared", "shared", "platform", "facade"], error: "unique" },
+])("rejects $label release identities before querying npm", ({ names, error }) => {
+  const result = runRelease(
+    { status: 1, stdout: JSON.stringify({ error: { code: "E404" } }) },
+    names,
+  );
+  expect(result.status).toBe(1);
+  expect(result.queries).toEqual([]);
+  expect(result.gateStarted).toBe(false);
+  expect(result.stderr).toContain(error);
 });
