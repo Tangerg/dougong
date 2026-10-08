@@ -4,7 +4,6 @@ import {
   type AsyncDisposable,
   type Disposable,
   type Readable,
-  type Resource,
 } from "./protocol";
 import { assertSynchronous, isThenable } from "./sync-result";
 
@@ -76,10 +75,7 @@ class Observation<T, Child extends AsyncDisposable> {
     const subscription = source.subscribe(() => this.#invalidate());
     assertDisposable(subscription, "Readable.subscribe()");
     if (this.#state.phase !== "active") {
-      assertSynchronous(
-        subscription.dispose(),
-        "Readable subscriptions must dispose synchronously",
-      );
+      disposeSubscription(subscription);
       throw new Error("Observation is not active");
     }
     this.#subscription = subscription;
@@ -112,7 +108,8 @@ class Observation<T, Child extends AsyncDisposable> {
 
   async #disposeResources() {
     const errors: unknown[] = [];
-    await collect(this.#takeSubscription(), errors);
+    // Finish synchronous factory handoffs before draining their returned resources.
+    await this.#disposeSubscription(errors);
     await collect(this.#takeDrainTask(), errors);
     await collect(this.#takeCurrent(), errors);
     if (errors.length === 1) throw errors[0];
@@ -210,10 +207,15 @@ class Observation<T, Child extends AsyncDisposable> {
     assertSynchronous(result, "Observers must be synchronous; use owner.spawn() for async work");
   }
 
-  #takeSubscription() {
+  async #disposeSubscription(errors: unknown[]) {
     const subscription = this.#subscription;
     this.#subscription = undefined;
-    return subscription;
+    if (!subscription) return;
+    try {
+      disposeSubscription(subscription);
+    } catch (error) {
+      errors.push(error);
+    }
   }
 
   #takeCurrent() {
@@ -242,7 +244,7 @@ class Observation<T, Child extends AsyncDisposable> {
     const errors = [error];
     this.#releaseBinding("stopped");
     this.#wakeDrain?.();
-    await collect(this.#takeSubscription(), errors);
+    await this.#disposeSubscription(errors);
     await collect(this.#takeCurrent(), errors);
     // The current drain task cannot await its own disposal. Release that edge
     // before disposing the cleanup handle that owns this Observation.
@@ -333,7 +335,11 @@ function assertObservationTask(value: unknown): asserts value is ObservationTask
   }
 }
 
-async function collect(resource: Resource | undefined, errors: unknown[]) {
+function disposeSubscription(subscription: Disposable) {
+  assertSynchronous(subscription.dispose(), "Readable subscriptions must dispose synchronously");
+}
+
+async function collect(resource: AsyncDisposable | undefined, errors: unknown[]) {
   if (!resource) return;
   try {
     await resource.dispose();

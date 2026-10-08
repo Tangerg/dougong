@@ -4,11 +4,38 @@ import {
   definePlugin,
   extensionPoint,
   service,
+  RecordedFailure,
   type Group,
   type Installation,
   type PluginContext,
   type Task,
 } from "../src";
+
+it("discards a rejected Installation even when its original failure has an inaccessible cause", async () => {
+  const cause = Proxy.revocable({}, {});
+  cause.revoke();
+  const failure = new Error("original setup failure", { cause: cause.proxy });
+  const host = createHost();
+  await host.start();
+  const change = host.change();
+  const installation = change.install(
+    definePlugin({
+      name: "owned.inaccessible-failure",
+      setup() {
+        throw failure;
+      },
+    }),
+  );
+
+  const rejected: unknown = await change.commit().catch((error: unknown) => error);
+  expect(Object.is(rejected, failure)).toBe(true);
+  await expect(installation.ready()).rejects.toBeInstanceOf(RecordedFailure);
+  expect(installation.diagnostics.get().error?.snapshot.message).toBe("original setup failure");
+  expect(host.diagnostics.get().installations.size).toBe(0);
+  expect(host.status).toBe("active");
+  await installation.remove();
+  await host.stop();
+});
 
 it("keeps child readiness and committed membership behind a parent removal transaction", async () => {
   const entered = Promise.withResolvers<void>();

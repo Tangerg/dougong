@@ -171,6 +171,8 @@ The result is a dependency direction that stays one-way: `reactive` does not dep
 
 If a third-party source closes the observation before `subscribe()` returns, `observe()` immediately disposes that subscription and rejects construction. A failure of the subscription’s disposer also reaches the caller synchronously.
 
+A Readable subscription's dispose must withdraw it synchronously. Construction rollback, explicit disposal and failure stopping share this boundary: a returned thenable is observed and rejected with TypeError, and cannot delay the release of child Lifetimes or tasks. Other cleanup still runs, with failures aggregated alongside the original error.
+
 Initial observation subscribes first, creates the child Lifetime, then reads the source and invokes the observer. Replacement also reads after child creation, so changes triggered by diagnostics during resource creation are included. Every replacement failure uses one stop procedure that preserves the original error and any cleanup failures together.
 
 ## Failure handling

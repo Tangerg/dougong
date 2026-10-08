@@ -17,8 +17,6 @@ export interface AsyncDisposable {
   [Symbol.asyncDispose](): Promise<void>;
 }
 
-export type Resource = Disposable | AsyncDisposable;
-
 /** Structural observable protocol shared by signals, ContributionViews and diagnostics. */
 export interface Readable<T> {
   get(): T;

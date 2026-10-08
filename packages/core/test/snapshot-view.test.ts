@@ -5,6 +5,31 @@ import { batchSnapshotNotifications } from "../src/snapshot-view";
 const RELEASE_PASSES = 8;
 
 describe("SnapshotPublisher", () => {
+  it("seals a failed final read whose error cause is inaccessible", () => {
+    const cause = Proxy.revocable({}, {});
+    cause.revoke();
+    const failure = new Error("original reader failure", { cause: cause.proxy });
+    let failed = false;
+    const publisher = new SnapshotPublisher(
+      () => {
+        if (failed) throw failure;
+        return 1;
+      },
+      () => undefined,
+    );
+    failed = true;
+    publisher.invalidate();
+
+    expect(
+      Object.is(
+        captureError(() => publisher.dispose()),
+        failure,
+      ),
+    ).toBe(true);
+    expect(captureError(() => publisher.view.get())).toBeInstanceOf(RecordedFailure);
+    publisher.dispose();
+  });
+
   it("rejects a circular reader instead of returning its previous cached value", () => {
     let value = 0;
     const publisher = new SnapshotPublisher(

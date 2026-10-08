@@ -80,6 +80,63 @@ describe("public API surface", () => {
     expect(Object.isFrozen(recorded.snapshot)).toBe(true);
   });
 
+  it("records an inaccessible cause without replacing the original failure", () => {
+    const cause = Proxy.revocable({}, {});
+    cause.revoke();
+    const failure = new Error("original failure", { cause: cause.proxy });
+
+    expect(new core.RecordedFailure(failure).snapshot).toMatchObject({
+      name: "Error",
+      message: "original failure",
+      cause: { name: "NonError", message: "Non-Error object omitted" },
+    });
+  });
+
+  it.each(["errors", "denied", "issues"])(
+    "omits an inaccessible diagnostic array (%s)",
+    (field) => {
+      const items = Proxy.revocable([], {});
+      items.revoke();
+      const failure = Object.assign(new Error("original failure"), { [field]: items.proxy });
+
+      const snapshot = new core.RecordedFailure(failure).snapshot;
+      expect(snapshot.message).toBe("original failure");
+      expect(snapshot).not.toHaveProperty(field);
+    },
+  );
+
+  it("captures diagnostic array length once through the external field boundary", () => {
+    let reads = 0;
+    const failures = new Proxy([new Error("nested failure")], {
+      get(target, key, receiver) {
+        if (key === "length") {
+          if (reads++ > 0) throw new Error("array length read twice");
+          return 1;
+        }
+        return Reflect.get(target, key, receiver);
+      },
+    });
+    const failure = Object.assign(new Error("original failure"), { errors: failures });
+
+    expect(new core.RecordedFailure(failure).snapshot.errors?.[0]?.message).toBe("nested failure");
+    expect(reads).toBe(1);
+  });
+
+  it("omits an inaccessible validation path while retaining its issue message", () => {
+    const path = new Proxy(["field"], {
+      get() {
+        throw new Error("path is inaccessible");
+      },
+    });
+    const failure = Object.assign(new Error("original failure"), {
+      issues: [{ message: "expected value", path }],
+    });
+
+    expect(new core.RecordedFailure(failure).snapshot.issues).toEqual([
+      { message: "expected value" },
+    ]);
+  });
+
   it("bounds diagnostic chains and preserves aggregate causes and validation issues", () => {
     const config = new core.ConfigValidationError([
       { message: "expected integer", path: [{ key: "port" }] },

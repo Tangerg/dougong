@@ -189,6 +189,8 @@ The snapshot preserves original name, message, code and stack text, plus bounded
 
 Recording expands at most 32 error nodes, descends at most four edges, and takes at most eight items per error list. Messages are capped at 4,096 characters, stack text at 16,384, and names, codes and permission fields at 256. Validation paths keep at most 16 segments. `truncated` marks bounded records and cut-off chains. These are diagnostic limits, not a serializer for application state.
 
+Reflection and field reads also cross the recording boundary: an inaccessible cause object becomes an omitted NonError record, while inaccessible array or path fields are omitted from the snapshot. Array length is captured once before reading a bounded number of entries. A revoked Proxy or throwing accessor cannot replace the original operation failure or prevent terminal resource release.
+
 ## Related
 
 - [Core API specification · Error conventions](./core-api.md)

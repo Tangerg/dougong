@@ -56,7 +56,7 @@ export class RecordedFailure extends Error {
   }
 
   constructor(error: Error) {
-    if (!(error instanceof Error)) throw new TypeError("RecordedFailure expects an Error");
+    if (!isRecordableError(error)) throw new TypeError("RecordedFailure expects an Error");
     const snapshot = #snapshot in error ? error.#snapshot : captureError(error);
     super(snapshot.message);
     this.code = snapshot.code;
@@ -79,7 +79,7 @@ function captureError(error: Error): ErrorSnapshot {
         truncated: true,
       });
     }
-    if (!(value instanceof Error)) {
+    if (!isRecordableError(value)) {
       const message =
         value === null ||
         ["string", "number", "boolean", "undefined", "bigint", "symbol"].includes(typeof value)
@@ -97,12 +97,15 @@ function captureError(error: Error): ErrorSnapshot {
       const raw = readErrorProperty(value, key);
       return typeof raw === "string" ? clip(raw, limit) : undefined;
     };
-    const list = (key: string) => {
-      const raw = readErrorProperty(value, key);
-      if (!Array.isArray(raw)) return undefined;
-      if (raw.length > 8) truncated = true;
-      // Read each item through the same boundary as other error fields.
-      return Array.from({ length: Math.min(raw.length, 8) }, (_, index) =>
+    const list = (container: unknown, key: string, limit: number) => {
+      const raw = readErrorProperty(container, key);
+      if (!isRecordableArray(raw)) return undefined;
+      const length = readErrorProperty(raw, "length");
+      if (typeof length !== "number" || !Number.isSafeInteger(length) || length < 0) {
+        return undefined;
+      }
+      if (length > limit) truncated = true;
+      return Array.from({ length: Math.min(length, limit) }, (_, index) =>
         readErrorProperty(raw, index),
       );
     };
@@ -111,26 +114,21 @@ function captureError(error: Error): ErrorSnapshot {
     const stack = string("stack", 16384);
     const code = string("code", 256);
     const cause = readErrorProperty(value, "cause");
-    const errors = list("errors");
+    const errors = list(value, "errors", 8);
     const manifestName = string("manifestName", 256);
-    const denied = list("denied")
+    const denied = list(value, "denied", 8)
       ?.filter((item): item is string => typeof item === "string")
       .map((item) => clip(item, 256));
-    const issues = list("issues")?.map((issue) => {
+    const issues = list(value, "issues", 8)?.map((issue) => {
       const message = readErrorProperty(issue, "message");
-      const rawPath = readErrorProperty(issue, "path");
-      const path = Array.isArray(rawPath)
-        ? Array.from({ length: Math.min(rawPath.length, 16) }, (_, index) => {
-            const part = readErrorProperty(rawPath, index);
-            const key = part && typeof part === "object" ? readErrorProperty(part, "key") : part;
-            return typeof key === "number"
-              ? key
-              : typeof key === "string" || typeof key === "symbol"
-                ? clip(String(key), 256)
-                : "[omitted]";
-          })
-        : undefined;
-      if (Array.isArray(rawPath) && rawPath.length > 16) truncated = true;
+      const path = list(issue, "path", 16)?.map((part) => {
+        const key = part && typeof part === "object" ? readErrorProperty(part, "key") : part;
+        return typeof key === "number"
+          ? key
+          : typeof key === "string" || typeof key === "symbol"
+            ? clip(String(key), 256)
+            : "[omitted]";
+      });
       return Object.freeze({
         message: typeof message === "string" ? clip(message, 4096) : "",
         ...(path ? { path: Object.freeze(path) } : {}),
@@ -154,8 +152,24 @@ function captureError(error: Error): ErrorSnapshot {
   return visit(error, 0);
 }
 
-// Error fields are a real external boundary. A throwing accessor must not
-// replace the failure being recorded with another failure in its recorder.
+// Reflection and field reads both cross the external failure boundary: revoked
+// proxies and throwing accessors cannot replace the failure being recorded.
+function isRecordableError(value: unknown): value is Error {
+  try {
+    return value instanceof Error;
+  } catch {
+    return false;
+  }
+}
+
+function isRecordableArray(value: unknown): value is unknown[] {
+  try {
+    return Array.isArray(value);
+  } catch {
+    return false;
+  }
+}
+
 function readErrorProperty(value: unknown, key: PropertyKey): unknown {
   try {
     return value && typeof value === "object"

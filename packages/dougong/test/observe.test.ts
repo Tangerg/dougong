@@ -117,6 +117,86 @@ function manualLifetime(dispose: () => void | Promise<void>): AsyncDisposable {
 }
 
 describe("observe composition", () => {
+  it("drains a Task handed back by a factory that closed the observation", async () => {
+    const base = manualOwner(manualLifetime(() => undefined));
+    let cleanup!: AsyncDisposable;
+    let closing!: Promise<void>;
+    let releaseTask!: ReturnType<typeof vi.fn<() => Promise<void>>>;
+    const owner: ObservationOwner = {
+      ...base,
+      cleanup(dispose) {
+        cleanup = base.cleanup(dispose);
+        return cleanup;
+      },
+      spawn(task) {
+        const runner = base.spawn(task);
+        releaseTask = vi.fn<() => Promise<void>>(() => runner.dispose());
+        closing = cleanup.dispose();
+        return { result: runner.result, ...asyncDisposable(releaseTask) };
+      },
+    };
+
+    observe(owner, signal(1), () => undefined);
+    await closing;
+    expect(releaseTask).toHaveBeenCalledOnce();
+  });
+
+  it.each(["dispose", "stop"] as const)(
+    "rejects asynchronous source unsubscription during %s and still releases the child",
+    async (phase) => {
+      const releaseChild = vi.fn<() => void>();
+      const base = manualOwner(manualLifetime(releaseChild));
+      let runnerResult!: Promise<void>;
+      const owner: ObservationOwner = {
+        ...base,
+        spawn(task) {
+          const runner = base.spawn(task);
+          runnerResult = runner.result as Promise<void>;
+          return runner;
+        },
+      };
+      const readFailure = new Error("source read failed");
+      const unsubscription = Promise.withResolvers<void>();
+      let failed = false;
+      let notify!: () => void;
+      const source: Readable<number> = {
+        get() {
+          if (failed) throw readFailure;
+          return 1;
+        },
+        subscribe(listener) {
+          notify = listener;
+          return disposable(() => unsubscription.promise);
+        },
+      };
+      const handle = observe(owner, source, () => undefined);
+      await Promise.resolve();
+
+      let completion: Promise<unknown>;
+      if (phase === "dispose") {
+        completion = handle.dispose().catch((error: unknown) => error);
+      } else {
+        failed = true;
+        notify();
+        completion = runnerResult.catch((error: unknown) => error);
+      }
+      await tick();
+      try {
+        expect(releaseChild).toHaveBeenCalledOnce();
+      } finally {
+        unsubscription.reject(new Error("async unsubscription failed"));
+      }
+      const failure = await completion;
+      expect(failure).toBeInstanceOf(phase === "dispose" ? TypeError : AggregateError);
+      const errors = phase === "dispose" ? [failure] : (failure as AggregateError).errors;
+      expect(errors).toEqual([
+        ...(phase === "stop" ? [readFailure] : []),
+        new TypeError("Readable subscriptions must dispose synchronously"),
+      ]);
+      if (phase === "stop") await handle.dispose();
+    },
+  );
+
   it.each([undefined, new Error("late subscription disposal failed")])(
     "releases a subscription returned after observation disposal has already started (%s)",
     async (failure) => {

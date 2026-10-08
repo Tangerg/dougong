@@ -171,6 +171,8 @@ interface ObservationOwner<Child extends AsyncDisposable = AsyncDisposable> {
 
 若第三方 source 在 `subscribe()` 返回前关闭了观察，`observe()` 会立即释放刚返回的订阅并拒绝构造，避免订阅落在释放过程之外；该订阅的释放失败也会同步交给调用方。
 
+`Readable` 订阅的 dispose 必须同步撤销订阅。构造回滚、主动释放和失败停止共用这一边界；返回 thenable 会被观察并以 `TypeError` 拒绝，不会等待它后才释放子 Lifetime 或任务。其他清理仍会执行，失败与原始错误一起聚合。
+
 初次观察先建立订阅，再创建子 Lifetime，最后读取 source 并调用 observer。后续替换同样在子 Lifetime 建立后读值，因此创建资源时由诊断回调触发的变化也不会遗漏。所有替换失败都进入同一个停止流程，原始错误和资源清理错误一起保留。
 
 ### 失败处理
