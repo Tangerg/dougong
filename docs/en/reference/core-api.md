@@ -295,6 +295,7 @@ StandardSchemaV1<ConfigInput, Config>
 - `install(plugin, input)` receives `ConfigInput`.
 - `setup(ctx, config)` receives the validated or transformed `Config`.
 - Schemas may validate asynchronously.
+- Core awaits only the schema's validation result. Without a schema, it passes the input unchanged; with a schema, it passes the successful result's `value` unchanged. Core neither unwraps Promise or thenable config payloads nor reads their `then`. A schema or setup must explicitly await a payload when it needs the resolved value. Installation and updates follow the same contract.
 - A configuration result is discriminated only by own `value` / `issues` properties, never through its prototype chain. Failure throws `ConfigValidationError` carrying a frozen `issues` list. Each issue message / path is read once; validation and storage use the same captured value without retaining third-party payloads.
 - A schema result must be either a success object containing `value` or a failure object containing an `issues` array; malformed issues, messages or paths reject with a precise `TypeError` before setup.
 - Core neither clones nor deep-freezes config; defensive transformation belongs to the schema.

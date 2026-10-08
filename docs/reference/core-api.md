@@ -295,6 +295,7 @@ StandardSchemaV1<ConfigInput, Config>
 - `install(plugin, input)` 接收 `ConfigInput`。
 - `setup(ctx, config)` 接收校验或转换后的 `Config`。
 - Schema 可以异步校验。
+- Core 只等待 Schema 的校验结果；无 Schema 时原样传递输入，有 Schema 时原样传递成功结果的 `value`。配置载荷即使是 Promise 或 thenable，也不会被 Core 展开或读取其 `then`；需要解析载荷时，由 Schema 或 setup 显式等待。安装与更新遵守同一契约。
 - 配置结果只用 own `value` / `issues` 判别成功与失败，不读取原型链；失败抛含冻结 `issues` 的 `ConfigValidationError`。每个 issue 的 message / path 只读取一次，验证与保存使用同一份捕获值，不保留第三方附带载荷。
 - Schema 结果必须是含 `value` 的成功对象，或含数组 `issues` 的失败对象；畸形 issue、message 或 path 会在 setup 前以精确 `TypeError` 拒绝。
 - Core 不克隆或深冻结配置；防御性转换属于 Schema。

@@ -263,10 +263,12 @@ export class Engine {
     for (const installation of installations) {
       try {
         const declaration = plan.declarationFor(installation);
-        configs.set(
-          installation,
-          await resolvePluginConfig(declaration.plugin.config, declaration.config, installation.id),
+        const resolved = await resolvePluginConfig(
+          declaration.plugin.config,
+          declaration.config,
+          installation.id,
         );
+        configs.set(installation, resolved.value);
       } catch (error) {
         throw normalizeFailure(
           error,

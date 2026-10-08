@@ -66,3 +66,34 @@ it("loads and activates the Artifact captured at admission", async () => {
   await platform.dispose();
   await host.stop();
 });
+
+it("delivers an Artifact's opaque Promise config to the loaded Plugin", async () => {
+  const config = Promise.resolve(7);
+  let received: Promise<number> | undefined;
+  const plugin = definePlugin<Promise<number>>({
+    name: "capture.opaque-config",
+    setup(_ctx, value) {
+      received = value;
+    },
+  });
+  const host = createHost();
+  await host.start();
+  const platform = createPlatform({
+    installer: host,
+    apiVersion: "1.0.0",
+    loader: new MemoryLoader(new Map([["selected", { default: plugin }]])),
+  });
+  try {
+    const registration = await platform.register({
+      manifest: { name: plugin.name, version: "1.0.0" },
+      reference: "selected",
+      config,
+    });
+    await registration.activate();
+    await registration.ready();
+    expect(received).toBe(config);
+  } finally {
+    await platform.dispose();
+    await host.stop();
+  }
+});

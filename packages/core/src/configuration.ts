@@ -12,13 +12,15 @@ import { ConfigValidationError } from "./errors";
  *
  * A schema is optional. With none declared, the input passes through untouched:
  * Core does not invent a validation step the Plugin author did not ask for.
+ * The result envelope keeps async validation separate from Promise-shaped
+ * config values, which only the Plugin may choose to await.
  */
 export async function resolvePluginConfig(
   schema: StandardSchemaV1<unknown, unknown> | undefined,
   input: unknown,
   installationId: string,
-) {
-  if (!schema) return input;
+): Promise<{ readonly value: unknown }> {
+  if (!schema) return { value: input };
   const result: unknown = await schema["~standard"].validate(input);
   if (!result || typeof result !== "object") {
     throw new TypeError(
@@ -44,5 +46,5 @@ export async function resolvePluginConfig(
       `Installation '${installationId}' config validator returned neither value nor issues`,
     );
   }
-  return (result as { readonly value: unknown }).value;
+  return { value: (result as { readonly value: unknown }).value };
 }

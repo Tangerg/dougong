@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { StandardSchemaV1 } from "@standard-schema/spec";
 import { ConfigValidationError, createHost, definePlugin } from "../src/index";
 
@@ -31,7 +31,97 @@ async function startWith(schema: StandardSchemaV1<unknown, unknown>, config: unk
   );
 }
 
+function configProbe(source: "input" | "schema", value: unknown) {
+  const setup = vi.fn<(_context: unknown, _config: unknown) => undefined>(() => undefined);
+  const plugin = definePlugin<unknown>({
+    name: "test.opaque-config",
+    ...(source === "schema" ? { config: schemaReturning(Promise.resolve({ value })) } : {}),
+    setup,
+  });
+  const host = createHost();
+  const installation = host.install(plugin, source === "schema" ? "validator input" : value);
+  return { host, installation, setup };
+}
+
 describe("Plugin config validation", () => {
+  it.each(["input", "schema"] as const)(
+    "preserves a Promise-valued config from %s through activation and update",
+    async (source) => {
+      const value = Promise.resolve(7);
+      const { host, installation, setup } = configProbe(source, value);
+      try {
+        await host.start();
+        await installation.update({ config: source === "schema" ? "next input" : value });
+        expect(setup).toHaveBeenCalledTimes(2);
+        for (const call of setup.mock.calls) expect(call[1]).toBe(value);
+      } finally {
+        await host.stop();
+      }
+    },
+  );
+
+  it.each(["input", "schema"] as const)(
+    "does not read or invoke a config's then protocol from %s",
+    async (source) => {
+      const then = vi.fn<(resolve: (value: number) => void) => void>((resolve) => resolve(7));
+      const readThen = vi.fn<() => typeof then>(() => then);
+      const value = new Proxy(
+        {},
+        {
+          get(target, key, receiver) {
+            if (key === "then") return readThen();
+            return Reflect.get(target, key, receiver);
+          },
+        },
+      );
+      const { host, setup } = configProbe(source, value);
+      try {
+        await host.start();
+        expect(setup.mock.calls[0]?.[1]).toBe(value);
+        expect(readThen).not.toHaveBeenCalled();
+        expect(then).not.toHaveBeenCalled();
+      } finally {
+        await host.stop();
+      }
+    },
+  );
+
+  it.each(["input", "schema"] as const)(
+    "does not wait for a pending config Promise from %s",
+    async (source) => {
+      const pending = Promise.withResolvers<number>();
+      const { host, setup } = configProbe(source, pending.promise);
+      const starting = host.start();
+      try {
+        await new Promise<void>((resolve) => setTimeout(resolve, 0));
+        const callsBeforeResolution = setup.mock.calls.length;
+        pending.resolve(7);
+        await starting;
+        expect(callsBeforeResolution).toBe(1);
+        expect(setup.mock.calls[0]?.[1]).toBe(pending.promise);
+      } finally {
+        pending.resolve(7);
+        await starting;
+        await host.stop();
+      }
+    },
+  );
+
+  it.each(["input", "schema"] as const)(
+    "leaves rejection observation of a config Promise from %s to its consumer",
+    async (source) => {
+      const value = Promise.reject(new Error("config resource unavailable"));
+      void value.catch(() => undefined);
+      const { host, setup } = configProbe(source, value);
+      try {
+        await host.start();
+        expect(setup.mock.calls[0]?.[1]).toBe(value);
+      } finally {
+        await host.stop();
+      }
+    },
+  );
+
   it("names the Installation when a validator returns a non-object result", async () => {
     const failure = await startWith(schemaReturning("not a result"), 1);
 

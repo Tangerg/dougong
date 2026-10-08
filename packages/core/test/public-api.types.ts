@@ -116,6 +116,12 @@ const parsed = core.definePlugin({
     void value.toFixed();
   },
 });
+const promised = core.definePlugin<Promise<number>>({
+  name: "surface.promise-config",
+  setup(_ctx, value) {
+    expectTypeOf(value).toEqualTypeOf<Promise<number>>();
+  },
+});
 expectTypeOf<
   core.Installation<typeof parsed> extends core.Installation ? true : false
 >().toEqualTypeOf<false>();
@@ -141,6 +147,11 @@ const verifyInstallationTypes = (
   void precise.update({ config: "43" });
   // @ts-expect-error Updates retain the precise Plugin's config input type.
   void precise.update({ config: 43 });
+
+  const promisedInstallation = host.install(promised, Promise.resolve(42));
+  void promisedInstallation.update({ config: Promise.resolve(43) });
+  // @ts-expect-error Promise config is a payload, not an implicitly awaited input.
+  host.install(promised, 42);
 
   const installation = host.install(erased);
   void installation.update({ plugin: erased });

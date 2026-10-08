@@ -144,6 +144,8 @@ Artifact 也是严格的声明值：它必须是仅含 `manifest`、`reference`�
 
 Artifact 是外部交付边界，不重复 Core 的 Plugin 作者期泛型：加载所得模块在类型系统外，`config` 必须由最终选中的 Plugin schema 在运行时验证；`placeholder` 使用同一个 `AnyPlugin` 擦除形状，因此异构 Plugin 清单可以直接进入 Platform，无需断言。擦除不增加第二条执行路径；placeholder 与加载所得 Plugin 都经过同一个声明规范化与 Core 提交边界。
 
+Platform 将 `config` 原样交给 Core，包括 Promise 与 thenable 载荷，不自行等待或转换配置。异步校验遵循 Core 的配置契约；需要解析载荷时，由所选 Plugin 的 Schema 或 setup 显式等待。
+
 `placeholder` 必须由应用代码信任的代码创建。它适合在懒加载前贡献命令标题、菜单元数据或占位面板。Platform 注册时把它作为普通 Core Plugin 安装；激活时原子更新**同一个 Core Installation**，换成加载所得 Plugin，因此 Installation ID、Group 归属和下游观测身份保持稳定。
 
 `Registration.status`：
