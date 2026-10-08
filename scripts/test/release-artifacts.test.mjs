@@ -62,7 +62,7 @@ if (name === "git") {
 } else process.exit(99);
 `;
 
-function runRelease(mutate, { packedName = "", packedDependencies } = {}) {
+function runRelease(mutate, { packedName = "", packedDependencies, escapedNames = false } = {}) {
   const workspace = mkdtempSync(join(tmpdir(), "dougong-release-artifacts-test-"));
   try {
     const bin = join(workspace, "bin");
@@ -82,7 +82,11 @@ function runRelease(mutate, { packedName = "", packedDependencies } = {}) {
     const originals = new Map();
     for (const name of packages) {
       const packageName = name === "dougong" ? name : `@dougongjs/${name}`;
-      const manifest = `${JSON.stringify({ name: packageName, version: "0.7.1" }, null, 2)}\n`;
+      const manifest =
+        `${JSON.stringify({ name: packageName, version: "0.7.1" }, null, 2)}\n`.replace(
+          packageName,
+          escapedNames ? packageName.replace("d", "\\u0064") : packageName,
+        );
       const path = join(workspace, "packages", name, "package.json");
       mkdirSync(join(workspace, "packages", name), { recursive: true });
       writeFileSync(path, manifest);
@@ -160,6 +164,12 @@ it("resumes packaging only when the complete published package matches", () => {
   expect(result.status).toBe(0);
   expect(result.stdout).toContain("already published, contents match");
   expect(result.stdout).toContain("Dry run complete");
+});
+
+it("restores the original manifest bytes after a successful dry run", () => {
+  const result = runRelease(() => undefined, { escapedNames: true });
+  expect(result.status).toBe(0);
+  expect(result.stdout).toContain("package.json versions restored");
 });
 
 it("rejects a tarball carrying another package's identity before publication", () => {

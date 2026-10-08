@@ -218,21 +218,33 @@ run("pnpm", ["check"]);
 
 step("Bumping versions");
 
-const originalManifests = new Map();
-for (const { dir, name } of PACKAGES) {
-  const manifest = readManifest(dir);
-  originalManifests.set(dir, JSON.stringify(manifest, null, 2) + "\n");
-  manifest.version = version;
-  writeManifest(dir, manifest);
-  console.log(`  ${name} → ${version}`);
-}
+// Capture every original before writing; a later read or partial write may fail.
+const originalManifests = new Map(
+  PACKAGES.map(({ dir }) => [dir, readFileSync(manifestPath(dir))]),
+);
 
 function restoreManifests() {
-  for (const [dir, contents] of originalManifests) writeFileSync(manifestPath(dir), contents);
+  const originals = [...originalManifests];
+  originalManifests.clear();
+  const errors = [];
+  for (const [dir, contents] of originals) {
+    try {
+      writeFileSync(manifestPath(dir), contents);
+    } catch (cause) {
+      errors.push(new Error(`Could not restore ${dir}/package.json`, { cause }));
+    }
+  }
+  if (errors.length) throw new AggregateError(errors, "Release manifest restoration failed");
 }
 
 process.on("exit", (code) => {
-  if (code !== 0 && originalManifests.size) restoreManifests();
+  if (code !== 0 && originalManifests.size) {
+    try {
+      restoreManifests();
+    } catch (error) {
+      console.error(error);
+    }
+  }
 });
 
 // A signal terminates the process without emitting `exit`, so the handler above
@@ -241,11 +253,22 @@ process.on("exit", (code) => {
 for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) {
   process.on(signal, () => {
     if (originalManifests.size) {
-      restoreManifests();
-      console.error("\n  interrupted — package.json versions restored");
+      try {
+        restoreManifests();
+        console.error("\n  interrupted — package.json versions restored");
+      } catch (error) {
+        console.error(error);
+      }
     }
     process.exit(130);
   });
+}
+
+for (const { dir, name } of PACKAGES) {
+  const manifest = JSON.parse(originalManifests.get(dir).toString("utf8"));
+  manifest.version = version;
+  writeManifest(dir, manifest);
+  console.log(`  ${name} → ${version}`);
 }
 
 // 6 · Pack and inspect
@@ -341,11 +364,10 @@ for (const { dir, name } of PACKAGES) {
 // 7 · Confirm
 
 if (dryRun) {
+  restoreManifests();
   step("Dry run complete");
   console.log("  every check passed; no package was published, tagged or pushed");
   console.log(`  tarballs kept at ${stage}`);
-  restoreManifests();
-  originalManifests.clear();
   console.log("  package.json versions restored\n");
   process.exit(0);
 }
@@ -356,7 +378,6 @@ if (!assumeYes) {
   rl.close();
   if (answer.trim().toLowerCase() !== "y") {
     restoreManifests();
-    originalManifests.clear();
     fail("aborted; package.json versions restored");
   }
 }
