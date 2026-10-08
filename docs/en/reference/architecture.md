@@ -318,7 +318,7 @@ A ChangeSet builds and validates the complete candidate graph before touching co
 Top-level side effects of a dynamic import, network requests and operating-system resources cannot be rolled back by an in-memory transaction. Those are the loader's or the plugin's compensation responsibility, and the documentation must not dress a framework transaction up as a distributed-transaction promise.
 
 
-An `InstallationGraph` captures a declaration version for each stable Installation identity. Activation reads that version from the plan; rollback can therefore execute the previous declaration even while Registry records contain the candidate declaration. Engine supplies every parsed config before stopping Instances, and rollback uses captured Instance configs. InstanceCoordinator rejects a missing prepared config and never invokes a schema as a fallback.
+An `InstallationGraph` captures a declaration version for each stable Installation identity. A candidate plan only stages declarations; Registry commits declarations and membership after candidate activation succeeds. Activation and rollback read the candidate and previous plans respectively; a plan cannot advance Registry's committed facts. Engine supplies every parsed config before stopping Instances, and rollback uses captured Instance configs. InstanceCoordinator rejects a missing prepared config and never invokes a schema as a fallback.
 
 ## 9. Why a Group is not a scope
 

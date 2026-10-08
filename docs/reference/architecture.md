@@ -318,7 +318,7 @@ ChangeSet 先构造和验证完整候选图，再触碰已提交执行状态。�
 动态 import 的模块顶层副作用、网络请求或操作系统资源本身无法由内存事务回滚。这些属于 Loader/插件的补偿责任，文档不能把框架事务包装成分布式事务承诺。
 
 
-`InstallationGraph` 为每个稳定 Installation 身份捕获对应声明版本。激活从计划读取该版本，因此即使 Registry 记录仍指向候选声明，回滚也能执行旧声明。Engine 在停止 Instance 前提供全部已解析 config，回滚使用旧 Instance 捕获的 config；InstanceCoordinator 对缺失的预解析配置直接报错，不再调用 schema 兜底。
+`InstallationGraph` 为每个稳定 Installation 身份捕获对应声明版本。候选计划只暂存待提交声明；Registry 在候选激活成功后才提交声明与成员关系。激活与回滚分别读取候选计划和旧计划，不能由计划推进 Registry 的已提交事实。Engine 在停止 Instance 前提供全部已解析 config，回滚使用旧 Instance 捕获的 config；InstanceCoordinator 对缺失的预解析配置直接报错，不再调用 schema 兜底。
 
 ## 九、Group 为什么不是 Scope
 

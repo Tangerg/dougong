@@ -62,7 +62,15 @@ if (name === "git") {
 } else process.exit(99);
 `;
 
-function runRelease(mutate, { packedName = "", packedDependencies, escapedNames = false } = {}) {
+function runRelease(
+  mutate,
+  {
+    packedName = "",
+    packedDependencies,
+    declaredDependencies = { "@standard-schema/spec": "^1.0.0" },
+    escapedNames = false,
+  } = {},
+) {
   const workspace = mkdtempSync(join(tmpdir(), "dougong-release-artifacts-test-"));
   try {
     const bin = join(workspace, "bin");
@@ -83,7 +91,7 @@ function runRelease(mutate, { packedName = "", packedDependencies, escapedNames 
     for (const name of packages) {
       const packageName = name === "dougong" ? name : `@dougongjs/${name}`;
       const manifest =
-        `${JSON.stringify({ name: packageName, version: "0.7.1" }, null, 2)}\n`.replace(
+        `${JSON.stringify({ name: packageName, version: "0.7.1", ...(name === "core" ? { dependencies: declaredDependencies } : {}) }, null, 2)}\n`.replace(
           packageName,
           escapedNames ? packageName.replace("d", "\\u0064") : packageName,
         );
@@ -184,8 +192,28 @@ it.each([
   { range: "^0.7.20", status: 1, output: "stderr", message: `expected ${version}` },
 ])("checks the packed internal dependency version $range", ({ range, status, output, message }) => {
   const result = runRelease(() => undefined, {
+    declaredDependencies: { "@dougongjs/reactive": "workspace:*" },
     packedDependencies: { "@dougongjs/reactive": range },
   });
   expect(result.status).toBe(status);
   expect(result[output]).toContain(message);
+});
+
+it.each([
+  { dependencies: {}, message: "@standard-schema/spec", label: "a missing dependency" },
+  {
+    dependencies: { "@standard-schema/spec": "^2.0.0" },
+    message: "expected ^1.0.0",
+    label: "a changed external dependency range",
+  },
+  {
+    dependencies: { "@standard-schema/spec": "^1.0.0", "@fixture/unexpected": "^1.0.0" },
+    message: "@fixture/unexpected",
+    label: "an undeclared dependency",
+  },
+])("rejects a tarball with $label", ({ dependencies, message }) => {
+  const result = runRelease(() => undefined, { packedDependencies: dependencies });
+  expect(result.status).toBe(1);
+  expect(result.stderr).toContain(message);
+  expect(result.stdout).not.toContain("Dry run complete");
 });

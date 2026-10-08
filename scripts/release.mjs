@@ -38,6 +38,8 @@ import {
 import { createInterface } from "node:readline/promises";
 import { tmpdir } from "node:os";
 import { basename, join, resolve } from "node:path";
+import { parseArgs } from "node:util";
+import { valid } from "semver";
 
 // Dependency order: a package is published only after everything it depends on.
 const PACKAGE_DIRECTORIES = [
@@ -46,11 +48,6 @@ const PACKAGE_DIRECTORIES = [
   "packages/platform",
   "packages/dougong",
 ];
-
-const args = process.argv.slice(2);
-const dryRun = args.includes("--dry-run");
-const assumeYes = args.includes("--yes");
-const version = args.find((argument) => !argument.startsWith("--"));
 
 function fail(message) {
   console.error(`\n✗ ${message}\n`);
@@ -100,12 +97,38 @@ function readPackageFiles(root) {
 
 // 1 · Inputs
 
-if (!version) {
-  fail("usage: node scripts/release.mjs <version> [--dry-run] [--yes]");
+let input;
+try {
+  input = parseArgs({
+    options: {
+      "dry-run": { type: "boolean" },
+      yes: { type: "boolean" },
+      otp: { type: "string" },
+    },
+    allowPositionals: true,
+    tokens: true,
+  });
+} catch (error) {
+  fail(error.message);
 }
-if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(version)) {
-  fail(`'${version}' is not a semantic version`);
+const { values, positionals, tokens } = input;
+if (positionals.length !== 1) {
+  fail("usage: node scripts/release.mjs <version> [--dry-run] [--yes] [--otp=<code>]");
 }
+const seenOptions = new Set();
+for (const token of tokens) {
+  if (token.kind !== "option") continue;
+  if (seenOptions.has(token.name)) fail(`Option '--${token.name}' must be specified once`);
+  seenOptions.add(token.name);
+}
+const [version] = positionals;
+if (valid(version) !== version) {
+  fail(`'${version}' is not a canonical semantic version`);
+}
+const dryRun = values["dry-run"] === true;
+const assumeYes = values.yes === true;
+const otp = values.otp;
+if (otp !== undefined && !otp.trim()) fail("--otp must be a non-empty code");
 
 const PACKAGES = PACKAGE_DIRECTORIES.map((dir) => {
   const { name } = readManifest(dir);
@@ -303,12 +326,27 @@ for (const { dir, name } of PACKAGES) {
   if (packedManifest.version !== version) {
     fail(`${name}: tarball declares version ${packedManifest.version}`);
   }
-  for (const [dependency, range] of Object.entries(packedManifest.dependencies ?? {})) {
-    if (range.startsWith("workspace:")) {
+  const declaredDependencies = JSON.parse(originalManifests.get(dir)).dependencies ?? {};
+  const expectedDependencies = new Map(
+    Object.entries(declaredDependencies).map(([dependency, range]) => [
+      dependency,
+      packageNames.has(dependency) ? version : range,
+    ]),
+  );
+  const packedDependencies = packedManifest.dependencies ?? {};
+  for (const dependency of new Set([
+    ...expectedDependencies.keys(),
+    ...Object.keys(packedDependencies),
+  ])) {
+    const range = packedDependencies[dependency];
+    const expected = expectedDependencies.get(dependency);
+    if (typeof range === "string" && range.startsWith("workspace:")) {
       fail(`${name}: tarball still depends on ${dependency}@${range}`);
     }
-    if (packageNames.has(dependency) && range !== version) {
-      fail(`${name}: tarball pins ${dependency}@${range}, expected ${version}`);
+    if (range !== expected) {
+      fail(
+        `${name}: tarball declares ${dependency}@${range ?? "(missing)"}, expected ${expected ?? "(absent)"}`,
+      );
     }
   }
   for (const required of ["dist/index.js", "dist/index.d.ts", "README.md", "LICENSE"]) {
@@ -417,7 +455,6 @@ function awaitRegistry(name) {
   return false;
 }
 
-const otp = args.find((argument) => argument.startsWith("--otp="));
 const published = [];
 for (const { name } of PACKAGES) {
   if (alreadyPublished.has(name)) {
@@ -425,7 +462,7 @@ for (const { name } of PACKAGES) {
     continue;
   }
   const publishArgs = ["publish", tarballs.get(name), "--access", "public"];
-  if (otp) publishArgs.push(otp);
+  if (otp !== undefined) publishArgs.push(`--otp=${otp}`);
   const result = spawnSync("npm", publishArgs, { stdio: "inherit" });
   if (result.status === 0 && !awaitRegistry(name)) {
     console.error(

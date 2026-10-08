@@ -34,6 +34,7 @@ if (name === "git") {
 function runRelease(
   response,
   names = ["@dougongjs/reactive", "@dougongjs/core", "@dougongjs/platform", "dougong"],
+  releaseArgs = [version, "--dry-run"],
 ) {
   const workspace = mkdtempSync(join(tmpdir(), "dougong-release-test-"));
   try {
@@ -52,7 +53,7 @@ function runRelease(
     for (const name of ["git", "pnpm", ...(response.missing ? [] : ["npm"])]) {
       writeFileSync(join(bin, name), command, { mode: 0o755 });
     }
-    const result = spawnSync(process.execPath, [release, version, "--dry-run"], {
+    const result = spawnSync(process.execPath, [release, ...releaseArgs], {
       cwd: workspace,
       env: { ...process.env, PATH: bin },
       encoding: "utf8",
@@ -91,6 +92,65 @@ it.each([
   expect(result.status).toBe(1);
   expect(result.gateStarted).toBe(false);
   expect(result.stdout).not.toContain(`${version} is unused on the registry`);
+});
+
+it.each([
+  "01.2.3",
+  "1.02.3",
+  "1.2.03",
+  "1.2.3-01",
+  "1.2.3-alpha..1",
+  "1.2.3-alpha.",
+  "1.2.3-.alpha",
+])("rejects invalid release version %s before external commands", (candidate) => {
+  const result = runRelease(
+    { status: 1, stdout: JSON.stringify({ error: { code: "E404" } }) },
+    undefined,
+    [candidate, "--dry-run"],
+  );
+  expect(result.status).toBe(1);
+  expect(result.queries).toEqual([]);
+  expect(result.gateStarted).toBe(false);
+  expect(result.stderr).toContain("version");
+});
+
+it.each([
+  { args: [version, "--dryrun", "--yes"], error: "--dryrun" },
+  { args: [version, "--dry-run", "--yess"], error: "--yess" },
+  { args: [version, "0.7.3", "--dry-run"], error: "usage:" },
+  { args: [version, "--dry-run", "--otp"], error: "--otp" },
+  { args: [version, "--dry-run", "--otp="], error: "--otp" },
+  { args: [version, "--dry-run", "--otp=   "], error: "--otp" },
+  { args: [version, "--dry-run", "--dry-run"], error: "specified once" },
+  { args: [version, "--dry-run", "--yes", "--yes"], error: "specified once" },
+  {
+    args: [version, "--dry-run", "--otp=123456", "--otp=654321"],
+    error: "specified once",
+  },
+])("rejects ambiguous or malformed release arguments $args", ({ args, error }) => {
+  const result = runRelease(
+    { status: 1, stdout: JSON.stringify({ error: { code: "E404" } }) },
+    undefined,
+    args,
+  );
+  expect(result.status).toBe(1);
+  expect(result.queries).toEqual([]);
+  expect(result.gateStarted).toBe(false);
+  expect(result.stderr).toContain(error);
+});
+
+it.each([
+  ["0.7.2-alpha.1", "--dry-run"],
+  ["--otp=123456", "--dry-run", version],
+  [version, "--yes", "--dry-run", "--otp=123456"],
+])("accepts canonical release inputs %s", (...args) => {
+  const result = runRelease(
+    { status: 1, stdout: JSON.stringify({ error: { code: "E404" } }) },
+    undefined,
+    args,
+  );
+  expect(result.status).toBe(1);
+  expect(result.gateStarted).toBe(true);
 });
 
 it("continues to verification only for an explicit missing version", () => {
