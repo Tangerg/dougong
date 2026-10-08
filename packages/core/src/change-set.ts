@@ -5,7 +5,7 @@ import type {
   PluginConfigArguments,
 } from "./host-api";
 import type { InstallationRecord } from "./installation";
-import { assertPlainRecord } from "./record";
+import { normalizePlainRecord } from "./record";
 import { normalizePlugin, type AnyPlugin, type NormalizedPlugin } from "./plugin";
 
 type DeclarationUpdate =
@@ -127,9 +127,11 @@ export class ChangeSetDraft implements ChangeSet {
     update: InstallationUpdate<Declaration>,
   ) {
     const port = this.#requireOpen();
-    assertPlainRecord(update, "Installation update", { fields: installationUpdateFields });
-    const hasPlugin = Object.hasOwn(update, "plugin");
-    const hasConfig = Object.hasOwn(update, "config");
+    const input = normalizePlainRecord(update, "Installation update", {
+      fields: installationUpdateFields,
+    });
+    const hasPlugin = Object.hasOwn(input, "plugin");
+    const hasConfig = Object.hasOwn(input, "config");
     if (!hasPlugin && !hasConfig) {
       throw new TypeError("Installation update must include 'plugin' or 'config'");
     }
@@ -137,17 +139,17 @@ export class ChangeSetDraft implements ChangeSet {
     const record = port.resolve(installation);
     let plugin: NormalizedPlugin | undefined;
     if (hasPlugin) {
-      const replacement = update.plugin;
+      const replacement = input.plugin;
       if (!replacement) throw new TypeError("Installation update 'plugin' must be a Plugin");
       plugin = normalizePlugin(replacement);
     }
     let declaration: DeclarationUpdate;
     if (plugin && hasConfig) {
-      declaration = { kind: "plugin-and-config", plugin, config: update.config };
+      declaration = { kind: "plugin-and-config", plugin, config: input.config };
     } else if (plugin) {
       declaration = { kind: "plugin", plugin };
     } else {
-      declaration = { kind: "config", config: update.config };
+      declaration = { kind: "config", config: input.config };
     }
     const operation: ChangeOperation = { kind: "update", installation: record, declaration };
     this.#stage(operation);

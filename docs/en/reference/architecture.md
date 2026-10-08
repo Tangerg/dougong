@@ -63,6 +63,8 @@ Mutable owners and projections are separated for each fact:
 | Group attachment and parent-child relationships | GroupNode | Group facade and structural diagnostics |
 | Group configuration phase | GroupConfigurationSession | Group facade reads it without advancing it independently |
 | Permission to append ChangeSet operations | Each draft's current phase | A check before input reads cannot authorize later writes; staging reads the sole phase again |
+| Accepted declaration fields | The frozen record returned by normalizePlainRecord | Core and Platform consume captured data; ordinary reads of the original cannot select fields again |
+| Requirement optionality and Contract identity | The frozen requirement returned by Contract normalization | Plugin normalization and Host lookups consume the capture without checking a wrapper and then rereading its original Service |
 | Lifetime operation authority | Lifetime's current phase and signal | Capture external Contract identity before granting access; InstanceCoordinator consumes only inert identity data |
 | Lifetime phase and resource / child membership | Lifetime state and actual ownership sets | Diagnostics read phase, Set.size and the real subtree without mirrored nodes or counters |
 | Event listener publication visibility | EventHub membership | ListenerRegistration holds only its callback and revocable resource binding |
@@ -443,7 +445,7 @@ An architectural constraint that exists only in prose degrades into a suggestion
 Three families are worth naming here, because they map directly onto the arguments above:
 
 - **Import direction** (section 2) — package-level direction plus the module rank table, checked in both directions: a new module without a rank fails, and a rank without a source file fails too.
-- **Single path** (section 4.2) — a set of **inverted rules**. Not "do not write X" but "**you must** write X". Host and Platform command serialization must use the same `SerialQueue`; Platform diagnostics must compile to `SnapshotPublisher`; Platform declaration validation must reuse `assertPlainRecord`. An absence means somebody started a second state machine.
+- **Single path** (section 4.2) — a set of **inverted rules**. Not "do not write X" but "**you must** write X". Host and Platform command serialization must use the same `SerialQueue`; Platform diagnostics must compile to `SnapshotPublisher`; Platform declaration validation must reuse `normalizePlainRecord`. An absence means somebody started a second state machine.
 - **Ownership** (section 7) — `new Lifetime(...)` may appear only in `InstanceCoordinator` and in `Lifetime` itself; anywhere else produces a resource tree nobody disposes.
 
 For the complete list, what each rule prevents, and the three-step procedure for adding a guard (write the gate first → watch it fail → reverse-verify), see [Mechanical guards](./guards.md).

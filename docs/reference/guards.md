@@ -85,7 +85,9 @@ pnpm check
 | Platform 加载取消必须复用 Core `isCancellationReason` | 两套取消判定 |
 | Core 与 Platform 的外部 Error 识别必须复用 Core `isError` | 各边界重复原型判断会覆盖原始拒绝值 |
 | Platform 终态错误必须复用 Core `RecordedFailure` | 两套终态诊断记录语义 |
-| Platform 声明校验必须复用 Core `assertPlainRecord` | 两套普通数据 record 校验语义 |
+| 声明边界必须用 `normalizePlainRecord`，不得恢复旧断言接口 | 校验原对象后仍由原对象的属性读取决定字段 |
+| Service 查找只消费归一化 requirement，不重读原包装 | optional 语义与实际 Service 身份分叉 |
+| Platform 声明捕获必须复用 Core `normalizePlainRecord` | 两套普通数据 record 捕获与校验语义 |
 | Host 必须把安装声明与句柄权限委托给 `InstallationRegistry` | Host 重新变成总类 |
 | Platform 结构协调必须把激活委托给 `Activator` | 第二条依赖激活路径 |
 | `Activator` 必须信任 `CandidateGraph` 的环不变量 | 第二份、且不可达的图实现 |

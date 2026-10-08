@@ -58,7 +58,6 @@ describe("public API surface", () => {
       "RecordedFailure",
       "SerialQueue",
       "SnapshotPublisher",
-      "assertPlainRecord",
       "asyncDisposeSymbol",
       "createHost",
       "definePlugin",
@@ -68,6 +67,7 @@ describe("public API surface", () => {
       "isCancellationReason",
       "isError",
       "isLogger",
+      "normalizePlainRecord",
       "optional",
       "service",
     ]);

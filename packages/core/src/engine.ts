@@ -2,7 +2,7 @@ import { resolvePluginConfig } from "./configuration";
 import { ContractRegistry, type ContractRegistryWriter } from "./contract-registry";
 import {
   normalizeContract,
-  isOptionalService,
+  normalizeRequirement,
   type ExtensionPoint,
   type OptionalService,
   type Service,
@@ -52,8 +52,10 @@ export class Engine {
     requirement: Service<T> | OptionalService<T>,
     availability: ServiceAvailability,
   ): T | undefined {
-    const allowMissing = isOptionalService(requirement);
-    const token = normalizeContract(allowMissing ? requirement.service : requirement, "service");
+    const normalized = normalizeRequirement(requirement, "Expected a Service");
+    if (normalized.kind === "extensionPoint") throw new TypeError("Expected a Service");
+    const allowMissing = normalized.kind === "optional";
+    const token = normalized.kind === "optional" ? normalized.service : normalized;
     this.#contracts.assertCompatible(token);
     if (availability === "unavailable") throw hostServicesUnavailable();
 

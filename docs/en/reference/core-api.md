@@ -33,7 +33,7 @@ One abstraction layer and one semantic allow exactly one canonical entry point. 
 | Start a background task | `spawn()` | `run` / `fork` / `task` |
 | Classify cancellation | `isCancellationReason()` | checking only `signal.aborted` / matching only an error name |
 | Recognize external Error values | `isError()` | repeating prototype checks at each boundary |
-| Validate declaration records | `assertPlainRecord()` | copied prototype / own-key checks in higher layers |
+| Validate declaration records | `normalizePlainRecord()` | copied prototype / own-key checks in higher layers |
 | Read a live value | `get()` | `.value` / a function call / `getSnapshot()` |
 | Subscribe to change | `subscribe()` | `watch` / `listen` / `observeChanges` |
 | Update an Installation | `update()` | `replace` / `reload` / `restart` |
@@ -42,7 +42,9 @@ One abstraction layer and one semantic allow exactly one canonical entry point. 
 
 `host.install()`, `installation.update()` and `installation.remove()` are single-target sugar: internally each creates a one-shot ChangeSet and commits it. They own no second validation, queue or rollback logic.
 
-`assertPlainRecord(value, label, { fields, createError })` is the shared declaration boundary for Core and higher layers. It accepts only inert data records whose prototype is `Object.prototype` or `null`, never reads inherited properties or accessors, and rejects arrays, symbol keys, non-enumerable own keys and fields outside `fields`. It throws `TypeError` by default; a higher layer with a structured error taxonomy may use `createError(message)` to preserve its own error type without copying the validation algorithm.
+`normalizePlainRecord(value, label, { fields, createError })` is the shared declaration boundary for Core and higher layers. It accepts data records whose prototype is `Object.prototype` or `null`, rejecting arrays, symbol keys, non-enumerable own keys, accessors and fields outside `fields`. It captures each field once from its own data descriptor and returns a frozen record with a null prototype, without ordinary property reads of the input. Callers must consume the returned record; the former assertion API has been removed. Capture is shallow: callbacks and opaque config payloads retain their identity, while nested declarations normalize at their own boundaries. It throws `TypeError` by default; higher layers may use `createError(message)` to preserve their error taxonomy without copying the capture and validation algorithm.
+
+`host.get()` and Plugin requirement normalization share the same identity capture path. The optional wrapper and its Service are captured once; lookup consumes only the frozen result. Ordinary reads or later changes to the wrapper cannot select another Service.
 
 ### 1.2 Composition closure
 

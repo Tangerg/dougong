@@ -1,5 +1,5 @@
 import {
-  assertPlainRecord,
+  normalizePlainRecord,
   definePlugin,
   isCancellationReason,
   type AnyPlugin,
@@ -19,19 +19,19 @@ export function normalizeArtifact<Reference>(
   apiVersion: string,
   artifact: Artifact<Reference>,
 ): NormalizedArtifact<Reference> {
-  assertPlainRecord(artifact, "Artifact declaration", { fields: artifactFields });
-  if (!Object.hasOwn(artifact, "manifest")) {
+  const declaration = normalizePlainRecord(artifact, "Artifact declaration", {
+    fields: artifactFields,
+  });
+  if (!Object.hasOwn(declaration, "manifest")) {
     throw new TypeError("Artifact declaration must define manifest");
   }
-  if (!Object.hasOwn(artifact, "reference")) {
+  if (!Object.hasOwn(declaration, "reference")) {
     throw new TypeError("Artifact declaration must define reference");
   }
-  const declaredManifest = artifact.manifest;
-  const reference = artifact.reference;
-  const config = Object.hasOwn(artifact, "config") ? artifact.config : undefined;
-  const declaredPlaceholder = Object.hasOwn(artifact, "placeholder")
-    ? artifact.placeholder
-    : undefined;
+  const declaredManifest = declaration.manifest;
+  const reference = declaration.reference;
+  const config = declaration.config;
+  const declaredPlaceholder = declaration.placeholder;
   const manifest = defineManifest(declaredManifest);
   if (!matchesVersion(apiVersion, manifest.apiVersion)) {
     throw new PlatformError(

@@ -33,7 +33,7 @@ Dougong Core 的定位是：
 | 启动后台任务 | `spawn()` | `run` / `fork` / `task` |
 | 判定取消结果 | `isCancellationReason()` | 只看 `signal.aborted` / 只匹配错误名 |
 | 识别外部 Error 值 | `isError()` | 各边界自行对拒绝值做原型检查 |
-| 校验声明 record | `assertPlainRecord()` | 各高层复制 prototype / own-key 校验 |
+| 校验声明 record | `normalizePlainRecord()` | 各高层复制 prototype / own-key 校验 |
 | 读取实时值 | `get()` | `.value` / 函数调用 / `getSnapshot()` |
 | 订阅变化 | `subscribe()` | `watch` / `listen` / `observeChanges` |
 | 更新 Installation | `update()` | `replace` / `reload` / `restart` |
@@ -42,7 +42,9 @@ Dougong Core 的定位是：
 
 `host.install()`、`installation.update()` 和 `installation.remove()` 是单目标语法糖，内部只创建一份 one-shot ChangeSet 并提交。它们不拥有第二套校验、队列或回滚逻辑。
 
-`assertPlainRecord(value, label, { fields, createError })` 是 Core 与高层共享的声明边界：它只接受 `Object.prototype` 或 `null` prototype 的惰性数据 record，不读取继承属性或 accessor，并拒绝数组、Symbol key、不可枚举 own key 与 `fields` 之外的字段。默认错误是 `TypeError`；拥有结构化错误体系的高层可用 `createError(message)` 保留自己的错误类型，而不复制校验算法。
+`normalizePlainRecord(value, label, { fields, createError })` 是 Core 与高层共享的声明边界：它只接受 `Object.prototype` 或 `null` prototype 的数据 record，并拒绝数组、Symbol key、不可枚举 own key、accessor 与 `fields` 之外的字段。每个字段从自有数据描述符捕获一次，返回冻结的 null-prototype record，不经普通属性读取再次访问输入。调用方必须消费返回值，不能校验后继续读取原对象；旧断言接口已删除。捕获是浅层的，回调、配置载荷等不透明值仍保留原身份，嵌套声明在各自边界归一化。默认错误是 `TypeError`；高层可用 `createError(message)` 保留自己的错误类型，而不复制捕获与校验算法。
+
+`host.get()` 与 Plugin requirement 归一化共享同一条身份捕获路径。optional 包装及其中的 Service 一次性捕获后，查找只使用冻结结果；包装对象的普通属性读取或后续变化不能重新选择 Service。
 
 ### 2. 组合闭包
 

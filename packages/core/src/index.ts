@@ -78,7 +78,7 @@ export {
   type AsyncDisposable,
   type Disposable,
 } from "./resource";
-export { assertPlainRecord } from "./record";
+export { normalizePlainRecord } from "./record";
 export { ReadonlyMapSnapshot } from "./readonly-map";
 export { SerialQueue } from "./serial-queue";
 export { SnapshotPublisher, type SnapshotView } from "./snapshot-view";

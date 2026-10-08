@@ -10,7 +10,7 @@
 
 import { satisfies, valid, validRange } from "semver";
 import { z } from "zod";
-import { assertPlainRecord } from "@dougongjs/core";
+import { normalizePlainRecord } from "@dougongjs/core";
 import { PlatformError } from "./errors";
 
 const identifier = z
@@ -75,7 +75,7 @@ function manifestDeclarationError(message: string) {
  * caller has one code to handle, with the original always kept as `cause`.
  */
 export function defineManifest(input: ManifestInput | Manifest): Manifest {
-  let declaration: Record<string, unknown>;
+  let declaration: Readonly<Record<string, unknown>>;
   try {
     declaration = snapshotManifestDeclaration(input);
   } catch (error) {
@@ -116,26 +116,19 @@ export function defineManifest(input: ManifestInput | Manifest): Manifest {
 // whoever supplied it. Validating one object and storing another that has since
 // been mutated is exactly the gap this closes.
 function snapshotManifestDeclaration(input: unknown) {
-  assertManifestRecord(input, "Manifest declaration");
-  const declaration: Record<string, unknown> = Object.fromEntries(Object.entries(input));
-  if (Object.hasOwn(declaration, "dependencies") && declaration.dependencies !== undefined) {
-    assertManifestRecord(declaration.dependencies, "Manifest dependencies");
-    const dependencies = Object.entries(declaration.dependencies);
-    if (dependencies.some(([name]) => name === "__proto__")) {
-      throw manifestDeclarationError("Manifest dependency '__proto__' is not supported");
-    }
-    declaration.dependencies = Object.fromEntries(dependencies);
-  }
-  return declaration;
-}
-
-function assertManifestRecord(
-  value: unknown,
-  label: string,
-): asserts value is Record<string, unknown> {
-  assertPlainRecord(value, label, {
+  const declaration = normalizePlainRecord(input, "Manifest declaration", {
     createError: manifestDeclarationError,
   });
+  if (declaration.dependencies !== undefined) {
+    const dependencies = normalizePlainRecord(declaration.dependencies, "Manifest dependencies", {
+      createError: manifestDeclarationError,
+    });
+    if (Object.hasOwn(dependencies, "__proto__")) {
+      throw manifestDeclarationError("Manifest dependency '__proto__' is not supported");
+    }
+    return { ...declaration, dependencies };
+  }
+  return declaration;
 }
 
 function assertUnique(values: ReadonlyArray<string>, label: string, manifestName: string) {

@@ -6,24 +6,34 @@ interface PlainRecordOptions {
 }
 
 /**
- * Validates declaration bags without reading through their prototype chain.
+ * Captures declaration bags without ordinary property reads.
  *
  * Every option object Core accepts passes through here. The checks look
  * paranoid, and each one closes a way for a declaration to lie:
  *
  * - a non-`Object.prototype` prototype could answer for keys it does not own;
  * - a non-enumerable or symbol key would escape the field allowlist;
- * - a getter (`{ get name() {...} }`) would return a different value on the
- *   second read, so validation would not describe what gets stored.
+ * - an accessor or Proxy get trap could return a different value from the
+ *   validated descriptor. Consumers use only the captured data.
  *
  * Rejecting an unknown field rather than ignoring it turns a typo — `permissions`
  * for `authorizer` — into an error at the call site instead of silence.
  */
-export function assertPlainRecord(
+export function normalizePlainRecord<T extends object>(
+  value: T,
+  label: string,
+  options?: PlainRecordOptions,
+): Readonly<T>;
+export function normalizePlainRecord(
+  value: unknown,
+  label: string,
+  options?: PlainRecordOptions,
+): Readonly<Record<string, unknown>>;
+export function normalizePlainRecord(
   value: unknown,
   label: string,
   options: PlainRecordOptions = {},
-): asserts value is object {
+): Readonly<Record<string, unknown>> {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw recordError(options, `${label} must be a plain record`);
   }
@@ -31,6 +41,7 @@ export function assertPlainRecord(
   if (prototype !== Object.prototype && prototype !== null) {
     throw recordError(options, `${label} must be a plain record`);
   }
+  const record: Record<string, unknown> = Object.create(null);
   for (const key of Reflect.ownKeys(value)) {
     const descriptor = Reflect.getOwnPropertyDescriptor(value, key);
     if (typeof key !== "string" || !descriptor?.enumerable) {
@@ -42,7 +53,9 @@ export function assertPlainRecord(
     if (options.fields && !options.fields.has(key)) {
       throw recordError(options, `${label}: unknown field '${key}'`);
     }
+    record[key] = descriptor.value;
   }
+  return Object.freeze(record);
 }
 
 function recordError(options: PlainRecordOptions, message: string) {

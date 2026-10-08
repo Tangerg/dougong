@@ -158,6 +158,10 @@ const TYPESCRIPT_RULES = [
 // Checks that run over the text of every source file under a package's `src`.
 const SOURCE_RULES = [
   {
+    test: (source) => /\bassertPlainRecord\b/.test(source),
+    message: "Declaration boundaries must capture owned data with normalizePlainRecord",
+  },
+  {
     // The kernel is runtime-agnostic (architecture doc: Core knows nothing about
     // HTTP, databases, windows or the filesystem). A `node:` import compiles
     // fine and then breaks only in a browser bundle.
@@ -187,6 +191,11 @@ const SOURCE_RULES = [
 
 // Checks scoped to one file, keyed by that file's madge path.
 const FILE_RULES = [
+  {
+    matches: (file) => file === "core/src/engine.ts",
+    test: (source) => /\bisOptionalService\b|\brequirement\.service\b/.test(source),
+    message: "Service lookups must consume a normalized requirement without rereading public input",
+  },
   {
     matches: (file) => file === "core/src/instance-coordinator.ts",
     test: (source) => /\bnormalizeContract\b/.test(source),
@@ -386,7 +395,7 @@ const FILE_RULES = [
   {
     matches: (file) => file.startsWith("platform/src/"),
     test: (source) => /Object\.getPrototypeOf\s*\(/.test(source),
-    message: "Platform declaration validation must reuse Core assertPlainRecord",
+    message: "Platform declaration validation must reuse Core normalizePlainRecord",
   },
 ];
 

@@ -5,6 +5,17 @@ import * as core from "@dougongjs/core";
 expectTypeOf<ConstructorParameters<typeof core.RecordedFailure>>().toEqualTypeOf<[unknown]>();
 expectTypeOf<typeof core.isError>().toEqualTypeOf<(value: unknown) => value is Error>();
 
+const capturedDeclaration = core.normalizePlainRecord(
+  { name: "declared", payload: { value: 1 } },
+  "Declaration",
+);
+expectTypeOf(capturedDeclaration).toEqualTypeOf<
+  Readonly<{ name: string; payload: { value: number } }>
+>();
+// @ts-expect-error Accepted declaration fields are immutable.
+capturedDeclaration.name = "replacement";
+capturedDeclaration.payload.value = 2;
+
 type PlainService = { readonly id: "plain"; readonly kind: "service" };
 type PlainOptional = {
   readonly kind: "optional";

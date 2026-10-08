@@ -63,6 +63,8 @@ Host 与 Platform 诊断通过 SnapshotPublisher 的 reader 构造集合。publi
 | Group 附着与父子关系 | GroupNode | Group facade、结构诊断 |
 | Group 配置会话阶段 | GroupConfigurationSession | Group facade 读取，不自行推进 |
 | ChangeSet 是否允许追加操作 | 各草稿的当前阶段 | 输入读取前的检查不能授权读取后的写入；暂存入口重新读取唯一阶段 |
+| 已接受的声明字段 | normalizePlainRecord 返回的冻结 record | Core 与 Platform 只消费同一份捕获数据，不让原对象的属性读取重新决定字段 |
+| requirement 的 optional 语义与 Contract 身份 | Contract 归一化返回的冻结 requirement | Plugin 与 Host 查找消费捕获结果，不再先判定包装再读取原 Service |
 | Lifetime 操作授权 | Lifetime 当前阶段与 signal | 先捕获外部 Contract 身份，再授予当前操作；InstanceCoordinator 只消费已捕获的身份数据 |
 | Lifetime 阶段与资源、子级成员关系 | Lifetime 状态和实际拥有集合 | 诊断读取阶段、Set.size 与真实子树，不保存镜像树或计数 |
 | Event listener 的发布可见性 | EventHub 成员集合 | ListenerRegistration 只保存回调与可撤销资源绑定 |
@@ -443,7 +445,7 @@ Group 删除负责安装所有权；领域值中的 workspace ID 负责数据选
 三类值得在这里点明，因为它们直接对应前面几节的论证：
 
 - **依赖方向**（第二节）——包级方向 + 模块 rank 表，rank 表两个方向都查：新模块没有 rank 会失败，rank 没有对应文件也会失败。
-- **单路径**（4.2 节）——一组**反向规则**：不是"不许写 X"，而是"**必须**写 X"。Host 与 Platform 的命令串行化必须用同一个 `SerialQueue`，Platform 诊断必须编译到 `SnapshotPublisher`，Platform 声明校验必须复用 `assertPlainRecord`。缺了就说明有人另起了一条状态机。
+- **单路径**（4.2 节）——一组**反向规则**：不是"不许写 X"，而是"**必须**写 X"。Host 与 Platform 的命令串行化必须用同一个 `SerialQueue`，Platform 诊断必须编译到 `SnapshotPublisher`，Platform 声明校验必须复用 `normalizePlainRecord`。缺了就说明有人另起了一条状态机。
 - **所有权**（第七节）——`new Lifetime(...)` 只允许出现在 `InstanceCoordinator` 和 `Lifetime` 自身；别处构造会产生无人释放的资源树。
 
 完整清单、每条规则防的是什么、以及新增守卫的三步流程（先写门禁 → 看它失败 → 反向验证），见[机械守卫](./guards.md)。

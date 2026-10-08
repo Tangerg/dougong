@@ -1,6 +1,6 @@
 import {
   asyncDisposeSymbol,
-  assertPlainRecord,
+  normalizePlainRecord,
   type AnyPlugin,
   type Logger,
   type Installer,
@@ -94,12 +94,10 @@ class PlatformImpl<Reference> implements Platform<Reference> {
   readonly diagnostics: SnapshotView<PlatformSnapshot>;
 
   constructor(options: PlatformOptions<Reference>) {
-    assertPlainRecord(options, "Platform options", { fields: platformOptionFields });
-    const installer = Object.hasOwn(options, "installer") ? options.installer : undefined;
-    const apiVersion = Object.hasOwn(options, "apiVersion") ? options.apiVersion : undefined;
-    const loader = Object.hasOwn(options, "loader") ? options.loader : undefined;
-    const authorizer = Object.hasOwn(options, "authorizer") ? options.authorizer : undefined;
-    const logger = Object.hasOwn(options, "logger") ? options.logger : undefined;
+    const declaration = normalizePlainRecord(options, "Platform options", {
+      fields: platformOptionFields,
+    });
+    const { installer, apiVersion, loader, authorizer, logger } = declaration;
     if (typeof apiVersion !== "string" || !isConcreteVersion(apiVersion)) {
       throw new TypeError("Platform apiVersion must be a semantic version");
     }

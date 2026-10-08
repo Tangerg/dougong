@@ -1,6 +1,7 @@
 import type { StandardSchemaV1 } from "@standard-schema/spec";
 import {
   normalizeContract,
+  normalizeRequirement,
   type ContractIdentity,
   type ContractKind,
   type ExtensionPoint,
@@ -11,7 +12,7 @@ import {
 import type { ContributionView } from "./contribution-store";
 import type { InstanceMeta, LifetimeOperations, Logger } from "./lifetime";
 import type { Awaitable } from "./resource";
-import { assertPlainRecord } from "./record";
+import { normalizePlainRecord } from "./record";
 
 export type { Awaitable } from "./resource";
 
@@ -156,12 +157,8 @@ export function definePlugin<
 }
 
 function normalizePluginDeclaration(plugin: AnyPlugin): AnyPlugin {
-  assertPluginRecord(plugin);
-  const name = Object.hasOwn(plugin, "name") ? plugin.name : undefined;
-  const config = Object.hasOwn(plugin, "config") ? plugin.config : undefined;
-  const declaredRequirements = Object.hasOwn(plugin, "requires") ? plugin.requires : undefined;
-  const declaredProvisions = Object.hasOwn(plugin, "provides") ? plugin.provides : undefined;
-  const setup = Object.hasOwn(plugin, "setup") ? plugin.setup : undefined;
+  const declaration = normalizePlainRecord(plugin, "Plugin declaration", { fields: pluginFields });
+  const { name, config, setup } = declaration;
   if (typeof name !== "string" || !name.trim()) {
     throw new TypeError("Plugin name must be a non-empty string");
   }
@@ -174,8 +171,14 @@ function normalizePluginDeclaration(plugin: AnyPlugin): AnyPlugin {
   if (config !== undefined && !isStandardSchemaV1(config)) {
     throw new TypeError(`Plugin '${name}' config must implement Standard Schema V1`);
   }
-  assertContractRecord(declaredRequirements, name, "requires");
-  assertContractRecord(declaredProvisions, name, "provides");
+  const declaredRequirements =
+    declaration.requires === undefined
+      ? undefined
+      : normalizePlainRecord(declaration.requires, `Plugin '${name}' requires`);
+  const declaredProvisions =
+    declaration.provides === undefined
+      ? undefined
+      : normalizePlainRecord(declaration.provides, `Plugin '${name}' provides`);
   const requires: Record<string, Requirement> = Object.create(null);
   const provides: Record<string, Provisions[string]> = Object.create(null);
 
@@ -192,22 +195,11 @@ function normalizePluginDeclaration(plugin: AnyPlugin): AnyPlugin {
     if (!requirement || typeof requirement !== "object") {
       throw new TypeError(`Plugin requirement '${key}' is not a contract`);
     }
-    assertPlainRecord(requirement, `Plugin requirement '${key}'`);
-    if (requirement.kind === "optional") {
-      requires[key] = Object.freeze({
-        kind: "optional",
-        service: normalizeContract(
-          requirement.service,
-          "service",
-          `Optional requirement '${key}' must wrap a Service`,
-        ),
-      }) as Requirement;
-    } else {
-      const message = `Plugin requirement '${key}' must be a Service or ExtensionPoint`;
-      const identity: ContractIdentity = normalizeContract(requirement, undefined, message);
-      if (identity.kind === "event") throw new TypeError(message);
-      requires[key] = identity as Requirement;
-    }
+    requires[key] = normalizeRequirement(
+      normalizePlainRecord(requirement, `Plugin requirement '${key}'`),
+      `Plugin requirement '${key}' must be a Service or ExtensionPoint`,
+      `Optional requirement '${key}' must wrap a Service`,
+    );
     const normalized = requires[key]!;
     rememberPluginContract(
       name,
@@ -243,10 +235,6 @@ function normalizePluginDeclaration(plugin: AnyPlugin): AnyPlugin {
   });
 }
 
-function assertPluginRecord(value: unknown): asserts value is Record<string, unknown> {
-  assertPlainRecord(value, "Plugin declaration", { fields: pluginFields });
-}
-
 // Structural, because Standard Schema is a protocol rather than a base class:
 // zod, valibot and arktype all satisfy it without sharing an ancestor. Checking
 // the shape here means an object that merely looks close fails at `definePlugin`
@@ -265,11 +253,6 @@ function isStandardSchemaV1(value: unknown): value is StandardSchemaV1 {
     typeof candidate.vendor === "string" &&
     typeof candidate.validate === "function"
   );
-}
-
-function assertContractRecord(value: unknown, pluginName: string, field: "requires" | "provides") {
-  if (value === undefined) return;
-  assertPlainRecord(value, `Plugin '${pluginName}' ${field}`);
 }
 
 // Rejects three distinct mistakes that all look like "this Contract appears

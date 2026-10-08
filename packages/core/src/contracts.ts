@@ -97,27 +97,16 @@ function contract<T, K extends ContractKind>(kind: K, id: string): Contract<T, K
   return Object.freeze({ id, kind }) as Contract<T, K>;
 }
 
-/**
- * The brand is compile-time only, so a runtime check can be structural at best.
- * This validates identity shape, not factory provenance. Declaration
- * normalization takes an owned identity snapshot of accepted values.
- */
-export function isContract(value: unknown, expected?: ContractKind): value is ContractIdentity {
-  const identity = readContractIdentity(value);
-  return identity !== undefined && (expected === undefined || identity.kind === expected);
+function readDataProperty(value: object, key: string): unknown {
+  const descriptor = Object.getOwnPropertyDescriptor(value, key);
+  return descriptor && "value" in descriptor ? descriptor.value : undefined;
 }
 
-function readContractIdentity(value: unknown): ContractIdentity | undefined {
-  if (!value || typeof value !== "object") return undefined;
-  const id = Object.getOwnPropertyDescriptor(value, "id");
-  const kind = Object.getOwnPropertyDescriptor(value, "kind");
-  if (!id || !("value" in id) || !kind || !("value" in kind)) return undefined;
-  const idValue: unknown = id.value;
-  const kindValue: unknown = kind.value;
-  if (!isValidContractId(idValue)) return undefined;
-  if (kindValue !== "service" && kindValue !== "extensionPoint" && kindValue !== "event")
-    return undefined;
-  return { id: idValue, kind: kindValue };
+function readContractIdentity(value: object, kind: unknown): ContractIdentity | undefined {
+  const id = readDataProperty(value, "id");
+  if (!isValidContractId(id)) return undefined;
+  if (kind !== "service" && kind !== "extensionPoint" && kind !== "event") return undefined;
+  return { id, kind };
 }
 
 /** Takes ownership of inert identity data before any registry or lookup uses it. */
@@ -136,7 +125,10 @@ export function normalizeContract(
   expected?: ContractKind,
   message?: string,
 ): ContractIdentity {
-  const identity = readContractIdentity(value);
+  const identity =
+    value && typeof value === "object"
+      ? readContractIdentity(value, readDataProperty(value, "kind"))
+      : undefined;
   if (!identity || (expected !== undefined && identity.kind !== expected)) {
     throw new TypeError(
       message ?? (expected ? `Expected ${contractDescription(expected)}` : "Invalid contract"),
@@ -170,16 +162,21 @@ export function optional<T>(token: Service<T>): OptionalService<T> {
   }) as OptionalService<T>;
 }
 
-export function isOptionalService<T>(
-  value: Service<T> | OptionalService<T>,
-): value is OptionalService<T> {
-  if (!value || typeof value !== "object") return false;
-  const kind = Object.getOwnPropertyDescriptor(value, "kind");
-  const wrapped = Object.getOwnPropertyDescriptor(value, "service");
-  return (
-    kind?.value === "optional" &&
-    !!wrapped &&
-    "value" in wrapped &&
-    isContract(wrapped.value, "service")
-  );
+/** Captures both optionality and identity; consumers never reread the input. */
+export function normalizeRequirement(
+  value: unknown,
+  message = "Expected a Service or ExtensionPoint",
+  optionalMessage = "Expected a Service",
+): Requirement {
+  if (!value || typeof value !== "object") throw new TypeError(message);
+  const kind = readDataProperty(value, "kind");
+  if (kind === "optional") {
+    return Object.freeze({
+      kind,
+      service: normalizeContract(readDataProperty(value, "service"), "service", optionalMessage),
+    }) as Requirement;
+  }
+  const identity = readContractIdentity(value, kind);
+  if (!identity || identity.kind === "event") throw new TypeError(message);
+  return Object.freeze(identity) as Requirement;
 }

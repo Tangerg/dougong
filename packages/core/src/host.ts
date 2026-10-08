@@ -11,7 +11,7 @@ import { isLogger, type Logger } from "./lifetime";
 import type { AnyPlugin } from "./plugin";
 import { SerialQueue } from "./serial-queue";
 import { batchSnapshotNotifications, type SnapshotView } from "./snapshot-view";
-import { assertPlainRecord } from "./record";
+import { normalizePlainRecord } from "./record";
 
 export type { LifecycleStatus } from "./lifecycle-status";
 export type { HostSnapshot, HostStatus, GroupSnapshot, InstallationSnapshot } from "./diagnostics";
@@ -57,10 +57,10 @@ class HostImpl implements Host {
   readonly #commands = new SerialQueue();
 
   constructor(options: HostOptions = {}) {
-    assertPlainRecord(options, "Host options", { fields: hostOptionFields });
-    const configuredName = Object.hasOwn(options, "name") ? options.name : undefined;
-    const configuredLogger = Object.hasOwn(options, "logger") ? options.logger : undefined;
-    const configuredOnError = Object.hasOwn(options, "onError") ? options.onError : undefined;
+    const declaration = normalizePlainRecord(options, "Host options", { fields: hostOptionFields });
+    const configuredName = declaration.name;
+    const configuredLogger = declaration.logger;
+    const configuredOnError = declaration.onError;
     const name = configuredName ?? "host";
     if (typeof name !== "string" || !name.trim()) {
       throw new TypeError("Host name must be a non-empty string");

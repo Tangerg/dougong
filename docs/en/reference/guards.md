@@ -85,7 +85,9 @@ Constraints the type system cannot express but source text can decide. Two kinds
 | Platform load cancellation must reuse Core `isCancellationReason` | Two cancellation classifications |
 | External Error recognition in Core and Platform must reuse Core `isError` | Repeated prototype checks can replace the original rejection |
 | Platform terminal failures must reuse Core `RecordedFailure` | Two terminal diagnostic recording protocols |
-| Platform declaration validation must reuse Core `assertPlainRecord` | Two plain-data-record validation semantics |
+| Declaration boundaries must use `normalizePlainRecord` without restoring the former assertion API | Validating an object but still letting its ordinary property reads select fields |
+| Service lookup consumes a normalized requirement without rereading the original wrapper | Optionality and the actual Service identity diverging |
+| Platform declaration capture must reuse Core `normalizePlainRecord` | Two plain-data-record capture and validation semantics |
 | Host must delegate declarations and handle authority to `InstallationRegistry` | Host becoming a god object again |
 | Platform structural coordination must delegate activation to `Activator` | A second dependency-activation path |
 | `Activator` must trust `CandidateGraph`'s cycle invariant | A second — and unreachable — graph implementation |
