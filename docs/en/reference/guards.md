@@ -63,6 +63,8 @@ Constraints the type system cannot express but source text can decide. Two kinds
 | `@dougongjs/reactive` has zero external imports | It is an independent foundation |
 | Resource implementations do not use `[Symbol.dispose]` / `[Symbol.asyncDispose]` directly | Foundation protocol modules must select stable keys instead of degrading a missing symbol into an `"undefined"` property |
 | The facade contains re-exports only | Logic there is a second execution path |
+| Lifetime diagnostic module declares read-only schemas only | Read phase and membership from the real Lifetime without a second tree, state machine or counters |
+| Event listener registrations cannot store a publication phase | EventHub membership is the sole visibility owner |
 | Installation facades cannot keep lifecycle or authority state | InstallationRecord is the sole owner |
 | RegistrationRecord cannot keep a mutable Manifest mirror | Manifest derives from the same Artifact; terminal data is immutable |
 | Group facades cannot keep configuration or structural phases | Read GroupConfigurationSession and GroupNode |

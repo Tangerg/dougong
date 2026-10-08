@@ -26,11 +26,8 @@ import type { Event, ExtensionPoint } from "./contracts";
 import type { Contribution, ContributionLeaseKind } from "./contribution-store";
 import { DougongError, isCancellationReason } from "./errors";
 import type { EventListener } from "./event-hub";
-import {
-  LifetimeDiagnostics,
-  type LifetimeDiagnosticNode,
-  type LifetimeResourceKind,
-} from "./lifetime-diagnostics";
+import type { LifetimeSnapshot } from "./lifetime-diagnostics";
+import { batchSnapshotNotifications, SnapshotPublisher } from "./snapshot-view";
 import {
   asyncDisposeSymbol,
   type AsyncDisposable,
@@ -154,8 +151,8 @@ interface LifetimeOptions {
   readonly parentSignal?: AbortSignal;
   readonly parent?: {
     readonly detach: (lifetime: Lifetime) => void;
-    readonly diagnostics: LifetimeDiagnostics;
-    readonly diagnosticNode: LifetimeDiagnosticNode;
+    readonly diagnostics: SnapshotPublisher<LifetimeSnapshot>;
+    readonly label: string;
     readonly declarations: DeclarationPhase;
   };
 }
@@ -163,31 +160,32 @@ interface LifetimeOptions {
 interface LifetimeDisposal {
   readonly lifetime: Lifetime;
   readonly errors: unknown[];
-  readonly binding: LifetimeBinding;
   readonly controller: AbortController;
   readonly finish: () => void;
 }
 
 interface LifetimeBinding {
   readonly port: LifetimePort;
-  readonly diagnostics: LifetimeDiagnostics;
-  readonly diagnosticNode: LifetimeDiagnosticNode;
+  readonly diagnostics: SnapshotPublisher<LifetimeSnapshot>;
 }
 
-/** One canonical owner for O(1) terminal detachment and diagnostic accounting. */
+/** Owns live resource membership; diagnostics read its size without separate counters. */
 class LifetimeResources<T extends Resource> implements Iterable<T> {
   readonly #resources = new Set<T>();
-  #accounting: LifetimeResourceAccounting | undefined;
+  #changed: (() => void) | undefined;
 
-  constructor(accounting?: LifetimeResourceAccounting) {
-    this.#accounting = accounting;
+  constructor(changed: () => void) {
+    this.#changed = changed;
+  }
+
+  get size() {
+    return this.#resources.size;
   }
 
   add(resource: T) {
     if (this.#resources.has(resource)) throw new Error("Lifetime already owns this resource");
     this.#resources.add(resource);
-    const accounting = this.#accounting;
-    if (accounting) accounting.diagnostics.change(accounting.node, accounting.kind, 1);
+    this.#changed?.();
   }
 
   own(resource: T) {
@@ -197,8 +195,7 @@ class LifetimeResources<T extends Resource> implements Iterable<T> {
 
   readonly release = (resource: T) => {
     if (!this.#resources.delete(resource)) return false;
-    const accounting = this.#accounting;
-    if (accounting) accounting.diagnostics.change(accounting.node, accounting.kind, -1);
+    this.#changed?.();
     return true;
   };
 
@@ -220,7 +217,7 @@ class LifetimeResources<T extends Resource> implements Iterable<T> {
         }
       }
     } finally {
-      this.#accounting = undefined;
+      this.#changed = undefined;
     }
   }
 
@@ -237,19 +234,13 @@ class LifetimeResources<T extends Resource> implements Iterable<T> {
         }
       }
     } finally {
-      this.#accounting = undefined;
+      this.#changed = undefined;
     }
   }
 
   [Symbol.iterator]() {
     return this.#resources[Symbol.iterator]();
   }
-}
-
-interface LifetimeResourceAccounting {
-  readonly diagnostics: LifetimeDiagnostics;
-  readonly node: LifetimeDiagnosticNode;
-  readonly kind: LifetimeResourceKind;
 }
 
 type CleanupRecordState =
@@ -407,7 +398,8 @@ export class Lifetime implements LifetimeContext {
   readonly #contributionViews: LifetimeResources<Disposable>;
   readonly #subscriptions: LifetimeResources<Disposable>;
   readonly #tasks: LifetimeResources<AsyncDisposable>;
-  readonly #children: LifetimeResources<Lifetime>;
+  readonly #children = new Set<Lifetime>();
+  readonly #label: string;
   readonly #cleanups: LifetimeResources<AsyncDisposable>;
   readonly #kind: "root" | "child";
   readonly #declarations: DeclarationPhase;
@@ -425,22 +417,21 @@ export class Lifetime implements LifetimeContext {
     this.#declarations = parent?.declarations ?? new DeclarationPhase();
     this.#detachFromParent = parent?.detach;
     this.#kind = parent ? "child" : "root";
+    this.#label = parent?.label ?? installationId;
+    const changed = () => this.#binding?.diagnostics.invalidate();
+    this.#listeners = new LifetimeResources(changed);
+    this.#contributions = new LifetimeResources(changed);
+    this.#contributionViews = new LifetimeResources(changed);
+    this.#subscriptions = new LifetimeResources(changed);
+    this.#tasks = new LifetimeResources(changed);
+    this.#cleanups = new LifetimeResources(changed);
     const diagnostics =
-      parent?.diagnostics ?? new LifetimeDiagnostics(installationId, (error) => port.report(error));
-    const diagnosticNode = parent?.diagnosticNode ?? diagnostics.root;
-    this.#binding = { port, diagnostics, diagnosticNode };
-    const account = (kind: LifetimeResourceKind): LifetimeResourceAccounting => ({
-      diagnostics,
-      node: diagnosticNode,
-      kind,
-    });
-    this.#listeners = new LifetimeResources(account("listeners"));
-    this.#contributions = new LifetimeResources(account("contributions"));
-    this.#contributionViews = new LifetimeResources(account("contributionViews"));
-    this.#subscriptions = new LifetimeResources(account("subscriptions"));
-    this.#tasks = new LifetimeResources(account("tasks"));
-    this.#children = new LifetimeResources();
-    this.#cleanups = new LifetimeResources(account("cleanups"));
+      parent?.diagnostics ??
+      new SnapshotPublisher(
+        () => this.#snapshot(),
+        (error) => port.report(error),
+      );
+    this.#binding = { port, diagnostics };
     const parentSignal = options.parentSignal;
     if (!parentSignal) return;
 
@@ -491,23 +482,21 @@ export class Lifetime implements LifetimeContext {
    * open document, per connection — without the parent growing.
    */
   lifetime(label: string) {
-    const { port, diagnostics, diagnosticNode: parentNode } = this.#requireActive();
+    const { port, diagnostics } = this.#requireActive();
     validateLifetimeLabel(label);
-    const diagnosticNode = diagnostics.createNode(label);
     const child = new Lifetime(port, this.#installationId, {
       parentSignal: this.signal,
       parent: {
         diagnostics,
-        diagnosticNode,
+        label,
         declarations: this.#declarations,
         detach: (lifetime) => {
-          if (!this.#children.release(lifetime)) return;
-          diagnostics.detach(parentNode, diagnosticNode);
+          if (this.#children.delete(lifetime)) diagnostics.invalidate();
         },
       },
     });
     this.#children.add(child);
-    diagnostics.attach(parentNode, diagnosticNode);
+    diagnostics.invalidate();
     return child.handle;
   }
 
@@ -606,18 +595,20 @@ export class Lifetime implements LifetimeContext {
 
     const closing: LifetimeDisposal[] = [];
     const completion = this.#prepareDisposal(closing);
-    // Seal the whole subtree before any withdrawal can call application code.
-    // Revoke all incoming callbacks before contributions publish their removal.
-    for (const { lifetime, errors } of closing) {
-      lifetime.#listeners.disposeSynchronously(errors);
-      lifetime.#subscriptions.disposeSynchronously(errors);
-      lifetime.#contributionViews.disposeSynchronously(errors);
-    }
-    for (const { lifetime, errors } of closing) {
-      lifetime.#contributions.disposeSynchronously(errors);
-    }
-    for (const { lifetime, binding, controller } of closing) {
-      binding.diagnostics.beginDisposing(binding.diagnosticNode);
+    // Phase and membership share one notification boundary; every callback reads
+    // the sealed ownership tree after incoming capabilities have been withdrawn.
+    batchSnapshotNotifications(() => {
+      this.#requireBinding().diagnostics.invalidate();
+      for (const { lifetime, errors } of closing) {
+        lifetime.#listeners.disposeSynchronously(errors);
+        lifetime.#subscriptions.disposeSynchronously(errors);
+        lifetime.#contributionViews.disposeSynchronously(errors);
+      }
+      for (const { lifetime, errors } of closing) {
+        lifetime.#contributions.disposeSynchronously(errors);
+      }
+    });
+    for (const { lifetime, controller } of closing) {
       controller.abort(disposalReason);
       lifetime.detachStartupSignal();
     }
@@ -660,19 +651,39 @@ export class Lifetime implements LifetimeContext {
           this.#detachFromParent = undefined;
           try {
             detach?.(this);
-            if (this.#kind === "root") binding.diagnostics.finishRoot();
+            if (this.#kind === "root") {
+              try {
+                binding.diagnostics.invalidate();
+              } finally {
+                binding.diagnostics.dispose();
+              }
+            }
           } finally {
             this.#binding = undefined;
           }
         }
       })().then(completion.resolve, completion.reject);
     };
-    closing.push({ lifetime: this, errors, binding, controller: state.controller, finish });
+    closing.push({ lifetime: this, errors, controller: state.controller, finish });
     return completion.promise;
   }
 
   [asyncDisposeSymbol]() {
     return this.dispose();
+  }
+
+  #snapshot(): LifetimeSnapshot {
+    return Object.freeze({
+      label: this.#label,
+      phase: this.#state.phase,
+      cleanups: this.#cleanups.size,
+      tasks: this.#tasks.size,
+      listeners: this.#listeners.size,
+      contributions: this.#contributions.size,
+      contributionViews: this.#contributionViews.size,
+      subscriptions: this.#subscriptions.size,
+      children: Object.freeze([...this.#children].map((child) => child.#snapshot())),
+    });
   }
 
   // The gate on every operation that creates a resource. `signal.aborted` is

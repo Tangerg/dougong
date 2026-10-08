@@ -772,7 +772,7 @@ Host start、stop 和 active 状态下提交的 ChangeSet 使用 ExtensionPoint 
 
 ## 十三、统一观察协议与 reactive 层
 
-快照通知中的再次失效会排队，在当前回调返回后处理；尚未轮到的同一订阅只排入一次。该顺序也适用于诊断回调引起的另一份快照变化，避免跨 Publisher 重入应用代码。
+读取快照期间发生的失效不会被读取完成覆盖；先提交本次读取结果，再处理读取引起的通知，避免重入读取后用旧结果覆盖新投影。读取失败保留失效状态并原样抛出。快照通知中的再次失效会排队，在当前回调返回后处理；尚未轮到的同一订阅只排入一次。该顺序也适用于诊断回调引起的另一份快照变化，避免跨 Publisher 重入应用代码。
 
 ContributionView、Installation diagnostics、Host diagnostics、Platform diagnostics 和 `@dougongjs/reactive` Signal 统一采用结构协议：
 
@@ -809,7 +809,7 @@ observe(lifetimeOwner, source, observer)
 - Signal 保存当前值；
 - computed 自动追踪仅用于同步、纯、懒、缓存计算；
 - batch 只接受同步 callback，并按订阅身份合并 callback 内的重复通知；
-- observe 是更高层的 Lifetime 组合器：显式读取一个 source，为当前值创建子 Lifetime，变化时先释放旧子级再创建新子级；observer 必须同步，后续替换失败会停止观察，释放订阅与当前子 Lifetime，并从 owner 摘除自己的 cleanup。
+- observe 是更高层的 Lifetime 组合器：显式读取一个 source，为当前值创建子 Lifetime，变化时先释放旧子级再创建新子级；observer 必须同步，异步清理结束后再次读取任务的取消信号，已取消的观察不会再创建子 Lifetime；后续替换失败会停止观察，释放订阅与当前子 Lifetime，并从 owner 摘除自己的 cleanup。
 
 ```ts
 const endpoint = computed(() => `${base.get()}/${account.get()}`)
@@ -855,7 +855,7 @@ const current = lifetime?.get()
 const subscription = lifetime?.subscribe(render)
 ```
 
-根节点的 `label` 是稳定的 installation ID；每个 `children` 条目严格对应一次真实的 `lifetime(label)` 所有权关系。节点计数只描述该 Lifetime 直接拥有的资源，`children` 只列直接子 Lifetime。子树总量可由这组不可再约简的事实递归推导，不在快照中保存第二份聚合状态。整棵快照递归冻结，但不暴露 Lifetime、资源对象、回调或 Store。
+根节点的 `label` 是稳定的 installation ID；每个 `children` 条目严格对应一次真实的 `lifetime(label)` 所有权关系。节点计数只描述该 Lifetime 直接拥有的资源，`children` 只列直接子 Lifetime。子树总量可由这组不可再约简的事实递归推导，不在快照中保存第二份聚合状态。阶段、分类计数与子级成员关系直接读取各自唯一拥有者，不维护第二棵诊断树或增减计数。整棵快照递归冻结，但不暴露 Lifetime、资源对象、回调或 Store。
 
 label 只回答“这组资源为何共同存活”，不是 capability ID、查找 key 或新的 Scope。重复 label 不产生冲突，也不改变释放语义。cleanup、task、listener 等叶资源不各自增加命名重载；只有确实存在共同释放边界时才创建子 Lifetime。Core 不从函数名、调用栈或序号猜测节点，也不为了实现分类计数伪造树层级。
 

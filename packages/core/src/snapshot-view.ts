@@ -156,8 +156,17 @@ export class SnapshotPublisher<T> implements Disposable {
 
   #materialize(read: () => T) {
     if (!this.#dirty) return;
-    this.#snapshot = read();
-    this.#dirty = false;
+    batchSnapshotNotifications(() => {
+      // A read may invalidate another snapshot and trigger a subscriber that
+      // reads this one. Commit this result before notifications can reenter it.
+      this.#dirty = false;
+      try {
+        this.#snapshot = read();
+      } catch (error) {
+        this.#dirty = true;
+        throw error;
+      }
+    });
   }
 
   #requireActive() {

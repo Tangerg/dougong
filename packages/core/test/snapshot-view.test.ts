@@ -5,6 +5,67 @@ import { batchSnapshotNotifications } from "../src/snapshot-view";
 const RELEASE_PASSES = 8;
 
 describe("SnapshotPublisher", () => {
+  it("preserves invalidation that arrives while a snapshot is being read", () => {
+    let value = 0;
+    const publisher = new SnapshotPublisher(
+      () => {
+        const current = value;
+        if (current === 1) {
+          value = 2;
+          publisher.invalidate();
+        }
+        return current;
+      },
+      () => undefined,
+    );
+    value = 1;
+    publisher.invalidate();
+    expect(publisher.view.get()).toBe(1);
+    expect(publisher.view.get()).toBe(2);
+    publisher.dispose();
+  });
+
+  it("finishes materialization before delivering invalidations raised by its reader", () => {
+    let value = 0;
+    const publisher = new SnapshotPublisher(
+      () => {
+        const current = value;
+        if (current === 1) {
+          value = 2;
+          publisher.invalidate();
+        }
+        return current;
+      },
+      () => undefined,
+    );
+    const seen: number[] = [];
+    value = 1;
+    publisher.invalidate();
+    publisher.view.subscribe(() => seen.push(publisher.view.get()));
+    expect(publisher.view.get()).toBe(2);
+    expect(seen).toEqual([2]);
+    expect(publisher.view.get()).toBe(2);
+    publisher.dispose();
+  });
+
+  it("keeps a failed materialization invalid until its reader succeeds", () => {
+    const failure = new Error("reader failed");
+    let fail = false;
+    const publisher = new SnapshotPublisher(
+      () => {
+        if (fail) throw failure;
+        return 1;
+      },
+      () => undefined,
+    );
+    fail = true;
+    publisher.invalidate();
+    expect(() => publisher.view.get()).toThrow(failure);
+    fail = false;
+    expect(publisher.view.get()).toBe(1);
+    publisher.dispose();
+  });
+
   it("settles nested snapshot batches and preserves both operation and reporter failures", () => {
     const subscriberError = new Error("subscriber failed");
     const reporterError = new Error("reporter failed");

@@ -772,7 +772,7 @@ Commit prepares every affected ExtensionPoint snapshot before delivering any not
 
 ## 13. The unified observation protocol and the reactive layer
 
-Invalidations raised during notification are queued until the current callback returns. Each subscription awaiting delivery is queued once. This order also applies when a diagnostics callback changes another snapshot, preventing reentry across Publishers.
+An invalidation arriving during a snapshot read is preserved. The read commits before delivering notifications it raised, so an older result cannot overwrite a newer projection produced by reentrant reading. A failed read retains its invalid state and throws the original error. Invalidations raised during notification are queued until the current callback returns. Each subscription awaiting delivery is queued once. This order also applies when a diagnostics callback changes another snapshot, preventing reentry across Publishers.
 
 `ContributionView`, Installation diagnostics, Host diagnostics, Platform diagnostics and `@dougongjs/reactive` signals all adopt one structural protocol:
 
@@ -809,7 +809,7 @@ observe(lifetimeOwner, source, observer)
 - a signal holds the current value
 - computed auto-tracking applies only to synchronous, pure, lazy, cached computation
 - batch accepts only a synchronous callback and coalesces repeated notifications per subscription identity
-- observe is a higher-level Lifetime combinator: it explicitly reads one source, creates a child Lifetime for the current value, and on change releases the old child before creating the new one. The observer must be synchronous, and a failed later replacement stops the observation, releases the subscription and current child Lifetime, and detaches its cleanup from the owner
+- observe is a higher-level Lifetime combinator: it explicitly reads one source, creates a child Lifetime for the current value, and on change releases the old child before creating the new one. The observer must be synchronous. After asynchronous cleanup, the task’s cancellation signal is checked again and a cancelled observation creates no replacement child. A failed later replacement stops the observation, releases the subscription and current child Lifetime, and detaches its cleanup from the owner
 
 ```ts
 const endpoint = computed(() => `${base.get()}/${account.get()}`)
@@ -855,7 +855,7 @@ const current = lifetime?.get()
 const subscription = lifetime?.subscribe(render)
 ```
 
-The root node's `label` is the stable installation ID, and every `children` entry corresponds strictly to one real `lifetime(label)` ownership relationship. Node counts describe only the resources that Lifetime owns directly, and `children` lists only direct child Lifetimes. Subtree totals are derivable recursively from this irreducible set of facts, so no second aggregate state is stored in the snapshot. The whole snapshot is recursively frozen and exposes no Lifetime, resource object, callback or store.
+The root node's `label` is the stable installation ID, and every `children` entry corresponds strictly to one real `lifetime(label)` ownership relationship. Node counts describe only the resources that Lifetime owns directly, and `children` lists only direct child Lifetimes. Subtree totals are derivable recursively from this irreducible set of facts, so no second aggregate state is stored in the snapshot. Phase, per-category counts and child membership read their sole owners directly; there is no second diagnostic tree or increment/decrement counter. The whole snapshot is recursively frozen and exposes no Lifetime, resource object, callback or store.
 
 A label answers only "why do these resources live together". It is not a capability ID, a lookup key or a new scope. Duplicate labels create no conflict and change no release semantics. Leaf resources such as cleanups, tasks and listeners add no naming overloads of their own; a child Lifetime is created only where a shared release boundary genuinely exists. Core never guesses nodes from function names, call stacks or ordinals, and never fabricates tree levels merely to implement categorised counts.
 

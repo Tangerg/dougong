@@ -117,6 +117,38 @@ function manualLifetime(dispose: () => void | Promise<void>): AsyncDisposable {
 }
 
 describe("observe composition", () => {
+  it("does not establish a replacement after cancellation during the previous cleanup", async () => {
+    const entered = Promise.withResolvers<void>();
+    const resume = Promise.withResolvers<void>();
+    const report = vi.fn<(error: unknown) => void>();
+    const host = createHost({ onError: report });
+    const source = signal(1);
+    const seen: number[] = [];
+    host.install(
+      definePlugin({
+        name: "observe.cancelled-replacement",
+        setup(ctx) {
+          observe(ctx, source, (value, child) => {
+            seen.push(value);
+            child.cleanup(async () => {
+              entered.resolve();
+              await resume.promise;
+            });
+          });
+        },
+      }),
+    );
+    await host.start();
+    source.set(2);
+    await entered.promise;
+    const stopped = host.stop();
+    await tick();
+    resume.resolve();
+    await stopped;
+    expect(seen).toEqual([1]);
+    expect(report).not.toHaveBeenCalled();
+  });
+
   it("reads the initial value after ownership and subscription have been established", async () => {
     const host = createHost();
     const source = signal(0);

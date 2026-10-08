@@ -1,5 +1,30 @@
 import { expect, it, vi } from "vitest";
-import { createHost, definePlugin, service, type Group, type Installation } from "../src";
+import { createHost, definePlugin, event, service, type Group, type Installation } from "../src";
+
+it("projects the sealed Lifetime phase before resource withdrawal notifies observers", async () => {
+  const host = createHost();
+  const notice = event<void>("audit/sealed-lifetime");
+  const installation = host.install(
+    definePlugin({
+      name: "audit.sealed-lifetime",
+      setup(ctx) {
+        ctx.on(notice, () => undefined);
+        ctx.lifetime("child").on(notice, () => undefined);
+      },
+    }),
+  );
+  await host.start();
+  const lifetime = installation.diagnostics.get().lifetime!;
+  const phases: string[] = [];
+  lifetime.subscribe(() => {
+    const snapshot = lifetime.get();
+    phases.push(snapshot.phase, ...snapshot.children.map((child) => child.phase));
+  });
+  await host.stop();
+  expect(phases.length).toBeGreaterThan(0);
+  expect(phases).not.toContain("active");
+  expect(lifetime.get().phase).toBe("disposed");
+});
 
 it("invalidates Installation and Host projections before either observer runs", async () => {
   const host = createHost();

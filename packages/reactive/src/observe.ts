@@ -134,7 +134,7 @@ class Observation<T, Child extends AsyncDisposable> {
         await this.#waitForInvalidation(signal);
         while (this.#state.phase === "active" && !signal.aborted && this.#dirty) {
           this.#dirty = false;
-          await this.#replaceCurrent();
+          await this.#replaceCurrent(signal);
         }
       }
     } catch (error) {
@@ -169,8 +169,8 @@ class Observation<T, Child extends AsyncDisposable> {
    * replacement cannot leave a value marked as observed when nothing is
    * observing it.
    */
-  async #replaceCurrent() {
-    if (this.#state.phase !== "active") return;
+  async #replaceCurrent(signal: AbortSignal) {
+    if (this.#state.phase !== "active" || signal.aborted) return;
     const beforeCleanup = this.#state.binding.source.get();
     // A notification does not guarantee a different value. Re-reading and
     // comparing avoids tearing down a live lifetime to rebuild an identical one.
@@ -179,7 +179,7 @@ class Observation<T, Child extends AsyncDisposable> {
     const previous = this.#takeCurrent();
     if (previous) await previous.dispose();
     this.#observed = { present: false };
-    if (this.#state.phase !== "active") return;
+    if (this.#state.phase !== "active" || signal.aborted) return;
 
     this.#createCurrent();
   }

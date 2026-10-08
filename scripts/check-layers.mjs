@@ -66,6 +66,7 @@ const CORE_MODULE_LAYERS = {
   // A configuration session owns an opaque Draft, independent of the ownership tree.
   "core/src/group-configuration.ts": 0,
   "core/src/lifecycle-status.ts": 0,
+  "core/src/lifetime-diagnostics.ts": 0,
   "core/src/record.ts": 0,
   "core/src/readonly-map.ts": 0,
   "core/src/resource.ts": 0,
@@ -76,9 +77,8 @@ const CORE_MODULE_LAYERS = {
   "core/src/contract-registry.ts": 1,
   "core/src/event-hub.ts": 1,
   "core/src/snapshot-view.ts": 1,
-  // Live contribution stores and Lifetime diagnostics share the snapshot protocol.
+  // Live contribution stores share the snapshot protocol.
   "core/src/contribution-store.ts": 2,
-  "core/src/lifetime-diagnostics.ts": 2,
   // Resource ownership, built from the leaf services and its diagnostic projection.
   "core/src/lifetime.ts": 3,
   // Plugin shape, declared in terms of lifetime operations.
@@ -187,6 +187,16 @@ const SOURCE_RULES = [
 
 // Checks scoped to one file, keyed by that file's madge path.
 const FILE_RULES = [
+  {
+    matches: (file) => file === "core/src/lifetime-diagnostics.ts",
+    test: (source) => /\b(?:class|function|let|const)\b/.test(source),
+    message: "Lifetime diagnostics declare read-only schemas, not a second tree or state owner",
+  },
+  {
+    matches: (file) => file === "core/src/event-hub.ts",
+    test: (source) => /phase:\s*["'](?:staged|published)["']|\.phase\s*=(?!=)/.test(source),
+    message: "EventHub membership owns listener publication; registrations cannot mirror its phase",
+  },
   {
     matches: (file) => file === "platform/src/registration.ts",
     test: (source) => /#manifest\b/.test(source),

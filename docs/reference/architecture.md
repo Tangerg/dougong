@@ -62,6 +62,8 @@ Host 与 Platform 诊断通过 SnapshotPublisher 的 reader 构造集合。publi
 | Host 命令完成边界 | Host 的 SerialQueue | Installation / Group ready 等待同一边界 |
 | Group 附着与父子关系 | GroupNode | Group facade、结构诊断 |
 | Group 配置会话阶段 | GroupConfigurationSession | Group facade 读取，不自行推进 |
+| Lifetime 阶段与资源、子级成员关系 | Lifetime 状态和实际拥有集合 | 诊断读取阶段、Set.size 与真实子树，不保存镜像树或计数 |
+| Event listener 的发布可见性 | EventHub 成员集合 | ListenerRegistration 只保存回调与可撤销资源绑定 |
 | Contribution 当前值 | ContributionRecord | Store 快照与 ContributionView |
 | Contribution claim 与发布顺序 | ContributionStore | Record 请求发布，不保存发布阶段 |
 | Registration 当前 Artifact | RegistrationRecord 的 authority | manifest getter 与诊断；终态仅保留不可变 Manifest |
@@ -261,7 +263,7 @@ Plugin Lifetime
 
 子 Lifetime 提前 dispose 后会从父拥有集合脱离。后台 Task 自然 settle 后也会从父任务集合和父 AbortSignal 监听器中脱离；父释放只取消并等待仍在运行的任务。两者都避免长生命周期按历史创建次数积累已完成对象。
 
-同一规则覆盖全部内部 lease：Listener、Contribution、ContributionView 及其订阅、cleanup 和 Task 在提前终止时都会从父集合摘除；终态对象同时清空 owner、Store、回调、payload 和诊断记账引用。七个资源类别复用同一套活跃资源集合实现，从而获得 O(1) 摘除、幂等 ownership release 与诊断增减。各类别仍使用独立集合表达发布顺序、释放顺序和分类计数，统一机制不混合语义。
+同一规则覆盖全部内部 lease：Listener、Contribution、ContributionView 及其订阅、cleanup 和 Task 在提前终止时都会从父集合摘除；终态对象同时清空 owner、Store、回调、payload 和失效通知引用。叶资源复用同一套活跃资源集合实现，从而获得 O(1) 摘除与幂等 ownership release；子 Lifetime 使用真实的子级拥有集合。诊断分类计数直接读取集合大小，各类别仍使用独立集合表达不同的发布与释放顺序。
 
 主动释放 Lifetime 或 Task 使用模块级冻结 `AbortError` 作为取消原因，父取消在活动阶段原样转发父 reason。这里共享的只是无状态错误值，不是 ambient scope；它避免每次 `abort()` 自动创建的错误调用栈把终态 `AbortSignal.reason` 变成一条指回 Host 的隐藏保留边。释放完成后，Lifetime 用一个携带该共享 `AbortError` 的新 aborted signal 替换活动 signal；终态资源因而既不保留旧 signal 的监听器闭包，也不保留可能携带应用对象的父 reason。进行中的释放 Promise 只属于 `disposing` 状态，进入 `disposed` 后同样被结构性丢弃，原始失败仍由已取得该 Promise 的调用方观察。
 
@@ -269,13 +271,13 @@ Plugin Lifetime
 
 相同约束也适用于安装所有权：终态 InstallationRecord 只保留不可变 Group ID，已分离 Group 清空 parent、事务屏障与历史 failure。历史 Installation 或 Group 因而不能经由所有权树或错误调用栈保活兄弟 Group 或 Host 根节点。
 
-终态摘除也覆盖错误对象。V8 的 `Error.stack` 可能携带创建错误时的编排调用帧，因此已脱离 owner 的失败 Installation 或 Registration 只保存 `name/message/code` 摘要，并在调用方再次读取失败时重建错误；正在等待提交的调用方仍接收原始错误。错误没有被静默丢弃，调用栈也不会成为一条不可见的 Host 所有权边。
+终态摘除也覆盖错误对象。V8 的 `Error.stack` 可能携带创建错误时的编排调用帧，诊断与被丢弃的终态句柄统一保存不可变、有界的 `RecordedFailure`，不保留原始 Error 或重建其异常类。失败命令仍传播原始错误；调用栈不会成为一条不可见的 Host 所有权边。
 
 ContributionRegistry 也只保留仍有 claim、View 或 subscription 的 Store；最后一个所有者释放后，空 Store 会从注册表摘除。失败 setup 即使尝试过从未提交的 ExtensionPoint ID，也不会让 Host 按历史失败次数积累空 Store。
 
 ContributionView 订阅包含两条正交的内部所有权边：Lifetime 拥有 subscription 资源，ContributionStore 拥有 listener 注册。一次公开 `dispose()` 必须同时切断两者；前者保证父 Lifetime 不积累终态资源，后者保证 Store 不继续通知或保活已退订的回调。这只是同一 Disposable 操作的内部原子释放，不形成第二套公开 API。
 
-每个根 Lifetime 还维护一份只读诊断视图。它逐节点投影真实的 Lifetime 所有权关系：根 label 是 Installation ID，子节点 label 来自 `lifetime(label)`；每个节点按 cleanup、Task、listener、Contribution、ContributionView 和 subscription 分类报告自己直接拥有的资源。子树总量可递归推导，不重复保存在节点中。诊断树不保存叶资源，也不从调用栈或函数名猜测伪节点。只有真实的共同释放边界才能形成节点，因此诊断结构与执行语义始终一致。
+每个根 Lifetime 还维护一份只读诊断视图。它逐节点投影真实的 Lifetime 所有权关系：根 label 是 Installation ID，子节点 label 来自 `lifetime(label)`；每个节点按 cleanup、Task、listener、Contribution、ContributionView 和 subscription 分类报告自己直接拥有的资源。阶段与分类计数直接读取真实 Lifetime 状态和资源集合，子树也直接遍历同一拥有集合；没有可独立推进的诊断节点、计数或树。整棵子树在通知观察者前统一封闭并撤回输入能力，快照不会把已封闭的节点报告成 active。快照不保存叶资源，也不从调用栈或函数名猜测伪节点。只有真实的共同释放边界才能形成节点，因此诊断结构与执行语义始终一致。
 
 这份视图复用 `get/subscribe` 协议，并与 Host 结构快照分离：高频资源变化不会重建整张 Installation 图，DevTools 又能回答“哪组资源当前持有什么”。子 Lifetime 终止即从父节点摘除；根终态视图只保留无子节点、全零计数的快照，不反向保活 Host 或资源对象。
 

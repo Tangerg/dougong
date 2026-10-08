@@ -16,7 +16,7 @@ interface ListenerSlot<T> {
 
 type ListenerRegistrationState<T> =
   | {
-      phase: "staged" | "published";
+      readonly phase: "active";
       readonly hub: EventHub;
       readonly slot: ListenerSlot<T>;
       readonly release: (publication: Publication) => void;
@@ -24,7 +24,7 @@ type ListenerRegistrationState<T> =
   | { readonly phase: "removed" };
 
 class ListenerHandle implements Disposable {
-  #registration: ListenerRegistration<unknown> | undefined;
+  readonly #registration: ListenerRegistration<unknown>;
 
   constructor(registration: ListenerRegistration<unknown>) {
     this.#registration = registration;
@@ -32,9 +32,7 @@ class ListenerHandle implements Disposable {
   }
 
   dispose() {
-    const registration = this.#registration;
-    this.#registration = undefined;
-    registration?.dispose();
+    this.#registration.dispose();
   }
 
   [disposeSymbol]() {
@@ -54,15 +52,14 @@ class ListenerRegistration<T> implements StagedResource<Disposable> {
     release: (publication: Publication) => void,
   ) {
     this.#eventId = eventId;
-    this.#state = { phase: "staged", hub, slot: { listener }, release };
+    this.#state = { phase: "active", hub, slot: { listener }, release };
     this.handle = new ListenerHandle(this as ListenerRegistration<unknown>);
   }
 
   publish() {
     const state = this.#state;
-    if (state.phase !== "staged") return;
+    if (state.phase === "removed") return;
     state.hub.add(this.#eventId, state.slot);
-    state.phase = "published";
   }
 
   dispose() {
@@ -71,7 +68,7 @@ class ListenerRegistration<T> implements StagedResource<Disposable> {
     this.#state = { phase: "removed" };
     state.slot.listener = undefined;
     try {
-      if (state.phase === "published") state.hub.delete(this.#eventId, state.slot);
+      state.hub.delete(this.#eventId, state.slot);
     } finally {
       state.release(this);
     }

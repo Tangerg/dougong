@@ -1,70 +1,31 @@
 import { describe, expect, it, vi } from "vitest";
-import { LifetimeDiagnostics } from "../src/lifetime-diagnostics";
+import { createHost, definePlugin, event, type Disposable, type LifetimeContext } from "../src";
 
-// These are internal invariant guards, tested directly because that is the only
-// place they can be reached: every public path into them is already correct by
-// construction. They exist so that a broken ownership edge inside Core is loud
-// rather than silently absorbed, and this file is what stops a future change
-// from "fixing" them into a clamp.
-
-describe("Lifetime diagnostics invariants", () => {
-  it("refuses a negative resource count instead of clamping it to zero", () => {
-    const diagnostics = new LifetimeDiagnostics("install:1", () => undefined);
-
-    diagnostics.change(diagnostics.root, "tasks", 1);
-    diagnostics.change(diagnostics.root, "tasks", -1);
-
-    // A second release for one acquisition means a resource was released twice,
-    // or released by something that never owned it. Clamping would hide the bug
-    // and leave the tree quietly describing the wrong ownership.
-    expect(() => diagnostics.change(diagnostics.root, "tasks", -1)).toThrowError(
-      new Error("Lifetime 'tasks' count cannot be negative"),
+describe("Lifetime diagnostic projections", () => {
+  it("reads direct resource membership and keeps historical counts immutable", async () => {
+    const host = createHost();
+    const notice = event<void>("diagnostics/direct-resources");
+    let first!: Disposable;
+    const installation = host.install(
+      definePlugin({
+        name: "diagnostics.direct-resources",
+        setup(ctx) {
+          first = ctx.on(notice, () => undefined);
+          ctx.on(notice, () => undefined);
+        },
+      }),
     );
-    expect(diagnostics.view.get().tasks).toBe(0);
-  });
-
-  it("refuses to attach one node twice", () => {
-    const diagnostics = new LifetimeDiagnostics("install:1", () => undefined);
-    const child = diagnostics.createNode("session");
-    diagnostics.attach(diagnostics.root, child);
-
-    expect(() => diagnostics.attach(diagnostics.root, child)).toThrowError(
-      new Error("Lifetime diagnostic node is attached"),
-    );
-    expect(diagnostics.view.get().children).toHaveLength(1);
-  });
-
-  it("ignores detaching a node that is not a child", () => {
-    const diagnostics = new LifetimeDiagnostics("install:1", () => undefined);
-    const listener = vi.fn<() => void>();
-    using subscription = diagnostics.view.subscribe(listener);
-    void subscription;
-
-    diagnostics.detach(diagnostics.root, diagnostics.createNode("stranger"));
-
-    // No invalidation, because nothing changed. A detach that notified anyway
-    // would wake every observer to hand them an identical tree.
-    expect(listener).not.toHaveBeenCalled();
-  });
-
-  it("counts resources without retaining them", () => {
-    const diagnostics = new LifetimeDiagnostics("install:1", () => undefined);
-
-    diagnostics.change(diagnostics.root, "listeners", 1);
-    diagnostics.change(diagnostics.root, "contributions", 1);
-
-    const snapshot = diagnostics.view.get();
-    expect(snapshot).toMatchObject({
-      label: "install:1",
-      phase: "active",
-      listeners: 1,
-      contributions: 1,
-      tasks: 0,
-    });
-    // Counts and a label, never the resources themselves: a diagnostics tree
-    // that held the listeners it describes would keep them alive precisely
-    // because someone was watching.
-    expect(Object.keys(snapshot).toSorted()).toEqual([
+    await host.start();
+    const view = installation.diagnostics.get().lifetime!;
+    const before = view.get();
+    expect(before.listeners).toBe(2);
+    first.dispose();
+    first.dispose();
+    expect(view.get().listeners).toBe(1);
+    expect(before.listeners).toBe(2);
+    expect(Object.isFrozen(before)).toBe(true);
+    expect(Object.isFrozen(before.children)).toBe(true);
+    expect(Object.keys(before).toSorted()).toEqual([
       "children",
       "cleanups",
       "contributionViews",
@@ -75,28 +36,63 @@ describe("Lifetime diagnostics invariants", () => {
       "subscriptions",
       "tasks",
     ]);
-    expect(Object.isFrozen(snapshot)).toBe(true);
+    await host.stop();
+    expect(view.get().listeners).toBe(0);
   });
 
-  it("publishes disposal once and then stops accepting writes", () => {
-    const diagnostics = new LifetimeDiagnostics("install:1", () => undefined);
-    const listener = vi.fn<() => void>();
-    diagnostics.view.subscribe(listener);
-
-    diagnostics.beginDisposing(diagnostics.root);
-    diagnostics.beginDisposing(diagnostics.root);
-    expect(diagnostics.view.get().phase).toBe("disposing");
-    expect(listener).toHaveBeenCalledOnce();
-
-    diagnostics.finishRoot();
-    diagnostics.finishRoot();
-
-    expect(diagnostics.view.get().phase).toBe("disposed");
-    expect(listener).toHaveBeenCalledTimes(2);
-    // The publisher is disposed with the root, so the terminal snapshot stays
-    // readable while further writes are refused.
-    expect(() => diagnostics.change(diagnostics.root, "tasks", 1)).toThrow(
-      "Snapshot publisher is disposed",
+  it("projects each real child identity even when labels are equal", async () => {
+    const host = createHost();
+    const notice = event<void>("diagnostics/child-identities");
+    let first!: LifetimeContext;
+    const installation = host.install(
+      definePlugin({
+        name: "diagnostics.child-identities",
+        setup(ctx) {
+          first = ctx.lifetime("session");
+          first.on(notice, () => undefined);
+          ctx.lifetime("session");
+        },
+      }),
     );
+    await host.start();
+    const view = installation.diagnostics.get().lifetime!;
+    expect(view.get().listeners).toBe(0);
+    expect(view.get().children.map((child) => [child.label, child.listeners])).toEqual([
+      ["session", 1],
+      ["session", 0],
+    ]);
+    await first.dispose();
+    const snapshot = view.get();
+    await first.dispose();
+    expect(view.get()).toBe(snapshot);
+    expect(snapshot.children.map((child) => [child.label, child.listeners])).toEqual([
+      ["session", 0],
+    ]);
+    await host.stop();
+    expect(view.get().children).toEqual([]);
+  });
+
+  it("publishes terminal phase, reports observer failures and releases subscriptions", async () => {
+    const report = vi.fn<(error: unknown) => void>();
+    const host = createHost({ onError: report });
+    const installation = host.install(definePlugin({ name: "diagnostics.terminal", setup() {} }));
+    await host.start();
+    const view = installation.diagnostics.get().lifetime!;
+    const failure = new Error("terminal Lifetime observer");
+    const listener = vi.fn<() => void>(() => {
+      if (view.get().phase === "disposed") throw failure;
+    });
+    const subscription = view.subscribe(listener);
+    await host.stop();
+    expect(view.get()).toMatchObject({ phase: "disposed", children: [], cleanups: 0, tasks: 0 });
+    expect(listener).toHaveBeenCalledTimes(2);
+    expect(report).toHaveBeenCalledExactlyOnceWith(failure);
+    expect(() => view.subscribe(() => undefined)).toThrow("Snapshot publisher is disposed");
+    const terminal = view.get();
+    await host.start();
+    await host.stop();
+    expect(view.get()).toBe(terminal);
+    expect(listener).toHaveBeenCalledTimes(2);
+    subscription.dispose();
   });
 });
