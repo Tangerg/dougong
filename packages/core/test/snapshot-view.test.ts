@@ -5,6 +5,32 @@ import { batchSnapshotNotifications } from "../src/snapshot-view";
 const RELEASE_PASSES = 8;
 
 describe("SnapshotPublisher", () => {
+  it("seals an inaccessible non-Error final rejection instead of retaining an obsolete value", () => {
+    const reason = Proxy.revocable({}, {});
+    reason.revoke();
+    let failed = false;
+    const publisher = new SnapshotPublisher(
+      () => {
+        if (failed) throw reason.proxy;
+        return { obsolete: true };
+      },
+      () => undefined,
+    );
+    failed = true;
+    publisher.invalidate();
+
+    expect(
+      Object.is(
+        captureError(() => publisher.dispose()),
+        reason.proxy,
+      ),
+    ).toBe(true);
+    const recorded = captureError(() => publisher.view.get());
+    expect(recorded).toBeInstanceOf(RecordedFailure);
+    expect((recorded as RecordedFailure).snapshot.name).toBe("NonError");
+    publisher.dispose();
+  });
+
   it("seals a failed final read whose error cause is inaccessible", () => {
     const cause = Proxy.revocable({}, {});
     cause.revoke();

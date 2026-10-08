@@ -67,6 +67,10 @@ Host 与 Platform 诊断通过 SnapshotPublisher 的 reader 构造集合。publi
 | Contribution 当前值 | ContributionRecord | Store 快照与 ContributionView |
 | Contribution claim 与发布顺序 | ContributionStore | Record 请求发布，不保存发布阶段 |
 | 冻结的终态错误记录 | RecordedFailure 私有 snapshot | 只读 getter、诊断与被丢弃句柄；原型继承不授予记录所有权 |
+| 外部拒绝值的 Error 识别 | Core isError | Platform 复用判定，只决定自己的业务错误码 |
+| 非 Error 包装的来源 | Core 归类路径登记的模块私有来源集合 | 外部错误原型及复制的 constructor 不授予重新归类权限 |
+| 本次激活的清理结果 | InstanceCoordinator 的不可变激活结果 | Engine 读取本次结果；公开错误与其他激活的历史错误不能发起清理状态转换 |
+| Manifest 声明失败来源 | Manifest 内部声明检查登记的私有来源集合 | 错误类型与 code 只是投影，不能自行绕过错误归类 |
 | 快照物化的执行与封闭边界 | SnapshotPublisher | view 不返回正在读取的旧缓存，也不能在 reader 内提前封闭结果 |
 | 已接受的配置校验问题字段 | ConfigValidationError 冻结的 issues | 第三方字段一次性捕获后验证与保存，不再重复读取 |
 | Registration 当前 Artifact | RegistrationRecord 的 authority | manifest getter 与诊断；终态仅保留不可变 Manifest |

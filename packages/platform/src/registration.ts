@@ -1,4 +1,10 @@
-import { RecordedFailure, SerialQueue, type Disposable, type Installation } from "@dougongjs/core";
+import {
+  isError,
+  RecordedFailure,
+  SerialQueue,
+  type Disposable,
+  type Installation,
+} from "@dougongjs/core";
 import type { Registration, NormalizedArtifact, PlatformChangeSet, Artifact } from "./platform-api";
 import { PlatformError } from "./errors";
 import type { ActivationPermit } from "./activation-gate";
@@ -367,7 +373,7 @@ export class RegistrationRecord<Reference> {
 }
 
 export function normalizeRegistrationFailure(error: unknown, manifestName: string): Error {
-  if (error instanceof Error) return error;
+  if (isError(error)) return error;
   return new PlatformError(
     "REGISTRATION_UNAVAILABLE",
     `Registration '${manifestName}' failed with a non-Error value`,

@@ -74,6 +74,7 @@ const PACKAGES = {
       "event",
       "extensionPoint",
       "isCancellationReason",
+      "isError",
       "isLogger",
       "optional",
       "service",

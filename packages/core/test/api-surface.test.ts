@@ -1,7 +1,55 @@
 import { describe, expect, it } from "vitest";
 import * as core from "../src/index";
+import { normalizeFailure } from "../src/errors";
 
 describe("public API surface", () => {
+  it("classifies inaccessible rejection values without reflecting a replacement failure", () => {
+    const reason = Proxy.revocable({}, {});
+    reason.revoke();
+
+    expect(core.isError(new Error("explicit"))).toBe(true);
+    expect(core.isError(reason.proxy)).toBe(false);
+    expect(core.isError(null)).toBe(false);
+    expect(core.isCancellationReason(AbortSignal.abort(), reason.proxy)).toBe(false);
+    expect(core.isCancellationReason(AbortSignal.abort(reason.proxy), reason.proxy)).toBe(true);
+  });
+
+  it("does not grant normalization authority through an inherited error prototype", () => {
+    const normalized = normalizeFailure("original", "FIRST_BOUNDARY", "first boundary");
+    const explicit = new Error("explicit failure");
+    Object.setPrototypeOf(explicit, Object.getPrototypeOf(normalized));
+
+    expect(normalizeFailure(explicit, "SECOND_BOUNDARY", "second boundary")).toBe(explicit);
+    expect(normalizeFailure(normalized, "FIRST_BOUNDARY", "first boundary")).toBe(normalized);
+    expect(normalizeFailure(normalized, "SECOND_BOUNDARY", "second boundary")).toMatchObject({
+      code: "SECOND_BOUNDARY",
+      cause: "original",
+    });
+  });
+
+  it("does not grant normalization authority through a copied error constructor", () => {
+    const normalized = normalizeFailure("original", "FIRST_BOUNDARY", "first boundary");
+    const ErrorClass = normalized.constructor as new (
+      code: string,
+      message: string,
+      options: ErrorOptions,
+    ) => Error;
+    const explicit = new ErrorClass("SECOND_BOUNDARY", "explicit failure", { cause: "explicit" });
+
+    expect(normalizeFailure(explicit, "THIRD_BOUNDARY", "third boundary")).toBe(explicit);
+  });
+
+  it("keeps Core's normalization identity and original reason immutable", () => {
+    const original = { reason: "original" };
+    const normalized = normalizeFailure(original, "FIRST_BOUNDARY", "first boundary");
+
+    expect(Reflect.set(normalized, "cause", { reason: "replacement" })).toBe(false);
+    expect(Reflect.set(normalized, "code", "SECOND_BOUNDARY")).toBe(false);
+    expect(Object.isFrozen(normalized)).toBe(true);
+    expect(normalizeFailure(normalized, "FIRST_BOUNDARY", "first boundary")).toBe(normalized);
+    expect(normalizeFailure(normalized, "SECOND_BOUNDARY", "second boundary").cause).toBe(original);
+  });
+
   it("keeps the Core value-export budget explicit", () => {
     expect(Object.keys(core).sort()).toEqual([
       "ConfigValidationError",
@@ -18,6 +66,7 @@ describe("public API surface", () => {
       "event",
       "extensionPoint",
       "isCancellationReason",
+      "isError",
       "isLogger",
       "optional",
       "service",
@@ -46,9 +95,7 @@ describe("public API surface", () => {
     expect(recorded.snapshot.stack).toBe(original.stack);
     expect(recorded).not.toHaveProperty("cause");
     expect(new core.RecordedFailure(recorded).snapshot).toBe(recorded.snapshot);
-    expect(() => new core.RecordedFailure(null as never)).toThrow(
-      "RecordedFailure expects an Error",
-    );
+    expect(new core.RecordedFailure(null).snapshot).toEqual({ name: "NonError", message: "null" });
     const hostile = Object.defineProperties(new Error(), {
       name: { get: () => 1 },
       message: {
@@ -61,6 +108,19 @@ describe("public API surface", () => {
       name: "Error",
       message: "",
     });
+  });
+
+  it("captures external error identity once when sealing a failure record", () => {
+    let reads = 0;
+    const failure = new Proxy(new Error("original"), {
+      getPrototypeOf() {
+        if (reads++ > 0) throw new Error("prototype read twice");
+        return Error.prototype;
+      },
+    });
+
+    expect(new core.RecordedFailure(failure).snapshot.message).toBe("original");
+    expect(reads).toBe(1);
   });
 
   it("records errors that inherit a RecordedFailure prototype without trusting their payload", () => {

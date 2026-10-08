@@ -10,7 +10,6 @@ import { InstallationGraph } from "../src/installation-graph";
 const port = () => ({
   hostName: "plan",
   logger: { debug() {}, info() {}, warn() {}, error() {} },
-  isInstalled: () => true,
   report: vi.fn<() => void>(),
 });
 
@@ -52,7 +51,7 @@ it("rolls back from the captured declaration and prepared undefined config witho
   await engine.stop();
 });
 
-it("rejects incomplete prepared activation inputs without running schema or setup", async () => {
+it("returns a failed activation outcome for incomplete inputs without running schema or setup", async () => {
   const validate = vi.fn<() => { value: undefined }>(() => ({ value: undefined }));
   const setup = vi.fn<() => void>();
   const record = new InstallationRecord(
@@ -71,9 +70,10 @@ it("rejects incomplete prepared activation inputs without running schema or setu
   const plan = InstallationGraph.build(new Map([[record, record.declaration]]), new Map());
   const coordinator = new InstanceCoordinator(port());
   const contracts = new ContractRegistry().writer(plan.contractKinds);
-  await expect(coordinator.activate(plan, new Set([record]), new Map(), contracts)).rejects.toThrow(
-    "no prepared config",
-  );
+  const outcome = await coordinator.activate(plan, new Set([record]), new Map(), contracts);
+  expect(outcome?.error).toEqual(new Error("Installation 'plan:1' has no prepared config"));
+  expect(outcome?.cleanupIncomplete).toBe(false);
+  expect(outcome?.cancelled).toBe(false);
   expect(validate).not.toHaveBeenCalled();
   expect(setup).not.toHaveBeenCalled();
   contracts.discard();

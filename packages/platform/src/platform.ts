@@ -5,6 +5,7 @@ import {
   type Logger,
   type Installer,
   isLogger,
+  isError,
   SerialQueue,
   type SnapshotView,
 } from "@dougongjs/core";
@@ -488,7 +489,7 @@ function requirePlatform<Reference>(authority: PlatformAuthority<Reference>) {
 }
 
 function normalizePlatformOperationFailure(error: unknown, operation: "change" | "disposal") {
-  if (error instanceof Error) return error;
+  if (isError(error)) return error;
   return new TypeError(`Platform ${operation} failed with a non-Error value`, { cause: error });
 }
 

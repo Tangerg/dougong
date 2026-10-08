@@ -32,6 +32,7 @@ Dougong Core 的定位是：
 | 创建子生命周期 | `lifetime(label)` | `child` / `scope` / `fiber` |
 | 启动后台任务 | `spawn()` | `run` / `fork` / `task` |
 | 判定取消结果 | `isCancellationReason()` | 只看 `signal.aborted` / 只匹配错误名 |
+| 识别外部 Error 值 | `isError()` | 各边界自行对拒绝值做原型检查 |
 | 校验声明 record | `assertPlainRecord()` | 各高层复制 prototype / own-key 校验 |
 | 读取实时值 | `get()` | `.value` / 函数调用 / `getSnapshot()` |
 | 订阅变化 | `subscribe()` | `watch` / `listen` / `observeChanges` |
@@ -582,6 +583,8 @@ await task.dispose()
 
 `isCancellationReason(signal, error)` 是这条规则唯一的公开判定器，Platform Loader 和下游适配器复用它，而不是各自复制一份“看起来像取消”的启发式逻辑。异常的 name 无法读取时不构成取消证据，原始失败继续传播；与 signal.reason 相同的值仍按身份判定。
 
+`isError(value: unknown): value is Error` 是 Core 与高层共用的 Error 识别边界。它检查当前原型链；原型无法读取时返回 false，不让反射异常覆盖原拒绝值。非 Error 的业务错误归类保留原值作为 cause；取消判断仍优先匹配 signal.reason 的身份。识别为 Error 不保证它的自定义字段可读取，终态记录独立捕获允许的诊断字段。
+
 任务自然 settle 后会立即从父 Lifetime 的拥有集合和 AbortSignal 监听器中脱离；之后调用该 Task 的 `dispose()` 只是幂等完成，不会追溯性 abort 已结束任务的 signal。已完成任务不会在长生命周期中按历史次数累积；父释放仍会 abort 并等待当时尚未 settle 的全部任务。
 
 等待是结构化所有权的承诺，不是超时策略：任务若停在不可取消且不 settle 的操作上，`Task.dispose()`、父 Lifetime 释放与 `host.stop()` 都会保持 pending。Core 不会暗中摘除这类工作；需要放弃等待时，必须由应用代码明确承担该策略及其资源后果。安全模式见 [Lifetime 指南](../guide/lifetime.md#后台任务)。
@@ -908,6 +911,10 @@ Event 因定义要求收集全部监听器失败，总是抛 AggregateError。Li
 后台任务、订阅者和后续 observe 的错误无法回到原同步调用栈，通过 `onError` 上报。`onError` 自身失败也不得改变正在观察的 Host 命令。
 
 `RecordedFailure` 是共享的终态错误类型。其只读 `snapshot: ErrorSnapshot` getter 返回私有拥有的冻结记录；只有真实 RecordedFailure 的私有记录可直接复用，继承其原型的外部 Error 仍须重新捕获。记录保存诊断值：原始名称、消息、错误码、栈文本、有界 cause 和聚合错误树、校验问题与权限字段。它不重建原错误子类，也不保留任意错误载荷。操作本身和可恢复失败仍传播原始 Error；被丢弃的 Installation 或 Registration 的 `ready()` 拒绝值为 RecordedFailure。需要枚举或序列化诊断数据时显式使用 `error.snapshot`；snapshot 不再是可枚举的实例数据字段。
+
+`new RecordedFailure(reason: unknown)` 接受任意拒绝值，不要求调用者预先归类。每个错误节点最多检查一次原型；无法识别的值记录为 NonError，原始值为基本类型时保留有界文本，其他对象省略。SnapshotPublisher 直接记录最终 reader 的拒绝值，不额外构造另一份错误。非 Error 包装的来源由归类路径登记在模块私有集合中，原型与 constructor 不能授予重新归类权限。清理是否未完成只由本次激活的内部结果携带；错误类型、code、原型、constructor 或另一次激活的历史错误都不能触发本次 fail-closed。
+
+Core 创建的非 Error 包装错误自身冻结，cause 与 code 不能被后来持有错误的代码改写，从而改变外层归类的原始原因。cause 指向的应用对象仍由应用拥有；显式抛出的应用 Error 原样传播。
 
 ## 十六、禁止方向
 

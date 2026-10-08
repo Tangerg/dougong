@@ -179,9 +179,7 @@ export class SnapshotPublisher<T> implements Disposable {
         if (this.#state.phase === "disposed") {
           // A terminal view cannot retry or retain an obsolete value and the
           // failed reader's object graph as though the final read succeeded.
-          const failure =
-            error instanceof Error ? error : new Error("Snapshot reader failed", { cause: error });
-          this.#snapshot = { phase: "error", error: new RecordedFailure(failure) };
+          this.#snapshot = { phase: "error", error: new RecordedFailure(error) };
         }
         throw error;
       } finally {

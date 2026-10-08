@@ -2,6 +2,9 @@ import type { StandardSchemaV1 } from "@standard-schema/spec";
 import { expectTypeOf } from "vitest";
 import * as core from "@dougongjs/core";
 
+expectTypeOf<ConstructorParameters<typeof core.RecordedFailure>>().toEqualTypeOf<[unknown]>();
+expectTypeOf<typeof core.isError>().toEqualTypeOf<(value: unknown) => value is Error>();
+
 type PlainService = { readonly id: "plain"; readonly kind: "service" };
 type PlainOptional = {
   readonly kind: "optional";

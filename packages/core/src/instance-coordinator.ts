@@ -16,11 +16,15 @@ interface PreparedActivation {
   readonly services: ReadonlyMap<string, unknown>;
 }
 
-class ActivationFailure {
+// Only this internal outcome carries cleanup authority. Public errors are data.
+export class ActivationFailure {
   constructor(
     readonly error: unknown,
     readonly cancelled: boolean,
-  ) {}
+    readonly cleanupIncomplete = false,
+  ) {
+    Object.freeze(this);
+  }
 }
 
 type ExtensionPointIdentity = Extract<Requirement, { readonly kind: "extensionPoint" }>;
@@ -30,9 +34,6 @@ export interface InstanceCoordinatorPort {
   readonly logger: Logger;
   readonly report: (error: unknown) => void;
 }
-
-/** Every activation aggregation must preserve this classification before returning to Engine. */
-export class IncompleteActivationCleanupError extends AggregateError {}
 
 /**
  * Owns live Instances and the capabilities reachable from their Lifetimes.
@@ -101,7 +102,7 @@ export class InstanceCoordinator {
     installations: ReadonlySet<InstallationRecord>,
     configs: ReadonlyMap<InstallationRecord, unknown>,
     contracts: ContractRegistryWriter,
-  ) {
+  ): Promise<ActivationFailure | undefined> {
     const port = this.#createLifetimePort(contracts);
     for (const layer of plan.layers) {
       const candidates = layer.filter(
@@ -155,18 +156,23 @@ export class InstanceCoordinator {
             : new AggregateError(errors, "Installation startup layer failed");
         if (
           cleanupErrors.length ||
-          errors.some((error) => error instanceof IncompleteActivationCleanupError)
+          results.some((result) => result instanceof ActivationFailure && result.cleanupIncomplete)
         ) {
-          throw new IncompleteActivationCleanupError(
-            [startupError, ...cleanupErrors],
-            "Installation startup layer failed and could not be cleanly disposed",
+          return new ActivationFailure(
+            new AggregateError(
+              [startupError, ...cleanupErrors],
+              "Installation startup layer failed and could not be cleanly disposed",
+            ),
+            false,
+            true,
           );
         }
-        throw startupError;
+        return new ActivationFailure(startupError, false);
       }
 
       this.#commitActivations(prepared);
     }
+    return undefined;
   }
 
   /**
@@ -287,13 +293,15 @@ export class InstanceCoordinator {
         // A failed `setup()` may have already registered listeners, tasks or
         // cleanups. If disposing them also fails, this Installation is not
         // merely broken — something it created is still alive and unowned. The
-        // distinct error type is what tells the Engine that rollback is unsafe.
+        // internal outcome tells Engine that rollback is unsafe. The error
+        // itself cannot grant cleanup authority to a later unrelated activation.
         return new ActivationFailure(
-          new IncompleteActivationCleanupError(
+          new AggregateError(
             [failure, cleanupError],
             `Installation '${installation.id}' failed to start and could not be cleanly disposed`,
           ),
           false,
+          true,
         );
       }
       return new ActivationFailure(failure, cancelled);

@@ -353,6 +353,13 @@ const FILE_RULES = [
     message: "Contribution observation must compose the canonical SnapshotPublisher",
   },
   {
+    matches: (file) =>
+      (file.startsWith("core/src/") || file.startsWith("platform/src/")) &&
+      file !== "core/src/errors.ts",
+    test: (source) => /\binstanceof\s+Error\b/.test(source),
+    message: "External failure recognition must reuse Core isError",
+  },
+  {
     matches: (file) => file === "platform/src/artifact.ts",
     test: (source) =>
       !/\bisCancellationReason\b/.test(source) || /function\s+\w*Cancellation\w*\s*\(/.test(source),

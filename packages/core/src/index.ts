@@ -69,6 +69,7 @@ export {
   DougongError,
   RecordedFailure,
   type ErrorSnapshot,
+  isError,
   isCancellationReason,
 } from "./errors";
 export {

@@ -67,6 +67,10 @@ Mutable owners and projections are separated for each fact:
 | Current Contribution value | ContributionRecord | Store snapshots and ContributionView |
 | Contribution claims and publication order | ContributionStore | Record requests publication without storing a publication phase |
 | Frozen terminal failure record | RecordedFailure private snapshot | Read-only getter, diagnostics and discarded handles; prototype inheritance grants no record authority |
+| Error recognition for external rejection values | Core isError | Platform reuses the predicate and chooses only its business error code |
+| Non-Error wrapper provenance | Module-private provenance set registered by Core normalization | External error prototypes and copied constructors grant no reclassification authority |
+| Current activation cleanup result | Immutable activation outcome from InstanceCoordinator | Engine reads this outcome; public errors and historical failures from other activations cannot originate cleanup transitions |
+| Manifest declaration failure provenance | Private provenance set registered by internal Manifest checks | Error classes and codes are projections without classification authority |
 | Snapshot materialization and closure boundary | SnapshotPublisher | A view cannot return its previous cache during its own read or seal an unfinished result |
 | Accepted configuration issue fields | ConfigValidationError frozen issues | Capture third-party fields once, then validate and store those values |
 | Current Registration Artifact | RegistrationRecord authority | Manifest getter and diagnostics; terminal state retains only immutable Manifest data |

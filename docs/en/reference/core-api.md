@@ -32,6 +32,7 @@ One abstraction layer and one semantic allow exactly one canonical entry point. 
 | Create a child lifetime | `lifetime(label)` | `child` / `scope` / `fiber` |
 | Start a background task | `spawn()` | `run` / `fork` / `task` |
 | Classify cancellation | `isCancellationReason()` | checking only `signal.aborted` / matching only an error name |
+| Recognize external Error values | `isError()` | repeating prototype checks at each boundary |
 | Validate declaration records | `assertPlainRecord()` | copied prototype / own-key checks in higher layers |
 | Read a live value | `get()` | `.value` / a function call / `getSnapshot()` |
 | Subscribe to change | `subscribe()` | `watch` / `listen` / `observeChanges` |
@@ -582,6 +583,8 @@ Releasing a task aborts first, then awaits the result settling. A background fai
 
 `isCancellationReason(signal, error)` is the sole public classifier for that rule. Platform loaders and downstream adapters reuse it instead of copying their own heuristic for what merely looks like cancellation. An unreadable error name is no evidence of cancellation, so the original failure still propagates; identity with signal.reason remains sufficient.
 
+`isError(value: unknown): value is Error` is the shared Error recognition boundary for Core and higher layers. It checks the current prototype chain and returns false when that chain is unreadable, so reflection cannot replace the original rejection. Business classification of non-Error failures keeps the original value as cause; cancellation still checks identity with signal.reason first. Recognizing an Error does not guarantee readable custom fields; terminal records separately capture permitted diagnostic fields.
+
 A task that settles naturally immediately detaches from the parent Lifetime's ownership set and from the AbortSignal listeners. A later `dispose()` on that task is an idempotent completion and never retroactively aborts the signal of a finished task. Completed tasks do not accumulate in a long-lived owner proportional to history; releasing a parent still aborts and awaits every task that had not settled at that moment.
 
 Waiting is a structured-ownership guarantee, not a timeout policy. If a task is stuck on a non-cancellable operation that never settles, `Task.dispose()`, parent Lifetime release and `host.stop()` all remain pending. Core never detaches such work implicitly; application code must explicitly own both an abandon-wait policy and its resource consequences. See the safe pattern in the [Lifetime guide](../guide/lifetime.md#background-tasks).
@@ -908,6 +911,10 @@ Because an Event by definition collects every listener failure, it always throws
 Errors from background tasks, subscribers and later observes cannot return to the original synchronous stack and are reported through `onError`. A failure inside `onError` itself must not change the Host command being observed.
 
 `RecordedFailure` is the shared terminal error type. Its read-only `snapshot: ErrorSnapshot` getter returns a privately owned frozen record. Only a genuine RecordedFailure can reuse that private record; an external Error inheriting its prototype is captured again. The record contains diagnostic values: original name, message, code, stack text, bounded cause and aggregate error trees, validation issues, and permission fields. It never reconstructs the original subclass or retains arbitrary error payloads. Operation failures and recoverable failures still propagate their original Error; `ready()` on a discarded Installation or Registration rejects with RecordedFailure. Enumerate or serialize diagnostic data explicitly through `error.snapshot`; snapshot is no longer an enumerable instance data field.
+
+`new RecordedFailure(reason: unknown)` accepts any rejection value without requiring prior classification. Each error node's prototype is checked at most once. Unrecognizable values become NonError records: primitives retain bounded text and other objects are omitted. SnapshotPublisher records its final reader rejection directly rather than constructing another error. The normalization path registers non-Error wrapper provenance in a module-private set; prototypes and constructors cannot grant reclassification authority. Only the current activation's internal outcome carries incomplete-cleanup evidence. Error classes, codes, prototypes, constructors and historical failures from another activation cannot trigger its fail-closed behavior.
+
+Non-Error wrappers created by Core are frozen. Later holders cannot rewrite cause or code and change the original reason used by an outer classification. The application still owns any object referenced by cause, and explicitly thrown application Errors propagate unchanged.
 
 ## 16. Forbidden directions
 

@@ -55,6 +55,17 @@ export function matchesVersion(version: string, range: string) {
 
 export type ManifestInput = z.input<typeof manifestSchema>;
 
+// Only our declaration checks grant provenance, independent of Error classes
+// and constructors reachable through a previously returned error.
+const manifestDeclarationFailures = new WeakSet<object>();
+
+function manifestDeclarationError(message: string) {
+  const failure = new PlatformError("MANIFEST_INVALID", message);
+  Object.freeze(failure);
+  manifestDeclarationFailures.add(failure);
+  return failure;
+}
+
 /**
  * Every failure here is one `MANIFEST_INVALID`, whatever went wrong inside.
  *
@@ -68,7 +79,8 @@ export function defineManifest(input: ManifestInput | Manifest): Manifest {
   try {
     declaration = snapshotManifestDeclaration(input);
   } catch (error) {
-    if (error instanceof PlatformError && error.code === "MANIFEST_INVALID") throw error;
+    if (error !== null && typeof error === "object" && manifestDeclarationFailures.has(error))
+      throw error;
     throw new PlatformError("MANIFEST_INVALID", "Manifest declaration could not be read", {
       cause: error,
     });
@@ -110,10 +122,7 @@ function snapshotManifestDeclaration(input: unknown) {
     assertManifestRecord(declaration.dependencies, "Manifest dependencies");
     const dependencies = Object.entries(declaration.dependencies);
     if (dependencies.some(([name]) => name === "__proto__")) {
-      throw new PlatformError(
-        "MANIFEST_INVALID",
-        "Manifest dependency '__proto__' is not supported",
-      );
+      throw manifestDeclarationError("Manifest dependency '__proto__' is not supported");
     }
     declaration.dependencies = Object.fromEntries(dependencies);
   }
@@ -125,7 +134,7 @@ function assertManifestRecord(
   label: string,
 ): asserts value is Record<string, unknown> {
   assertPlainRecord(value, label, {
-    createError: (message) => new PlatformError("MANIFEST_INVALID", message),
+    createError: manifestDeclarationError,
   });
 }
 

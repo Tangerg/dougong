@@ -81,6 +81,7 @@ pnpm check
 | Platform 诊断必须编译到 Core `SnapshotPublisher` | 复制观察协议 |
 | Contribution 观察必须组合同一个 `SnapshotPublisher` | 同上 |
 | Platform 加载取消必须复用 Core `isCancellationReason` | 两套取消判定 |
+| Core 与 Platform 的外部 Error 识别必须复用 Core `isError` | 各边界重复原型判断会覆盖原始拒绝值 |
 | Platform 终态错误必须复用 Core `RecordedFailure` | 两套终态诊断记录语义 |
 | Platform 声明校验必须复用 Core `assertPlainRecord` | 两套普通数据 record 校验语义 |
 | Host 必须把安装声明与句柄权限委托给 `InstallationRegistry` | Host 重新变成总类 |

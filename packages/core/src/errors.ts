@@ -1,9 +1,10 @@
-// Error vocabulary for Core. Three jobs, kept apart on purpose:
+// Error vocabulary for Core. Four jobs, kept apart on purpose:
 //
 //   DougongError      a failure with a stable machine-readable `code`
-//   RecordedFailure   an Error with a bounded pure-value snapshot for objects that must not retain
+//   RecordedFailure   a bounded pure-value rejection record for objects that must not retain
 //                     the failed object graph
-//   normalizeFailure  the one place a non-Error rejection reason becomes an Error
+//   isError           the shared recognition boundary for external rejection values
+//   normalizeFailure  Core's coded normalization of non-Error rejection reasons
 //
 // `docs/reference/errors.md` lists every code, and the api-surface gate derives
 // the codes from this source and fails when the two disagree.
@@ -55,9 +56,11 @@ export class RecordedFailure extends Error {
     return this.#snapshot;
   }
 
-  constructor(error: Error) {
-    if (!isRecordableError(error)) throw new TypeError("RecordedFailure expects an Error");
-    const snapshot = #snapshot in error ? error.#snapshot : captureError(error);
+  constructor(error: unknown) {
+    const snapshot =
+      error !== null && typeof error === "object" && #snapshot in error
+        ? error.#snapshot
+        : captureError(error);
     super(snapshot.message);
     this.code = snapshot.code;
     this.#snapshot = snapshot;
@@ -68,7 +71,7 @@ export class RecordedFailure extends Error {
   }
 }
 
-function captureError(error: Error): ErrorSnapshot {
+function captureError(error: unknown): ErrorSnapshot {
   const seen = new Set<unknown>();
   let remaining = 32;
   const visit = (value: unknown, depth: number): ErrorSnapshot => {
@@ -79,7 +82,7 @@ function captureError(error: Error): ErrorSnapshot {
         truncated: true,
       });
     }
-    if (!isRecordableError(value)) {
+    if (!isError(value)) {
       const message =
         value === null ||
         ["string", "number", "boolean", "undefined", "bigint", "symbol"].includes(typeof value)
@@ -152,9 +155,8 @@ function captureError(error: Error): ErrorSnapshot {
   return visit(error, 0);
 }
 
-// Reflection and field reads both cross the external failure boundary: revoked
-// proxies and throwing accessors cannot replace the failure being recorded.
-function isRecordableError(value: unknown): value is Error {
+/** Unreadable prototypes are not evidence that a rejection value is an Error. */
+export function isError(value: unknown): value is Error {
   try {
     return value instanceof Error;
   } catch {
@@ -180,8 +182,9 @@ function readErrorProperty(value: unknown, key: PropertyKey): unknown {
   }
 }
 
-/** Internal marker that lets a higher public boundary reclassify the original non-Error reason. */
-class NonErrorFailure extends DougongError {}
+// Only this normalization boundary grants provenance. Copying an Error's
+// constructor or prototype cannot grant permission to reclassify it.
+const normalizedFailures = new WeakSet<Error>();
 
 /**
  * Preserves explicit Error values and classifies non-Error rejection reasons.
@@ -191,15 +194,21 @@ class NonErrorFailure extends DougongError {}
  * kept as `cause`. A real Error is returned untouched — Core never rewrites a
  * failure a Plugin author deliberately threw.
  *
- * The private marker class is why re-normalizing is safe: a wrapper that already
+ * The private provenance set is why re-normalizing is safe: a wrapper that already
  * belongs to Core can be re-coded as it passes an outer boundary instead of
  * being wrapped a second time.
  */
 export function normalizeFailure(error: unknown, code: string, message: string): Error {
-  if (error instanceof NonErrorFailure) {
-    return error.code === code ? error : new NonErrorFailure(code, message, { cause: error.cause });
+  let reason = error;
+  if (isError(error)) {
+    if (!normalizedFailures.has(error)) return error;
+    if ((error as DougongError).code === code) return error;
+    reason = error.cause;
   }
-  return error instanceof Error ? error : new NonErrorFailure(code, message, { cause: error });
+  const failure = new DougongError(code, message, { cause: reason });
+  Object.freeze(failure);
+  normalizedFailures.add(failure);
+  return failure;
 }
 
 /**
@@ -224,7 +233,7 @@ export function isCancellationReason(signal: AbortSignal, error: unknown) {
   }
   if (!signal.aborted) return false;
   if (Object.is(error, signal.reason)) return true;
-  return error instanceof Error && readErrorProperty(error, "name") === "AbortError";
+  return isError(error) && readErrorProperty(error, "name") === "AbortError";
 }
 
 export class ConfigValidationError extends DougongError {

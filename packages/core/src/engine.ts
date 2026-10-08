@@ -11,7 +11,7 @@ import { DougongError, normalizeFailure } from "./errors";
 import { InstallationGraph } from "./installation-graph";
 import type { InstallationDeclaration, InstallationRecord } from "./installation";
 import {
-  IncompleteActivationCleanupError,
+  type ActivationFailure,
   InstanceCoordinator,
   type InstanceCoordinatorPort,
 } from "./instance-coordinator";
@@ -141,8 +141,15 @@ export class Engine {
         );
       }
 
+      let activationFailure: ActivationFailure | undefined;
       try {
-        await this.#instances.activate(nextPlan, affected, nextConfigs, contracts);
+        activationFailure = await this.#instances.activate(
+          nextPlan,
+          affected,
+          nextConfigs,
+          contracts,
+        );
+        if (activationFailure) throw activationFailure.error;
         contracts.commit();
         this.#instances.commitActivationOrder(nextPlan.order);
         this.#plan = nextPlan;
@@ -155,7 +162,7 @@ export class Engine {
         // behind. If cleanup was incomplete, some Instance from the abandoned
         // plan may still hold a resource, so restoring the previous one would
         // run two owners of the same thing at once — fail closed instead.
-        if (changeError instanceof IncompleteActivationCleanupError || nextStopErrors.length) {
+        if (activationFailure?.cleanupIncomplete || nextStopErrors.length) {
           return this.#failClosed(
             new Set([...previousPlan.order, ...affected]),
             [changeError, ...nextStopErrors],
@@ -175,7 +182,8 @@ export class Engine {
     const configs = await this.#resolveConfigs(plan, plan.order);
     this.#instances.resetActivationState();
     try {
-      await this.#instances.activate(plan, installations, configs, contracts);
+      const failure = await this.#instances.activate(plan, installations, configs, contracts);
+      if (failure) throw failure.error;
       contracts.commit();
       this.#instances.commitActivationOrder(plan.order);
     } catch (error) {
@@ -225,7 +233,13 @@ export class Engine {
   ): Promise<TransitionOutcome> {
     const contracts = this.#contracts.writer(previousPlan.contractKinds);
     try {
-      await this.#instances.activate(previousPlan, affected, previousConfigs, contracts);
+      const failure = await this.#instances.activate(
+        previousPlan,
+        affected,
+        previousConfigs,
+        contracts,
+      );
+      if (failure) throw failure.error;
       contracts.commit();
       this.#instances.commitActivationOrder(previousPlan.order);
       this.#plan = previousPlan;

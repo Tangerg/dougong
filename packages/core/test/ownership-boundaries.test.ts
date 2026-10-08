@@ -11,6 +11,134 @@ import {
   type Task,
 } from "../src";
 
+it.each(["historical failure", "prototype", "constructor"])(
+  "keeps cleanup outcome authority out of an external error's %s",
+  async (source) => {
+    const failedHost = createHost();
+    failedHost.install(
+      definePlugin({
+        name: "owned.previous-cleanup-failure",
+        setup(ctx) {
+          ctx.cleanup(() => {
+            throw new Error("previous cleanup failed");
+          });
+          throw new Error("previous setup failed");
+        },
+      }),
+    );
+    const historical: unknown = await failedHost.start().catch((error: unknown) => error);
+    const ErrorClass = (historical as Error).constructor as new (
+      errors: ReadonlyArray<unknown>,
+      message: string,
+    ) => Error;
+    const VALUE = service<number>("owned/cleanup-outcome");
+    const provides = { value: VALUE };
+    const host = createHost();
+    const original = definePlugin({
+      name: "owned.cleanup-outcome",
+      provides,
+      setup: () => ({ value: 1 }),
+    });
+    const installation = host.install(original);
+    await host.start();
+    const failure =
+      source === "historical failure"
+        ? historical
+        : source === "constructor"
+          ? new ErrorClass([], "setup failed cleanly")
+          : Object.setPrototypeOf(
+              new Error("setup failed cleanly"),
+              Object.getPrototypeOf(historical),
+            );
+    const replacement = definePlugin({
+      name: original.name,
+      provides,
+      setup() {
+        throw failure;
+      },
+    });
+    const rejected = await installation
+      .update({ plugin: replacement })
+      .catch((error: unknown) => error);
+
+    expect(Object.is(rejected, failure)).toBe(true);
+    expect(host.status).toBe("active");
+    expect(host.get(VALUE)).toBe(1);
+    expect(installation.status).toBe("active");
+    await host.stop();
+  },
+);
+
+it("withdraws setup resources after an inaccessible non-Error rejection", async () => {
+  const reason = Proxy.revocable({}, {});
+  reason.revoke();
+  const released = vi.fn<() => void>();
+  const host = createHost();
+  await host.start();
+  const change = host.change();
+  const installation = change.install(
+    definePlugin({
+      name: "owned.inaccessible-rejection",
+      setup(ctx) {
+        ctx.cleanup(released);
+        throw reason.proxy;
+      },
+    }),
+  );
+
+  const failure: unknown = await change.commit().catch((error: unknown) => error);
+  expect(failure).toBeInstanceOf(Error);
+  expect(Object.is((failure as Error).cause, reason.proxy)).toBe(true);
+  expect(released).toHaveBeenCalledTimes(1);
+  expect(installation.status).toBe("failed");
+  await expect(installation.ready()).rejects.toBeInstanceOf(RecordedFailure);
+  expect(installation.diagnostics.get().error?.code).toBe("INSTALLATION_UNAVAILABLE");
+  expect(host.diagnostics.get().installations.size).toBe(0);
+  expect(host.status).toBe("active");
+  await host.stop();
+});
+
+it("preserves an inaccessible Task rejection that occurs after cancellation", async () => {
+  const reason = Proxy.revocable({}, {});
+  reason.revoke();
+  const entered = Promise.withResolvers<void>();
+  const completion = Promise.withResolvers<void>();
+  const aborted = Promise.withResolvers<void>();
+  const reports: unknown[] = [];
+  const host = createHost({
+    onError: (error) => {
+      reports.push(error);
+    },
+  });
+  let task!: Task;
+  host.install(
+    definePlugin({
+      name: "owned.inaccessible-task",
+      setup(ctx) {
+        task = ctx.spawn(async (signal) => {
+          signal.addEventListener("abort", () => aborted.resolve(), { once: true });
+          entered.resolve();
+          await completion.promise;
+        });
+      },
+    }),
+  );
+  await host.start();
+  await entered.promise;
+  const result = task.result.then(
+    () => false,
+    (error: unknown) => Object.is(error, reason.proxy),
+  );
+  const stopping = host.stop();
+  await aborted.promise;
+  completion.reject(reason.proxy);
+  await stopping;
+
+  expect(await result).toBe(true);
+  expect(reports).toHaveLength(1);
+  expect(Object.is(reports[0], reason.proxy)).toBe(true);
+});
+
 it("discards a rejected Installation even when its original failure has an inaccessible cause", async () => {
   const cause = Proxy.revocable({}, {});
   cause.revoke();

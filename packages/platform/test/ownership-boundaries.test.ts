@@ -6,7 +6,139 @@ import {
   type ChangeSet,
   type Installation,
 } from "@dougongjs/core";
-import { createPlatform, defineManifest, MemoryLoader } from "../src";
+import { createPlatform, defineManifest, MemoryLoader, PlatformError } from "../src";
+
+it("keeps internally owned manifest declaration failures immutable", () => {
+  let failure: unknown;
+  try {
+    defineManifest({ name: "owned.invalid", version: "1.0.0", dependencies: [] } as never);
+  } catch (error) {
+    failure = error;
+  }
+
+  expect(failure).toBeInstanceOf(PlatformError);
+  expect(Reflect.set(failure as PlatformError, "code", "REGISTRATION_UNAVAILABLE")).toBe(false);
+  expect(Object.isFrozen(failure)).toBe(true);
+  expect((failure as PlatformError).code).toBe("MANIFEST_INVALID");
+});
+
+it("does not grant manifest declaration authority through a copied error constructor", () => {
+  let original: unknown;
+  try {
+    defineManifest({ name: "owned.invalid", version: "1.0.0", dependencies: [] } as never);
+  } catch (error) {
+    original = error;
+  }
+  const ErrorClass = (original as Error).constructor as new (
+    code: string,
+    message: string,
+  ) => Error;
+  const external = new ErrorClass("MANIFEST_INVALID", "external reflection failed");
+  const input = new Proxy(
+    { name: "owned.copied-constructor", version: "1.0.0" },
+    {
+      getPrototypeOf() {
+        throw external;
+      },
+    },
+  );
+  let failure: unknown;
+  try {
+    defineManifest(input);
+  } catch (error) {
+    failure = error;
+  }
+
+  expect(failure).toBeInstanceOf(PlatformError);
+  expect(Object.is((failure as Error).cause, external)).toBe(true);
+});
+
+it("seals a rejected Registration when authorization throws an inaccessible value", async () => {
+  const reason = Proxy.revocable({}, {});
+  reason.revoke();
+  const platform = createPlatform({
+    installer: createHost(),
+    apiVersion: "1.0.0",
+    loader: new MemoryLoader(new Map()),
+    authorizer: {
+      authorize() {
+        throw reason.proxy;
+      },
+    },
+  });
+  const change = platform.change();
+  const registration = change.register({
+    manifest: { name: "owned.inaccessible-authorization", version: "1.0.0" },
+    reference: "unused",
+  });
+  const failure: unknown = await change.commit().catch((error: unknown) => error);
+
+  expect(failure).toBeInstanceOf(Error);
+  expect(Object.is((failure as Error).cause, reason.proxy)).toBe(true);
+  expect(registration.status).toBe("failed");
+  await expect(registration.ready()).rejects.toMatchObject({
+    name: "RecordedFailure",
+    code: "REGISTRATION_UNAVAILABLE",
+  });
+  expect(platform.diagnostics.get().registrations.size).toBe(0);
+  await registration.remove();
+  await platform.dispose();
+});
+
+it("preserves the manifest error boundary when reflection throws an inaccessible value", () => {
+  const reason = Proxy.revocable({}, {});
+  reason.revoke();
+  const input = new Proxy(
+    { name: "owned.inaccessible-manifest", version: "1.0.0" },
+    {
+      getPrototypeOf() {
+        throw reason.proxy;
+      },
+    },
+  );
+  let failure: unknown;
+  try {
+    defineManifest(input);
+  } catch (error) {
+    failure = error;
+  }
+
+  expect(failure).toBeInstanceOf(Error);
+  expect((failure as { code: string }).code).toBe("MANIFEST_INVALID");
+  expect(Object.is((failure as Error).cause, reason.proxy)).toBe(true);
+});
+
+it("does not let an external coded error bypass manifest declaration ownership", () => {
+  const reason = Proxy.revocable({}, {});
+  reason.revoke();
+  const external = Object.defineProperty(
+    new PlatformError("MANIFEST_INVALID", "external"),
+    "code",
+    {
+      get() {
+        throw reason.proxy;
+      },
+    },
+  );
+  const input = new Proxy(
+    { name: "owned.external-error", version: "1.0.0" },
+    {
+      getPrototypeOf() {
+        throw external;
+      },
+    },
+  );
+  let failure: unknown;
+  try {
+    defineManifest(input);
+  } catch (error) {
+    failure = error;
+  }
+
+  expect(failure).toBeInstanceOf(PlatformError);
+  expect((failure as PlatformError).code).toBe("MANIFEST_INVALID");
+  expect(Object.is((failure as Error).cause, external)).toBe(true);
+});
 
 it.each([false, true])(
   "derives availability from a removed Core Installation (placeholder: %s)",

@@ -183,6 +183,8 @@ The channel is fail-safe: an `onError` that throws or rejects falls back to the 
 
 ### Diagnostic failure records
 
+Core provides `isError(value)` as the shared recognition boundary for external rejection values. An unreadable prototype returns false rather than throwing a reflection error that replaces the original failure. Platform reuses this predicate before selecting its own error code and disposition. Only genuinely created and frozen internal declaration errors may pass through the Manifest check unchanged; an externally thrown PlatformError or matching code cannot bypass the MANIFEST_INVALID boundary.
+
 Installation and Registration diagnostic errors always use `RecordedFailure`; later calls to `ready()` on discarded handles reject with the same type. Its `name` is always `RecordedFailure`; its optional `code` and frozen `snapshot: ErrorSnapshot` describe the original failure. It does not claim `instanceof TypeError`, `DougongError` or `PermissionDeniedError`. The command that failed and recoverable live failures still deliver the original Error. After a SnapshotPublisher final read fails, its first dispose throws the original value, terminal get calls throw RecordedFailure, and neither the previous snapshot payload nor the failed reader remains retained.
 
 The snapshot preserves original name, message, code and stack text, plus bounded `cause` and `errors` trees. Permission failures retain `manifestName` and `denied`; config failures retain issue messages and paths. Arbitrary objects, callbacks and custom payloads are omitted. The read-only snapshot getter returns the record privately owned by RecordedFailure, without trusting external fields or prototype inheritance. Enumerate and serialize `error.snapshot` explicitly rather than relying on enumerable error-instance fields. Text is copied as strings. The recorder also replaces its native constructor trace when the source has no stack, so historical errors cannot retain the Host, Installer, Loader or Platform through their object graph.
@@ -190,6 +192,10 @@ The snapshot preserves original name, message, code and stack text, plus bounded
 Recording expands at most 32 error nodes, descends at most four edges, and takes at most eight items per error list. Messages are capped at 4,096 characters, stack text at 16,384, and names, codes and permission fields at 256. Validation paths keep at most 16 segments. `truncated` marks bounded records and cut-off chains. These are diagnostic limits, not a serializer for application state.
 
 Reflection and field reads also cross the recording boundary: an inaccessible cause object becomes an omitted NonError record, while inaccessible array or path fields are omitted from the snapshot. Array length is captured once before reading a bounded number of entries. A revoked Proxy or throwing accessor cannot replace the original operation failure or prevent terminal resource release.
+
+`RecordedFailure` accepts unknown directly and checks each error node's prototype at most once without requiring prior Error recognition. Primitive rejection values use the NonError name and bounded text; unrecognizable objects retain only an omission record. Module-private sets own normalization and Manifest declaration failure provenance, with registration restricted to their responsible internal paths. The current activation's internal outcome owns its cleanup result. External errors, including rethrown genuine cleanup failures from another activation, remain error data and cannot advance that cleanup fact.
+
+Non-Error wrappers created by Core are frozen to preserve the original cause identity and code used by later classification. Objects referenced by cause and explicitly thrown application Errors remain under application ownership.
 
 ## Related
 
