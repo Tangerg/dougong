@@ -64,6 +64,8 @@ pnpm check
 | 资源实现不直接使用 `[Symbol.dispose]` / `[Symbol.asyncDispose]` | 必须经过基础协议模块选择稳定 key，避免缺失 Symbol 退化成 `"undefined"` 属性 |
 | facade 只含 re-export | 有逻辑就是第二条执行路径 |
 | Lifetime 诊断模块只声明只读 schema | 阶段与成员关系直接读取真实 Lifetime，不另建诊断树、状态机或计数 |
+| InstanceCoordinator 不重新读取外部 Contract 身份 | 由 Lifetime 捕获纯数据身份后检查操作授权，反射不能越过释放边界 |
+| Installation 诊断不通过 Lifetime 的执行绑定读取 view | Instance 已保存同一只读 view，释放期间仍能读取终态投影 |
 | Event listener 不另存发布阶段 | EventHub 成员关系是可见性唯一拥有者 |
 | Installation facade 不另建状态机 | 权限只保存在 InstallationRecord |
 | RegistrationRecord 不另存可变 Manifest | manifest 直接来自同一 Artifact，终态只保留不可变数据 |

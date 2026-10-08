@@ -64,6 +64,8 @@ Constraints the type system cannot express but source text can decide. Two kinds
 | Resource implementations do not use `[Symbol.dispose]` / `[Symbol.asyncDispose]` directly | Foundation protocol modules must select stable keys instead of degrading a missing symbol into an `"undefined"` property |
 | The facade contains re-exports only | Logic there is a second execution path |
 | Lifetime diagnostic module declares read-only schemas only | Read phase and membership from the real Lifetime without a second tree, state machine or counters |
+| InstanceCoordinator cannot re-read external Contract identities | Lifetime captures inert identity before granting authority, so reflection cannot cross disposal |
+| Installation diagnostics cannot reach through Lifetime's execution binding for a view | Instance retains the same read-only view for terminal reads during disposal |
 | Event listener registrations cannot store a publication phase | EventHub membership is the sole visibility owner |
 | Installation facades cannot keep lifecycle or authority state | InstallationRecord is the sole owner |
 | RegistrationRecord cannot keep a mutable Manifest mirror | Manifest derives from the same Artifact; terminal data is immutable |

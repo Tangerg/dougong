@@ -195,6 +195,8 @@ await change.commit();
 
 `platform.register()`、`registration.update()`、`registration.remove()` 都机械退化为单项 Platform ChangeSet。ChangeSet one-shot、commit 幂等、同一目标只允许出现一次，并拒绝其他 Platform 的 Registration。
 
+每个暂存入口在读取 Artifact 后检查草稿的当前阶段。若反射期间重入 `commit()`，尚在读取输入的 register/update 同步拒绝，不创建悬空 Registration，也不能向已提交草稿追加操作。
+
 空 Platform ChangeSet 不触发候选图、Core ChangeSet 或诊断 revision，但仍按提交顺序经过同一命令队列并检查 Platform authority；它会等待先前的变更，dispose 前创建的旧空草稿也不能在终态后伪装成成功提交。
 
 `change.register()` 创建的 Registration 在 commit 前只是该 ChangeSet 独占的 draft，不持有 Platform owner，不能另行 `activate/update/remove`，也不能作为另一份 ChangeSet 的目标。commit 时才授予控制权限；注册失败或移除后再次撤销。已进入队列的重复移除请求按 Registration 身份幂等完成，即使同名 Registration 后来重新注册，也不会删除新的成员。终态句柄的直接 `remove()` 保持幂等，但不能重新作为新 ChangeSet 的目标。这样草稿与旧句柄都不会绕开候选图，也不会反向保活 Platform。

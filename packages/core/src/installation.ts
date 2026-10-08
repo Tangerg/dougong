@@ -55,6 +55,7 @@ export interface Instance {
   readonly plugin: NormalizedPlugin;
   readonly config: unknown;
   readonly lifetime: Lifetime;
+  readonly diagnostics: SnapshotView<LifetimeSnapshot>;
 }
 
 export function createInstallationDeclaration(
@@ -339,7 +340,7 @@ export class InstallationRecord {
         ),
       ),
       provides: Object.freeze(Object.values(plugin?.provides ?? {}).map((token) => token.id)),
-      ...(instance ? { lifetime: instance.lifetime.diagnostics } : {}),
+      ...(instance ? { lifetime: instance.diagnostics } : {}),
       ...(error ? { error: new RecordedFailure(error) } : {}),
     });
   }

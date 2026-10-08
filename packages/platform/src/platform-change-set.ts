@@ -48,7 +48,7 @@ export class PlatformChangeSetDraft<Reference> implements PlatformChangeSet<Refe
   register(artifact: Artifact<Reference>) {
     const port = this.#requireOpen();
     const normalized = port.normalize(artifact);
-    const registration = port.createRegistration(normalized);
+    const registration = this.#requireOpen().createRegistration(normalized);
     this.#stage({ kind: "register", registration, artifact: normalized });
     return registration.facade;
   }
@@ -103,6 +103,7 @@ export class PlatformChangeSetDraft<Reference> implements PlatformChangeSet<Refe
   }
 
   #stage(operation: PlatformChangeOperation<Reference>) {
+    this.#requireOpen();
     if (this.#operations.has(operation.registration)) {
       throw new TypeError(
         `Registration '${operation.registration.manifestName}' can only appear once in the same ChangeSet`,

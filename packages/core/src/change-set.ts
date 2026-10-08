@@ -112,8 +112,9 @@ export class ChangeSetDraft implements ChangeSet {
     config: unknown,
     create?: DraftInstallationFactory,
   ): Installation<Declaration> {
-    const port = this.#requireOpen();
+    this.#requireOpen();
     const normalized = normalizePlugin(plugin);
+    const port = this.#requireOpen();
     const draft = (create ?? port.create)(normalized, config);
     this.#stage({ kind: "install", installation: draft.record });
     // Runtime authority is the facade identity; Declaration exists only in the
@@ -213,6 +214,7 @@ export class ChangeSetDraft implements ChangeSet {
   // and there is no reading of "both" that is obviously right. The caller has to
   // say which one it meant.
   #stage(operation: ChangeOperation) {
+    this.#requireOpen();
     if (this.#operations.has(operation.installation)) {
       throw new TypeError(
         `Installation '${operation.installation.id}' can only appear once in the same ChangeSet`,

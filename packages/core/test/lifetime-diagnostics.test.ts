@@ -2,6 +2,35 @@ import { describe, expect, it, vi } from "vitest";
 import { createHost, definePlugin, event, type Disposable, type LifetimeContext } from "../src";
 
 describe("Lifetime diagnostic projections", () => {
+  it.each(["Installation", "Host"])(
+    "keeps %s diagnostics readable while a disposed Instance is still stopping",
+    async (source) => {
+      const host = createHost();
+      const installation = host.install(definePlugin({ name: "diagnostics.drained", setup() {} }));
+      await host.start();
+      const view = installation.diagnostics.get().lifetime!;
+      const observed = Promise.withResolvers<unknown>();
+      view.subscribe(() => {
+        if (view.get().phase !== "disposed") return;
+        queueMicrotask(() => {
+          try {
+            const snapshot =
+              source === "Installation"
+                ? installation.diagnostics.get()
+                : host.diagnostics.get().installations.get(installation.id)!;
+            observed.resolve({ status: snapshot.status, lifetime: snapshot.lifetime?.get().phase });
+          } catch (error) {
+            observed.resolve({ error });
+          }
+        });
+      });
+
+      await host.stop();
+      expect(await observed.promise).toEqual({ status: "stopping", lifetime: "disposed" });
+      expect(host.status).toBe("idle");
+    },
+  );
+
   it("reads direct resource membership and keeps historical counts immutable", async () => {
     const host = createHost();
     const notice = event<void>("diagnostics/direct-resources");

@@ -195,6 +195,8 @@ await change.commit();
 
 `platform.register()`, `registration.update()` and `registration.remove()` all degenerate mechanically into a single-item Platform ChangeSet. A ChangeSet is one-shot, its commit is idempotent, a target may appear only once, and Registrations from another Platform are rejected.
 
+Each staging entry checks the draft's current phase after reading the Artifact. If reflection reenters `commit()`, the register/update operation still reading its input rejects synchronously, without creating an orphan Registration or appending an operation to the submitted draft.
+
 An empty Platform ChangeSet creates no candidate graph, Core ChangeSet or diagnostics revision, but it still crosses the same command queue in submission order and validates Platform authority. It waits for earlier changes, and an old empty draft created before disposal cannot pretend to commit after the Platform is terminal.
 
 A Registration created by `change.register()` is an exclusive draft of that ChangeSet until commit. It holds no Platform owner, cannot separately `activate` / `update` / `remove`, and cannot be targeted by another ChangeSet. Control authority is granted at commit and revoked again after failure or removal. Repeated removal requests already accepted into the queue complete idempotently by Registration identity, so a later Registration with the same name is never removed by an old request. Direct `remove()` remains idempotent on a terminal handle, but that handle cannot become the target of a new ChangeSet. This keeps both drafts and stale handles from bypassing the candidate graph or retaining the Platform.

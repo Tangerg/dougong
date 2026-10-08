@@ -62,6 +62,8 @@ Mutable owners and projections are separated for each fact:
 | Host command completion boundary | Host's SerialQueue | Installation / Group ready await the same boundary |
 | Group attachment and parent-child relationships | GroupNode | Group facade and structural diagnostics |
 | Group configuration phase | GroupConfigurationSession | Group facade reads it without advancing it independently |
+| Permission to append ChangeSet operations | Each draft's current phase | A check before input reads cannot authorize later writes; staging reads the sole phase again |
+| Lifetime operation authority | Lifetime's current phase and signal | Capture external Contract identity before granting access; InstanceCoordinator consumes only inert identity data |
 | Lifetime phase and resource / child membership | Lifetime state and actual ownership sets | Diagnostics read phase, Set.size and the real subtree without mirrored nodes or counters |
 | Event listener publication visibility | EventHub membership | ListenerRegistration holds only its callback and revocable resource binding |
 | Current Contribution value | ContributionRecord | Store snapshots and ContributionView |
@@ -72,6 +74,7 @@ Mutable owners and projections are separated for each fact:
 | Current activation cleanup result | Immutable activation outcome from InstanceCoordinator | Engine reads this outcome; public errors and historical failures from other activations cannot originate cleanup transitions |
 | Manifest declaration failure provenance | Private provenance set registered by internal Manifest checks | Error classes and codes are projections without classification authority |
 | Snapshot materialization and closure boundary | SnapshotPublisher | A view cannot return its previous cache during its own read or seal an unfinished result |
+| Lifetime diagnostic view | The same SnapshotPublisher | Instance retains a read-only view and reads the same terminal projection after the execution binding is released |
 | Accepted configuration issue fields | ConfigValidationError frozen issues | Capture third-party fields once, then validate and store those values |
 | Current Registration Artifact | RegistrationRecord authority | Manifest getter and diagnostics; terminal state retains only immutable Manifest data |
 | Promise and disposal Symbol runtime rules | scripts/internal/disposal-runtime.ts | Generated Core / reactive modules |

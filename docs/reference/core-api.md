@@ -158,6 +158,7 @@ const USER_CREATED = event<User>("users/created")
 - ID 必须非空且首尾无空白；区分大小写，不做 trim 或 Unicode 规范化。
 - 同一 ID 在一个 Host 中不能同时承担两种 kind，否则抛 `CONTRACT_CONFLICT`。
 - 只有成功提交的声明和 active Lifetime 的使用才登记 kind；失败的 setup、rollback 和未命中的应用代码读取不会占用 Contract ID。
+- Lifetime 先捕获外部 token 的纯数据身份，再读取当前阶段与 signal 决定操作授权。若反射期间发生释放，本次操作以 `LIFETIME_DISPOSED` 拒绝，不登记 kind、不创建资源、不派发 Event；InstanceCoordinator 不再读取外部 token。
 - `optional()` 是 branded OptionalService 的唯一类型化构造入口，且只接受 Service；ExtensionPoint 的空 Map 本身就是合法值，Event 没有提供者概念。
 
 固定 Contract 的同一 ID 应在代码库中只声明一次并从稳定模块导出。TypeScript 本身无法阻止两个模块为同一 ID 写出不同类型参数，因此 Dougong 仓库的架构门禁会拒绝重复的固定字符串声明；下游代码库也应执行同类静态检查。参数化 Contract family 不属于重复的固定声明。
@@ -688,6 +689,7 @@ await change.commit()
 规则：
 
 - one-shot；首次 `commit()` 后封口；
+- 暂存入口只从草稿当前阶段获得写入权；若输入反射期间重入 `commit()`，尚在读取输入的操作同步拒绝，不能向已提交草稿追加 Installation 或变更；
 - commit 幂等，重复调用返回同一 Promise；
 - 空 ChangeSet 不制造伪 `changing` 状态或诊断 revision，但仍按提交顺序经过 Host 命令队列与 owner authority 边界；先提交的 Group 删除会使随后提交的旧空草稿以 `GROUP_REMOVED` 拒绝；
 - 同一 Installation 在一份 ChangeSet 中只能出现一次；
@@ -867,6 +869,8 @@ const subscription = lifetime?.subscribe(render)
 label 只回答“这组资源为何共同存活”，不是 capability ID、查找 key 或新的 Scope。重复 label 不产生冲突，也不改变释放语义。cleanup、task、listener 等叶资源不各自增加命名重载；只有确实存在共同释放边界时才创建子 Lifetime。Core 不从函数名、调用栈或序号猜测节点，也不为了实现分类计数伪造树层级。
 
 资源变化只更新这份小型视图，不增加 Host revision，也不重建全部 InstallationSnapshot；调用方要观察资源变化就显式订阅嵌套视图。子 Lifetime 终止后立即从树中摘除；Instance 停止后新的 InstallationSnapshot 不再含 `lifetime`，已经取得的旧视图会停在无子节点、全零计数的 `disposed` 终态，且不再保留 Host。
+
+Instance 从创建时保存同一份只读 Lifetime view，不在诊断读取时重新取得执行绑定。Lifetime 已释放而 Installation 仍处于 `stopping` 的交接期间，Installation 与 Host 诊断仍可读取该 view 的 `disposed` 终态；这份投影不能推进 Lifetime 阶段或创建资源。
 
 公共 facade 对象与顶层 Host / Platform 都经过冻结且保持狭窄。纯 JavaScript 检查自有属性或原型，也不会看到：
 

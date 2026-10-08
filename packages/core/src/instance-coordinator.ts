@@ -1,5 +1,5 @@
 import type { ContractRegistryWriter } from "./contract-registry";
-import { normalizeContract, type Event, type ExtensionPoint, type Requirement } from "./contracts";
+import type { Event, ExtensionPoint, Requirement } from "./contracts";
 import { ContributionRegistry, type ContributionView } from "./contribution-store";
 import { DougongError, isCancellationReason } from "./errors";
 import { EventHub, type EventListener } from "./event-hub";
@@ -281,7 +281,9 @@ export class InstanceCoordinator {
 
       return Object.freeze({
         installation,
-        instance: Object.freeze({ plugin, config, lifetime }),
+        // The view remains readable after Lifetime releases its live binding,
+        // including the interval before this Instance finishes deactivating.
+        instance: Object.freeze({ plugin, config, lifetime, diagnostics: lifetime.diagnostics }),
         services,
       });
     } catch (error) {
@@ -426,15 +428,13 @@ export class InstanceCoordinator {
     release: (publication: Publication) => void,
     contracts: ContractRegistryWriter,
   ) {
-    const identity = normalizeContract(token, "event");
-    contracts.remember(identity);
-    return this.#events.stage(identity.id, listener, release);
+    contracts.remember(token);
+    return this.#events.stage(token.id, listener, release);
   }
 
   #emit<T>(token: Event<T>, payload: T, contracts: ContractRegistryWriter) {
-    const identity = normalizeContract(token, "event");
-    contracts.remember(identity);
-    return this.#events.emit(identity.id, payload);
+    contracts.remember(token);
+    return this.#events.emit(token.id, payload);
   }
 
   #stageContribution<T>(
@@ -445,9 +445,8 @@ export class InstanceCoordinator {
     release: (publication: Publication) => void,
     contracts: ContractRegistryWriter,
   ) {
-    const identity = normalizeContract(token, "extensionPoint");
-    contracts.remember(identity);
-    return this.#contributions.get<T>(identity).stage(installationId, key, value, release);
+    contracts.remember(token);
+    return this.#contributions.get<T>(token).stage(installationId, key, value, release);
   }
 
   #contributionView(token: ExtensionPointIdentity, lifetime: Lifetime): ContributionView<unknown> {

@@ -188,6 +188,17 @@ const SOURCE_RULES = [
 // Checks scoped to one file, keyed by that file's madge path.
 const FILE_RULES = [
   {
+    matches: (file) => file === "core/src/instance-coordinator.ts",
+    test: (source) => /\bnormalizeContract\b/.test(source),
+    message: "Lifetime must capture external Contract identities before granting live access",
+  },
+  {
+    matches: (file) => file === "core/src/installation.ts",
+    test: (source) => /instance\.lifetime\.diagnostics\b/.test(source),
+    message:
+      "Instance diagnostics must retain the read-only view independently of live Lifetime access",
+  },
+  {
     matches: (file) => file === "core/src/lifetime-diagnostics.ts",
     test: (source) => /\b(?:class|function|let|const)\b/.test(source),
     message: "Lifetime diagnostics declare read-only schemas, not a second tree or state owner",

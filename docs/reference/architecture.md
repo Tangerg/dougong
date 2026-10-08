@@ -62,6 +62,8 @@ Host 与 Platform 诊断通过 SnapshotPublisher 的 reader 构造集合。publi
 | Host 命令完成边界 | Host 的 SerialQueue | Installation / Group ready 等待同一边界 |
 | Group 附着与父子关系 | GroupNode | Group facade、结构诊断 |
 | Group 配置会话阶段 | GroupConfigurationSession | Group facade 读取，不自行推进 |
+| ChangeSet 是否允许追加操作 | 各草稿的当前阶段 | 输入读取前的检查不能授权读取后的写入；暂存入口重新读取唯一阶段 |
+| Lifetime 操作授权 | Lifetime 当前阶段与 signal | 先捕获外部 Contract 身份，再授予当前操作；InstanceCoordinator 只消费已捕获的身份数据 |
 | Lifetime 阶段与资源、子级成员关系 | Lifetime 状态和实际拥有集合 | 诊断读取阶段、Set.size 与真实子树，不保存镜像树或计数 |
 | Event listener 的发布可见性 | EventHub 成员集合 | ListenerRegistration 只保存回调与可撤销资源绑定 |
 | Contribution 当前值 | ContributionRecord | Store 快照与 ContributionView |
@@ -72,6 +74,7 @@ Host 与 Platform 诊断通过 SnapshotPublisher 的 reader 构造集合。publi
 | 本次激活的清理结果 | InstanceCoordinator 的不可变激活结果 | Engine 读取本次结果；公开错误与其他激活的历史错误不能发起清理状态转换 |
 | Manifest 声明失败来源 | Manifest 内部声明检查登记的私有来源集合 | 错误类型与 code 只是投影，不能自行绕过错误归类 |
 | 快照物化的执行与封闭边界 | SnapshotPublisher | view 不返回正在读取的旧缓存，也不能在 reader 内提前封闭结果 |
+| Lifetime 诊断 view | 同一 SnapshotPublisher | Instance 保存只读 view，释放执行绑定后仍读取同一终态投影 |
 | 已接受的配置校验问题字段 | ConfigValidationError 冻结的 issues | 第三方字段一次性捕获后验证与保存，不再重复读取 |
 | Registration 当前 Artifact | RegistrationRecord 的 authority | manifest getter 与诊断；终态仅保留不可变 Manifest |
 | 运行时 Promise 与释放 Symbol 规则 | scripts/internal/disposal-runtime.ts | Core / reactive 生成模块 |

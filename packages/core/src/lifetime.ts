@@ -22,7 +22,7 @@
 // before awaiting, or a task waiting on its signal would never finish; user
 // cleanups run last, when the resources they might touch are already quiet.
 
-import type { Event, ExtensionPoint } from "./contracts";
+import { normalizeContract, type Event, type ExtensionPoint } from "./contracts";
 import type { Contribution, ContributionLeaseKind } from "./contribution-store";
 import { DougongError, isCancellationReason } from "./errors";
 import type { EventListener } from "./event-hub";
@@ -102,6 +102,7 @@ export interface LifetimeOperations {
 export interface LifetimeContext extends LifetimeOperations, AsyncDisposable {}
 
 export interface LifetimePort {
+  // Lifetime grants live access only after capturing inert Contract identities.
   readonly stageOn: <T>(
     token: Event<T>,
     listener: EventListener<T>,
@@ -514,23 +515,29 @@ export class Lifetime implements LifetimeContext {
   }
 
   on<T>(token: Event<T>, listener: EventListener<T>) {
+    this.#requireActive();
+    const identity = normalizeContract(token, "event");
     const { port } = this.#requireActive();
-    const publication = port.stageOn(token, listener, this.#listeners.release);
+    const publication = port.stageOn(identity, listener, this.#listeners.release);
     this.#listeners.add(publication);
     if (this.#declarations.published) publication.publish();
     return publication.handle;
   }
 
   async emit<T>(token: Event<T>, ...payload: EventArguments<T>) {
+    this.#requireActive();
+    const identity = normalizeContract(token, "event");
     const { port } = this.#requireActive();
-    await port.emit(token, payload[0] as T);
+    await port.emit(identity, payload[0] as T);
   }
 
   contribute<T>(token: ExtensionPoint<T>, key: string, value: T) {
+    this.#requireActive();
+    const identity = normalizeContract(token, "extensionPoint");
     const { port } = this.#requireActive();
     const publication = port.stageContribution(
       this.#installationId,
-      token,
+      identity,
       key,
       value,
       this.#contributions.release,

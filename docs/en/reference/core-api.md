@@ -158,6 +158,7 @@ Uniform rules:
 - The ID must be non-empty with no leading or trailing whitespace. It is case-sensitive, and is neither trimmed nor Unicode-normalised.
 - One ID cannot serve two kinds in the same Host; doing so throws `CONTRACT_CONFLICT`.
 - Only successfully committed declarations and use by an active Lifetime register a kind. A failed setup, a rollback and an unmatched application-code read never occupy a Contract ID.
+- Lifetime captures an external token's inert identity before reading its current phase and signal to grant operation authority. Disposal during reflection rejects the operation with `LIFETIME_DISPOSED`, without registering a kind, creating resources or emitting an Event; InstanceCoordinator does not read the external token again.
 - `optional()` is the sole typed constructor for its branded OptionalService wrapper and accepts only a Service. An ExtensionPoint's empty map is already a valid value, and an Event has no notion of a provider.
 
 A fixed Contract ID should be declared exactly once in a codebase and exported from a stable module. TypeScript alone cannot prevent two modules from writing different type arguments for the same ID, so Dougong's architecture guard rejects duplicate fixed-string declarations in this repository; downstream codebases should enforce the same static rule. Parameterized Contract families are not duplicate fixed declarations.
@@ -688,6 +689,7 @@ await change.commit()
 Rules:
 
 - one-shot; sealed after the first `commit()`
+- staging takes write authority only from the draft's current phase; if input reflection reenters `commit()`, the operation still reading its input rejects synchronously and cannot append an Installation or change to the submitted draft
 - commit is idempotent; repeated calls return the same promise
 - an empty ChangeSet manufactures neither a fake `changing` status nor a diagnostics revision, but still crosses the Host command queue and owner-authority boundary in submission order; an earlier Group removal makes a subsequently submitted stale empty draft reject with `GROUP_REMOVED`
 - one Installation may appear only once per ChangeSet
@@ -867,6 +869,8 @@ The root node's `label` is the stable installation ID, and every `children` entr
 A label answers only "why do these resources live together". It is not a capability ID, a lookup key or a new scope. Duplicate labels create no conflict and change no release semantics. Leaf resources such as cleanups, tasks and listeners add no naming overloads of their own; a child Lifetime is created only where a shared release boundary genuinely exists. Core never guesses nodes from function names, call stacks or ordinals, and never fabricates tree levels merely to implement categorised counts.
 
 A resource change updates only this small view: it does not bump the Host revision or rebuild every `InstallationSnapshot`. A caller wanting to observe resource churn subscribes to the nested view explicitly. A child Lifetime detaches from the tree as soon as it terminates; after an Instance stops, new `InstallationSnapshot`s no longer carry `lifetime`, and an already-obtained old view stops at a childless, all-zero `disposed` terminal state without retaining the Host.
+
+Instance retains the same read-only Lifetime view from creation instead of reacquiring the execution binding while reading diagnostics. When Lifetime has disposed but Installation is still `stopping`, Installation and Host diagnostics can still read that view's `disposed` terminal state. This projection cannot advance Lifetime phase or create resources.
 
 Public facade objects and the top-level Host / Platform are frozen and narrow. Plain JavaScript inspection of own properties or prototypes will not reveal:
 
