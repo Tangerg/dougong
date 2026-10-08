@@ -37,6 +37,10 @@ export class GroupConfigurationSession<Draft> {
     return this.#state.phase === "failed" ? this.#state.error : undefined;
   }
 
+  get sealed() {
+    return this.#state.phase === "sealed";
+  }
+
   requireDraft() {
     const state = this.#state;
     if (state.phase === "failed") throw state.error;

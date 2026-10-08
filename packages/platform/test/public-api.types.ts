@@ -1,9 +1,15 @@
-import { type AnyPlugin, type Awaitable, definePlugin, service } from "@dougongjs/core";
+import {
+  type AnyPlugin,
+  type Awaitable,
+  type RecordedFailure,
+  definePlugin,
+  service,
+} from "@dougongjs/core";
 import { ImportLoader, PermissionSet } from "@dougongjs/platform";
 import { expectTypeOf } from "vitest";
 import type * as platform from "@dougongjs/platform";
 
-expectTypeOf<platform.RegistrationSnapshot["error"]>().toEqualTypeOf<Error | undefined>();
+expectTypeOf<platform.RegistrationSnapshot["error"]>().toEqualTypeOf<RecordedFailure | undefined>();
 expectTypeOf<ReturnType<platform.PlatformChangeSet<unknown>["update"]>>().toEqualTypeOf<void>();
 expectTypeOf<ReturnType<platform.PlatformChangeSet<unknown>["remove"]>>().toEqualTypeOf<void>();
 // @ts-expect-error Artifact carries only the external Reference type.

@@ -21,7 +21,7 @@ type RegistrationAuthority<Reference> =
       artifact: NormalizedArtifact<Reference>;
       admission: Promise<void> | undefined;
     }
-  | { readonly phase: "terminal" };
+  | { readonly phase: "terminal"; readonly manifest: NormalizedArtifact<Reference>["manifest"] };
 
 type RegistrationState =
   | { readonly phase: "pending" }
@@ -90,7 +90,6 @@ class RegistrationFacade<Reference> implements Registration<Reference> {
  */
 export class RegistrationRecord<Reference> {
   #authority: RegistrationAuthority<Reference>;
-  #manifest: NormalizedArtifact<Reference>["manifest"];
   #state: RegistrationState = { phase: "pending" };
   #installationSubscription: Disposable | undefined;
   readonly #activationQueue = new SerialQueue();
@@ -100,7 +99,6 @@ export class RegistrationRecord<Reference> {
 
   constructor(artifact: NormalizedArtifact<Reference>) {
     this.#authority = { phase: "draft", artifact };
-    this.#manifest = artifact.manifest;
     this.facade = new RegistrationFacade(this);
   }
 
@@ -118,11 +116,12 @@ export class RegistrationRecord<Reference> {
   }
 
   get manifestName() {
-    return this.#manifest.name;
+    return this.manifest.name;
   }
 
   get manifest() {
-    return this.#manifest;
+    const authority = this.#authority;
+    return authority.phase === "terminal" ? authority.manifest : authority.artifact.manifest;
   }
 
   get artifact() {
@@ -264,7 +263,6 @@ export class RegistrationRecord<Reference> {
     return () => {
       authority.admission = undefined;
       authority.artifact = artifact;
-      this.#manifest = artifact.manifest;
       this.#state = state;
       this.#observeInstallation();
     };
@@ -289,7 +287,7 @@ export class RegistrationRecord<Reference> {
     this.#state = { phase: "failed", installation: undefined, error: failure };
     this.#installationSubscription?.dispose();
     this.#installationSubscription = undefined;
-    this.#authority = { phase: "terminal" };
+    this.#authority = { phase: "terminal", manifest: this.manifest };
     for (const waiter of this.#readyWaiters) waiter.reject(failure);
     this.#readyWaiters.clear();
   }
@@ -301,7 +299,7 @@ export class RegistrationRecord<Reference> {
     );
     this.#installationSubscription?.dispose();
     this.#installationSubscription = undefined;
-    this.#authority = { phase: "terminal" };
+    this.#authority = { phase: "terminal", manifest: this.manifest };
     this.#state = { phase: "removed" };
     for (const waiter of this.#readyWaiters) waiter.reject(error);
     this.#readyWaiters.clear();

@@ -57,6 +57,8 @@ const FORBIDDEN_PACKAGES = {
 // without a rank is a hard error rather than an unguarded default: the point of
 // the table is that someone has to decide where a new module sits.
 const CORE_MODULE_LAYERS = {
+  // Generated runtime leaf consumed by the structural resource declarations.
+  "core/src/disposal-runtime.ts": -1,
   // Foundation: pure declarations and structural values.
   "core/src/contracts.ts": 0,
   "core/src/errors.ts": 0,
@@ -185,6 +187,35 @@ const SOURCE_RULES = [
 
 // Checks scoped to one file, keyed by that file's madge path.
 const FILE_RULES = [
+  {
+    matches: (file) => file === "platform/src/registration.ts",
+    test: (source) => /#manifest\b/.test(source),
+    message: "RegistrationRecord must derive Manifest from its Artifact without a mutable mirror",
+  },
+  {
+    matches: (file) => file === "core/src/installation-registry.ts",
+    test: (source) => /#state\b|installationControls\b/.test(source),
+    message:
+      "Installation facades must project InstallationRecord authority without a second state machine",
+  },
+  {
+    matches: (file) => file === "core/src/group-coordinator.ts",
+    test: (source) => /#state\b|finishConfiguration\b/.test(source),
+    message: "Group facades must read GroupNode attachment and the canonical configuration session",
+  },
+  {
+    matches: (file) => file === "core/src/contribution-store.ts",
+    test: (source) =>
+      /#entries\b/.test(source) ||
+      /\.value\s*=/.test(
+        source.slice(
+          source.indexOf("export class ContributionStore"),
+          source.indexOf("class ContributionViewLease"),
+        ),
+      ),
+    message:
+      "ContributionStore must project ContributionRecord values instead of keeping or advancing a second copy",
+  },
   {
     matches: (file) => file.startsWith("reactive/src/"),
     // The package declares no `dependencies`. Any non-relative import would be

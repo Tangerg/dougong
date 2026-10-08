@@ -137,6 +137,17 @@ describe("lifetime retention", () => {
     expect(fixture.references.get("host")?.deref()).toBeUndefined();
   });
 
+  it("does not retain a Host through a historical failed Installation snapshot", async () => {
+    const forceGc = (globalThis as typeof globalThis & { gc?: () => void }).gc;
+    if (!forceGc) throw new TypeError("Retention tests require Node.js --expose-gc");
+
+    const fixture = await createHistoricalFailureSnapshot();
+    await collectNamedReferences(forceGc, fixture.references);
+
+    expect(fixture.snapshot.status).toBe("failed");
+    expect(fixture.references.get("host")?.deref()).toBeUndefined();
+  });
+
   it("collects an abandoned active Host without retained handles", async () => {
     const forceGc = (globalThis as typeof globalThis & { gc?: () => void }).gc;
     if (!forceGc) throw new TypeError("Retention tests require Node.js --expose-gc");
@@ -197,25 +208,28 @@ describe("lifetime retention", () => {
     expect(fixture.reference.deref()).toBeUndefined();
   });
 
-  it("does not retain a Host through an abandoned Installation", async () => {
-    const forceGc = (globalThis as typeof globalThis & { gc?: () => void }).gc;
-    if (!forceGc) throw new TypeError("Retention tests require Node.js --expose-gc");
+  it.each([true, false])(
+    "does not retain a Host through an abandoned Installation (stack: %s)",
+    async (stack) => {
+      const forceGc = (globalThis as typeof globalThis & { gc?: () => void }).gc;
+      if (!forceGc) throw new TypeError("Retention tests require Node.js --expose-gc");
 
-    const fixture = await createAbandonedInstallation();
-    for (let pass = 0; pass < RELEASE_PASSES && fixture.reference.deref(); pass++) {
-      await nextTurn();
-      forceGc();
-      forceGc();
-    }
+      const fixture = await createAbandonedInstallation(stack);
+      for (let pass = 0; pass < RELEASE_PASSES && fixture.reference.deref(); pass++) {
+        await nextTurn();
+        forceGc();
+        forceGc();
+      }
 
-    expect(fixture.installation.status).toBe("failed");
-    expect(fixture.reference.deref()).toBeUndefined();
-    await expect(fixture.installation.ready()).rejects.toMatchObject({
-      name: "RecordedFailure",
-      message: "abandoned plugin failed",
-      snapshot: { name: "Error" },
-    });
-  });
+      expect(fixture.installation.status).toBe("failed");
+      expect(fixture.reference.deref()).toBeUndefined();
+      await expect(fixture.installation.ready()).rejects.toMatchObject({
+        name: "RecordedFailure",
+        message: "abandoned plugin failed",
+        snapshot: { name: "Error" },
+      });
+    },
+  );
 
   it("does not retain a Host or failure stack through a removed Group", async () => {
     const forceGc = (globalThis as typeof globalThis & { gc?: () => void }).gc;
@@ -325,14 +339,16 @@ async function createRemovedInstallation() {
   return { installation, reference: new WeakRef(host) };
 }
 
-async function createAbandonedInstallation() {
+async function createAbandonedInstallation(stack: boolean) {
   const host = createHost();
   await host.start();
   const installation = host.install(
     definePlugin({
       name: "retention.abandoned-plugin",
       setup() {
-        throw new Error("abandoned plugin failed");
+        const error = new Error("abandoned plugin failed");
+        if (!stack) Object.defineProperty(error, "stack", { value: undefined });
+        throw error;
       },
     }),
   );
@@ -524,6 +540,23 @@ async function createHistoricalLifetimeDiagnostics() {
   if (!diagnostics) throw new TypeError("Lifetime diagnostics were not published");
   await host.stop();
   return { diagnostics, references };
+}
+
+async function createHistoricalFailureSnapshot() {
+  const host = createHost();
+  const installation = host.install(
+    definePlugin({
+      name: "lifetime.historical-failure",
+      setup() {
+        throw new Error("historical failure", { cause: host });
+      },
+    }),
+  );
+  const references = new Map<string, WeakRef<object>>([["host", new WeakRef(host)]]);
+  await host.start().catch(() => undefined);
+  const snapshot = installation.diagnostics.get();
+  await installation.remove();
+  return { snapshot, references };
 }
 
 async function createAbandonedActiveHost() {

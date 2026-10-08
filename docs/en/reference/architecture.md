@@ -48,9 +48,26 @@ Depends only on standard JavaScript and the Standard Schema type contract. It ow
 - a SerialQueue shared across layers, where one failure does not poison later commands
 - read-only diagnostic projections
 
-Core keeps the same division internally: Host serializes public commands and publishes status over three peer collaborators; InstallationRegistry owns declarations and public handle authority; GroupCoordinator owns only structural Groups; Engine owns the committed plan and its commit, rollback and fail-closed transitions. InstanceCoordinator, beneath Engine, owns live Instances and the Services, Events, ExtensionPoints and Lifetimes reachable from them. Platform reuses Core's serialization primitive directly rather than copying its failure-isolation state machine. Graph switching happens only in Engine and live execution happens only in InstanceCoordinator, so declaration state, transaction state and active execution state each have exactly one source of truth instead of accumulating in one class; runtime remains reserved for the JavaScript environment such as Node, a browser or a WebView.
+Core keeps the same division internally: Host serializes public commands and publishes status over three peer collaborators; InstallationRegistry manages committed declarations, membership and authority grants; InstallationRecord holds the sole execution state and authority binding; GroupCoordinator owns only structural Groups; Engine owns the committed plan and its commit, rollback and fail-closed transitions. InstanceCoordinator, beneath Engine, constructs and cleans up Instances, advances their state through InstallationRecord, and manages the Services, Events, ExtensionPoints and Lifetimes reachable from them. Platform reuses Core's serialization primitive directly rather than copying its failure-isolation state machine. Graph switching happens only in Engine and live execution happens only in InstanceCoordinator, so declaration state, transaction state and active execution state each have exactly one source of truth instead of accumulating in one class; runtime remains reserved for the JavaScript environment such as Node, a browser or a WebView.
 
 Host and Platform diagnostics materialize collections through SnapshotPublisher’s reader. Publishing only advances revision and invalidates the view; repeated unread changes do not build snapshots. `ContractRegistryWriter` has explicit staged, committed and discarded phases: after commit it writes directly to the same durable registry. Group configuration sessions live separately from the ownership tree and retain their generic Draft boundary to avoid depending on a specific ChangeSet implementation.
+
+
+Mutable owners and projections are separated for each fact:
+
+| Fact | Sole owner | Other representations |
+| --- | --- | --- |
+| Committed Installation membership | InstallationRegistry | Group queries, Host diagnostics and candidate graphs |
+| Installation declaration, Instance state and control binding | InstallationRecord | Installation facade, immutable graph versions and diagnostics |
+| Host command completion boundary | Host's SerialQueue | Installation / Group ready await the same boundary |
+| Group attachment and parent-child relationships | GroupNode | Group facade and structural diagnostics |
+| Group configuration phase | GroupConfigurationSession | Group facade reads it without advancing it independently |
+| Current Contribution value | ContributionRecord | Store snapshots and ContributionView |
+| Contribution claims and publication order | ContributionStore | Record requests publication without storing a publication phase |
+| Current Registration Artifact | RegistrationRecord authority | Manifest getter and diagnostics; terminal state retains only immutable Manifest data |
+| Promise and disposal Symbol runtime rules | scripts/internal/disposal-runtime.ts | Generated Core / reactive modules |
+
+Snapshots and caches cannot originate transitions. Commands validate target identity before asking the owner to advance it; terminal records retain data while releasing control, callbacks and payload references.
 
 ### `@dougongjs/reactive`
 
@@ -65,7 +82,7 @@ Core does not import reactive. The two compose through the structural `get()/sub
 
 Minimal protocols such as `Disposable` / `AsyncDisposable` are declared separately in both foundation packages. They carry no state or implementation, and TypeScript makes them interoperate structurally. This is deliberate duplication of a protocol declaration, traded for zero dependencies in both directions. The single-path principle forbids duplicated state machines and execution semantics, not shared type sources between independent foundation packages.
 
-Synchronous callback policy has one authoritative source, `scripts/internal/sync-result.ts`. `pnpm generate:internal` produces Core and reactive’s `sync-result.ts`; package builds inline these independent projections without a shared runtime dependency. `pnpm check:generated` rejects drift from the source. Update the source once and regenerate both publication projections.
+Synchronous callback policy and runtime protocol each have one authoritative source: `scripts/internal/sync-result.ts` and `scripts/internal/disposal-runtime.ts`. `pnpm generate:internal` produces the corresponding Core and reactive modules; package builds inline these independent projections without a shared runtime dependency. `pnpm check:generated` rejects drift. Promise requirements and disposal Symbol resolution are also edited once, then regenerated for both packages.
 
 ### `@dougongjs/platform`
 
@@ -274,7 +291,7 @@ Contract kinds, listeners and Contributions all enter a transaction draft first.
 
 Host start, stop and ChangeSet use batches. The internal map may go through stop and rebuild, but a view's public snapshot switches exactly once, at the end of the transaction.
 
-A ChangeSet committed while the Host is active first produces a committed or rolled-back outcome; the corresponding Installations settle only after the ExtensionPoint batch has published. `ready()` is therefore a transaction barrier and never resolves before the final ExtensionPoint snapshot.
+A ChangeSet committed while the Host is active first produces a committed or rolled-back outcome; the corresponding Installations settle only after the ExtensionPoint batch has published. `ready()` is therefore a transaction barrier and never resolves before the final ExtensionPoint snapshot. Installations and Groups first await Host commands submitted before the call; consumers in other Groups and empty Groups cannot announce readiness while the Host is still changing.
 
 ### Multi-Installation graph change
 
@@ -294,7 +311,7 @@ A Group solves:
 - how to await a set of Installations becoming ready
 - how to atomically delete a whole installation subtree
 
-Group configuration, structural ownership, lifecycle state and facade authority each use a closed state machine. The configuration session is `open / failed / sealed`, the structural node is `attached / detached`, the lifecycle keeps the established flag and the current readiness barrier, and the public Group is `configuring / attached / revoked`.
+The Group configuration session is `open / failed / sealed`, the structural node is `attached / detached`, and the lifecycle keeps the initial establishment result and subtree change barrier. The public Group reads that same session and node, retaining only a revocable collaborator binding rather than a second configuration or attachment state. Installation facades likewise read InstallationRecord’s authority binding.
 
 Those state machines are composed by an internal `GroupCoordinator` instead of being scattered through the Host orchestrator. The coordinator fully owns the Group tree, facade authority and readiness; Host supplies only Installation ChangeSets, serialized commands and diagnostics publication through narrow ports. That boundary adds no public concept and grants a Group no capability-resolution power.
 

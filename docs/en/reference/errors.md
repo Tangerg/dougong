@@ -181,11 +181,11 @@ const host = createHost({
 
 The channel is fail-safe: an `onError` that throws or rejects falls back to the logger; a logger that itself throws or rejects is observed and then falls silent as the terminal sink — **observing an error never changes the Host command being observed**.
 
-### Terminal diagnostic records
+### Diagnostic failure records
 
-Discarded Installations and Registrations reject `ready()` with `RecordedFailure`. Its `name` is always `RecordedFailure`; its optional `code` and frozen `snapshot: ErrorSnapshot` describe the original failure. It does not claim `instanceof TypeError`, `DougongError` or `PermissionDeniedError`. The command that failed and recoverable live failures still deliver the original Error.
+Installation and Registration diagnostic errors always use `RecordedFailure`; later calls to `ready()` on discarded handles reject with the same type. Its `name` is always `RecordedFailure`; its optional `code` and frozen `snapshot: ErrorSnapshot` describe the original failure. It does not claim `instanceof TypeError`, `DougongError` or `PermissionDeniedError`. The command that failed and recoverable live failures still deliver the original Error.
 
-The snapshot preserves original name, message, code and stack text, plus bounded `cause` and `errors` trees. Permission failures retain `manifestName` and `denied`; config failures retain issue messages and paths. Arbitrary objects, callbacks and custom payloads are omitted. Text is copied as strings, so historical errors cannot retain the Host, Installer, Loader or Platform through their object graph.
+The snapshot preserves original name, message, code and stack text, plus bounded `cause` and `errors` trees. Permission failures retain `manifestName` and `denied`; config failures retain issue messages and paths. Arbitrary objects, callbacks and custom payloads are omitted. Text is copied as strings. The recorder also replaces its native constructor trace when the source has no stack, so historical errors cannot retain the Host, Installer, Loader or Platform through their object graph.
 
 Recording expands at most 32 error nodes, descends at most four edges, and takes at most eight items per error list. Messages are capped at 4,096 characters, stack text at 16,384, and names, codes and permission fields at 256. Validation paths keep at most 16 segments. `truncated` marks bounded records and cut-off chains. These are diagnostic limits, not a serializer for application state.
 

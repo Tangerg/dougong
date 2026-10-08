@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { assertContract, event, extensionPoint, optional, service } from "../src/contracts";
+import { normalizeContract, event, extensionPoint, optional, service } from "../src/contracts";
 
 describe("Contract identity", () => {
   // A Contract id is a namespaced key that outlives the code declaring it, so a
@@ -57,10 +57,10 @@ describe("Contract validation", () => {
     ["extensionPoint", service("contract/not-point"), "Expected an ExtensionPoint"],
     ["event", extensionPoint("contract/not-event"), "Expected an Event"],
   ] as const)("describes an expected %s precisely", (kind, value, message) => {
-    expect(() => assertContract(value, kind)).toThrowError(new TypeError(message));
+    expect(() => normalizeContract(value, kind)).toThrowError(new TypeError(message));
   });
 
   it("distinguishes an invalid Contract from a kind mismatch", () => {
-    expect(() => assertContract(null)).toThrowError(new TypeError("Invalid contract"));
+    expect(() => normalizeContract(null)).toThrowError(new TypeError("Invalid contract"));
   });
 });

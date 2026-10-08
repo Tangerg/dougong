@@ -2321,8 +2321,14 @@ describe("Host", () => {
     expect(snapshot).toMatchObject({
       pluginName: "test.diagnostic-failure",
       status: "failed",
-      error: failure,
+      error: {
+        name: "RecordedFailure",
+        snapshot: { name: "Error", message: failure.message },
+      },
     });
+    expect(Object.isFrozen(snapshot?.error)).toBe(true);
+    failure.message = "changed after publication";
+    expect(snapshot?.error?.message).toBe("diagnostic failure");
   });
 
   it("classifies non-Error setup failures for stable Installations", async () => {
@@ -2350,7 +2356,12 @@ describe("Host", () => {
       message: `Installation '${installation.id}' failed with a non-Error value`,
     });
     expect(classified).toBe(commandFailure);
-    expect(host.diagnostics.get().installations.get(installation.id)?.error).toBe(classified);
+    expect(
+      host.diagnostics.get().installations.get(installation.id)?.error?.snapshot,
+    ).toMatchObject({
+      name: "DougongError",
+      code: "INSTALLATION_UNAVAILABLE",
+    });
     await host.stop();
   });
 });

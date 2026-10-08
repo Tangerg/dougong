@@ -197,7 +197,7 @@ await change.commit();
 
 An empty Platform ChangeSet creates no candidate graph, Core ChangeSet or diagnostics revision, but it still crosses the same command queue in submission order and validates Platform authority. It waits for earlier changes, and an old empty draft created before disposal cannot pretend to commit after the Platform is terminal.
 
-A Registration created by `change.register()` is an exclusive draft of that ChangeSet until commit. It holds no Platform owner, cannot separately `activate` / `update` / `remove`, and cannot be targeted by another ChangeSet. Control authority is granted at commit and revoked again after failure or removal. Direct `remove()` remains idempotent on a terminal handle, but that handle cannot become the target of a new ChangeSet. This keeps both drafts and stale handles from bypassing the candidate graph or retaining the Platform.
+A Registration created by `change.register()` is an exclusive draft of that ChangeSet until commit. It holds no Platform owner, cannot separately `activate` / `update` / `remove`, and cannot be targeted by another ChangeSet. Control authority is granted at commit and revoked again after failure or removal. Repeated removal requests already accepted into the queue complete idempotently by Registration identity, so a later Registration with the same name is never removed by an old request. Direct `remove()` remains idempotent on a terminal handle, but that handle cannot become the target of a new ChangeSet. This keeps both drafts and stale handles from bypassing the candidate graph or retaining the Platform.
 
 Calling `activate()` immediately after `commit()` returns does not depend on microtask order: the Registration first awaits the same admission commit that granted its authority, and both calls observe the same failure if that commit fails.
 
@@ -246,11 +246,11 @@ Planet-style media sources and Lynx Desktop-style commands, menus and panels are
 `platform.diagnostics` uses the same read-only `get() + subscribe()` protocol as Core and signals, and contains:
 
 - Platform `apiVersion`, `status` and a monotonic `revision`
-- per Registration: `manifestName`, `version`, `status`, `activation`, `permissions`, `dependencies` and the latest failure, already normalized to `Error`
+- per Registration: `manifestName`, `version`, `status`, `activation`, `permissions`, `dependencies` and the latest failure, recorded as immutable `RecordedFailure` with a bounded `snapshot` that never references the original failure object
 
 Each related public type has one role: `Platform` is the control protocol, `PlatformOptions` is its construction boundary, and `PlatformChangeSet` is one structural change. `PlatformStatus` / `PlatformSnapshot` describe aggregate state and diagnostics; `RegistrationStatus` / `RegistrationSnapshot` describe one stable Registration. None exposes the Activator, candidate graph or Core Installation.
 
-The snapshot, entries and arrays are frozen, and the Map exposes no mutating methods. `subscribe()` only delivers future invalidation notices; the caller re-reads with `get()`. A failing diagnostics subscriber is reported through the Platform logger and never changes a registration or activation outcome.
+The snapshot, entries and arrays are frozen, and the Map exposes no mutating methods. `subscribe()` only delivers future invalidation notices; the caller re-reads with `get()`. A failing diagnostics subscriber is reported through the Platform logger, including failures during the final `disposed` notification before the reporter is released. It never changes a registration or activation outcome.
 
 Platform implements no second observer. It submits an immutable PlatformSnapshot to Core's `SnapshotPublisher`. After Platform disposes successfully, an already-obtained historical view stops at the terminal `disposed` state, existing subscriptions detach, and the reader, logger and Platform owner are all severed.
 

@@ -9,8 +9,8 @@
 // contributes to or reads therefore costs nothing after its last user leaves.
 //
 // The layering is: ContributionRegistry (one store per ExtensionPoint id) owns
-// ContributionStore (entries and snapshot) which owns ContributionRecord (one
-// contribution's stage/publish/dispose state).
+// ContributionStore (claims and publication) which owns ContributionRecord (one
+// contribution's value and revocable resource binding).
 
 import type { Requirement } from "./contracts";
 import { ReadonlyMapSnapshot } from "./readonly-map";
@@ -75,7 +75,7 @@ class ContributionViewHandle<T> implements ContributionView<T> {
 
 type ContributionState<T> =
   | {
-      phase: "staged" | "published";
+      readonly phase: "active";
       readonly store: ContributionStore<T>;
       value: T;
       readonly detachFromOwner: (publication: Publication) => void;
@@ -115,22 +115,21 @@ class ContributionRecord<T> implements StagedResource<Contribution<T>> {
     detachFromOwner: (publication: Publication) => void,
   ) {
     this.#id = id;
-    this.#state = { phase: "staged", store, value: initialValue, detachFromOwner };
+    this.#state = { phase: "active", store, value: initialValue, detachFromOwner };
     this.handle = new ContributionHandle(this);
   }
 
   publish() {
     const state = this.#state;
-    if (state.phase !== "staged") return;
-    state.store.insert(this.#id, this, state.value);
+    if (state.phase === "disposed") return;
+    state.store.publishClaim(this.#id, this);
   }
 
-  commitPublication() {
+  get value() {
     const state = this.#state;
-    if (state.phase !== "staged") {
-      throw new Error(`Contribution '${this.#id}' is not staged`);
-    }
-    state.phase = "published";
+    if (state.phase === "disposed")
+      throw new TypeError(`Contribution '${this.#id}' has been disposed`);
+    return state.value;
   }
 
   update(value: T) {
@@ -140,7 +139,7 @@ class ContributionRecord<T> implements StagedResource<Contribution<T>> {
     }
     if (Object.is(state.value, value)) return;
     state.value = value;
-    if (state.phase === "published") state.store.update(this.#id, this, value);
+    state.store.valueChanged(this.#id, this);
   }
 
   dispose() {
@@ -148,7 +147,7 @@ class ContributionRecord<T> implements StagedResource<Contribution<T>> {
     if (state.phase === "disposed") return;
     this.#state = { phase: "disposed" };
     try {
-      state.store.removeContribution(this.#id, this, state.phase);
+      state.store.removeContribution(this.#id, this);
     } finally {
       state.detachFromOwner(this);
     }
@@ -162,8 +161,10 @@ class ContributionRecord<T> implements StagedResource<Contribution<T>> {
 export class ContributionStore<T> {
   readonly #invalidate: (store: ContributionStore<unknown>) => void;
   readonly #releaseIfUnused: (store: ContributionStore<unknown>) => void;
-  readonly #claims = new Map<string, ContributionRecord<T>>();
-  readonly #entries = new Map<string, { contribution: ContributionRecord<T>; value: T }>();
+  readonly #claims = new Map<
+    string,
+    { readonly contribution: ContributionRecord<T>; published: boolean }
+  >();
   readonly #publisher: SnapshotPublisher<ReadonlyMap<string, T>>;
   #snapshot: ReadonlyMap<string, T> = new ReadonlyMapSnapshot();
   #views = 0;
@@ -198,7 +199,7 @@ export class ContributionStore<T> {
         throw new TypeError(`Duplicate contribution '${id}'`);
       }
       const contribution = new ContributionRecord(this, id, value, release);
-      this.#claims.set(id, contribution);
+      this.#claims.set(id, { contribution, published: false });
       return contribution;
     } catch (error) {
       this.#notifyIfUnused();
@@ -279,34 +280,28 @@ export class ContributionStore<T> {
     return subscription;
   }
 
-  insert(id: string, contribution: ContributionRecord<T>, value: T) {
-    this.#assertCurrentClaim(id, contribution);
-    if (this.#entries.has(id)) {
-      throw new Error(`Contribution '${id}' is already published`);
+  publishClaim(id: string, contribution: ContributionRecord<T>) {
+    const claim = this.#requireClaim(id, contribution);
+    if (claim.published) return;
+    claim.published = true;
+    // Map iteration follows publication order, including claims staged earlier.
+    this.#claims.delete(id);
+    this.#claims.set(id, claim);
+    this.#invalidate(this as ContributionStore<unknown>);
+  }
+
+  valueChanged(id: string, contribution: ContributionRecord<T>) {
+    if (this.#requireClaim(id, contribution).published) {
+      this.#invalidate(this as ContributionStore<unknown>);
     }
-    contribution.commitPublication();
-    this.#entries.set(id, { contribution, value });
-    this.#invalidate(this as ContributionStore<unknown>);
   }
 
-  update(id: string, contribution: ContributionRecord<T>, value: T) {
-    const entry = this.#requirePublishedEntry(id, contribution);
-    entry.value = value;
-    this.#invalidate(this as ContributionStore<unknown>);
-  }
-
-  removeContribution(
-    id: string,
-    contribution: ContributionRecord<T>,
-    visibility: "staged" | "published",
-  ) {
-    this.#assertCurrentClaim(id, contribution);
-    if (visibility === "published") this.#requirePublishedEntry(id, contribution);
+  removeContribution(id: string, contribution: ContributionRecord<T>) {
+    const claim = this.#requireClaim(id, contribution);
 
     try {
       this.#claims.delete(id);
-      if (visibility === "published") {
-        this.#entries.delete(id);
+      if (claim.published) {
         this.#invalidate(this as ContributionStore<unknown>);
       }
     } finally {
@@ -321,7 +316,9 @@ export class ContributionStore<T> {
    * nobody, instead of waking every observer to hand them what they already had.
    */
   publishSnapshot() {
-    const nextEntries = [...this.#entries].map(([key, entry]) => [key, entry.value] as const);
+    const nextEntries = [...this.#claims].flatMap(([key, claim]) =>
+      claim.published ? [[key, claim.contribution.value] as const] : [],
+    );
     const unchanged =
       nextEntries.length === this.#snapshot.size &&
       nextEntries.every(
@@ -333,18 +330,12 @@ export class ContributionStore<T> {
     this.#publisher.invalidate();
   }
 
-  #assertCurrentClaim(id: string, contribution: ContributionRecord<T>) {
-    if (this.#claims.get(id) !== contribution) {
+  #requireClaim(id: string, contribution: ContributionRecord<T>) {
+    const claim = this.#claims.get(id);
+    if (claim?.contribution !== contribution) {
       throw new Error(`Contribution '${id}' is not the current claim`);
     }
-  }
-
-  #requirePublishedEntry(id: string, contribution: ContributionRecord<T>) {
-    const entry = this.#entries.get(id);
-    if (entry?.contribution !== contribution) {
-      throw new Error(`Contribution '${id}' is not the published entry`);
-    }
-    return entry;
+    return claim;
   }
 
   // The self-release check. Every counter has to be at zero and the Host must
@@ -355,7 +346,6 @@ export class ContributionStore<T> {
       this.#released ||
       this.#retainedByHost ||
       this.#claims.size ||
-      this.#entries.size ||
       this.#subscriptions ||
       this.#views
     ) {

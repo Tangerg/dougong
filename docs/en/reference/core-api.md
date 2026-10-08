@@ -152,6 +152,7 @@ Uniform rules:
 
 - The first argument is a stable string ID and is the execution identity; object identity plays no part in matching.
 - At runtime, the return value is a frozen plain object whose shape is exactly `{ id, kind }`. Its TypeScript type also carries a factory-private phantom brand, so a plain `{ id, kind }` cannot accidentally masquerade as a Contract at compile time. The brand takes no part in runtime matching.
+- Call boundaries accept only own data properties for `id/kind`, without executing getters or reading inherited fields. Normalization captures and freezes one identity for validation, lookup and storage.
 - A Contract holds no execution state and is reusable across applications.
 - The ID must be non-empty with no leading or trailing whitespace. It is case-sensitive, and is neither trimmed nor Unicode-normalised.
 - One ID cannot serve two kinds in the same Host; doing so throws `CONTRACT_CONFLICT`.
@@ -626,7 +627,7 @@ await database.ready()
 
 `install()` synchronously returns a stable `Installation` and queues a single-item ChangeSet onto the Host command queue. Plugin-shape errors throw synchronously; commit and startup errors surface through `ready()` / `start()`.
 
-`ready()`'s barrier sits after the whole command: it settles only once candidate-graph validation, the Instance switch and the ExtensionPoint batch publication have all finished. A caller reading a ContributionView immediately after `await installation.ready()` sees only the committed snapshot and never needs to wait an extra tick.
+`ready()`'s barrier sits after the whole command: it settles only once candidate-graph validation, the Instance switch and the ExtensionPoint batch publication have all finished. A caller reading a ContributionView immediately after `await installation.ready()` sees only the committed snapshot and never needs to wait an extra tick. Readiness first awaits all Host commands queued before the call, including changes in another Group that affect this Installation; empty Groups use the same boundary.
 
 The command queue linearises install, update, remove, start and stop. One failure never destroys the ability to queue later commands.
 
@@ -664,11 +665,11 @@ type ManagedInstallation = Pick<Installation, "id" | "status" | "ready" | "remov
 const managed: ManagedInstallation[] = [host.install(adminPlugin), host.install(auditPlugin)]
 ```
 
-Once an Installation reaches `removed` it revokes its control reference to the Host and releases the Plugin declaration and config. A terminal `remove()` succeeds idempotently and `update()` rejects with `INSTALLATION_REMOVED`; keeping a removed Installation never keeps the Host alive.
+Once an Installation reaches `removed` it revokes its control reference to the Host and releases the Plugin declaration and config. Repeated removal requests already accepted into the queue complete idempotently for the same member identity. A terminal `remove()` succeeds idempotently and `update()` rejects with `INSTALLATION_REMOVED`; keeping a removed Installation never keeps the Host alive.
 
-When an Installation fails before commit, a caller already awaiting `ready()` still receives the original `Error`. If setup or a config validator throws a non-`Error` value, the first public command and the stable failure state share the same `INSTALLATION_UNAVAILABLE` error, with the original value in `cause`. After the Installation detaches from the Host, it keeps only a `name/message/code` data summary and reconstructs an error at the call boundary on a later `ready()`. A JavaScript `Error`'s stack may retain the whole orchestration object graph and must not become a hidden ownership edge on a terminal Installation. Failed Installations still attached to an active Host keep the original error for diagnostics and retry semantics. Platform's terminal `Registration` follows the same rule.
+Failed commands propagate the original `Error`. If setup or a config validator throws a non-`Error` value, the first public command and the stable failure state still attached to the Host share the same `INSTALLATION_UNAVAILABLE` error, with the original value in `cause`. A discarded Installation later rejects `ready()` with `RecordedFailure`, retaining only a frozen, bounded error record rather than reconstructing the original class. A failed Installation still attached to the Host keeps the original error for command propagation and retry, while diagnostics always use a recorded projection. Platform Registrations follow the same rule.
 
-`installation.diagnostics` exposes the same immutable `InstallationSnapshot` used by Host diagnostics. It invalidates when the committed declaration or lifecycle changes. Removal publishes a final snapshot, then releases the reader, reporter and subscriptions when the command’s readiness settles. Terminal diagnostic errors use `RecordedFailure`, so retained snapshots do not retain execution objects through lazy JavaScript stacks.
+`installation.diagnostics` exposes the same immutable `InstallationSnapshot` used by Host diagnostics. It invalidates when the committed declaration or lifecycle changes. Installation and Host snapshots invalidate in one notification batch, so callbacks cannot read conflicting states. Removal publishes a final snapshot and reports final observer failures through Host onError, then releases the reader, reporter and subscriptions when the command’s readiness settles. All diagnostic errors use immutable `RecordedFailure`, including snapshots of recoverable failures; original Errors, custom fields and causes cannot retain execution objects through these snapshots.
 
 ### 10.3 The canonical ChangeSet
 
@@ -727,7 +728,7 @@ Group rules:
 
 - may nest
 - every installation inside configure shares one commit
-- `ready()` awaits changes already submitted anywhere in the subtree, including parent ChangeSets targeting subtree Installations and dynamic child changes queued before the call, then waits for the subtree installations to become ready
+- `ready()` first awaits Host commands submitted before the call, then the configuration establishment result and subtree installations; the boundary also covers dependencies outside the subtree and empty Groups
 - `remove()` deletes the whole subtree in one Core transaction
 - a Group ChangeSet may only modify Installations in its own subtree
 - `Group` and `Installation` share `status/ready/remove`; `Installation` also has `update` and `diagnostics`

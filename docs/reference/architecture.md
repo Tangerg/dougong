@@ -48,9 +48,26 @@ core 与 reactive 互不依赖
 - 跨层共用、失败不污染后续命令的 SerialQueue；
 - 只读诊断投影。
 
-Core 内部也保持同一分工：Host 在三个平级协作者之上串行化公共命令并发布状态；InstallationRegistry 拥有声明与公共 handle 权限；GroupCoordinator 只拥有结构 Group；Engine 只拥有已提交计划及其 commit、rollback、fail-closed 转换。Engine 下层的 InstanceCoordinator 只拥有活动 Instance，以及从中可达的 Service、Event、ExtensionPoint 与 Lifetime。Platform 直接复用 Core 的同一串行原语，不复制失败隔离状态机。图切换只在 Engine 中执行，活动执行只在 InstanceCoordinator 中发生，因此声明状态、事务状态和活动执行状态各有一个真相源，而不是堆进一个总类；runtime 一词只保留给 Node、浏览器或 WebView 等 JavaScript 环境。
+Core 内部也保持同一分工：Host 在三个平级协作者之上串行化公共命令并发布状态；InstallationRegistry 管理已提交声明、成员关系与权限授予，InstallationRecord 保存唯一的运行态与权限绑定；GroupCoordinator 只拥有结构 Group；Engine 只拥有已提交计划及其 commit、rollback、fail-closed 转换。Engine 下层的 InstanceCoordinator 执行 Instance 的构建与清理，通过 InstallationRecord 推进 Instance 状态，并管理从中可达的 Service、Event、ExtensionPoint 与 Lifetime。Platform 直接复用 Core 的同一串行原语，不复制失败隔离状态机。图切换只在 Engine 中执行，活动执行只在 InstanceCoordinator 中发生，因此声明状态、事务状态和活动执行状态各有一个真相源，而不是堆进一个总类；runtime 一词只保留给 Node、浏览器或 WebView 等 JavaScript 环境。
 
 Host 与 Platform 诊断通过 SnapshotPublisher 的 reader 构造集合。publish 只推进 revision 并使视图失效，未被读取的连续变化不会构造快照。`ContractRegistryWriter` 明确区分 staged、committed、discarded 阶段；提交后直接写入同一份持久注册表。Group 配置会话与所有权树分文件，保留 Draft 泛型以避免依赖具体 ChangeSet 实现。
+
+
+每个事实的可变拥有者与投影明确分开：
+
+| 事实 | 唯一拥有者 | 其他表示 |
+| --- | --- | --- |
+| 已提交 Installation 成员关系 | InstallationRegistry | Group 查询、Host 诊断、候选图 |
+| Installation 声明、Instance 状态与控制绑定 | InstallationRecord | Installation facade、不可变图版本与诊断 |
+| Host 命令完成边界 | Host 的 SerialQueue | Installation / Group ready 等待同一边界 |
+| Group 附着与父子关系 | GroupNode | Group facade、结构诊断 |
+| Group 配置会话阶段 | GroupConfigurationSession | Group facade 读取，不自行推进 |
+| Contribution 当前值 | ContributionRecord | Store 快照与 ContributionView |
+| Contribution claim 与发布顺序 | ContributionStore | Record 请求发布，不保存发布阶段 |
+| Registration 当前 Artifact | RegistrationRecord 的 authority | manifest getter 与诊断；终态仅保留不可变 Manifest |
+| 运行时 Promise 与释放 Symbol 规则 | scripts/internal/disposal-runtime.ts | Core / reactive 生成模块 |
+
+快照和缓存不能发起转换。命令先检查目标身份，再交给拥有者推进；终态记录保留数据并释放控制、回调和载荷引用。
 
 ### `@dougongjs/reactive`
 
@@ -65,7 +82,7 @@ Core 不导入 reactive。二者通过结构化 `get()/subscribe()` 和 Lifetime
 
 `Disposable` / `AsyncDisposable` 等极小协议会在两个基础包中分别声明。它们不携带状态或实现，TypeScript 依靠结构类型互通。这是有意的协议声明重复，用来换取双向零依赖；单路径原则禁止的是重复状态机和执行语义，不是要求独立基础包共享一个类型来源。
 
-同步回调政策只有一份权威源码：`scripts/internal/sync-result.ts`。`pnpm generate:internal` 生成 Core 与 reactive 的 `sync-result.ts`，两个包分别内联这些投影，不新增共享运行时依赖；`pnpm check:generated` 拒绝偏离权威源码的生成结果。规则修改只编辑一次源码，再生成两份发布投影。
+同步回调政策与运行时协议各有一份权威源码：`scripts/internal/sync-result.ts` 和 `scripts/internal/disposal-runtime.ts`。`pnpm generate:internal` 生成 Core 与 reactive 的对应模块，两个包分别内联这些投影，不新增共享运行时依赖；`pnpm check:generated` 拒绝偏离权威源码的生成结果。Promise 能力要求与释放 Symbol 的解析语义也只编辑一次源码，再生成两份发布投影。
 
 ### `@dougongjs/platform`
 
@@ -274,7 +291,7 @@ Contract kind、Listener 和 Contribution 都先进入事务草稿。Service 输
 
 Host start、stop 和 ChangeSet 使用批次。内部 Map 可以经历停止与重建，但 View 的公开快照只在事务结束时切换一次。
 
-Host active 时提交的 ChangeSet 先产生 committed 或 rolled-back outcome，ExtensionPoint 批次完成发布后才 settle 对应 Installation。`ready()` 因而是事务屏障，不会早于最终 ExtensionPoint 快照。
+Host active 时提交的 ChangeSet 先产生 committed 或 rolled-back outcome，ExtensionPoint 批次完成发布后才 settle 对应 Installation。`ready()` 因而是事务屏障，不会早于最终 ExtensionPoint 快照。Installation 与 Group 都先等待调用前已提交的 Host 命令边界；跨 Group 的依赖消费者及空 Group 也不能在 Host 仍为 changing 时提前宣告就绪。
 
 ### 多 Installation 图变更
 
@@ -294,7 +311,7 @@ Group 解决：
 - 如何等待一组 Installation ready；
 - 如何原子删除整棵安装子树。
 
-Group 配置、结构所有权、生命周期状态与 facade 权限各自使用封闭状态机。配置会话是 `open / failed / sealed`，结构节点是 `attached / detached`，生命周期保存 established 状态与当前 readiness barrier，公共 Group 是 `configuring / attached / revoked`。
+Group 配置会话是 `open / failed / sealed`，结构节点是 `attached / detached`，生命周期保存首次建立结果与子树变更 barrier。公共 Group 直接读取同一配置会话和结构节点，只保留可撤销的协作者绑定，不再拥有第二份配置或附着状态。Installation facade 同样直接读取 InstallationRecord 的权限绑定。
 
 这些状态机由一个内部 `GroupCoordinator` 组合，不再散落在 Host 编排器中。Coordinator 完整拥有 Group 树、facade authority 与 readiness；Host 只通过窄端口提供 Installation ChangeSet、串行命令和诊断发布。这个边界不会新增公共概念，也不会让 Group 获得能力解析权。
 

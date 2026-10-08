@@ -3,7 +3,7 @@ import { extensionPoint } from "../src";
 import { ContributionRegistry, ContributionStore } from "../src/contribution-store";
 
 describe("ContributionStore invariants", () => {
-  it("distinguishes a duplicate declaration from invalid publication state", () => {
+  it("rejects duplicate and foreign claims without disturbing the owner", () => {
     const store = createStore<number>();
     const claimed = store.stage("owner", "item", 1, () => undefined);
 
@@ -12,30 +12,29 @@ describe("ContributionStore invariants", () => {
     );
 
     const foreign = createStore<number>().stage("owner", "item", 2, () => undefined);
-    expect(() => store.insert("owner/item", foreign, 2)).toThrowError(
+    expect(() => store.publishClaim("owner/item", foreign)).toThrowError(
       new Error("Contribution 'owner/item' is not the current claim"),
     );
 
     claimed.publish();
-    expect(() => store.insert("owner/item", claimed, 1)).toThrowError(
-      new Error("Contribution 'owner/item' is already published"),
+    expect(() => store.valueChanged("owner/item", foreign)).toThrowError(
+      new Error("Contribution 'owner/item' is not the current claim"),
     );
-    expect(() => store.update("owner/item", foreign, 2)).toThrowError(
-      new Error("Contribution 'owner/item' is not the published entry"),
-    );
-    expect(() => store.removeContribution("owner/item", foreign, "published")).toThrowError(
+    expect(() => store.removeContribution("owner/item", foreign)).toThrowError(
       new Error("Contribution 'owner/item' is not the current claim"),
     );
   });
 
-  it("leaves the claim intact when removal validation fails", () => {
+  it("projects only published claims and reads each value from its record", () => {
     const store = createStore<number>();
     const contribution = store.stage("owner", "item", 1, () => undefined);
 
-    expect(() => store.removeContribution("owner/item", contribution, "published")).toThrowError(
-      new Error("Contribution 'owner/item' is not the published entry"),
-    );
-
+    contribution.handle.update(2);
+    expect(store.snapshot().size).toBe(0);
+    contribution.publish();
+    expect(store.snapshot().get("owner/item")).toBe(2);
+    contribution.handle.update(1);
+    expect(store.snapshot().get("owner/item")).toBe(1);
     contribution.publish();
     expect(store.snapshot().get("owner/item")).toBe(1);
   });

@@ -1,6 +1,6 @@
 import type { StandardSchemaV1 } from "@standard-schema/spec";
 import {
-  isContract,
+  normalizeContract,
   type ContractIdentity,
   type ContractKind,
   type ExtensionPoint,
@@ -192,26 +192,29 @@ function normalizePluginDeclaration(plugin: AnyPlugin): AnyPlugin {
     if (!requirement || typeof requirement !== "object") {
       throw new TypeError(`Plugin requirement '${key}' is not a contract`);
     }
+    assertPlainRecord(requirement, `Plugin requirement '${key}'`);
     if (requirement.kind === "optional") {
-      if (!isContract(requirement.service, "service")) {
-        throw new TypeError(`Optional requirement '${key}' must wrap a Service`);
-      }
-    } else if (!isContract(requirement, "service") && !isContract(requirement, "extensionPoint")) {
-      throw new TypeError(`Plugin requirement '${key}' must be a Service or ExtensionPoint`);
+      requires[key] = Object.freeze({
+        kind: "optional",
+        service: normalizeContract(
+          requirement.service,
+          "service",
+          `Optional requirement '${key}' must wrap a Service`,
+        ),
+      }) as Requirement;
+    } else {
+      const message = `Plugin requirement '${key}' must be a Service or ExtensionPoint`;
+      const identity: ContractIdentity = normalizeContract(requirement, undefined, message);
+      if (identity.kind === "event") throw new TypeError(message);
+      requires[key] = identity as Requirement;
     }
-    requires[key] =
-      requirement.kind === "optional"
-        ? (Object.freeze({
-            kind: "optional",
-            service: snapshotContract(requirement.service),
-          }) as Requirement)
-        : snapshotContract(requirement);
+    const normalized = requires[key]!;
     rememberPluginContract(
       name,
       contracts,
       "requirement",
       key,
-      requirement.kind === "optional" ? requirement.service : requirement,
+      normalized.kind === "optional" ? normalized.service : normalized,
     );
   }
 
@@ -223,10 +226,11 @@ function normalizePluginDeclaration(plugin: AnyPlugin): AnyPlugin {
     if (key === "then") {
       throw new TypeError("Plugin provision alias 'then' conflicts with the Promise protocol");
     }
-    if (!isContract(provision, "service")) {
-      throw new TypeError(`Plugin provision '${key}' must be a Service`);
-    }
-    provides[key] = snapshotContract(provision);
+    provides[key] = normalizeContract(
+      provision,
+      "service",
+      `Plugin provision '${key}' must be a Service`,
+    );
     rememberPluginContract(name, contracts, "provision", key, provides[key]);
   }
 
@@ -237,11 +241,6 @@ function normalizePluginDeclaration(plugin: AnyPlugin): AnyPlugin {
     provides: Object.freeze(provides),
     setup,
   });
-}
-
-// Only the identity is owned by Core. Config and service values remain opaque.
-function snapshotContract<T extends ContractIdentity>(token: T): T {
-  return Object.freeze({ id: token.id, kind: token.kind }) as T;
 }
 
 function assertPluginRecord(value: unknown): asserts value is Record<string, unknown> {

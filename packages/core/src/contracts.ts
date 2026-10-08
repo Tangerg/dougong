@@ -79,13 +79,17 @@ export type Requirement = ServiceIdentity | ExtensionPointIdentity | OptionalSer
 
 export type ContractValue<T> = T extends Contract<infer Value, ContractKind> ? Value : never;
 
-function validateId(label: string, id: string) {
-  if (typeof id !== "string" || !id.trim()) {
-    throw new TypeError(`${label} id must be a non-empty string`);
-  }
-  if (id !== id.trim()) {
-    throw new TypeError(`${label} id cannot start or end with whitespace`);
-  }
+function validateId(label: string, id: unknown) {
+  if (isValidContractId(id)) return;
+  throw new TypeError(
+    typeof id === "string" && id.trim()
+      ? `${label} id cannot start or end with whitespace`
+      : `${label} id must be a non-empty string`,
+  );
+}
+
+function isValidContractId(id: unknown): id is string {
+  return typeof id === "string" && id.length > 0 && id === id.trim();
 }
 
 function contract<T, K extends ContractKind>(kind: K, id: string): Contract<T, K> {
@@ -99,25 +103,46 @@ function contract<T, K extends ContractKind>(kind: K, id: string): Contract<T, K
  * normalization takes an owned identity snapshot of accepted values.
  */
 export function isContract(value: unknown, expected?: ContractKind): value is ContractIdentity {
-  if (!value || typeof value !== "object") return false;
-  const candidate = value as Partial<ContractIdentity>;
-  return (
-    typeof candidate.id === "string" &&
-    candidate.id.length > 0 &&
-    candidate.id === candidate.id.trim() &&
-    (candidate.kind === "service" ||
-      candidate.kind === "extensionPoint" ||
-      candidate.kind === "event") &&
-    (expected === undefined || candidate.kind === expected)
-  );
+  const identity = readContractIdentity(value);
+  return identity !== undefined && (expected === undefined || identity.kind === expected);
 }
 
-export function assertContract(
+function readContractIdentity(value: unknown): ContractIdentity | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const id = Object.getOwnPropertyDescriptor(value, "id");
+  const kind = Object.getOwnPropertyDescriptor(value, "kind");
+  if (!id || !("value" in id) || !kind || !("value" in kind)) return undefined;
+  const idValue: unknown = id.value;
+  const kindValue: unknown = kind.value;
+  if (!isValidContractId(idValue)) return undefined;
+  if (kindValue !== "service" && kindValue !== "extensionPoint" && kindValue !== "event")
+    return undefined;
+  return { id: idValue, kind: kindValue };
+}
+
+/** Takes ownership of inert identity data before any registry or lookup uses it. */
+export function normalizeContract<T extends ContractIdentity>(
+  value: T,
+  expected?: ContractKind,
+  message?: string,
+): T;
+export function normalizeContract(
   value: unknown,
   expected?: ContractKind,
-): asserts value is ContractIdentity {
-  if (isContract(value, expected)) return;
-  throw new TypeError(expected ? `Expected ${contractDescription(expected)}` : "Invalid contract");
+  message?: string,
+): ContractIdentity;
+export function normalizeContract(
+  value: unknown,
+  expected?: ContractKind,
+  message?: string,
+): ContractIdentity {
+  const identity = readContractIdentity(value);
+  if (!identity || (expected !== undefined && identity.kind !== expected)) {
+    throw new TypeError(
+      message ?? (expected ? `Expected ${contractDescription(expected)}` : "Invalid contract"),
+    );
+  }
+  return Object.freeze(identity);
 }
 
 function contractDescription(kind: ContractKind) {
@@ -139,16 +164,22 @@ export function extensionPoint<T>(id: string): ExtensionPoint<T> {
 }
 
 export function optional<T>(token: Service<T>): OptionalService<T> {
-  if (!isContract(token, "service")) {
-    throw new TypeError("optional() expects a Service");
-  }
-  return Object.freeze({ kind: "optional", service: service<T>(token.id) }) as OptionalService<T>;
+  return Object.freeze({
+    kind: "optional",
+    service: normalizeContract(token, "service", "optional() expects a Service"),
+  }) as OptionalService<T>;
 }
 
 export function isOptionalService<T>(
   value: Service<T> | OptionalService<T>,
 ): value is OptionalService<T> {
   if (!value || typeof value !== "object") return false;
-  const candidate = value as Partial<OptionalServiceIdentity>;
-  return candidate.kind === "optional" && isContract(candidate.service, "service");
+  const kind = Object.getOwnPropertyDescriptor(value, "kind");
+  const wrapped = Object.getOwnPropertyDescriptor(value, "service");
+  return (
+    kind?.value === "optional" &&
+    !!wrapped &&
+    "value" in wrapped &&
+    isContract(wrapped.value, "service")
+  );
 }

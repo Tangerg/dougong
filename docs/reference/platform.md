@@ -197,7 +197,7 @@ await change.commit();
 
 空 Platform ChangeSet 不触发候选图、Core ChangeSet 或诊断 revision，但仍按提交顺序经过同一命令队列并检查 Platform authority；它会等待先前的变更，dispose 前创建的旧空草稿也不能在终态后伪装成成功提交。
 
-`change.register()` 创建的 Registration 在 commit 前只是该 ChangeSet 独占的 draft，不持有 Platform owner，不能另行 `activate/update/remove`，也不能作为另一份 ChangeSet 的目标。commit 时才授予控制权限；注册失败或移除后再次撤销。终态句柄的直接 `remove()` 保持幂等，但不能重新作为新 ChangeSet 的目标。这样草稿与旧句柄都不会绕开候选图，也不会反向保活 Platform。
+`change.register()` 创建的 Registration 在 commit 前只是该 ChangeSet 独占的 draft，不持有 Platform owner，不能另行 `activate/update/remove`，也不能作为另一份 ChangeSet 的目标。commit 时才授予控制权限；注册失败或移除后再次撤销。已进入队列的重复移除请求按 Registration 身份幂等完成，即使同名 Registration 后来重新注册，也不会删除新的成员。终态句柄的直接 `remove()` 保持幂等，但不能重新作为新 ChangeSet 的目标。这样草稿与旧句柄都不会绕开候选图，也不会反向保活 Platform。
 
 `commit()` 返回后立即调用 `activate()` 也不依赖微任务顺序：Registration 会先等待授权它的同一次提交，提交失败则两者观察到同一失败。
 
@@ -246,11 +246,11 @@ Planet 式媒体源、Lynx Desktop 式命令/菜单/面板分别是 ExtensionPoi
 `platform.diagnostics` 使用与 Core/Signal 相同的 `get() + subscribe()` 只读协议，包含：
 
 - Platform `apiVersion`、`status` 和单调 `revision`；
-- 每个 Registration 的 `manifestName`、`version`、`status`、`activation`、`permissions`、`dependencies` 与已规范化为 `Error` 的最近失败。
+- 每个 Registration 的 `manifestName`、`version`、`status`、`activation`、`permissions`、`dependencies` 与记录为不可变 `RecordedFailure` 的最近失败；有界 `snapshot` 保留错误信息，不引用原始失败对象。
 
 相关公开类型各有一个职责：`Platform` 是控制协议，`PlatformOptions` 是构造边界，`PlatformChangeSet` 是一次性结构变更；`PlatformStatus` / `PlatformSnapshot` 描述整体状态与诊断，`RegistrationStatus` / `RegistrationSnapshot` 描述单个稳定 Registration。它们不暴露 Activator、候选图或 Core Installation。
 
-快照、条目和数组冻结，Map 不暴露可变方法。`subscribe()` 只发送未来失效通知，调用方收到后重新 `get()`。诊断订阅者失败经 Platform Logger 上报，不会改变注册或激活结果。
+快照、条目和数组冻结，Map 不暴露可变方法。`subscribe()` 只发送未来失效通知，调用方收到后重新 `get()`。诊断订阅者失败经 Platform Logger 上报，最终 `disposed` 通知中的异常也先完成上报，再释放 reporter；不会改变注册或激活结果。
 
 Platform 不实现另一套观察器；它把不可变 PlatformSnapshot 提交给 Core 的 `SnapshotPublisher`。Platform 成功释放后，已经取得的历史 view 停在 `disposed` 终态，现有订阅被摘除，且 reader、Logger 和 Platform owner 都被切断。
 

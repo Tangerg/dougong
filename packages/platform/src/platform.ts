@@ -68,9 +68,9 @@ type PlatformState<Reference> =
 /**
  * Serializes public structural commands over the Activator and Core compiler.
  *
- * The mirror of `HostImpl`: a serialization boundary that owns no domain state
- * of its own. Registrations hold their own state machines, the Activator owns
- * admission, `core-change.ts` owns the compilation to Core.
+ * Owns committed Registration membership and serializes its changes.
+ * Registrations hold their own state machines, the Activator owns admission,
+ * and `core-change.ts` owns the compilation to Core.
  *
  * `PlatformAuthority` is the indirection worth understanding. Every port closes
  * over a mutable `{ current }` cell rather than over `this`, so disposal can
@@ -132,20 +132,7 @@ class PlatformImpl<Reference> implements Platform<Reference> {
         status: this.#state.phase,
         registrations: this.#registrations.values(),
       }),
-      (error) => {
-        const platform = authority.current;
-        if (!platform) return;
-        const ports = platform.#livePorts();
-        if (!ports) return;
-        try {
-          const result: unknown = ports.logger.error(error);
-          // Platform has no secondary error port. Logger failure is terminal but
-          // still observed so it cannot surface as an unhandled rejection.
-          void Promise.resolve(result).catch(() => undefined);
-        } catch {
-          // Diagnostics are observation-only and cannot fail a platform command.
-        }
-      },
+      createDiagnosticReporter(this.#requirePorts().logger),
     );
     this.diagnostics = this.#diagnosticModel.view;
     this.#activator = new Activator(
@@ -275,8 +262,13 @@ class PlatformImpl<Reference> implements Platform<Reference> {
     return this.#enqueueChange(async () => {
       try {
         this.#assertActive();
-        if (!operations.length) return;
-        await this.#applyChanges(operations);
+        const pending = operations.filter(
+          (operation) =>
+            operation.kind !== "remove" ||
+            this.#registrations.get(operation.registration.manifestName) === operation.registration,
+        );
+        if (!pending.length) return;
+        await this.#applyChanges(pending);
       } catch (error) {
         const failure = normalizePlatformOperationFailure(error, "change");
         for (const registration of registrations) registration.discard(failure);
@@ -496,4 +488,16 @@ function requirePlatform<Reference>(authority: PlatformAuthority<Reference>) {
 function normalizePlatformOperationFailure(error: unknown, operation: "change" | "disposal") {
   if (error instanceof Error) return error;
   return new TypeError(`Platform ${operation} failed with a non-Error value`, { cause: error });
+}
+
+function createDiagnosticReporter(logger: Logger) {
+  return (error: unknown) => {
+    try {
+      const result: unknown = logger.error(error);
+      // The terminal logger has no lower sink, but its rejection must be observed.
+      void Promise.resolve(result).catch(() => undefined);
+    } catch {
+      // Diagnostics cannot mutate the command being observed.
+    }
+  };
 }

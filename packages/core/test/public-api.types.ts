@@ -136,7 +136,9 @@ void verifyInstallationTypes;
 
 expectTypeOf<core.Group["status"]>().toEqualTypeOf<core.LifecycleStatus>();
 expectTypeOf<core.Installation["status"]>().toEqualTypeOf<core.LifecycleStatus>();
-expectTypeOf<core.InstallationSnapshot["error"]>().toEqualTypeOf<Error | undefined>();
+expectTypeOf<core.InstallationSnapshot["error"]>().toEqualTypeOf<
+  core.RecordedFailure | undefined
+>();
 expectTypeOf<core.Host>().toMatchTypeOf<core.Installer>();
 expectTypeOf<core.Group>().toMatchTypeOf<core.Installer>();
 expectTypeOf<core.ChangeSet["install"]>().toEqualTypeOf<core.Installer["install"]>();

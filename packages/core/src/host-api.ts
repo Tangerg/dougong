@@ -1,43 +1,15 @@
 import type { HostSnapshot, HostStatus, InstallationSnapshot } from "./diagnostics";
 import type { Logger } from "./lifetime";
 import type { LifecycleStatus } from "./lifecycle-status";
-import type { AnyPlugin, Plugin, Provisions, Requirements } from "./plugin";
+import type { AnyPlugin, Plugin } from "./plugin";
 import type { ExtensionPoint, OptionalService, Service } from "./contracts";
 import type { ContributionView } from "./contribution-store";
 import type { SnapshotView } from "./snapshot-view";
 import type { Awaitable } from "./resource";
+import type { InstallationUpdate } from "./installation";
+export type { InstallationUpdate } from "./installation";
 
 declare const installationBrand: unique symbol;
-
-type DeclaredInstallationUpdate<
-  Config,
-  Requires extends Requirements,
-  Provides extends Provisions,
-  ConfigInput,
-> =
-  | {
-      readonly plugin: Plugin<Config, Requires, Provides, ConfigInput>;
-      readonly config?: ConfigInput;
-    }
-  | {
-      readonly plugin?: never;
-      readonly config: ConfigInput;
-    };
-
-type AnyPluginInstallationUpdate =
-  | { readonly plugin: AnyPlugin; readonly config?: unknown }
-  | { readonly plugin?: never; readonly config: unknown };
-
-/**
- * What one `update()` may change. The union requires at least one of `plugin`
- * and `config`, so an empty update is a compile error rather than a transaction
- * that commits nothing. Replacing the Plugin keeps the Installation's identity
- * and position — only its declaration moves.
- */
-export type InstallationUpdate<Declaration extends AnyPlugin = AnyPlugin> =
-  Declaration extends Plugin<infer Config, infer Requires, infer Provides, infer ConfigInput>
-    ? DeclaredInstallationUpdate<Config, Requires, Provides, ConfigInput>
-    : AnyPluginInstallationUpdate;
 
 /**
  * Makes the config argument required exactly when the Plugin declares one, so

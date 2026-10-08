@@ -1,7 +1,7 @@
 import { resolvePluginConfig } from "./configuration";
 import { ContractRegistry, type ContractRegistryWriter } from "./contract-registry";
 import {
-  assertContract,
+  normalizeContract,
   isOptionalService,
   type ExtensionPoint,
   type OptionalService,
@@ -53,8 +53,7 @@ export class Engine {
     availability: ServiceAvailability,
   ): T | undefined {
     const allowMissing = isOptionalService(requirement);
-    const token = allowMissing ? requirement.service : requirement;
-    assertContract(token, "service");
+    const token = normalizeContract(allowMissing ? requirement.service : requirement, "service");
     this.#contracts.assertCompatible(token);
     if (availability === "unavailable") throw hostServicesUnavailable();
 
@@ -72,9 +71,9 @@ export class Engine {
   }
 
   contributions<T>(token: ExtensionPoint<T>) {
-    assertContract(token, "extensionPoint");
-    this.#contracts.remember(token);
-    return this.#instances.contributions(token);
+    const identity = normalizeContract(token, "extensionPoint");
+    this.#contracts.remember(identity);
+    return this.#instances.contributions(identity);
   }
 
   buildPlan(declarations: ReadonlyMap<InstallationRecord, InstallationDeclaration>) {

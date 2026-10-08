@@ -29,29 +29,25 @@ export interface GroupCoordinatorPort {
   readonly attachInstallation: (installation: InstallationRecord) => void;
   readonly discardInstallation: (installation: InstallationRecord, error: unknown) => void;
   readonly runExclusive: (operation: () => Promise<void>) => Promise<void>;
+  readonly settled: () => Promise<void>;
   readonly removeInstallations: (operations: ReadonlyArray<ChangeOperation>) => Promise<void>;
   readonly notifyChanged: () => void;
 }
 
 interface GroupControl {
-  readonly finishConfiguration: () => void;
   readonly revoke: () => void;
 }
 
 const groupControls = new WeakMap<object, GroupControl>();
 
-type GroupState =
-  | {
-      readonly phase: "configuring";
-      readonly coordinator: GroupCoordinator;
-      readonly configuration: GroupConfigurationSession<ChangeSetDraft>;
-    }
-  | { readonly phase: "attached"; readonly coordinator: GroupCoordinator }
-  | { readonly phase: "revoked" };
+interface GroupBinding {
+  readonly coordinator: GroupCoordinator;
+  readonly configuration: GroupConfigurationSession<ChangeSetDraft> | undefined;
+}
 
 class GroupFacade implements Group {
   readonly #node: GroupNode;
-  #state: GroupState;
+  #binding: GroupBinding | undefined;
 
   constructor(
     coordinator: GroupCoordinator,
@@ -59,18 +55,10 @@ class GroupFacade implements Group {
     configuration?: GroupConfigurationSession<ChangeSetDraft>,
   ) {
     this.#node = node;
-    this.#state = configuration
-      ? { phase: "configuring", coordinator, configuration }
-      : { phase: "attached", coordinator };
+    this.#binding = { coordinator, configuration };
     groupControls.set(this, {
-      finishConfiguration: () => {
-        const state = this.#state;
-        if (state.phase === "configuring") {
-          this.#state = { phase: "attached", coordinator: state.coordinator };
-        }
-      },
       revoke: () => {
-        this.#state = { phase: "revoked" };
+        this.#binding = undefined;
       },
     });
     Object.freeze(this);
@@ -85,63 +73,57 @@ class GroupFacade implements Group {
   }
 
   get status() {
-    const state = this.#state;
-    return state.phase === "revoked" ? "removed" : state.coordinator.status(this.#node);
+    return this.#node.attached ? this.#requireBinding().coordinator.status(this.#node) : "removed";
   }
 
   ready() {
-    const state = this.#state;
-    return state.phase === "revoked"
-      ? Promise.reject(groupRemovedError(this.#node))
-      : state.coordinator.ready(this.#node);
+    return this.#node.attached
+      ? this.#requireBinding().coordinator.ready(this.#node)
+      : Promise.reject(groupRemovedError(this.#node));
   }
 
   install<Declaration extends AnyPlugin>(
     plugin: Declaration,
     ...config: PluginConfigArguments<Declaration>
   ) {
-    const state = this.#state;
-    if (state.phase === "configuring") {
-      return state.coordinator.stageConfigurationInstall(
-        this.#node,
-        state.configuration,
-        plugin,
-        ...config,
-      );
+    const { coordinator } = this.#requireBinding();
+    const configuration = this.#configuration();
+    if (configuration) {
+      return coordinator.stageConfigurationInstall(this.#node, configuration, plugin, ...config);
     }
-    return this.#requireCoordinator().install(this.#node, plugin, ...config);
+    return coordinator.install(this.#node, plugin, ...config);
   }
 
   change() {
-    if (this.#state.phase === "configuring") {
+    if (this.#configuration()) {
       throw new TypeError("Cannot create a ChangeSet while a Group is being configured");
     }
-    return this.#requireCoordinator().change(this.#node);
+    return this.#requireBinding().coordinator.change(this.#node);
   }
 
   group(name: string, configure: (group: Group) => void) {
-    const state = this.#state;
-    if (state.phase === "configuring") state.configuration.assertOpen();
-    return this.#requireCoordinator().create(
-      this.#node,
-      name,
-      configure,
-      state.phase === "configuring" ? state.configuration : undefined,
-    );
+    const { coordinator } = this.#requireBinding();
+    const configuration = this.#configuration();
+    configuration?.assertOpen();
+    return coordinator.create(this.#node, name, configure, configuration);
   }
 
   remove() {
-    const state = this.#state;
-    if (state.phase === "configuring") {
+    if (!this.#node.attached) return Promise.resolve();
+    if (this.#configuration()) {
       throw new TypeError("Cannot remove a Group while it is being configured");
     }
-    return state.phase === "attached" ? state.coordinator.remove(this.#node) : Promise.resolve();
+    return this.#requireBinding().coordinator.remove(this.#node);
   }
 
-  #requireCoordinator() {
-    const state = this.#state;
-    if (state.phase === "revoked") throw groupRemovedError(this.#node);
-    return state.coordinator;
+  #configuration() {
+    const configuration = this.#requireBinding().configuration;
+    return configuration?.sealed ? undefined : configuration;
+  }
+
+  #requireBinding() {
+    if (!this.#node.attached || !this.#binding) throw groupRemovedError(this.#node);
+    return this.#binding;
   }
 }
 
@@ -230,7 +212,6 @@ export class GroupCoordinator {
       execute: (operations) => {
         this.#requireLifecycle(group);
         const operation = this.#port.executeChanges(group, operations);
-        for (const change of operations) change.installation.trackReadiness(operation);
         if (operations.length && tracking === "immediate") {
           this.#track([group, ...operations.map((change) => change.installation.group)], operation);
         }
@@ -287,10 +268,6 @@ export class GroupCoordinator {
 
     if (ownsConfiguration) {
       const operation = configuration.seal().commit();
-      for (const child of node.walk()) {
-        const childFacade = this.#facades.get(child);
-        if (childFacade) groupControls.get(childFacade)?.finishConfiguration();
-      }
       this.#track(node.walk(), operation);
       observeReadinessOperation(operation);
     }
@@ -299,6 +276,7 @@ export class GroupCoordinator {
   }
 
   async ready(group: GroupNode) {
+    await this.#port.settled();
     await this.#requireLifecycle(group).ready(async () => {
       await Promise.all(this.#installationsIn(group).map((installation) => installation.ready()));
     });

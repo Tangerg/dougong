@@ -12,7 +12,7 @@ Eleven steps in order, aborting on the first failure:
 
 | # | Step | Protects |
 | --- | --- | --- |
-| 1 | `check:generated` | Generated synchronous callback policy matches its single authoritative source |
+| 1 | `check:generated` | Generated callback and runtime protocols match their authoritative sources |
 | 2 | `typecheck` | Five tsconfig projects plus the test project, all `--noEmit` |
 | 3 | `lint` | oxlint, `--deny-warnings` |
 | 4 | `format:check` | prettier |
@@ -28,7 +28,7 @@ Step 9 must precede step 10: `dist/index.d.ts` is **the only place the complete 
 
 ## `check:generated`
 
-`scripts/generate-internal.mjs --check` verifies Core and reactive’s `sync-result.ts` against `scripts/internal/sync-result.ts`, the only editable definition of synchronous callback policy. Matching each other is insufficient: both projections must match their source. `pnpm generate:internal` regenerates the projections; package builds run the same generator before bundling.
+`scripts/generate-internal.mjs --check` verifies Core and reactive’s `sync-result.ts` and `disposal-runtime.ts` against their corresponding sources under `scripts/internal/`. Synchronous callbacks, Promise requirements and disposal Symbol resolution each have one editable source. Matching each other is insufficient: both projections must match their source. `pnpm generate:internal` regenerates the projections; package builds run the same generator before bundling.
 
 ## `check:layers`
 
@@ -63,6 +63,10 @@ Constraints the type system cannot express but source text can decide. Two kinds
 | `@dougongjs/reactive` has zero external imports | It is an independent foundation |
 | Resource implementations do not use `[Symbol.dispose]` / `[Symbol.asyncDispose]` directly | Foundation protocol modules must select stable keys instead of degrading a missing symbol into an `"undefined"` property |
 | The facade contains re-exports only | Logic there is a second execution path |
+| Installation facades cannot keep lifecycle or authority state | InstallationRecord is the sole owner |
+| RegistrationRecord cannot keep a mutable Manifest mirror | Manifest derives from the same Artifact; terminal data is immutable |
+| Group facades cannot keep configuration or structural phases | Read GroupConfigurationSession and GroupNode |
+| ContributionStore cannot store or assign a second contribution value | ContributionRecord owns the value; Store owns publication |
 | `HostImpl` must not be exported | `Host` is an interface; `createHost()` is the only constructor |
 | Only `InstanceCoordinator` and `Lifetime` itself may construct a Lifetime | Anywhere else produces a resource tree nobody disposes |
 

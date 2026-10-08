@@ -1,4 +1,9 @@
-import { ReadonlyMapSnapshot, SnapshotPublisher, type SnapshotView } from "@dougongjs/core";
+import {
+  ReadonlyMapSnapshot,
+  RecordedFailure,
+  SnapshotPublisher,
+  type SnapshotView,
+} from "@dougongjs/core";
 import type { Manifest } from "./manifest";
 
 export type PlatformStatus = "active" | "disposing" | "disposed";
@@ -19,7 +24,7 @@ export interface RegistrationSnapshot {
   readonly activation: ReadonlyArray<string>;
   readonly permissions: ReadonlyArray<string>;
   readonly dependencies: Readonly<Record<string, string>>;
-  readonly error?: Error;
+  readonly error?: RecordedFailure;
 }
 
 export interface PlatformSnapshot {
@@ -89,7 +94,7 @@ export class PlatformDiagnostics {
       snapshots.set(
         manifest.name,
         Object.freeze(
-          error === undefined ? snapshot : { ...snapshot, error },
+          error === undefined ? snapshot : { ...snapshot, error: new RecordedFailure(error) },
         ) as RegistrationSnapshot,
       );
     }

@@ -1476,9 +1476,9 @@ describe("Platform", () => {
       message: "Registration 'failed.non-error' failed with a non-Error value",
     });
     expect(classified).toBe(activationFailure);
-    expect(platform.diagnostics.get().registrations.get(registration.manifest.name)?.error).toBe(
-      classified,
-    );
+    expect(
+      platform.diagnostics.get().registrations.get(registration.manifest.name)?.error?.snapshot,
+    ).toMatchObject({ name: "PlatformError", code: "REGISTRATION_UNAVAILABLE" });
     await platform.dispose();
   });
 

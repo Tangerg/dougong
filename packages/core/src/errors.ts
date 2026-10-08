@@ -42,9 +42,9 @@ export interface ErrorSnapshot {
 }
 
 /**
- * A terminal failure is a record, never a reconstruction of the original class.
- * Operations still reject with their live error; retained terminal handles use
- * this class so causes and custom fields cannot retain application resources.
+ * Diagnostic failures are records, never reconstructions of the original class.
+ * Operations still reject with their live error; snapshots and terminal handles
+ * use this class so causes and custom fields cannot retain application resources.
  */
 export class RecordedFailure extends Error {
   override readonly name = "RecordedFailure";
@@ -57,8 +57,9 @@ export class RecordedFailure extends Error {
     super(snapshot.message);
     this.code = snapshot.code;
     this.snapshot = snapshot;
-    // Stack text is diagnostic data, not a reference to the original Error.
-    if (snapshot.stack !== undefined) this.stack = snapshot.stack;
+    // Always replace V8's constructor trace: even a missing source stack must
+    // not leave native frames retaining the application that records this failure.
+    this.stack = snapshot.stack ?? `${this.name}: ${snapshot.message}`;
     Object.freeze(this);
   }
 }

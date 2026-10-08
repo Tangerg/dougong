@@ -1,9 +1,39 @@
 import { DougongError, RecordedFailure, normalizeFailure } from "./errors";
 import type { Lifetime, LifetimeSnapshot } from "./lifetime";
 import type { LifecycleStatus } from "./lifecycle-status";
-import type { NormalizedPlugin } from "./plugin";
+import type { AnyPlugin, NormalizedPlugin, Plugin, Provisions, Requirements } from "./plugin";
 import type { GroupNode } from "./group";
-import { SnapshotPublisher, type SnapshotView } from "./snapshot-view";
+import { batchSnapshotNotifications, SnapshotPublisher, type SnapshotView } from "./snapshot-view";
+
+type DeclaredInstallationUpdate<
+  Config,
+  Requires extends Requirements,
+  Provides extends Provisions,
+  ConfigInput,
+> =
+  | {
+      readonly plugin: Plugin<Config, Requires, Provides, ConfigInput>;
+      readonly config?: ConfigInput;
+    }
+  | { readonly plugin?: never; readonly config: ConfigInput };
+
+type AnyPluginInstallationUpdate =
+  | { readonly plugin: AnyPlugin; readonly config?: unknown }
+  | { readonly plugin?: never; readonly config: unknown };
+
+/** Replaces a declaration or config while preserving Installation identity and position. */
+export type InstallationUpdate<Declaration extends AnyPlugin = AnyPlugin> =
+  Declaration extends Plugin<infer Config, infer Requires, infer Provides, infer ConfigInput>
+    ? DeclaredInstallationUpdate<Config, Requires, Provides, ConfigInput>
+    : AnyPluginInstallationUpdate;
+
+interface InstallationAuthority {
+  readonly notifyChanged: () => void;
+  readonly report: (error: unknown) => void;
+  readonly settled: () => Promise<void>;
+  readonly update: (change: InstallationUpdate) => Promise<void>;
+  readonly remove: () => Promise<void>;
+}
 
 export interface InstallationSnapshot {
   readonly id: string;
@@ -13,7 +43,7 @@ export interface InstallationSnapshot {
   readonly requires: ReadonlyArray<string>;
   readonly provides: ReadonlyArray<string>;
   readonly lifetime?: SnapshotView<LifetimeSnapshot>;
-  readonly error?: Error;
+  readonly error?: RecordedFailure;
 }
 
 export interface InstallationDeclaration {
@@ -37,8 +67,7 @@ export function createInstallationDeclaration(
 interface InstallationAttachment {
   declaration: InstallationDeclaration;
   readonly group: GroupNode;
-  notifyChanged: (() => void) | undefined;
-  report: ((error: unknown) => void) | undefined;
+  authority: Pick<InstallationAuthority, "settled" | "update" | "remove"> | undefined;
 }
 
 type InstallationState =
@@ -54,7 +83,8 @@ type InstallationState =
       readonly error: Error;
       readonly readiness: "unsettled" | "settled";
     }
-  | { readonly phase: "removed"; readonly readiness: "unsettled" | "settled" };
+  | { readonly phase: "removed"; readonly readiness: "unsettled" | "settled" }
+  | { readonly phase: "discarded"; readonly error: RecordedFailure };
 
 /**
  * An installation is a stable identity whose declaration and active Instance
@@ -63,8 +93,8 @@ type InstallationState =
  */
 export class InstallationRecord {
   #state: InstallationState = { phase: "pending" };
-  #pendingReadiness: { readonly attempt: object; readonly barrier: Promise<void> } | undefined;
   #attachment: InstallationAttachment | undefined;
+  #notifications: Pick<InstallationAuthority, "notifyChanged" | "report"> | undefined;
 
   readonly #publisher: SnapshotPublisher<InstallationSnapshot>;
   readonly #pluginName: string;
@@ -84,29 +114,37 @@ export class InstallationRecord {
     declaration: InstallationDeclaration,
   ) {
     this.groupId = group.id;
-    this.#attachment = { declaration, group, notifyChanged: undefined, report: undefined };
+    this.#attachment = { declaration, group, authority: undefined };
     this.#pluginName = declaration.plugin.name;
     this.#publisher = new SnapshotPublisher(
       () => this.#snapshot(),
-      (error) => this.#attachment?.report?.(error),
+      (error) => this.#notifications?.report(error),
     );
     this.diagnostics = this.#publisher.view;
   }
 
-  attach(notifyChanged: () => void, report: (error: unknown) => void) {
+  attach(authority: InstallationAuthority) {
     const attachment = this.#requireAttachment();
-    if (attachment.notifyChanged) throw new Error(`Installation '${this.id}' is already attached`);
-    attachment.notifyChanged = notifyChanged;
-    attachment.report = report;
+    if (attachment.authority) throw new Error(`Installation '${this.id}' is already attached`);
+    attachment.authority = {
+      settled: authority.settled,
+      update: authority.update,
+      remove: authority.remove,
+    };
+    this.#notifications = { notifyChanged: authority.notifyChanged, report: authority.report };
   }
 
   get status(): LifecycleStatus {
-    return this.#state.phase;
+    return this.#state.phase === "discarded" ? "failed" : this.#state.phase;
   }
 
   /** Whether the owning ChangeSet has granted this Installation Host authority. */
   get hasAuthority() {
-    return this.#attachment?.notifyChanged !== undefined;
+    return (
+      this.#attachment?.authority !== undefined &&
+      this.#state.phase !== "removed" &&
+      this.#state.phase !== "discarded"
+    );
   }
 
   get instance() {
@@ -116,7 +154,7 @@ export class InstallationRecord {
 
   get error() {
     const state = this.#state;
-    if (state.phase === "failed") {
+    if (state.phase === "failed" || state.phase === "discarded") {
       return state.error;
     }
     if (state.phase === "removed") {
@@ -139,9 +177,24 @@ export class InstallationRecord {
   }
 
   ready() {
-    const pending = this.#pendingReadiness;
-    if (pending) return pending.barrier.then(() => this.#readyFromCurrentState());
-    return this.#readyFromCurrentState();
+    const boundary = this.#attachment?.authority?.settled();
+    return boundary
+      ? boundary.then(() => this.#readyFromCurrentState())
+      : this.#readyFromCurrentState();
+  }
+
+  async requestUpdate(change: InstallationUpdate) {
+    const authority = this.#attachment?.authority;
+    if (!this.hasAuthority || !authority) throw this.unavailableError();
+    await authority.update(change);
+  }
+
+  async requestRemoval() {
+    if (this.#state.phase === "removed" || this.#state.phase === "discarded") return;
+    const attachment = this.#attachment;
+    if (!attachment) return;
+    if (!attachment.authority) throw this.unavailableError();
+    await attachment.authority.remove();
   }
 
   unavailableError() {
@@ -154,40 +207,13 @@ export class InstallationRecord {
     );
   }
 
-  /**
-   * Binds `ready()` to the change currently in flight.
-   *
-   * The `attempt` token is the point: a second change can start before the
-   * first one's promise settles, and only the latest attempt is allowed to clear
-   * the barrier. Without it, a stale resolution would report readiness for an
-   * attempt that has already been superseded.
-   *
-   * A rejection is rethrown only when this Installation did not end up active.
-   * A change that failed elsewhere in the batch but left this one running is not
-   * this Installation's failure to report.
-   */
-  trackReadiness(operation: Promise<void>) {
-    const attempt = {};
-    const barrier = operation.then(
-      () => {
-        if (this.#pendingReadiness?.attempt === attempt) this.#pendingReadiness = undefined;
-      },
-      (error) => {
-        if (this.#pendingReadiness?.attempt === attempt) this.#pendingReadiness = undefined;
-        if (this.#state.phase !== "active") throw this.error ?? error;
-      },
-    );
-    this.#pendingReadiness = { attempt, barrier };
-    // ready() owns this barrier's failure; mark the internal observer branch handled.
-    void barrier.catch(() => undefined);
-  }
-
   // A terminal state only answers `ready()` once its readiness has been settled.
   // Before that the outcome is still being decided by the change in flight, so
   // the caller joins the waiter set instead of being told a result that the
   // transaction might still roll back.
   #readyFromCurrentState(): Promise<void> {
     const state = this.#state;
+    if (state.phase === "discarded") return Promise.reject(state.error);
     if (
       (state.phase === "active" || state.phase === "failed" || state.phase === "removed") &&
       state.readiness === "settled"
@@ -229,7 +255,13 @@ export class InstallationRecord {
       for (const waiter of this.#readyWaiters) waiter.reject(error);
     }
     this.#readyWaiters.clear();
-    if (state.phase === "removed") this.#publisher.dispose();
+    if (state.phase === "removed") {
+      try {
+        this.#publisher.dispose();
+      } finally {
+        this.#notifications = undefined;
+      }
+    }
   }
 
   beginStopping() {
@@ -256,15 +288,17 @@ export class InstallationRecord {
   discard(error: unknown) {
     const failure = new RecordedFailure(this.#normalizeFailure(error));
     this.#transition({
-      phase: "failed",
+      phase: "discarded",
       error: failure,
-      readiness: "settled",
     });
     for (const waiter of this.#readyWaiters) waiter.reject(failure);
     this.#readyWaiters.clear();
-    this.#pendingReadiness = undefined;
-    this.#attachment = undefined;
-    this.#publisher.dispose();
+    try {
+      this.#publisher.dispose();
+    } finally {
+      this.#attachment = undefined;
+      this.#notifications = undefined;
+    }
   }
 
   #transitionToFailed(error: unknown) {
@@ -279,14 +313,15 @@ export class InstallationRecord {
 
   remove() {
     this.#transition({ phase: "removed", readiness: "unsettled" });
-    this.#pendingReadiness = undefined;
     this.#attachment = undefined;
   }
 
   #transition(state: InstallationState) {
-    this.#state = state;
-    this.#publisher.invalidate();
-    this.#attachment?.notifyChanged?.();
+    batchSnapshotNotifications(() => {
+      this.#state = state;
+      this.#publisher.invalidate();
+      this.#notifications?.notifyChanged();
+    });
   }
 
   #snapshot(): InstallationSnapshot {
@@ -305,9 +340,7 @@ export class InstallationRecord {
       ),
       provides: Object.freeze(Object.values(plugin?.provides ?? {}).map((token) => token.id)),
       ...(instance ? { lifetime: instance.lifetime.diagnostics } : {}),
-      ...(error
-        ? { error: this.#state.phase === "removed" ? new RecordedFailure(error) : error }
-        : {}),
+      ...(error ? { error: new RecordedFailure(error) } : {}),
     });
   }
 

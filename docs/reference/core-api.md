@@ -152,6 +152,7 @@ const USER_CREATED = event<User>("users/created")
 
 - 第一个参数是稳定字符串 ID，也是执行身份；对象身份不参与匹配。
 - 运行时返回值是冻结普通对象，形状只有 `{ id, kind }`；TypeScript 类型另带工厂私有的 phantom brand，使普通 `{ id, kind }` 不能在编译期冒充 Contract。该 brand 不参与运行时匹配。
+- 调用边界只接受 `id/kind` 的 own data property，不执行 getter 或读取继承字段；规范化捕获并冻结同一份身份，再用于校验、查找与存储。
 - Contract 不持有执行状态，可跨应用复用。
 - ID 必须非空且首尾无空白；区分大小写，不做 trim 或 Unicode 规范化。
 - 同一 ID 在一个 Host 中不能同时承担两种 kind，否则抛 `CONTRACT_CONFLICT`。
@@ -626,7 +627,7 @@ await database.ready()
 
 `install()` 同步返回稳定 `Installation`，并把单项 ChangeSet 排入 Host 命令队列。Plugin 形状错误同步抛出；提交或启动错误由 `ready()` / `start()` 暴露。
 
-`ready()` 的屏障位于整笔命令之后：候选图验证、Instance 切换和 ExtensionPoint 批次发布全部结束后才 settle。调用方在 `await installation.ready()` 后立即读取 ContributionView 时只能得到已提交快照，不需要额外等待一个 tick。
+`ready()` 的屏障位于整笔命令之后：候选图验证、Instance 切换和 ExtensionPoint 批次发布全部结束后才 settle。调用方在 `await installation.ready()` 后立即读取 ContributionView 时只能得到已提交快照，不需要额外等待一个 tick。屏障由 Host 的同一 SerialQueue 提供，覆盖调用前已提交的命令，包括其他 Group 中的依赖提供者变更；Installation 不再维护一份仅针对直接更新的命令屏障。
 
 命令队列线性化 install、update、remove、start 和 stop。一次失败不会破坏后续命令排队能力。
 
@@ -664,11 +665,11 @@ type ManagedInstallation = Pick<Installation, "id" | "status" | "ready" | "remov
 const managed: ManagedInstallation[] = [host.install(adminPlugin), host.install(auditPlugin)]
 ```
 
-Installation 进入 `removed` 后撤销对 Host 的控制引用并释放 Plugin 声明与配置。终态 `remove()` 幂等成功，`update()` 以 `INSTALLATION_REMOVED` 拒绝；保留一个已删除 Installation 不会反向保活 Host。
+Installation 进入 `removed` 后撤销对 Host 的控制引用并释放 Plugin 声明与配置。已经进入队列的重复移除请求也按同一成员身份幂等完成；终态 `remove()` 幂等成功，`update()` 以 `INSTALLATION_REMOVED` 拒绝；保留一个已删除 Installation 不会反向保活 Host。
 
-Installation 在提交前失败时，已经等待 `ready()` 的调用方仍收到原始 `Error`；setup 或配置校验器抛出非 `Error` 值时，首次公开命令与稳定失败状态共享同一个 `INSTALLATION_UNAVAILABLE` 错误，原值保存在 `cause`。Installation 脱离 Host 后，只保留错误的 `name/message/code` 纯数据摘要，后续 `ready()` 在调用边界重建错误。JavaScript `Error` 的调用栈可能保留整个编排对象图，不能成为终态 Installation 的隐藏所有权边。仍附着于活动 Host 的失败 Installation 继续保留原始错误，供诊断和重试语义使用。Platform 的终态 Registration 遵守相同规则。
+失败的命令传播原始 `Error`；setup 或配置校验器抛出非 `Error` 值时，首次公开命令与仍附着于 Host 的稳定失败状态共享同一个 `INSTALLATION_UNAVAILABLE` 错误，原值保存在 `cause`。被丢弃的 Installation 后续 `ready()` 使用 `RecordedFailure`，只持有冻结、有界的错误记录，不重建原异常类。仍附着于 Host 的失败 Installation 保留原始错误以支持命令传播和重试，但诊断始终使用记录投影。Platform 的 Registration 遵守相同规则。
 
-`installation.diagnostics` 暴露 Host 诊断使用的同一份不可变 `InstallationSnapshot`，在已提交声明或生命周期变化时失效。移除先发布终态快照，在命令 readiness settle 时释放 reader、reporter 和订阅。终态诊断错误使用 `RecordedFailure`，避免保留的快照通过 JavaScript 惰性调用栈持有执行对象。
+`installation.diagnostics` 暴露 Host 诊断使用的同一份不可变 `InstallationSnapshot`，在已提交声明或生命周期变化时失效。Installation 与 Host 快照在同一通知批次中失效，回调不能读到相互矛盾的状态。移除先发布终态快照，最后一次观察者异常仍进入 Host onError；在命令 readiness settle 时释放 reader、reporter 和订阅。所有诊断错误都使用不可变 `RecordedFailure`，即使快照取自仍可恢复的失败状态，也不会通过原始 Error、自定义字段或 cause 持有执行对象。
 
 ### 10.3 canonical ChangeSet
 
@@ -727,7 +728,7 @@ Group 的规则：
 
 - 可嵌套；
 - configure 内全部安装共享一次提交；
-- `ready()` 等待调用前已在整棵子树提交的变更（包括父级 ChangeSet 对子树安装的变更，以及仍在排队的动态子 Group 变更），再等待子树中的安装就绪；
+- `ready()` 先等待调用前已提交的 Host 命令，再等待配置建立结果和子树中的安装就绪；这个边界也覆盖子树外的依赖变更与空 Group；
 - `remove()` 用一次 Core 事务删除整棵子树；
 - Group ChangeSet 只能修改自身子树的 Installation；
 - Group 与 Installation 共享 `status/ready/remove`，Installation 另有 `update` 与 `diagnostics`；

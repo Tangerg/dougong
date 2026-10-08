@@ -32,7 +32,7 @@ const hostOptionFields = new Set(["name", "logger", "onError"]);
  * The Host owns no domain state. It is a serialization boundary over three
  * peers, each of which is the single source of truth for one thing:
  *
- *   InstallationRegistry  declarations and public-handle authority
+ *   InstallationRegistry  committed membership and authority grants
  *   GroupCoordinator      installation ownership structure
  *   Engine                the committed plan, and commit/rollback/fail-closed
  *
@@ -79,6 +79,7 @@ class HostImpl implements Host {
     this.#logger = configuredLogger ?? defaultLogger;
     this.#onError = configuredOnError ?? ((error) => this.#logger.error(error));
     this.#installations = new InstallationRegistry({
+      settled: () => this.#commands.settled,
       report: (error) => this.#report(error),
       notifyChanged: () => this.#publishDiagnostics(),
       update: (installation, facade, update) => {
@@ -106,6 +107,7 @@ class HostImpl implements Host {
       discardInstallation: (installation, error) =>
         this.#installations.discard(installation, error),
       runExclusive: (operation) => this.#commands.run(operation),
+      settled: () => this.#commands.settled,
       removeInstallations: (operations) => this.#removeInstallations(operations),
       notifyChanged: () => this.#publishDiagnostics(),
     });
@@ -202,18 +204,18 @@ class HostImpl implements Host {
 
     return this.#commands.run(async () => {
       try {
+        const pending = this.#installations.pendingOperations(operations);
+        if (operations.length && !pending.length) return;
         if (!group.attached) throw groupRemovedError(group);
-        if (!operations.length) return;
+        if (!pending.length) return;
         // While idle there are no Instances to stop or start, so the change is
         // just a declaration edit. A transaction is only needed once a committed
         // plan exists that the change could break.
         if (this.#status === "active") {
-          await this.#transact(operations);
+          await this.#transact(pending);
         } else {
-          this.#installations.commit(this.#installations.draft(operations), operations, false);
-          this.#installations.settleReadiness(
-            operations.map((operation) => operation.installation),
-          );
+          this.#installations.commit(this.#installations.draft(pending), pending, false);
+          this.#installations.settleReadiness(pending.map((operation) => operation.installation));
         }
         this.#publishDiagnostics();
       } catch (error) {

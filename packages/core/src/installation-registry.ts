@@ -16,6 +16,7 @@ type AnyInstallationUpdate = InstallationUpdate<AnyPlugin>;
 interface InstallationRegistryPort {
   readonly notifyChanged: () => void;
   readonly report: (error: unknown) => void;
+  readonly settled: () => Promise<void>;
   readonly update: (
     installation: InstallationRecord,
     facade: AnyInstallation,
@@ -24,50 +25,11 @@ interface InstallationRegistryPort {
   readonly remove: (installation: InstallationRecord, facade: AnyInstallation) => Promise<void>;
 }
 
-interface InstallationControl {
-  readonly attach: (
-    update: (change: AnyInstallationUpdate) => Promise<void>,
-    remove: () => Promise<void>,
-  ) => void;
-  readonly revoke: () => void;
-}
-
-type InstallationFacadeState<Declaration extends AnyPlugin> =
-  | { readonly phase: "draft" }
-  | {
-      readonly phase: "attached";
-      readonly update: (change: InstallationUpdate<Declaration>) => Promise<void>;
-      readonly remove: () => Promise<void>;
-    }
-  | { readonly phase: "revoked" };
-
-// The facade a caller receives is created before its ChangeSet commits, so it
-// starts with no authority at all. `attach` grants it, `revoke` takes it back
-// when the Installation leaves the graph. Keeping both off the object means
-// public code holding the handle cannot call either.
-const installationControls = new WeakMap<object, InstallationControl>();
-
 class InstallationFacade<Declaration extends AnyPlugin> {
   readonly #installation: InstallationRecord;
-  #state: InstallationFacadeState<Declaration> = { phase: "draft" };
 
   constructor(installation: InstallationRecord) {
     this.#installation = installation;
-    installationControls.set(this, {
-      attach: (updateRecord, removeRecord) => {
-        if (this.#state.phase !== "draft") {
-          throw new Error(`Installation '${this.#installation.id}' control is already sealed`);
-        }
-        this.#state = {
-          phase: "attached",
-          update: updateRecord as (update: InstallationUpdate<Declaration>) => Promise<void>,
-          remove: removeRecord,
-        };
-      },
-      revoke: () => {
-        this.#state = { phase: "revoked" };
-      },
-    });
     Object.freeze(this);
   }
 
@@ -91,31 +53,16 @@ class InstallationFacade<Declaration extends AnyPlugin> {
     return this.#installation.ready();
   }
 
-  async update(update: InstallationUpdate<Declaration>) {
-    const state = this.#state;
-    if (state.phase === "draft") throw this.#notCommitted();
-    if (state.phase === "revoked") throw this.#installation.unavailableError();
-    await state.update(update);
+  update(update: InstallationUpdate<Declaration>) {
+    return this.#installation.requestUpdate(update as AnyInstallationUpdate);
   }
 
-  async remove() {
-    const state = this.#state;
-    if (state.phase === "draft") throw this.#notCommitted();
-    // Removing something already removed succeeds. `update()` rejects in the
-    // same state because it asks for a change that cannot happen, while
-    // `remove()` only asks for an end state that already holds.
-    if (state.phase === "attached") await state.remove();
-  }
-
-  #notCommitted() {
-    return new DougongError(
-      "INSTALLATION_UNAVAILABLE",
-      `Installation '${this.#installation.id}' has not been committed`,
-    );
+  remove() {
+    return this.#installation.requestRemoval();
   }
 }
 
-/** Owns Installation declarations, public facade authority and stable lookup. */
+/** Owns committed membership and grants the authority stored by each record. */
 export class InstallationRegistry {
   readonly #records = new Map<string, InstallationRecord>();
   readonly #owned = new WeakMap<object, InstallationRecord>();
@@ -135,6 +82,12 @@ export class InstallationRegistry {
     return this.#records.get(installation.id) === installation;
   }
 
+  pendingOperations(operations: ReadonlyArray<ChangeOperation>) {
+    return operations.filter(
+      (operation) => operation.kind !== "remove" || this.contains(operation.installation),
+    );
+  }
+
   create(group: GroupNode, plugin: NormalizedPlugin, config: unknown) {
     group.assertAttached();
     const index = ++this.#sequence;
@@ -144,8 +97,8 @@ export class InstallationRegistry {
       group,
       createInstallationDeclaration(plugin, config),
     );
-    // The public declaration marker is type-only; runtime authority is the
-    // WeakMap identity registered immediately below.
+    // The public declaration marker is type-only; this identity map proves
+    // provenance without granting the draft mutation authority.
     const facade = new InstallationFacade<AnyPlugin>(installation) as unknown as AnyInstallation;
     this.#owned.set(facade, installation);
     this.#facades.set(installation, facade);
@@ -161,13 +114,13 @@ export class InstallationRegistry {
   attach(installation: InstallationRecord) {
     const facade = this.#facades.get(installation);
     if (!facade) throw new Error(`Installation '${installation.id}' has no public facade`);
-    const control = installationControls.get(facade);
-    if (!control) throw new Error(`Installation '${installation.id}' has no draft control`);
-    installation.attach(this.#port.notifyChanged, this.#port.report);
-    control.attach(
-      (update) => this.#port.update(installation, facade, update),
-      () => this.#port.remove(installation, facade),
-    );
+    installation.attach({
+      notifyChanged: this.#port.notifyChanged,
+      report: this.#port.report,
+      settled: this.#port.settled,
+      update: (update) => this.#port.update(installation, facade, update),
+      remove: () => this.#port.remove(installation, facade),
+    });
   }
 
   /** Builds a candidate without changing committed declarations or membership. */
@@ -218,7 +171,7 @@ export class InstallationRegistry {
       for (const operation of operations) {
         if (operation.kind === "remove") {
           operation.installation.remove();
-          this.#revoke(operation.installation);
+          this.#facades.delete(operation.installation);
         } else if (!active) {
           operation.installation.deactivate();
         }
@@ -233,19 +186,10 @@ export class InstallationRegistry {
 
   discard(installation: InstallationRecord, error: unknown) {
     installation.discard(error);
-    this.#revoke(installation);
+    this.#facades.delete(installation);
   }
 
   declarations() {
     return new Map([...this.#records.values()].map((record) => [record, record.declaration]));
-  }
-
-  #revoke(installation: InstallationRecord) {
-    const facade = this.#facades.get(installation);
-    if (facade) {
-      installationControls.get(facade)?.revoke();
-      installationControls.delete(facade);
-    }
-    this.#facades.delete(installation);
   }
 }

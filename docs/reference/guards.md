@@ -12,7 +12,7 @@ pnpm check
 
 | # | 步骤 | 保护什么 |
 | --- | --- | --- |
-| 1 | `check:generated` | 生成的同步回调规则与唯一权威源码一致 |
+| 1 | `check:generated` | 生成的同步回调及运行时协议与各自权威源码一致 |
 | 2 | `typecheck` | 五个 tsconfig 项目 + 测试项目，全部 `--noEmit` |
 | 3 | `lint` | oxlint，`--deny-warnings` |
 | 4 | `format:check` | prettier |
@@ -28,7 +28,7 @@ pnpm check
 
 ## `check:generated`
 
-`scripts/generate-internal.mjs --check` 将 Core 和 reactive 的 `sync-result.ts` 分别与 `scripts/internal/sync-result.ts` 校验；后者是同步回调政策唯一的编辑源。两份投影彼此相同并不够，它们必须都来自权威源码。`pnpm generate:internal` 重新生成投影，包构建也在打包前运行同一生成器。
+`scripts/generate-internal.mjs --check` 将 Core 和 reactive 的 `sync-result.ts`、`disposal-runtime.ts` 分别与 `scripts/internal/` 下的对应源码校验；同步回调、Promise 能力要求与释放 Symbol 解析各只有一个编辑源。两份投影彼此相同并不够，它们必须都来自权威源码。`pnpm generate:internal` 重新生成投影，包构建也在打包前运行同一生成器。
 
 ## `check:layers`
 
@@ -63,6 +63,10 @@ pnpm check
 | `@dougongjs/reactive` 零外部导入 | 它是独立基础包 |
 | 资源实现不直接使用 `[Symbol.dispose]` / `[Symbol.asyncDispose]` | 必须经过基础协议模块选择稳定 key，避免缺失 Symbol 退化成 `"undefined"` 属性 |
 | facade 只含 re-export | 有逻辑就是第二条执行路径 |
+| Installation facade 不另建状态机 | 权限只保存在 InstallationRecord |
+| RegistrationRecord 不另存可变 Manifest | manifest 直接来自同一 Artifact，终态只保留不可变数据 |
+| Group facade 不另建配置或附着状态 | 直接读取配置会话与 GroupNode |
+| ContributionStore 不另存或修改贡献值 | 值只由 ContributionRecord 推进，Store 只拥有 claim 与发布状态 |
 | `HostImpl` 不得导出 | `Host` 是接口，`createHost()` 是唯一构造入口 |
 | Lifetime 只能由 `InstanceCoordinator` 和 `Lifetime` 自身构造 | 别处构造会产生无人释放的资源树 |
 
