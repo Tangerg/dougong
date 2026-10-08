@@ -108,6 +108,39 @@ function manualOwner(
   };
 }
 
+it("keeps the captured Task completion authoritative until observation disposal", async () => {
+  const child = asyncDisposable(async () => undefined);
+  const baseOwner = manualOwner(child);
+  const taskDisposed = vi.fn<() => void>();
+  let reads = 0;
+  let completion!: Promise<unknown>;
+  const owner: ObservationOwner = {
+    ...baseOwner,
+    spawn<T>(task: (signal: AbortSignal) => T | PromiseLike<T>) {
+      const runner = baseOwner.spawn(task);
+      completion = runner.result;
+      const dispose = () => {
+        taskDisposed();
+        return runner.dispose();
+      };
+      return {
+        get result() {
+          return ++reads === 1 ? runner.result : Promise.resolve(undefined as T);
+        },
+        dispose,
+        [Symbol.asyncDispose]: dispose,
+      };
+    },
+  };
+  const observation = observe(owner, signal(0), () => undefined);
+  await tick();
+  await observation.dispose();
+  await completion;
+
+  expect(taskDisposed).toHaveBeenCalledOnce();
+  expect(reads).toBe(1);
+});
+
 function manualLifetime(dispose: () => void | Promise<void>): AsyncDisposable {
   const release = async () => {
     await dispose();

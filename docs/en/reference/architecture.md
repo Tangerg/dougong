@@ -65,6 +65,8 @@ Mutable owners and projections are separated for each fact:
 | Permission to append ChangeSet operations | Each draft's current phase | A check before input reads cannot authorize later writes; staging reads the sole phase again |
 | Accepted declaration fields | The frozen record returned by normalizePlainRecord | Core and Platform consume captured data; ordinary reads of the original cannot select fields again |
 | Requirement optionality and Contract identity | The frozen requirement returned by Contract normalization | Plugin normalization and Host lookups consume the capture without checking a wrapper and then rereading its original Service |
+| Accepted asynchronous completion protocol | The then method and receiver captured once | A native Promise executes the capture without rereading the original object to select another result |
+| Observation Task completion | The result captured once when accepting the Task | Observation releases the Task from this completion; a second property read cannot detach it prematurely |
 | Lifetime operation authority | Lifetime's current phase and signal | Capture external Contract identity before granting access; InstanceCoordinator consumes only inert identity data |
 | Lifetime phase and resource / child membership | Lifetime state and actual ownership sets | Diagnostics read phase, Set.size and the real subtree without mirrored nodes or counters |
 | Event listener publication visibility | EventHub membership | ListenerRegistration holds only its callback and revocable resource binding |
@@ -97,6 +99,8 @@ Core does not import reactive. The two compose through the structural `get()/sub
 Minimal protocols such as `Disposable` / `AsyncDisposable` are declared separately in both foundation packages. They carry no state or implementation, and TypeScript makes them interoperate structurally. This is deliberate duplication of a protocol declaration, traded for zero dependencies in both directions. The single-path principle forbids duplicated state machines and execution semantics, not shared type sources between independent foundation packages.
 
 Synchronous callback policy and runtime protocol each have one authoritative source: `scripts/internal/sync-result.ts` and `scripts/internal/disposal-runtime.ts`. `pnpm generate:internal` produces the corresponding Core and reactive modules; package builds inline these independent projections without a shared runtime dependency. `pnpm check:generated` rejects drift. Promise requirements and disposal Symbol resolution are also edited once, then regenerated for both packages.
+
+Synchronous callback checks and Observation Task acceptance share `captureThenable`: read `then` once, invoke the captured method with its original receiver in a Promise job, and let a native Promise handle fulfillment and rejection. Synchronous boundaries throw `TypeError` immediately while observing the captured rejection. Task `result` is also read once, so completion notification and resource detachment consume the same captured result.
 
 ### `@dougongjs/platform`
 

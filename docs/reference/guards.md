@@ -87,6 +87,8 @@ pnpm check
 | Platform 终态错误必须复用 Core `RecordedFailure` | 两套终态诊断记录语义 |
 | 声明边界必须用 `normalizePlainRecord`，不得恢复旧断言接口 | 校验原对象后仍由原对象的属性读取决定字段 |
 | Service 查找只消费归一化 requirement，不重读原包装 | optional 语义与实际 Service 身份分叉 |
+| 异步结果边界必须一次捕获 then，不保留布尔判定后重读的路径 | 实际观察另一个异步分支，漏掉原始拒绝 |
+| Observation 不得重读 runner.result | 未完成 Task 被另一个完成结果提前摘除 |
 | Platform 声明捕获必须复用 Core `normalizePlainRecord` | 两套普通数据 record 捕获与校验语义 |
 | Host 必须把安装声明与句柄权限委托给 `InstallationRegistry` | Host 重新变成总类 |
 | Platform 结构协调必须把激活委托给 `Activator` | 第二条依赖激活路径 |

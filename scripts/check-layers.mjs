@@ -192,6 +192,16 @@ const SOURCE_RULES = [
 // Checks scoped to one file, keyed by that file's madge path.
 const FILE_RULES = [
   {
+    matches: (file) => /^(?:core|reactive)\/src\/sync-result\.ts$/.test(file),
+    test: (source) => /\bisThenable\b|Promise\.resolve\(value\)/.test(source),
+    message: "Async result boundaries must capture then once before observation or rejection",
+  },
+  {
+    matches: (file) => file === "reactive/src/observe.ts",
+    test: (source) => /\brunner\.result\b/.test(source),
+    message: "Observation must consume the captured Task completion without rereading its result",
+  },
+  {
     matches: (file) => file === "core/src/engine.ts",
     test: (source) => /\bisOptionalService\b|\brequirement\.service\b/.test(source),
     message: "Service lookups must consume a normalized requirement without rereading public input",

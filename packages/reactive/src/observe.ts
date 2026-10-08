@@ -5,7 +5,7 @@ import {
   type Disposable,
   type Readable,
 } from "./protocol";
-import { assertSynchronous, isThenable } from "./sync-result";
+import { assertSynchronous, captureThenable } from "./sync-result";
 
 // `observe()` — the bridge between a changing value and structured ownership.
 //
@@ -24,7 +24,7 @@ import { assertSynchronous, isThenable } from "./sync-result";
 // rapid changes must not overlap two teardowns — the loop guarantees the previous
 // lifetime is fully gone before the next observer call.
 //
-// The `assert*` helpers at the bottom check the owner's return values because the
+// The return-value checks at the bottom validate the owner's protocol because the
 // owner is a caller-supplied object. A `lifetime()` that returns something
 // undisposable would leak silently, so it is rejected at the boundary instead.
 
@@ -83,9 +83,9 @@ class Observation<T, Child extends AsyncDisposable> {
     this.#createCurrent();
 
     const runner = owner.spawn((signal) => this.#drain(signal));
-    assertObservationTask(runner);
+    const result = captureObservationTaskResult(runner);
     this.#drainTask = runner;
-    void runner.result.then(
+    void result.then(
       () => this.#releaseDrainTask(runner),
       () => this.#releaseDrainTask(runner),
     );
@@ -324,15 +324,17 @@ function assertAsyncDisposable(value: unknown, source: string): asserts value is
   }
 }
 
-function assertObservationTask(value: unknown): asserts value is ObservationTask {
-  if (
-    !value ||
-    typeof (value as ObservationTask).dispose !== "function" ||
-    typeof (value as ObservationTask)[asyncDisposeSymbol] !== "function" ||
-    !isThenable((value as ObservationTask).result)
-  ) {
+function captureObservationTaskResult(value: unknown): Promise<unknown> {
+  const result =
+    value &&
+    typeof (value as ObservationTask).dispose === "function" &&
+    typeof (value as ObservationTask)[asyncDisposeSymbol] === "function"
+      ? captureThenable((value as ObservationTask).result)
+      : undefined;
+  if (!result) {
     throw new TypeError("ObservationOwner.spawn() must return an ObservationTask");
   }
+  return result;
 }
 
 function disposeSubscription(subscription: Disposable) {

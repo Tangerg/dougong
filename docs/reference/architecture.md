@@ -65,6 +65,8 @@ Host 与 Platform 诊断通过 SnapshotPublisher 的 reader 构造集合。publi
 | ChangeSet 是否允许追加操作 | 各草稿的当前阶段 | 输入读取前的检查不能授权读取后的写入；暂存入口重新读取唯一阶段 |
 | 已接受的声明字段 | normalizePlainRecord 返回的冻结 record | Core 与 Platform 只消费同一份捕获数据，不让原对象的属性读取重新决定字段 |
 | requirement 的 optional 语义与 Contract 身份 | Contract 归一化返回的冻结 requirement | Plugin 与 Host 查找消费捕获结果，不再先判定包装再读取原 Service |
+| 已接纳异步结果的完成协议 | 一次捕获的 then 方法及其接收者 | 原生 Promise 执行捕获的协议，不重读原对象选择另一个结果 |
+| Observation Task 的完成结果 | 接纳 Task 时一次捕获的 result | 观察据此摘除 Task，不让第二次属性读取提前释放任务绑定 |
 | Lifetime 操作授权 | Lifetime 当前阶段与 signal | 先捕获外部 Contract 身份，再授予当前操作；InstanceCoordinator 只消费已捕获的身份数据 |
 | Lifetime 阶段与资源、子级成员关系 | Lifetime 状态和实际拥有集合 | 诊断读取阶段、Set.size 与真实子树，不保存镜像树或计数 |
 | Event listener 的发布可见性 | EventHub 成员集合 | ListenerRegistration 只保存回调与可撤销资源绑定 |
@@ -97,6 +99,8 @@ Core 不导入 reactive。二者通过结构化 `get()/subscribe()` 和 Lifetime
 `Disposable` / `AsyncDisposable` 等极小协议会在两个基础包中分别声明。它们不携带状态或实现，TypeScript 依靠结构类型互通。这是有意的协议声明重复，用来换取双向零依赖；单路径原则禁止的是重复状态机和执行语义，不是要求独立基础包共享一个类型来源。
 
 同步回调政策与运行时协议各有一份权威源码：`scripts/internal/sync-result.ts` 和 `scripts/internal/disposal-runtime.ts`。`pnpm generate:internal` 生成 Core 与 reactive 的对应模块，两个包分别内联这些投影，不新增共享运行时依赖；`pnpm check:generated` 拒绝偏离权威源码的生成结果。Promise 能力要求与释放 Symbol 的解析语义也只编辑一次源码，再生成两份发布投影。
+
+同步回调检查和 Observation Task 结果接纳共用 `captureThenable`：一次读取 `then`，在 Promise job 中用原接收者调用捕获的方法，由原生 Promise 处理完成和拒绝。同步边界立即抛出 `TypeError`，同时观察已捕获结果的拒绝；Task 的 `result` 也只读取一次，完成通知与资源摘除消费同一个捕获结果。
 
 ### `@dougongjs/platform`
 

@@ -169,6 +169,8 @@ interface ObservationOwner<Child extends AsyncDisposable = AsyncDisposable> {
 
 `ObservationOwner<Child>` 只要求 `Child extends AsyncDisposable`；`Observer` 仍接收推导出的具体 Child 类型，因此 Core Lifetime 在回调中的完整能力会保留。异步清理完成后，`observe()` 重新读取 source，只为最新值创建资源。A 清理期间发生 A → B → C 变化时，观察结果为 A → C。
 
+`observe()` 接纳 `spawn()` 返回的 Task 时只读取一次 `result`，并捕获该结果的 `then` 方法。后续只依据这一完成结果摘除 Task，直到完成或主动释放前都保留任务的释放能力。
+
 若第三方 source 在 `subscribe()` 返回前关闭了观察，`observe()` 会立即释放刚返回的订阅并拒绝构造，避免订阅落在释放过程之外；该订阅的释放失败也会同步交给调用方。
 
 `Readable` 订阅的 dispose 必须同步撤销订阅。构造回滚、主动释放和失败停止共用这一边界；返回 thenable 会被观察并以 `TypeError` 拒绝，不会等待它后才释放子 Lifetime 或任务。其他清理仍会执行，失败与原始错误一起聚合。

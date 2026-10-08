@@ -87,6 +87,8 @@ Constraints the type system cannot express but source text can decide. Two kinds
 | Platform terminal failures must reuse Core `RecordedFailure` | Two terminal diagnostic recording protocols |
 | Declaration boundaries must use `normalizePlainRecord` without restoring the former assertion API | Validating an object but still letting its ordinary property reads select fields |
 | Service lookup consumes a normalized requirement without rereading the original wrapper | Optionality and the actual Service identity diverging |
+| Async result boundaries capture then once without a check followed by another read | Observing a different asynchronous branch and missing the original rejection |
+| Observation cannot reread runner.result | A different completion result detaching an unfinished Task |
 | Platform declaration capture must reuse Core `normalizePlainRecord` | Two plain-data-record capture and validation semantics |
 | Host must delegate declarations and handle authority to `InstallationRegistry` | Host becoming a god object again |
 | Platform structural coordination must delegate activation to `Activator` | A second dependency-activation path |

@@ -169,6 +169,8 @@ The result is a dependency direction that stays one-way: `reactive` does not dep
 
 `ObservationOwner<Child>` only requires `Child extends AsyncDisposable`; `Observer` still receives the concrete child type, so a Core Lifetime retains all its capabilities in the callback. After asynchronous cleanup, `observe()` reads the source again and creates resources only for that latest value. Changes A → B → C while A is cleaning up produce A → C observations.
 
+When accepting the Task returned by `spawn()`, `observe()` reads `result` once and captures that result's `then` method. Only this completion can detach the Task; its disposal capability is retained until completion or explicit disposal.
+
 If a third-party source closes the observation before `subscribe()` returns, `observe()` immediately disposes that subscription and rejects construction. A failure of the subscription’s disposer also reaches the caller synchronously.
 
 A Readable subscription's dispose must withdraw it synchronously. Construction rollback, explicit disposal and failure stopping share this boundary: a returned thenable is observed and rejected with TypeError, and cannot delay the release of child Lifetimes or tasks. Other cleanup still runs, with failures aggregated alongside the original error.

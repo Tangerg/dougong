@@ -7,18 +7,24 @@
 // it is wrong.
 //
 export function assertSynchronous(value: unknown, message: string): void {
-  if (!isThenable(value)) return;
+  const pending = captureThenable(value);
+  if (!pending) return;
 
   // The synchronous TypeError below is the public outcome of this boundary.
   // Observe the rejected thenable as well so the rejected implementation
   // detail cannot escape later as an unrelated unhandled rejection.
-  void Promise.resolve(value).catch(() => undefined);
+  void pending.catch(() => undefined);
   throw new TypeError(message);
 }
 
-// Duck-typed rather than `instanceof Promise`: a thenable from another realm, or
-// any custom implementation, still has to be caught here.
-export function isThenable(value: unknown): value is PromiseLike<unknown> {
-  if (value === null || (typeof value !== "object" && typeof value !== "function")) return false;
-  return typeof (value as { readonly then?: unknown }).then === "function";
+// Capture the protocol once, including custom and foreign-realm thenables.
+// Invoke in a Promise job with the original receiver; assimilation must not
+// reread a getter that can select another asynchronous outcome.
+export function captureThenable(value: unknown): Promise<unknown> | undefined {
+  if (value === null || (typeof value !== "object" && typeof value !== "function")) return;
+  const then = (value as { readonly then?: unknown }).then;
+  if (typeof then !== "function") return;
+  return Promise.resolve().then(
+    () => new Promise<unknown>((resolve, reject) => Reflect.apply(then, value, [resolve, reject])),
+  );
 }
