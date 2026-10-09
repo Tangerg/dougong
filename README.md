@@ -87,7 +87,7 @@ Signal 不是第五种能力。`@dougongjs/reactive` 提供 `signal()` / `comput
 | [`dougong`](./packages/dougong) | 门面，re-export 下面三个 | 三个内部包 |
 | [`@dougongjs/core`](./packages/core) | 六个原子、依赖图、事务、Group、诊断 | `@standard-schema/spec` |
 | [`@dougongjs/reactive`](./packages/reactive) | Signal 值层与 `observe()` | **无** |
-| [`@dougongjs/platform`](./packages/platform) | Manifest、Loader、权限、懒激活、HMR | core、zod、compare-versions |
+| [`@dougongjs/platform`](./packages/platform) | Manifest、Loader、权限、懒激活、HMR | core、zod、semver |
 
 `core` 与 `reactive` 是互不依赖的基础层；`platform` 只依赖 `core`；`dougong` 只是组合入口。这条方向由 CI 的架构门禁强制。
 

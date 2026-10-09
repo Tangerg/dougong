@@ -90,7 +90,7 @@ A signal is not a fifth capability. `@dougongjs/reactive` provides `signal()` / 
 | [`dougong`](./packages/dougong) | Facade re-exporting the three below | the three internal packages |
 | [`@dougongjs/core`](./packages/core) | The six atoms, dependency graph, transactions, Groups, diagnostics | `@standard-schema/spec` |
 | [`@dougongjs/reactive`](./packages/reactive) | Signal value layer and `observe()` | **none** |
-| [`@dougongjs/platform`](./packages/platform) | Manifests, loaders, permissions, lazy activation, HMR | core, zod, compare-versions |
+| [`@dougongjs/platform`](./packages/platform) | Manifests, loaders, permissions, lazy activation, HMR | core, zod, semver |
 
 `core` and `reactive` are mutually independent foundations; `platform` depends only on `core`; `dougong` is just the composition entry point. That direction is enforced by an architecture gate in CI.
 
