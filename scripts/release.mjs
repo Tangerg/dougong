@@ -8,7 +8,8 @@
 // from the wrong exit code and nobody looked inside the tarball. So this script
 // refuses to trust anything it has not verified itself:
 //
-//   * a clean tree that matches origin, so the published commit is the pushed one
+//   * a clean tree at origin, or its exact unfinished version commit, so recovery
+//     cannot push unrelated source changes
 //   * the full `pnpm check`, whose exit code is read directly, never through a pipe
 //   * `npm pack` tarballs extracted and inspected, because listing a tarball with
 //     glob flags is not portable and silently reported "clean" once before
@@ -139,6 +140,7 @@ const PACKAGES = PACKAGE_DIRECTORIES.map((dir) => {
 });
 const packageNames = new Set(PACKAGES.map(({ name }) => name));
 if (packageNames.size !== PACKAGES.length) fail("Release package names must be unique");
+const manifestFiles = PACKAGES.map(({ dir }) => manifestPath(dir));
 
 const current = readManifest(PACKAGES[0].dir).version;
 console.log(`\nDougong release: ${current} → ${version}${dryRun ? "  (dry run)" : ""}`);
@@ -153,7 +155,7 @@ step("Verifying repository state");
 const branch = capture("git", ["rev-parse", "--abbrev-ref", "HEAD"]);
 if (branch !== "main") fail(`on branch '${branch}'; releases are cut from main`);
 
-if (capture("git", ["status", "--porcelain"])) {
+if (capture("git", ["status", "--porcelain", "--untracked-files=all"])) {
   fail("working tree is not clean; commit or stash first");
 }
 
@@ -161,17 +163,53 @@ run("git", ["fetch", "--quiet", "origin", "main"]);
 const ahead = capture("git", ["rev-list", "--count", "origin/main..HEAD"]);
 const behind = capture("git", ["rev-list", "--count", "HEAD..origin/main"]);
 if (behind !== "0") fail(`local main is ${behind} commit(s) behind origin/main`);
-if (ahead !== "0") fail(`local main is ${ahead} commit(s) ahead of origin/main; push first`);
+
+// Git owns the release record. A failed tag or push leaves this exact version
+// commit, not an independent recovery marker or a second release state machine.
+function isPendingReleaseCommit() {
+  if (ahead !== "1") return false;
+  if (capture("git", ["show", "-s", "--format=%B", "HEAD"]) !== `chore: release ${version}`) {
+    return false;
+  }
+  const parents = capture("git", ["rev-list", "--parents", "-n", "1", "HEAD"]).split(" ");
+  if (parents.length !== 2 || parents[1] !== capture("git", ["rev-parse", "origin/main"])) {
+    return false;
+  }
+  const changed = capture("git", ["diff", "--name-only", "origin/main", "HEAD"]).split("\n");
+  if (changed.some((file) => !PACKAGES.some(({ dir }) => file === `${dir}/package.json`))) {
+    return false;
+  }
+  return PACKAGES.every(({ dir }) => {
+    const previous = JSON.parse(capture("git", ["show", `origin/main:${dir}/package.json`]));
+    previous.version = version;
+    return readFileSync(manifestPath(dir), "utf8") === `${JSON.stringify(previous, null, 2)}\n`;
+  });
+}
+
+const pendingReleaseCommit = isPendingReleaseCommit();
+if (ahead !== "0" && !pendingReleaseCommit) {
+  fail(`local main is ${ahead} commit(s) ahead of origin/main; push first`);
+}
 
 const tag = `v${version}`;
-if (capture("git", ["tag", "--list", tag])) fail(`tag ${tag} already exists`);
+const head = capture("git", ["rev-parse", "HEAD"]);
+const hasTag = Boolean(capture("git", ["tag", "--list", tag]));
+if (
+  hasTag &&
+  (!PACKAGES.every(({ dir }) => readManifest(dir).version === version) ||
+    capture("git", ["cat-file", "-t", `refs/tags/${tag}`]) !== "tag" ||
+    capture("git", ["rev-parse", `refs/tags/${tag}^{commit}`]) !== head)
+) {
+  fail(`tag ${tag} already exists but does not record this release`);
+}
 console.log(
-  `  main is clean and equals origin/main at ${capture("git", ["rev-parse", "--short", "HEAD"])}`,
+  `  main is clean${pendingReleaseCommit ? "; resuming its release record" : " and equals origin/main"} at ${head}`,
 );
 
 // 3 · Registry state
 //
-// Checked before the gate so a duplicate version fails in seconds, not minutes.
+// Capture publication facts before packaging. Even a fully uploaded release
+// must compare every artifact before it can finish recording the release.
 
 step("Verifying registry state");
 
@@ -215,8 +253,8 @@ const alreadyPublished = new Set();
 for (const { name } of PACKAGES) {
   if (registryHasVersion(name)) alreadyPublished.add(name);
 }
-if (alreadyPublished.size === PACKAGES.length) {
-  fail(`${version} is already published for every package`);
+if ((pendingReleaseCommit || hasTag) && alreadyPublished.size !== PACKAGES.length) {
+  fail("Git records this release but not every package is published; refusing to advance it");
 }
 if (alreadyPublished.size) {
   console.log(`  resuming: ${[...alreadyPublished].join(", ")} already at ${version}`);
@@ -245,8 +283,17 @@ step("Bumping versions");
 const originalManifests = new Map(
   PACKAGES.map(({ dir }) => [dir, readFileSync(manifestPath(dir))]),
 );
+let recordingIndex = false;
 
 function restoreManifests() {
+  if (recordingIndex) {
+    // A command may report failure after committing. Never roll back a Git
+    // fact using the process exit code as a competing source of truth.
+    if (capture("git", ["rev-parse", "HEAD"]) !== head) {
+      originalManifests.clear();
+      return false;
+    }
+  }
   const originals = [...originalManifests];
   originalManifests.clear();
   const errors = [];
@@ -257,7 +304,15 @@ function restoreManifests() {
       errors.push(new Error(`Could not restore ${dir}/package.json`, { cause }));
     }
   }
+  if (recordingIndex) {
+    try {
+      capture("git", ["restore", "--staged", "--", ...manifestFiles]);
+    } catch (cause) {
+      errors.push(new Error("Could not restore the staged release manifests", { cause }));
+    }
+  }
   if (errors.length) throw new AggregateError(errors, "Release manifest restoration failed");
+  return true;
 }
 
 process.on("exit", (code) => {
@@ -277,8 +332,12 @@ for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) {
   process.on(signal, () => {
     if (originalManifests.size) {
       try {
-        restoreManifests();
-        console.error("\n  interrupted — package.json versions restored");
+        const restored = restoreManifests();
+        console.error(
+          restored
+            ? "\n  interrupted — package.json versions restored"
+            : `\n  interrupted — release commit preserved; re-run pnpm release ${version}`,
+        );
       } catch (error) {
         console.error(error);
       }
@@ -491,11 +550,15 @@ for (const { name } of PACKAGES) {
 
 step("Recording the release");
 
+recordingIndex = true;
+run("git", ["add", ...manifestFiles]);
+const staged = spawnSync("git", ["diff", "--cached", "--quiet"], { stdio: "inherit" });
+if (staged.error) fail(`Cannot inspect staged release manifests: ${staged.error.message}`);
+if (staged.status === 1) run("git", ["commit", "-m", `chore: release ${version}`]);
+else if (staged.status !== 0) fail(`Cannot inspect staged release manifests (${staged.status})`);
 originalManifests.clear();
-run("git", ["add", ...PACKAGES.map(({ dir }) => manifestPath(dir))]);
-run("git", ["commit", "-m", `chore: release ${version}`]);
-run("git", ["tag", "-a", tag, "-m", `Dougong ${version}`]);
-run("git", ["push", "origin", "main", "--follow-tags"]);
+if (!hasTag) run("git", ["tag", "-a", tag, "-m", `Dougong ${version}`]);
+run("git", ["push", "--atomic", "--no-follow-tags", "origin", "main", `refs/tags/${tag}`]);
 
 rmSync(stage, { recursive: true, force: true });
 

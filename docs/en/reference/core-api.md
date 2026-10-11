@@ -462,7 +462,7 @@ render()
 
 The view may be created before startup and keeps its identity across stop/start. It exposes committed snapshots only, and the caller owns the subscription `Disposable`. The call also records the Contract ID as an ExtensionPoint identity, so another Contract kind cannot later reuse that ID in the same Host. Plugins still obtain Lifetime-bound views only through `requires`. That stable identity across restarts also means retaining the view intentionally retains its Host observation chain; let it leave scope with the Host rather than placing it in a longer-lived global cache.
 
-The snapshot is a genuinely read-only map with no `set/delete/clear`. Object identity is preserved when nothing changes, and a new snapshot is created when a change commits. However many times one ExtensionPoint changes inside a single Core ChangeSet, it notifies exactly once.
+The snapshot is a genuinely read-only map with no `set/delete/clear`. Object identity is preserved when entry iteration order and every value's identity are unchanged, and a new snapshot is created when a change commits. Publication order belongs only to ContributionStore; snapshots project that order, so an order change publishes a new snapshot even if all keys and values stay equal. However many times one ExtensionPoint changes inside a single Core ChangeSet, it notifies exactly once.
 
 A ContributionView is a live capability owned by the Plugin Lifetime, not a store reference that can leak permanently. After an Instance stops, the old view's `get/subscribe` refuse to work and sever the store reference; a new Instance receives a new view. The view's public `get/subscribe` come from a narrow facade holding only a revocable binding — an arrow function created inside a store method scope must not implicitly capture the store. This boundary differs from the treatment of an old Service closure: a Service is an ordinary value resolved once, while a ContributionView keeps observing committed contributions.
 
@@ -845,7 +845,7 @@ host.diagnostics.get()
 host.diagnostics.subscribe(notify)
 ```
 
-A snapshot contains the Host name/status/revision, an `InstallationSnapshot` map and a `GroupSnapshot` map. When an entry carries its latest failure, `error` is precisely typed as `Error` because the state machine has already classified non-Error values before publishing diagnostics. The snapshot, its entries, arrays and maps are all read-only; diagnostics cannot control the Host.
+A snapshot contains the Host name/status/revision, an `InstallationSnapshot` map and a `GroupSnapshot` map. When an entry carries its latest failure, `error` is a `RecordedFailure` containing only frozen, bounded diagnostic data without retaining the original error's object graph. The snapshot, its entries, arrays and maps are all read-only; diagnostics cannot control the Host.
 
 A running `InstallationSnapshot` also carries an independent `lifetime` observation view:
 

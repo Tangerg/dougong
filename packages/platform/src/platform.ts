@@ -145,6 +145,7 @@ class PlatformImpl<Reference> implements Platform<Reference> {
         if (platform) platform.#publish();
       },
       change: () => requirePlatform(authority).change(),
+      settled: () => requirePlatform(authority).#changeQueue.settled,
       activateRegistration: (registration, signal, permit) => {
         const platform = requirePlatform(authority);
         platform.#assertActive();

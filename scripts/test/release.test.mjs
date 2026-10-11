@@ -160,11 +160,12 @@ it("continues to verification only for an explicit missing version", () => {
   expect(result.stdout).toContain(`${version} is unused on the registry`);
 });
 
-it("recognizes an existing version before starting verification", () => {
+it("verifies a fully published version before finishing its release record", () => {
   const result = runRelease({ status: 0, stdout: JSON.stringify(version), plain: version });
   expect(result.status).toBe(1);
-  expect(result.gateStarted).toBe(false);
-  expect(result.stderr).toContain(`${version} is already published for every package`);
+  expect(result.gateStarted).toBe(true);
+  expect(result.queries).toHaveLength(4);
+  expect(result.stdout).toContain("resuming:");
 });
 
 it("queries the release identities captured from package manifests", () => {

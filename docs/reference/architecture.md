@@ -60,6 +60,7 @@ Host 与 Platform 诊断通过 SnapshotPublisher 的 reader 构造集合。publi
 | 已提交 Installation 成员关系 | InstallationRegistry | Group 查询、Host 诊断、候选图 |
 | Installation 声明、Instance 状态与控制绑定 | InstallationRecord | Installation facade、不可变图版本与诊断 |
 | Host 命令完成边界 | Host 的 SerialQueue | Installation / Group ready 等待同一边界 |
+| Platform 结构命令完成边界 | Platform 的 SerialQueue | Registration ready 与 Core 生命周期观察等待同一边界；不独立判定尚未提交的绑定变化 |
 | Group 附着与父子关系 | GroupNode | Group facade、结构诊断 |
 | Group 配置会话阶段 | GroupConfigurationSession | Group facade 读取，不自行推进 |
 | ChangeSet 是否允许追加操作 | 各草稿的当前阶段 | 输入读取前的检查不能授权读取后的写入；暂存入口重新读取唯一阶段 |
@@ -71,7 +72,7 @@ Host 与 Platform 诊断通过 SnapshotPublisher 的 reader 构造集合。publi
 | Lifetime 阶段与资源、子级成员关系 | Lifetime 状态和实际拥有集合 | 诊断读取阶段、Set.size 与真实子树，不保存镜像树或计数 |
 | Event listener 的发布可见性 | EventHub 成员集合 | ListenerRegistration 只保存回调与可撤销资源绑定 |
 | Contribution 当前值 | ContributionRecord | Store 快照与 ContributionView |
-| Contribution claim 与发布顺序 | ContributionStore | Record 请求发布，不保存发布阶段 |
+| Contribution claim 与发布顺序 | ContributionStore | Record 请求发布，不保存发布阶段；快照完整投影条目顺序和当前值 |
 | 冻结的终态错误记录 | RecordedFailure 私有 snapshot | 只读 getter、诊断与被丢弃句柄；原型继承不授予记录所有权 |
 | 外部拒绝值的 Error 识别 | Core isError | Platform 复用判定，只决定自己的业务错误码 |
 | 非 Error 包装的来源 | Core 归类路径登记的模块私有来源集合 | 外部错误原型及复制的 constructor 不授予重新归类权限 |
@@ -81,6 +82,8 @@ Host 与 Platform 诊断通过 SnapshotPublisher 的 reader 构造集合。publi
 | Lifetime 诊断 view | 同一 SnapshotPublisher | Instance 保存只读 view，释放执行绑定后仍读取同一终态投影 |
 | 已接受的配置校验问题字段 | ConfigValidationError 冻结的 issues | 第三方字段一次性捕获后验证与保存，不再重复读取 |
 | Registration 当前 Artifact | RegistrationRecord 的 authority | manifest getter 与诊断；终态仅保留不可变 Manifest |
+| 已发布包版本与内容 | npm 注册表 | 发布流程只读取和比对本地候选，查询失败不产生不存在的事实 |
+| 发布提交与标签 | Git 对象图 | 发布流程验证并推进同一记录，不另存恢复状态 |
 | 运行时 Promise 与释放 Symbol 规则 | scripts/internal/disposal-runtime.ts | Core / reactive 生成模块 |
 
 快照和缓存不能发起转换。命令先检查目标身份，再交给拥有者推进；终态记录保留数据并释放控制、回调和载荷引用。

@@ -462,7 +462,7 @@ render()
 
 该视图可在启动前创建，并跨 stop/start 保持身份；它只呈现已提交快照，订阅的 `Disposable` 由调用方所有。调用同时把 Contract ID 作为 ExtensionPoint 身份登记，因此同一 Host 后续不能用另一种 Contract kind 复用该 ID。Plugin 内部仍只能通过 `requires` 获取受 Lifetime 约束的视图。跨重启的稳定身份也意味着保留该 View 会有意保留所属 Host 的观察链路；应用应让它与 Host 一同退出作用域，而不是把它放进更长寿的全局缓存。
 
-快照是真正只读的 Map，没有 `set/delete/clear`。无变化时保持对象身份；提交变化时创建新快照。一次 Core ChangeSet 内同一 ExtensionPoint 无论改变多少次，只通知一次。
+快照是真正只读的 Map，没有 `set/delete/clear`。条目迭代顺序与每个值的身份都未变化时保持对象身份；提交变化时创建新快照。发布顺序仅在 ContributionStore 中保存，快照按同一顺序投影，即使 key 和值相同，仅顺序改变也会发布新快照。一次 Core ChangeSet 内同一 ExtensionPoint 无论改变多少次，只通知一次。
 
 ContributionView 是 Plugin Lifetime 拥有的 live capability，而不是可永久泄漏的 Store 引用。Instance 停止后，旧 View 的 `get/subscribe` 会拒绝使用并切断对 Store 的引用；新 Instance 会获得新 View。View 的公开 `get/subscribe` 由只持有可撤销 binding 的窄 facade 提供，不能用在 Store 方法作用域中创建的箭头函数暗中捕获 Store。这个边界与旧 Service 闭包的处理不同：Service 是一次解析出的普通值，ContributionView 则持续观察已提交贡献。
 
@@ -845,7 +845,7 @@ host.diagnostics.get()
 host.diagnostics.subscribe(notify)
 ```
 
-快照包含 Host name/status/revision、InstallationSnapshot Map 和 GroupSnapshot Map。若条目含最近失败，其 `error` 精确标注为 `Error`，因为状态机已经在写入诊断前完成非 Error 值的分类。快照、条目、数组与 Map 都只读；诊断不能控制 Host。
+快照包含 Host name/status/revision、InstallationSnapshot Map 和 GroupSnapshot Map。若条目含最近失败，其 `error` 为 `RecordedFailure`，只保存冻结、有界的诊断数据，不保留原异常的对象图。快照、条目、数组与 Map 都只读；诊断不能控制 Host。
 
 运行中的 `InstallationSnapshot` 还包含一份独立的 `lifetime` 观察视图：
 

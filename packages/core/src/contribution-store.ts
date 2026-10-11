@@ -311,19 +311,21 @@ export class ContributionStore<T> {
 
   /**
    * Rebuilds the published snapshot, and does nothing when the result would be
-   * equal by identity per key. A change that adds and removes the same entry —
-   * an Instance restarting with an identical contribution — therefore notifies
-   * nobody, instead of waking every observer to hand them what they already had.
+   * equal by entry order and value identity. An Instance restart that restores
+   * the same ordered entries therefore notifies nobody, instead of waking every
+   * observer to hand them what they already had.
    */
   publishSnapshot() {
     const nextEntries = [...this.#claims].flatMap(([key, claim]) =>
       claim.published ? [[key, claim.contribution.value] as const] : [],
     );
+    const previousEntries = this.#snapshot.entries();
     const unchanged =
       nextEntries.length === this.#snapshot.size &&
-      nextEntries.every(
-        ([key, value]) => this.#snapshot.has(key) && Object.is(this.#snapshot.get(key), value),
-      );
+      nextEntries.every(([key, value]) => {
+        const previous = previousEntries.next().value;
+        return previous !== undefined && previous[0] === key && Object.is(previous[1], value);
+      });
     if (unchanged) return;
 
     this.#snapshot = new ReadonlyMapSnapshot(nextEntries);

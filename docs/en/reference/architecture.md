@@ -60,6 +60,7 @@ Mutable owners and projections are separated for each fact:
 | Committed Installation membership | InstallationRegistry | Group queries, Host diagnostics and candidate graphs |
 | Installation declaration, Instance state and control binding | InstallationRecord | Installation facade, immutable graph versions and diagnostics |
 | Host command completion boundary | Host's SerialQueue | Installation / Group ready await the same boundary |
+| Platform structural command completion boundary | Platform's SerialQueue | Registration ready and Core lifecycle observation await the same boundary instead of independently classifying uncommitted binding changes |
 | Group attachment and parent-child relationships | GroupNode | Group facade and structural diagnostics |
 | Group configuration phase | GroupConfigurationSession | Group facade reads it without advancing it independently |
 | Permission to append ChangeSet operations | Each draft's current phase | A check before input reads cannot authorize later writes; staging reads the sole phase again |
@@ -71,7 +72,7 @@ Mutable owners and projections are separated for each fact:
 | Lifetime phase and resource / child membership | Lifetime state and actual ownership sets | Diagnostics read phase, Set.size and the real subtree without mirrored nodes or counters |
 | Event listener publication visibility | EventHub membership | ListenerRegistration holds only its callback and revocable resource binding |
 | Current Contribution value | ContributionRecord | Store snapshots and ContributionView |
-| Contribution claims and publication order | ContributionStore | Record requests publication without storing a publication phase |
+| Contribution claims and publication order | ContributionStore | Record requests publication without storing a publication phase; snapshots project the complete entry order and current values |
 | Frozen terminal failure record | RecordedFailure private snapshot | Read-only getter, diagnostics and discarded handles; prototype inheritance grants no record authority |
 | Error recognition for external rejection values | Core isError | Platform reuses the predicate and chooses only its business error code |
 | Non-Error wrapper provenance | Module-private provenance set registered by Core normalization | External error prototypes and copied constructors grant no reclassification authority |
@@ -81,6 +82,8 @@ Mutable owners and projections are separated for each fact:
 | Lifetime diagnostic view | The same SnapshotPublisher | Instance retains a read-only view and reads the same terminal projection after the execution binding is released |
 | Accepted configuration issue fields | ConfigValidationError frozen issues | Capture third-party fields once, then validate and store those values |
 | Current Registration Artifact | RegistrationRecord authority | Manifest getter and diagnostics; terminal state retains only immutable Manifest data |
+| Published package versions and contents | npm registry | Release execution reads and compares local candidates; failed queries cannot establish absence |
+| Release commits and tags | Git object graph | Release execution validates and advances the same record without a separate recovery state |
 | Promise and disposal Symbol runtime rules | scripts/internal/disposal-runtime.ts | Generated Core / reactive modules |
 
 Snapshots and caches cannot originate transitions. Commands validate target identity before asking the owner to advance it; terminal records retain data while releasing control, callbacks and payload references.

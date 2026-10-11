@@ -166,7 +166,7 @@ Platform 将 `config` 原样交给 Core，包括 Promise 与 thenable 载荷，�
 
 signal 已 aborted 后，取消加载只把与 `signal.reason` 相同的值或明确的 `AbortError` 识别为取消结果。Loader 仅仅在 abort 后抛出的其他错误仍保留为 `MODULE_LOAD_FAILED` 及其 `cause`，不会被竞态中的取消原因覆盖。
 
-`ready()` 在 `pending` / `registered` / `loading` 时等待首次激活及 Core ready barrier；在 `installed` 时委托当前 Core Installation；在 `unavailable` / `failed` / `removed` 时立即拒绝。一次失败的等待不会因以后重试自动复活，重试成功后应重新调用 `ready()`。
+`ready()` 先等待调用时已经提交的 Platform 结构命令完成，再读取 Registration 的当前状态：在 `pending` / `registered` / `loading` 时等待首次激活及 Core ready barrier；在 `installed` 时委托当前 Core Installation；在 `unavailable` / `failed` / `removed` 时拒绝。更新的授权、预加载与 Core 提交共用这一个命令边界，不能在预加载期间把旧 Instance 的 readiness 当作更新完成。Core 生命周期通知也在同一边界之后判断当前 Installation 绑定；主动撤掉未激活的 placeholder 不会使仍有效的激活等待失败，外部删除当前 Installation 仍会拒绝等待。一次失败的等待不会因以后重试自动复活，重试成功后应重新调用 `ready()`。
 
 ## 六、Manifest 依赖与激活条件
 

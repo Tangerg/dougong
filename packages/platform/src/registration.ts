@@ -11,6 +11,7 @@ import type { ActivationPermit } from "./activation-gate";
 
 export interface RegistrationPort<Reference> {
   readonly change: () => PlatformChangeSet<Reference>;
+  readonly settled: () => Promise<void>;
   readonly notifyChanged: () => void;
   readonly activateRegistration: (
     registration: RegistrationRecord<Reference>,
@@ -176,6 +177,13 @@ export class RegistrationRecord<Reference> {
   }
 
   ready() {
+    const boundary = this.#grantedAuthority()?.port.settled();
+    return boundary
+      ? boundary.then(() => this.#readyFromCurrentState())
+      : this.#readyFromCurrentState();
+  }
+
+  #readyFromCurrentState() {
     if (this.status === "unavailable") return Promise.reject(this.unavailableError());
     const state = this.#state;
     if (state.phase === "loaded") {
@@ -333,8 +341,13 @@ export class RegistrationRecord<Reference> {
     rejectUnavailable();
     if (!installation || installation.status === "removed" || !authority) return;
     this.#installationSubscription = installation.diagnostics.subscribe(() => {
-      rejectUnavailable();
-      authority.port.notifyChanged();
+      // Core may remove a placeholder before the Platform commits its new
+      // Artifact. Classify the current binding after that structural command,
+      // rather than treating an intermediate Core projection as a delivery failure.
+      void authority.port.settled().then(() => {
+        rejectUnavailable();
+        authority.port.notifyChanged();
+      });
     });
   }
 

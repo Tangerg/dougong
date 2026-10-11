@@ -166,7 +166,7 @@ Installation existence is owned by Core. Platform records whether the external P
 
 After the signal is aborted, only the exact `signal.reason` or an explicit `AbortError` is classified as a cancellation outcome. Another Loader error that merely occurs after abort remains a `MODULE_LOAD_FAILED` with its original `cause`; a racing cancellation reason never overwrites it.
 
-`ready()` waits for the first activation and the Core ready barrier while `pending` / `registered` / `loading`; delegates to the current Core Installation while `installed`; and rejects immediately while `unavailable` / `failed` / `removed`. A failed wait is not revived by a later retry — call `ready()` again after a successful retry.
+`ready()` first awaits Platform structural commands already submitted when it is called, then reads the Registration's current state. It waits for the first activation and the Core ready barrier while `pending` / `registered` / `loading`, delegates to the current Core Installation while `installed`, and rejects while `unavailable` / `failed` / `removed`. Authorization, preloading and Core commit share this command boundary: readiness of the old Instance during preloading cannot stand for completion of the update. Core lifecycle notifications also evaluate the current Installation binding after this boundary. Withdrawing an inactive placeholder therefore preserves pending activation readiness, while external removal of the current Installation still rejects it. A failed wait is not revived by a later retry — call `ready()` again after a successful retry.
 
 ## 6. Manifest dependencies and activation conditions
 

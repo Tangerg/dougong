@@ -142,6 +142,30 @@ describe("ContributionStore invariants", () => {
     expect(secondStore.snapshot().get("owner/item")).toBe(2);
   });
 
+  it("publishes a changed iteration order even when every key retains the same value", () => {
+    const registry = new ContributionRegistry(() => undefined);
+    const token = extensionPoint<number>("contribution/reordered");
+    const store = registry.get<number>(token);
+    const view = store.hostView();
+    const first = store.stage("owner", "first", 1, () => undefined);
+    const second = store.stage("owner", "second", 2, () => undefined);
+    first.publish();
+    second.publish();
+    const before = view.get();
+    const seen: string[][] = [];
+    const subscription = view.subscribe(() => seen.push([...view.get().keys()]));
+
+    registry.beginBatch();
+    first.dispose();
+    store.stage("owner", "first", 1, () => undefined).publish();
+    registry.endBatch();
+
+    expect([...view.get().keys()]).toEqual(["owner/second", "owner/first"]);
+    expect(view.get()).not.toBe(before);
+    expect(seen).toEqual([["owner/second", "owner/first"]]);
+    subscription.dispose();
+  });
+
   it("releases a Store whose only claim was rejected, and keeps one that holds a claim", () => {
     const registry = new ContributionRegistry(() => undefined);
     const rejected = extensionPoint<number>("contribution/rejected-claim");
