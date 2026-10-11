@@ -16,7 +16,6 @@ import {
   type InstanceCoordinatorPort,
 } from "./instance-coordinator";
 
-/** Every execution terminal outcome carries the records whose readiness must settle. */
 export type TransitionOutcome =
   | { readonly kind: "committed"; readonly affected: ReadonlySet<InstallationRecord> }
   | {
@@ -27,14 +26,7 @@ export type TransitionOutcome =
 
 type ServiceAvailability = "available" | "unavailable";
 
-/**
- * Owns the committed plan and its commit, rollback and fail-closed transitions.
- *
- * `#plan` is the single definition of "committed". It is assigned only after an
- * activation succeeds and cleared whenever no consistent graph exists, so
- * `hasCommittedPlan` is the honest answer to whether this Host can serve reads —
- * there is no second flag that could disagree with it.
- */
+// Only a successfully activated plan permits committed reads; a separate flag could disagree.
 export class Engine {
   readonly #contracts = new ContractRegistry();
   readonly #instances: InstanceCoordinator;
@@ -102,20 +94,7 @@ export class Engine {
     return errors;
   }
 
-  /**
-   * The whole transaction, in the order the steps have to happen.
-   *
-   * Configs resolve and Contract identities draft *before* anything stops,
-   * because those are the failures that can still be taken back for free — a
-   * schema rejection at this point costs nothing. Once the affected Instances
-   * are down, every remaining failure has a price, and the only question left is
-   * whether the previous state can be restored.
-   *
-   * The whole body runs inside one contribution batch, so contributions
-   * withdrawn by stopping Instances and added by starting ones become visible in
-   * a single step. Without it, an ExtensionPoint observer would see the set
-   * briefly empty in the middle of a successful change.
-   */
+  // Validate before stopping to preserve live Instances on rejection. Batch publication to hide intermediate contributions.
   async transition(
     nextPlan: InstallationGraph,
     changed: ReadonlySet<InstallationRecord>,
@@ -123,8 +102,6 @@ export class Engine {
   ): Promise<TransitionOutcome> {
     return this.#instances.withContributionBatch(async () => {
       const previousPlan = this.#requirePlan();
-      // Dependents are affected too, in both plans: a Service being replaced
-      // takes down whatever consumed it, and whatever will consume it next.
       const affected = previousPlan.affectedByTransitionTo(nextPlan, changed);
       const nextConfigs = await this.#resolveConfigs(
         nextPlan,
@@ -160,10 +137,7 @@ export class Engine {
       } catch (changeError) {
         const nextStopErrors = await this.#instances.deactivate(affected);
         contracts.discard();
-        // Rollback is only attempted when the failed activation left nothing
-        // behind. If cleanup was incomplete, some Instance from the abandoned
-        // plan may still hold a resource, so restoring the previous one would
-        // run two owners of the same thing at once — fail closed instead.
+        // Incomplete cleanup can leave live resources, so rollback would risk two owners of the same resource.
         if (activationFailure?.cleanupIncomplete || nextStopErrors.length) {
           return this.#failClosed(
             new Set([...previousPlan.order, ...affected]),
@@ -197,14 +171,7 @@ export class Engine {
     }
   }
 
-  /**
-   * The last level: no consistent graph could be reached, so none is presented.
-   *
-   * Everything stops and `#plan` is cleared, which drops the Host to `idle` and
-   * closes reads. The AggregateError carries every cause — the original failure
-   * first, then whatever shutdown itself hit. Nothing is swallowed here; the
-   * point of failing closed is that the report is complete.
-   */
+  // Fail closed when recovery cannot establish a consistent graph; reads must not expose a partial result.
   async #failClosed(
     affected: ReadonlySet<InstallationRecord>,
     causes: ReadonlyArray<unknown>,
@@ -219,14 +186,7 @@ export class Engine {
     };
   }
 
-  /**
-   * Restores the previous plan using the configs captured before the change, not
-   * mutable records. Declaration versions belong to the plan; re-validating
-   * configs could fail for a second,
-   * unrelated reason while trying to recover from the first.
-   *
-   * A rollback that itself fails returns a fail-closed outcome for the entire graph.
-   */
+  // Rollback uses captured configs because revalidation could introduce a second failure during recovery.
   async #rollback(
     previousPlan: InstallationGraph,
     affected: ReadonlySet<InstallationRecord>,

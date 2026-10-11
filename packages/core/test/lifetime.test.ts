@@ -776,10 +776,6 @@ describe("structured lifetime", () => {
     await host.stop();
   });
 
-  // A child scope disposed during `setup()` detaches only once its own teardown
-  // drains, so publication finds it still attached. Failing there would turn an
-  // ordinary Plugin action — and every `observe()` whose source changes during
-  // setup — into a Host that refuses to start.
   it("publishes an Instance whose child scope is still disposing", async () => {
     const items = extensionPoint<string>("lifetime/disposing-child");
     const draining = Promise.withResolvers<void>();
@@ -804,8 +800,6 @@ describe("structured lifetime", () => {
     await expect(host.stop()).resolves.toBeUndefined();
   });
 
-  // The publication phase belongs to the Instance, not to each scope, so a scope
-  // opened after the activation committed must not re-stage what is already live.
   it("declares visibly at once from a scope created after publication", async () => {
     const late = extensionPoint<string>("lifetime/late-scope");
     let declareLate: (() => void) | undefined;

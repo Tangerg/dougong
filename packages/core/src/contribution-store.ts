@@ -1,32 +1,14 @@
-// ExtensionPoints: an open set that many Installations write into and anyone can
-// read. The bookkeeping here exists to answer one question — when is a store no
-// longer needed? — without ever leaving a live edge behind.
-//
-// Four kinds of reference keep a store alive: unpublished claims, published
-// entries, views handed to Instances, and subscriptions. When the last of them
-// goes and the Host is not holding a view of its own, the store disposes itself
-// and removes itself from the registry. An ExtensionPoint that nobody
-// contributes to or reads therefore costs nothing after its last user leaves.
-//
-// The layering is: ContributionRegistry (one store per ExtensionPoint id) owns
-// ContributionStore (claims and publication) which owns ContributionRecord (one
-// contribution's value and revocable resource binding).
+// Claims, entries, views and subscriptions keep a store alive independently; release requires all four to end.
 
 import type { Requirement } from "./contracts";
 import { ReadonlyMapSnapshot } from "./readonly-map";
 import { disposeSymbol, type Disposable, type Publication, type StagedResource } from "./resource";
 import { batchSnapshotNotifications, SnapshotPublisher, type SnapshotView } from "./snapshot-view";
 
-/** A contributed entry the contributor may update or withdraw — nobody else can. */
 export interface Contribution<T> extends Disposable {
   readonly update: (value: T) => void;
 }
 
-/**
- * The read side: a keyed map, not a list. Keys are `installationId/key`, so two
- * Installations contributing under the same local key stay distinct, and a
- * consumer can tell which Installation an entry came from.
- */
 export type ContributionView<T> = SnapshotView<ReadonlyMap<string, T>>;
 
 export type ContributionLeaseKind = "view" | "subscription";
@@ -54,8 +36,7 @@ class ContributionViewHandle<T> implements ContributionView<T> {
     Object.freeze(this);
   }
 
-  // The handle retains only revocable binding state. Disposing its lease clears
-  // the ContributionStore edge even when downstream code retains the public view.
+  // Revocable bindings prevent a retained view from keeping its disposed store alive.
   #read() {
     const binding = this.#requireBinding();
     return binding.store.snapshot();
@@ -188,10 +169,7 @@ export class ContributionStore<T> {
     value: T,
     release: (publication: Publication) => void,
   ): ContributionRecord<T> {
-    // The registry creates a Store for whichever reference asked for it, so a
-    // claim that never materializes leaves that Store at zero references without
-    // any release having happened. Liveness is checked wherever the count can
-    // reach zero, and a failed acquisition is one of those places.
+    // A failed claim can create a zero-reference store without a lease to release it.
     try {
       validateKey(key);
       const id = contributionId(installationId, key);
@@ -234,14 +212,7 @@ export class ContributionStore<T> {
     return new ContributionViewHandle(state);
   }
 
-  /**
-   * A stable view explicitly owned by the Host for graph-external consumers.
-   *
-   * Application code has no Lifetime to lease a view from, so this one is
-   * retained by the Host instead — which also pins the store open for as long as
-   * the Host lives. That is the trade: `host.contributions()` gives a handle that
-   * never goes stale, at the cost of a store that is no longer self-releasing.
-   */
+  // Host-owned views pin the store because application code has no Lifetime from which to lease one.
   hostView(): ContributionView<T> {
     this.#retainedByHost = true;
     return this.#publisher.view;
@@ -284,7 +255,6 @@ export class ContributionStore<T> {
     const claim = this.#requireClaim(id, contribution);
     if (claim.published) return;
     claim.published = true;
-    // Map iteration follows publication order, including claims staged earlier.
     this.#claims.delete(id);
     this.#claims.set(id, claim);
     this.#invalidate(this as ContributionStore<unknown>);
@@ -309,12 +279,7 @@ export class ContributionStore<T> {
     }
   }
 
-  /**
-   * Rebuilds the published snapshot, and does nothing when the result would be
-   * equal by entry order and value identity. An Instance restart that restores
-   * the same ordered entries therefore notifies nobody, instead of waking every
-   * observer to hand them what they already had.
-   */
+  // Snapshot equality includes entry order: reordered values can change consumer selection.
   publishSnapshot() {
     const nextEntries = [...this.#claims].flatMap(([key, claim]) =>
       claim.published ? [[key, claim.contribution.value] as const] : [],
@@ -340,9 +305,7 @@ export class ContributionStore<T> {
     return claim;
   }
 
-  // The self-release check. Every counter has to be at zero and the Host must
-  // not be holding a view; `#released` makes it run once, since disposing the
-  // publisher can re-enter through a subscription's own teardown.
+  // Seal release before disposing the publisher because disposal can reenter the release check.
   #notifyIfUnused() {
     if (
       this.#released ||
@@ -452,10 +415,7 @@ export class ContributionRegistry {
     this.#batchDepth++;
   }
 
-  // Depth-counted, so nested Host operations collapse into the outermost batch
-  // and publication happens exactly once. Every store's snapshot is attempted
-  // even if one of them throws, then the failures are aggregated — a single bad
-  // subscriber must not leave the remaining stores unpublished.
+  // Attempt every publication so one broken store cannot strand the others with stale snapshots.
   endBatch() {
     if (!this.#batchDepth) throw new Error("Contribution batch is not active");
     this.#batchDepth--;
@@ -499,10 +459,7 @@ function contributionId(installationId: string, key: string) {
   return `${escapeKeyPart(installationId)}/${escapeKeyPart(key)}`;
 }
 
-// Percent-escaped so the composed id is unambiguous: without it, installation
-// `a` with key `b/c` and installation `a/b` with key `c` would collide. `%` is
-// escaped first, or escaping `/` afterwards could produce a sequence that
-// decodes back to a different pair.
+// Escaping prevents different Installation/key pairs from producing the same contribution id.
 function escapeKeyPart(value: string) {
   return value.replaceAll("%", "%25").replaceAll("/", "%2F");
 }

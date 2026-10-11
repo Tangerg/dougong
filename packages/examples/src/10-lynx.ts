@@ -43,9 +43,7 @@ const workspaceState = (workspace: string) =>
   service<WorkspaceState>(`examples/lynx/workspaces/${encodeURIComponent(workspace)}/state`);
 const MAIN_WORKSPACE = workspaceState("main");
 
-// Uniqueness lives here, in application code, not in Core. An ExtensionPoint is
-// an open set by definition; "only one command may claim this id" is a policy
-// this workbench chose, and a different application may want the opposite.
+// Command uniqueness is application policy; enforcing it in Core would restrict unrelated contribution sets.
 function selectCommand(commands: ContributionView<Command>, id: string) {
   const matches = [...commands.get().values()].filter((command) => command.id === id);
   if (matches.length > 1) throw new TypeError(`Duplicate command '${id}'`);
@@ -67,11 +65,6 @@ function explorerPlugin(title: string, relativePath: string) {
   });
 }
 
-/**
- * A workbench. Two rules that applications usually get wrong are made explicit here:
- * command uniqueness is a domain policy, not a Core ExtensionPoint mode; and a
- * Group owns installations, so it is not a capability scope.
- */
 export async function lynxScenario(): Promise<ExampleResult> {
   let rootCatalog!: CommandCatalog;
   let workspacePanels!: ContributionView<Panel>;
@@ -120,9 +113,6 @@ export async function lynxScenario(): Promise<ExampleResult> {
       initialWorkspaceCommands = ctx.catalog.list().length;
     },
   });
-  // The placeholder contributes the command but no `run`, so the workbench can
-  // list and render it before anything is loaded. Choosing it is what activates
-  // the real module — the command exists in order to be the activation trigger.
   const placeholder = definePlugin({
     name: "examples.lynx.explorer",
     setup(ctx) {
@@ -139,10 +129,6 @@ export async function lynxScenario(): Promise<ExampleResult> {
   host.install(filesystemAdapter);
   host.install(catalogPlugin);
   host.install(rootShell);
-  // Everything belonging to one workspace goes in one Group, so closing the
-  // workspace is one `remove()`. `MAIN_WORKSPACE` is a Contract family — one
-  // Service id per workspace — which is how per-workspace state stays explicit
-  // instead of being resolved from ambient scope.
   const workspace = host.group("workspace-main", (group) => {
     group.install(workspaceStatePlugin);
     group.install(workspaceShell);
@@ -171,16 +157,10 @@ export async function lynxScenario(): Promise<ExampleResult> {
     placeholder,
   });
 
-  // `rootCatalog` was installed at the root, and it sees a command contributed
-  // from inside the workspace Group. Groups own installations; they do not scope
-  // capabilities.
   const placeholderExecutable = rootCatalog.get("explorer.open")?.run !== undefined;
   await platform.trigger("command:explorer.open");
   const firstOutput = await rootCatalog.get("explorer.open")?.run?.();
 
-  // An update replaces the implementation while keeping the Registration's
-  // identity — same name, new version and reference. Consumers see the command's
-  // behavior change, not the command disappear and return.
   await explorer.update({
     manifest: {
       name: "examples.lynx.explorer",

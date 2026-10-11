@@ -22,9 +22,7 @@ const aliases = Object.fromEntries(
 );
 
 export default defineConfig({
-  // Tests import the workspace packages by their published names so the suite
-  // exercises the same specifiers a consumer writes, while resolving to source
-  // rather than a stale `dist/`. TypeScript owns the source resolution paths.
+  // Resolve through TypeScript paths so tests cannot drift to stale dist artifacts.
   resolve: {
     alias: aliases,
   },
@@ -32,8 +30,7 @@ export default defineConfig({
   test: {
     include: ["packages/*/test/**/*.test.ts", "scripts/test/**/*.test.mjs"],
 
-    // Resource-retention tests need an explicit GC boundary. Forked workers
-    // are required because V8 flags cannot be added to an existing thread.
+    // V8 flags require forked workers for the GC boundary used by retention tests.
     pool: "forks",
     poolOptions: {
       forks: {
@@ -41,26 +38,13 @@ export default defineConfig({
       },
     },
 
-    // Mocks are per-package listeners and event handlers; leaking one into the
-    // next test would show up as a phantom extra call, not as a failure here.
     restoreMocks: true,
 
-    // Compile-only `public-api.types.ts` files are intentionally outside this
-    // runtime pattern. `pnpm typecheck` checks every file under `test/` with
-    // the repository's strict options; both gates live in the `check` chain.
     coverage: {
       enabled: true,
       provider: "istanbul",
       include: ["packages/*/src/**"],
-      // Thresholds follow the measured package floors. A package cannot hide a
-      // regression behind stronger coverage elsewhere in the workspace.
-      //
-      // They are floors, not targets. The remaining gap in each package is
-      // defence-in-depth behind an earlier check — a `GroupNode.assertAttached()`
-      // that the GroupCoordinator has already refused, a `SERVICE_CYCLE` for a
-      // self-dependency that `definePlugin` rejects first. Reaching those lines
-      // would mean bypassing the public API, so raising the numbers further
-      // would buy assertions about unreachable states rather than behaviour.
+      // Package floors prevent one layer from masking another layer's coverage regression.
       thresholds: {
         "packages/core/src/**": { statements: 93, functions: 96, branches: 86, lines: 96 },
         "packages/platform/src/**": {

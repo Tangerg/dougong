@@ -1,8 +1,3 @@
-// Platform errors extend `DougongError`, so application code can catch one type
-// and read one `code` regardless of which layer failed. Codes are listed in
-// `docs/reference/errors.md`, and the api-surface gate checks the docs against
-// this source.
-
 import { DougongError } from "@dougongjs/core";
 
 export class PlatformError extends DougongError {
@@ -13,12 +8,7 @@ export class PlatformError extends DougongError {
   }
 }
 
-/**
- * Carries the manifest name and the exact permissions refused, so a caller can
- * show or re-request them without parsing a message. Both are validated and
- * frozen on construction: an error is often the one object that outlives the
- * operation, so it must not share a mutable array with it.
- */
+// Permission errors can outlive the operation; own their denied-permission data to avoid mutable sharing.
 export class PermissionDeniedError extends PlatformError {
   override name = "PermissionDeniedError";
   readonly manifestName: string;

@@ -2,7 +2,6 @@ import madge from "madge";
 
 export const packagesDirectory = "packages";
 
-/** Owns both guards' scan configuration and rejects unresolved dependency edges. */
 export async function analyzeDependencies() {
   const analysis = await madge(packagesDirectory, {
     fileExtensions: ["ts"],

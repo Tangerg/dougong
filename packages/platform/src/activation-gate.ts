@@ -1,19 +1,4 @@
-// Mutual exclusion between two things that both want to change the graph:
-// lazy activation, which starts whenever an event fires, and a structural change,
-// which needs the graph to hold still long enough to validate and commit.
-//
-// A change closes the gate and waits for outstanding permits. New activations are
-// refused with REGISTRATION_BUSY while it is closed — refused, not queued, because
-// an activation that waits for an unrelated change is indistinguishable to the
-// caller from one that hung.
-
-/**
- * One admitted activation tree; dependencies reuse their root permit.
- *
- * Per-tree rather than per-Registration, so activating a dependency cannot
- * deadlock against the root that is waiting for it. That is why
- * `activateAsDependency` takes a permit instead of asking for its own.
- */
+// Dependencies reuse the root permit to avoid deadlocking the activation tree against itself.
 export class ActivationPermit {
   #release: ((permit: ActivationPermit) => void) | undefined;
 
@@ -35,7 +20,6 @@ type ActivationGateState =
       readonly resolve: () => void;
     };
 
-/** Prevents new activation trees while a structural change reaches commit. */
 export class ActivationGate {
   readonly #permits = new Set<ActivationPermit>();
   #state: ActivationGateState = { phase: "open" };

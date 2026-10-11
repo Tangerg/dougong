@@ -70,7 +70,6 @@ async function measureChained(plugins: number, delayMilliseconds: number) {
   return elapsed;
 }
 
-/** Informational benchmark; behavioral tests, not wall-clock thresholds, gate CI. */
 export async function benchmarkStartup(
   plugins = 20,
   delayMilliseconds = 20,

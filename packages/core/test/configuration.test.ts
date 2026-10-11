@@ -2,11 +2,6 @@ import { describe, expect, it, vi } from "vitest";
 import type { StandardSchemaV1 } from "@standard-schema/spec";
 import { ConfigValidationError, createHost, definePlugin } from "../src/index";
 
-// A config schema is third-party code. Core validates its *result* as untrusted
-// input, so a validator that violates the Standard Schema protocol produces an
-// error naming the Installation rather than an `undefined` config that fails
-// somewhere inside setup().
-
 function schemaReturning(result: unknown): StandardSchemaV1<unknown, unknown> {
   return {
     "~standard": {
@@ -152,8 +147,6 @@ describe("Plugin config validation", () => {
   });
 
   it("treats an explicitly empty issue list as a rejection, not a success", async () => {
-    // `issues: []` is present, so the validator said "invalid" without saying
-    // why. Reading it as valid would let a schema fail open.
     const failure = await startWith(schemaReturning({ issues: [] }), 1);
 
     expect(failure).toBeInstanceOf(ConfigValidationError);

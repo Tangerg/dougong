@@ -9,18 +9,8 @@ interface Candidate<Reference> {
   readonly installed: boolean;
 }
 
-// Validates the graph a change *would* produce, before any of it is applied.
-//
-// Building the whole candidate state and checking that is what makes batches
-// work: registering A which depends on B, and B, in one change is valid, even
-// though neither is valid alone. Per-operation checks would reject it.
-//
-// Only installed Registrations have their dependencies enforced. A registered
-// but inactive one is a declaration nobody is running yet, so a missing
-// dependency is a future problem, not a present one — enforcing it here would
-// make registration order matter.
+// Validate final candidate graphs so atomic batches work independently of staging order.
 
-/** Validates the complete registration graph that would exist after a change. */
 export function validateCandidateGraph<Reference>(
   current: Iterable<RegistrationRecord<Reference>>,
   operations: ReadonlyArray<PlatformChangeOperation<Reference>>,
@@ -87,9 +77,7 @@ function assertAcyclic<Reference>(candidate: ReadonlyMap<string, Candidate<Refer
     if (!current) return;
 
     visiting.add(name);
-    // Unknown dependencies are skipped rather than reported. Whether a missing
-    // dependency matters is `assertInstalledDependencies`' decision; this
-    // function only answers whether the edges that do exist form a cycle.
+    // Missing-dependency policy belongs to installed-dependency validation; cycle checks only follow existing edges.
     for (const dependency of Object.keys(current.artifact.manifest.dependencies)) {
       if (candidate.has(dependency)) visit(dependency, [...path, name]);
     }

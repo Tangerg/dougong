@@ -1,5 +1,3 @@
-// Structural protocols are independent; their runtime rules have one generated source.
-
 export {
   assertPromiseRuntime,
   resolveDisposalSymbol,
@@ -17,7 +15,6 @@ export interface AsyncDisposable {
   [Symbol.asyncDispose](): Promise<void>;
 }
 
-/** Structural observable protocol shared by signals, ContributionViews and diagnostics. */
 export interface Readable<T> {
   get(): T;
   subscribe(listener: () => void): Disposable;

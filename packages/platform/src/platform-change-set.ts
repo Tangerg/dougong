@@ -32,7 +32,6 @@ type PlatformChangeSetState<Reference> =
   | { readonly phase: "committing" }
   | { readonly phase: "submitted"; readonly promise: Promise<void> };
 
-/** One-shot draft that owns target uniqueness and delegates candidate validation. */
 export class PlatformChangeSetDraft<Reference> implements PlatformChangeSet<Reference> {
   readonly #operations = new Map<
     RegistrationRecord<Reference>,

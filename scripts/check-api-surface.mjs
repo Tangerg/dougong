@@ -1,27 +1,5 @@
 #!/usr/bin/env node
-// Public declaration guard. Complements check-layers.mjs (import direction) and
-// the value-level `api-surface.test.ts` (which cannot see type-only exports):
-// this one reads the *built* `dist/index.d.ts` of every published package and asserts the exact
-// exported vocabulary, values and types alike.
-//
-// Four independent assertions per package:
-//
-//   1. The exported identifiers equal the allowlist exactly. A new export is a
-//      deliberate decision, not a side effect of an `export *`.
-//   2. No retired identifier reappears in a package entry declaration. The
-//      banlist holds whole tokens, never patterns, so `Plugin`, `PluginContext`,
-//      `InstanceMeta`, `definePlugin` and other valid Plugin-related names
-//      stay legal while `PluginHandle` and friends cannot come back.
-//   3. Every public export appears in the Chinese and English documentation for
-//      its package. Updating the allowlist cannot leave a supported API unexplained.
-//   4. Built declaration files contain no explicit or inferred `any`; source
-//      checks alone cannot see types introduced by declaration emit.
-//
-// Symbols are resolved through the TypeScript checker rather than matched as
-// text, so `export *` re-exports are seen as the final surface a consumer gets.
-//
-// Run after `pnpm build`; `dist/index.d.ts` is the only place the full type
-// surface exists as an artifact.
+// Inspect emitted declarations because runtime export checks cannot see type-only exports or inferred any.
 
 import { createRequire } from "node:module";
 import { existsSync, globSync, readFileSync } from "node:fs";
@@ -32,15 +10,6 @@ import { runtimeBaseline } from "./runtime-baseline.mjs";
 const ts = createRequire(import.meta.url)("typescript");
 const retiredIdentifiers = new Set(retiredVocabulary);
 
-// The vocabulary. One name per lifecycle stage:
-//
-//   Manifest + Reference -> Artifact -> Registration   (Platform: external code)
-//   Plugin -> Installation                             (Core: stable public identity)
-//             \-> Instance                             (internal active execution)
-//
-// Host is the execution boundary Dougong owns. The code that embeds Dougong is
-// "application code"; the JavaScript environment is the "runtime". Neither is
-// called a host on this surface.
 const PACKAGES = {
   "@dougongjs/reactive": {
     dist: "packages/reactive/dist/index.d.ts",
@@ -81,7 +50,6 @@ const PACKAGES = {
     ],
     types: [
       "ErrorSnapshot",
-      // Contract identity.
       "ContractKind",
       "ContractValue",
       "Event",
@@ -89,7 +57,6 @@ const PACKAGES = {
       "OptionalService",
       "Requirement",
       "Service",
-      // The declaration and its context.
       "AnyPlugin",
       "Awaitable",
       "Plugin",
@@ -100,7 +67,6 @@ const PACKAGES = {
       "Requirements",
       "ResolvedRequirement",
       "ResolvedRequirements",
-      // The execution boundary and what lives inside it.
       "ChangeSet",
       "Group",
       "GroupSnapshot",
@@ -113,7 +79,6 @@ const PACKAGES = {
       "InstallationUpdate",
       "Installer",
       "LifecycleStatus",
-      // Ownership.
       "AsyncDisposable",
       "BackgroundTask",
       "Cleanup",
@@ -123,7 +88,6 @@ const PACKAGES = {
       "LifetimePhase",
       "LifetimeSnapshot",
       "Task",
-      // Open contribution sets and observation.
       "Contribution",
       "ContributionView",
       "EventListener",
@@ -162,9 +126,6 @@ const PACKAGES = {
 
   dougong: {
     dist: "packages/dougong/dist/index.d.ts",
-    // The facade is a pure re-export layer: its surface is exactly Core plus
-    // Platform plus the reactive names it forwards. Computed, not restated, so
-    // the two cannot drift.
     values: null,
     types: null,
   },
@@ -192,8 +153,7 @@ function surfaceOf(distPath) {
   for (const exported of checker.getExportsOfModule(moduleSymbol)) {
     const symbol =
       exported.flags & ts.SymbolFlags.Alias ? checker.getAliasedSymbol(exported) : exported;
-    // A class is both; classify it as a value so each name lands in exactly one
-    // bucket and the two allowlists stay disjoint.
+    // Classify classes as values so type and value allowlists stay disjoint.
     if (symbol.flags & ts.SymbolFlags.Value) values.add(exported.name);
     else if (symbol.flags & ts.SymbolFlags.Type) types.add(exported.name);
     else throw new Error(`${distPath} exports '${exported.name}' with no value or type meaning`);
@@ -297,8 +257,6 @@ for (const [name, spec] of Object.entries(PACKAGES)) {
   }
 }
 
-// The facade must be exactly Core + Platform + the forwarded reactive names, and
-// nothing of its own. Checked against the parsed surfaces, not the source text.
 const facade = surfaces.get("dougong");
 const core = surfaces.get("@dougongjs/core");
 const platform = surfaces.get("@dougongjs/platform");
@@ -321,10 +279,6 @@ if (facade && core && platform && reactive) {
   }
 }
 
-// Error codes are public API too, and the only copy of them a consumer reads is
-// the reference table. Derive the real set from error construction sites and
-// require both language versions to list exactly it. Looking at AST context
-// avoids mistaking an unrelated uppercase string constant for an error code.
 const ERROR_CODE_RE = /^[A-Z][A-Z_]{3,}$/;
 const sourceCodes = new Set();
 for (const dir of ["packages/core/src", "packages/platform/src"]) {
@@ -362,9 +316,7 @@ for (const dir of ["packages/core/src", "packages/platform/src"]) {
     visit(source);
   }
 }
-// Prose naming a code that no longer exists is worse than prose omitting one, so
-// every page is checked for invented codes; only the two reference tables must
-// additionally be exhaustive.
+// Check all pages so retired error codes cannot survive outside the canonical reference table.
 const REFERENCE_TABLES = ["docs/reference/errors.md", "docs/en/reference/errors.md"];
 const MARKDOWN_FILES = [
   ...globSync("docs/**/*.md"),
@@ -373,9 +325,7 @@ const MARKDOWN_FILES = [
   "README.en.md",
 ];
 
-// The Markdown tree is the navigation source of truth. Every primary page must
-// be reachable from both the locale sidebar and its homepage, and neither
-// navigation may retain a route whose file was removed.
+// Derive navigation from Markdown pages so a second inventory cannot silently drift.
 const navigationSource = readFileSync("docs/.vitepress/config.mts", "utf8");
 const configuredRoutes = [...navigationSource.matchAll(/\blink:\s*"([^"]+)"/g)].map(
   ([, route]) => route.split("#", 1)[0],
@@ -452,17 +402,10 @@ for (const doc of MARKDOWN_FILES) {
   }
 }
 
-// The guard reference page claims to list every architecture rule. Rule prose is
-// translated, so matching messages by keyword would produce false failures in
-// one language and false passes in the other. Counting rows is language
-// independent: it does not prove a given row describes a given rule, but adding
-// a rule and forgetting to document it cannot pass, which is the regression that
-// produced a stale gate section before this page existed.
+// Count rules structurally because translated prose cannot serve as stable rule identity.
 const GUARD_PAGES = ["docs/reference/guards.md", "docs/en/reference/guards.md"];
 const gateSource = readFileSync("scripts/check-layers.mjs", "utf8");
 const sourceRuleCount = [...gateSource.matchAll(/message:\s*\n?\s*"[^"]+"/g)].length;
-// Prohibitions enforced outside SOURCE_RULES, currently constructor allowlists
-// and forbidden AST type kinds. Counted from their markers so the total stays derived.
 const standaloneRuleCount = [
   ...gateSource.matchAll(/^const [A-Z_]+_(?:CONSTRUCTORS|TYPE_KINDS|INTERFACES)\b/gm),
 ].length;
@@ -471,11 +414,9 @@ for (const page of GUARD_PAGES) {
   const pageText = readFileSync(page, "utf8");
   const documentedRules = [...pageText.matchAll(/^\|.+\|$/gm)]
     .map(([row]) => row)
-    .filter((row) => !/^\|[\s-:|]+\|$/.test(row)) // separator rows
-    // The step table is keyed by a number and the coverage table by a package
-    // name; every remaining data row is one architecture rule.
+    .filter((row) => !/^\|[\s-:|]+\|$/.test(row))
     .filter((row) => !/^\|\s*(?:#|\d+|core|platform|reactive|包|Package)\s*\|/.test(row))
-    .filter((row) => !/^\|\s*(?:规则|Rule)\s*\|/.test(row)).length; // rule table headers
+    .filter((row) => !/^\|\s*(?:规则|Rule)\s*\|/.test(row)).length;
   if (documentedRules !== expectedRuleRows) {
     failures.push(
       `${page}: documents ${documentedRules} architecture rules, but check-layers.mjs enforces ${expectedRuleRows}`,

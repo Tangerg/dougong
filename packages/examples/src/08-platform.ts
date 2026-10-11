@@ -16,12 +16,6 @@ interface Command {
 
 const COMMANDS = extensionPoint<Command>("examples/platform/commands");
 
-/**
- * Everything so far was code in the application build. Platform adds the four
- * concerns that appear when code arrives from outside the build — declaration,
- * authorization, loading, activation — and compiles them into the same Core
- * install / update / remove used in chapters 05 and 06.
- */
 export async function lazyPlatform(): Promise<ExampleResult> {
   let commands!: ContributionView<Command>;
 
@@ -33,8 +27,6 @@ export async function lazyPlatform(): Promise<ExampleResult> {
     },
   });
 
-  // Supplied by application code: it makes the command visible in the menu before any
-  // external module has been fetched.
   const placeholder = definePlugin({
     name: "examples.platform.remote-command",
     setup(ctx) {
@@ -42,7 +34,6 @@ export async function lazyPlatform(): Promise<ExampleResult> {
     },
   });
 
-  // The real implementation, shipped separately.
   const active = definePlugin({
     name: "examples.platform.remote-command",
     setup(ctx) {
@@ -64,7 +55,6 @@ export async function lazyPlatform(): Promise<ExampleResult> {
     loader: new MemoryLoader(new Map([["remote", { default: active }]])),
   });
 
-  // Registration is admission, not execution. Nothing has been loaded yet.
   const registration = await platform.register({
     manifest: {
       name: "examples.platform.remote-command",

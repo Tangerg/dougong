@@ -3,11 +3,7 @@ import type { InstallationRecord, InstallationSnapshot } from "./installation";
 import { ReadonlyMapSnapshot } from "./readonly-map";
 import { SnapshotPublisher, type SnapshotView } from "./snapshot-view";
 
-/**
- * `changing` is the reason the read window is closed during a transaction.
- * `host.get()` only answers while the status is `active`, so a Service lookup
- * mid-change cannot observe a half-applied plan — it fails instead.
- */
+// The changing phase closes reads so a transaction cannot expose an intermediate Service graph.
 export type HostStatus = "idle" | "starting" | "active" | "changing" | "stopping";
 
 export type { InstallationSnapshot } from "./installation";
@@ -32,14 +28,7 @@ interface HostDiagnosticSource {
   readonly groups: Iterable<GroupNode>;
 }
 
-/**
- * Immutable operational read model; never a service locator or control plane.
- *
- * Everything here is data or another read-only view. There is deliberately no
- * way back: nothing in a snapshot can install, remove, or reach a live Instance.
- * `revision` increments on every publish so a consumer can tell "nothing
- * changed" from "changed back to an equal value".
- */
+// Diagnostics expose read-only projections so observation cannot become a second command path.
 export class HostDiagnostics {
   readonly #name: string;
   readonly #publisher: SnapshotPublisher<HostSnapshot>;

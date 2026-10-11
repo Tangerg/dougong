@@ -62,7 +62,6 @@ class InstallationFacade<Declaration extends AnyPlugin> {
   }
 }
 
-/** Owns committed membership and grants the authority stored by each record. */
 export class InstallationRegistry {
   readonly #records = new Map<string, InstallationRecord>();
   readonly #owned = new WeakMap<object, InstallationRecord>();
@@ -97,8 +96,7 @@ export class InstallationRegistry {
       group,
       createInstallationDeclaration(plugin, config),
     );
-    // The public declaration marker is type-only; this identity map proves
-    // provenance without granting the draft mutation authority.
+    // Facade identity proves provenance without exposing draft mutation capabilities.
     const facade = new InstallationFacade<AnyPlugin>(installation) as unknown as AnyInstallation;
     this.#owned.set(facade, installation);
     this.#facades.set(installation, facade);
@@ -123,7 +121,6 @@ export class InstallationRegistry {
     });
   }
 
-  /** Builds a candidate without changing committed declarations or membership. */
   draft(operations: ReadonlyArray<ChangeOperation>) {
     const declarations = this.declarations();
     for (const operation of operations) {

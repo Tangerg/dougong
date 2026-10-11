@@ -59,18 +59,13 @@ interface ChangeSetDraftControl {
   ) => Installation<Declaration>;
 }
 
-// Two capabilities that Core needs and application code must not have: discard a
-// draft, and stage an install with a caller-supplied ownership target. Keeping
-// them in a WeakMap keyed by the draft means they are reachable from inside the
-// package without appearing on the public `ChangeSet` interface, and they vanish
-// with the draft rather than being revoked by hand.
+// Weak keys hide draft mutation capabilities from application code without retaining drafts.
 const draftControls = new WeakMap<ChangeSetDraft, ChangeSetDraftControl>();
 
 export function discardChangeSetDraft(draft: ChangeSetDraft, error: unknown) {
   draftControls.get(draft)?.discard(error);
 }
 
-/** Stages explicit ownership into a shared draft without widening the public ChangeSet API. */
 export function stageChangeSetInstallation<Declaration extends AnyPlugin>(
   draft: ChangeSetDraft,
   plugin: Declaration,
@@ -82,11 +77,6 @@ export function stageChangeSetInstallation<Declaration extends AnyPlugin>(
   return control.install(plugin, config, create);
 }
 
-/**
- * Rich one-shot draft for the canonical mutation path. It owns target
- * uniqueness, Installation authority, sealing and commit idempotency before
- * the Host ever sees a candidate graph.
- */
 export class ChangeSetDraft implements ChangeSet {
   readonly #operations = new Map<InstallationRecord, ChangeOperation>();
   #state: ChangeSetState;
@@ -117,8 +107,7 @@ export class ChangeSetDraft implements ChangeSet {
     const port = this.#requireOpen();
     const draft = (create ?? port.create)(normalized, config);
     this.#stage({ kind: "install", installation: draft.record });
-    // Runtime authority is the facade identity; Declaration exists only in the
-    // invariant compile-time brand and is recovered at this single erasure seam.
+    // The invariant declaration brand is erased here; facade identity proves runtime authority.
     return draft.facade as unknown as Installation<Declaration>;
   }
 
@@ -160,12 +149,7 @@ export class ChangeSetDraft implements ChangeSet {
     this.#stage({ kind: "remove", installation: port.resolve(installation) });
   }
 
-  /**
-   * Commit is idempotent by returning the same promise, so two callers awaiting
-   * one draft get one transaction rather than two. `committing` exists to catch
-   * the reentrant case — an `attach` hook that calls `commit()` again — which
-   * would otherwise submit the operation list twice.
-   */
+  // The committing phase prevents reentrant attachment from submitting the same draft twice.
   commit() {
     const state = this.#state;
     if (state.phase === "submitted") return state.promise;
@@ -179,9 +163,7 @@ export class ChangeSetDraft implements ChangeSet {
     const operations = Object.freeze([...this.#operations.values()]);
     const port = state.port;
     try {
-      // Authority is granted to every new Installation before any of them
-      // executes. If one attach fails, all of them are discarded: a batch must
-      // not leave half its handles live and half of them dead.
+      // Grant all authorities before execution so a failed attachment cannot leave a partial batch.
       for (const operation of operations) {
         if (operation.kind === "install") port.attach(operation.installation);
       }
@@ -211,10 +193,7 @@ export class ChangeSetDraft implements ChangeSet {
     }
   }
 
-  // One operation per Installation per ChangeSet. Allowing two would make the
-  // outcome depend on staging order — `update` then `remove` versus the reverse —
-  // and there is no reading of "both" that is obviously right. The caller has to
-  // say which one it meant.
+  // Multiple operations on one Installation would make the result depend on staging order.
   #stage(operation: ChangeOperation) {
     this.#requireOpen();
     if (this.#operations.has(operation.installation)) {

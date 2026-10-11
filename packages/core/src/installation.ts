@@ -21,7 +21,6 @@ type AnyPluginInstallationUpdate =
   | { readonly plugin: AnyPlugin; readonly config?: unknown }
   | { readonly plugin?: never; readonly config: unknown };
 
-/** Replaces a declaration or config while preserving Installation identity and position. */
 export type InstallationUpdate<Declaration extends AnyPlugin = AnyPlugin> =
   Declaration extends Plugin<infer Config, infer Requires, infer Provides, infer ConfigInput>
     ? DeclaredInstallationUpdate<Config, Requires, Provides, ConfigInput>
@@ -87,11 +86,7 @@ type InstallationState =
   | { readonly phase: "removed"; readonly readiness: "unsettled" | "settled" }
   | { readonly phase: "discarded"; readonly error: RecordedFailure };
 
-/**
- * An installation is a stable identity whose declaration and active Instance
- * may change. State transitions and ready waiters live here so orchestration
- * code cannot create a status that disagrees with the owned Instance.
- */
+// Keep state transitions with the Instance so orchestration cannot publish a contradictory status.
 export class InstallationRecord {
   #state: InstallationState = { phase: "pending" };
   #attachment: InstallationAttachment | undefined;
@@ -139,7 +134,6 @@ export class InstallationRecord {
     return this.#state.phase === "discarded" ? "failed" : this.#state.phase;
   }
 
-  /** Whether the owning ChangeSet has granted this Installation Host authority. */
   get hasAuthority() {
     return (
       this.#attachment?.authority !== undefined &&
@@ -208,27 +202,12 @@ export class InstallationRecord {
     );
   }
 
-  // A terminal state only answers `ready()` once its readiness has been settled.
-  // Before that the outcome is still being decided by the change in flight, so
-  // the caller joins the waiter set instead of being told a result that the
-  // transaction might still roll back.
+  // Readiness waits for transaction settlement because a provisional terminal state can still roll back.
   #readyFromCurrentState(): Promise<void> {
     const state = this.#state;
     if (state.phase === "discarded") return Promise.reject(state.error);
-    if (
-      (state.phase === "active" || state.phase === "failed" || state.phase === "removed") &&
-      state.readiness === "settled"
-    ) {
-      if (state.phase === "active") return Promise.resolve();
-      if (state.phase === "failed" || state.phase === "removed") {
-        return Promise.reject(
-          this.error ??
-            new DougongError(
-              "INSTALLATION_UNAVAILABLE",
-              `Installation '${this.id}' is ${state.phase}`,
-            ),
-        );
-      }
+    if ("readiness" in state && state.readiness === "settled") {
+      return state.phase === "active" ? Promise.resolve() : Promise.reject(this.unavailableError());
     }
 
     const completion = Promise.withResolvers<void>();
@@ -242,17 +221,12 @@ export class InstallationRecord {
 
   settleReady() {
     const state = this.#state;
-    if (state.phase !== "active" && state.phase !== "failed" && state.phase !== "removed") {
-      return;
-    }
-    if (state.readiness === "settled") return;
+    if (!("readiness" in state) || state.readiness === "settled") return;
     this.#state = { ...state, readiness: "settled" };
     if (state.phase === "active") {
       for (const waiter of this.#readyWaiters) waiter.resolve();
     } else {
-      const error =
-        this.error ??
-        new DougongError("INSTALLATION_UNAVAILABLE", `Installation '${this.id}' is ${state.phase}`);
+      const error = this.unavailableError();
       for (const waiter of this.#readyWaiters) waiter.reject(error);
     }
     this.#readyWaiters.clear();
@@ -277,15 +251,16 @@ export class InstallationRecord {
   }
 
   fail(error: unknown) {
-    return this.#transitionToFailed(error);
+    const failure = this.#normalizeFailure(error);
+    this.#transition({
+      phase: "failed",
+      error: failure,
+      readiness: "unsettled",
+    });
+    return failure;
   }
 
-  /**
-   * For an Installation that never made it into the graph. Unlike `fail()`, this
-   * is terminal: readiness settles immediately, the attachment is dropped, and
-   * the reason is kept as a RecordedFailure rather than the live Error. The handle the
-   * caller already holds stays usable and reports why it is dead.
-   */
+  // An uncommitted handle is terminal; retain bounded failure data instead of its abandoned object graph.
   discard(error: unknown) {
     const failure = new RecordedFailure(this.#normalizeFailure(error));
     this.#transition({
@@ -300,16 +275,6 @@ export class InstallationRecord {
       this.#attachment = undefined;
       this.#notifications = undefined;
     }
-  }
-
-  #transitionToFailed(error: unknown) {
-    const failure = this.#normalizeFailure(error);
-    this.#transition({
-      phase: "failed",
-      error: failure,
-      readiness: "unsettled",
-    });
-    return failure;
   }
 
   remove() {

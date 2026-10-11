@@ -35,14 +35,12 @@ export function acquireForLifetime<T>(
         }
         return { status: "acquired", value } as const;
       } catch (cause) {
-        // External failures are not cancellation of this Task, even when an
-        // adapter names its error AbortError and the operations Lifetime stops.
+        // An external AbortError is not cancellation requested by this Task.
         throw new Error("External resource operation failed", { cause });
       }
     });
 
-    // The operation Task owns reporting; the waiting generation only projects
-    // its outcome. Re-throwing here would report the same failure a second time.
+    // The operation Task owns reporting; rethrowing its projected outcome would report the failure twice.
     return operation.result.then(
       (result) => result,
       (error: unknown) => ({ status: "failed", error }) as const,

@@ -1,20 +1,8 @@
-// Contract tokens: the identity layer that every other Core atom is keyed by.
-//
-// A token carries no value and no behavior — it is a frozen `{ id, kind }` pair.
-// Its type parameter names the value that will flow through it and appears in no
-// runtime field, so it lives in a declared-only slot where the compiler can
-// still check it.
-
 declare const contractBrand: unique symbol;
 declare const contractValueSlot: unique symbol;
 declare const optionalBrand: unique symbol;
 
-/**
- * Holds `T` in a covariant and a contravariant position at once, which makes
- * every Contract invariant in `T`. Without the contravariant half, `Service<Cat>`
- * would be assignable to `Service<Animal>` and `host.get()` could hand back a
- * value narrower than the token the caller passed in.
- */
+// Both variance positions prevent a token for a narrower value from satisfying a wider Contract.
 interface ContractValueSlot<T> {
   readonly value: T;
   readonly accept: (value: T) => void;
@@ -22,17 +10,12 @@ interface ContractValueSlot<T> {
 
 export type ContractKind = "service" | "extensionPoint" | "event";
 
-/** The erased half of a token: all a registry needs to key it, with no value type. */
 export interface ContractIdentity {
   readonly id: string;
   readonly kind: ContractKind;
 }
 
-/**
- * Nominal marker. A structurally identical `{ id, kind }` literal is not a
- * Contract, so a token has to come from `service()`, `event()` or
- * `extensionPoint()` rather than from an object written at the call site.
- */
+// The nominal marker prevents structural literals from bypassing token construction.
 interface ContractBrand {
   readonly [contractBrand]: true;
 }
@@ -54,11 +37,7 @@ export interface Service<T> extends Contract<T, "service"> {}
 export interface ExtensionPoint<T> extends Contract<T, "extensionPoint"> {}
 export interface Event<T> extends Contract<T, "event"> {}
 
-/**
- * `optional()` wraps rather than flags, so the required and optional forms of
- * one Service stay distinct values. A Plugin cannot weaken a hard dependency by
- * mutating a shared token.
- */
+// A wrapper prevents a caller from weakening a shared Service token by mutation.
 interface OptionalServiceIdentity {
   readonly [optionalBrand]: true;
   readonly kind: "optional";
@@ -70,11 +49,7 @@ export interface OptionalService<T> extends OptionalServiceIdentity {
   readonly [contractValueSlot]: ContractValueSlot<T>;
 }
 
-/**
- * Everything a Plugin may name in `requires`. Events are absent on purpose: an
- * Event is a transient fact reached through the Lifetime, never something whose
- * presence the dependency graph can order.
- */
+// Events cannot form dependency edges because they have no persistent presence to order.
 export type Requirement = ServiceIdentity | ExtensionPointIdentity | OptionalServiceIdentity;
 
 export type ContractValue<T> = T extends Contract<infer Value, ContractKind> ? Value : never;
@@ -109,7 +84,6 @@ function readContractIdentity(value: object, kind: unknown): ContractIdentity | 
   return { id, kind };
 }
 
-/** Takes ownership of inert identity data before any registry or lookup uses it. */
 export function normalizeContract<T extends ContractIdentity>(
   value: T,
   expected?: ContractKind,
@@ -162,7 +136,6 @@ export function optional<T>(token: Service<T>): OptionalService<T> {
   }) as OptionalService<T>;
 }
 
-/** Captures both optionality and identity; consumers never reread the input. */
 export function normalizeRequirement(
   value: unknown,
   message = "Expected a Service or ExtensionPoint",

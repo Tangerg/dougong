@@ -1,29 +1,4 @@
 #!/usr/bin/env node
-// One-command release for the four published packages.
-//
-//   node scripts/release.mjs <version> [--dry-run] [--yes] [--otp=<code>]
-//
-// The order below is not arbitrary. Version 0.0.1 of this project shipped
-// broken because `dist/` still held the previous scope: the gate had been read
-// from the wrong exit code and nobody looked inside the tarball. So this script
-// refuses to trust anything it has not verified itself:
-//
-//   * a clean tree at origin, or its exact unfinished version commit, so recovery
-//     cannot push unrelated source changes
-//   * the full `pnpm check`, whose exit code is read directly, never through a pipe
-//   * `npm pack` tarballs extracted and inspected, because listing a tarball with
-//     glob flags is not portable and silently reported "clean" once before
-//   * publish in dependency order, and poll the registry after each upload,
-//     because an exit code is not proof: npm's browser two-factor wait can be
-//     interrupted, and a release that uploaded nothing once looked finished
-//
-// npm versions are immutable, so a run that stops midway is resumable rather
-// than requiring a version bump. Re-running the same version skips packages
-// already on the registry, but only after comparing their published contents
-// with what this run would upload.
-//
-// `--dry-run` performs every check and every packaging step, and stops before
-// the first irreversible action (publish, tag, push).
 
 import { execFileSync, spawnSync } from "node:child_process";
 import {
@@ -42,7 +17,6 @@ import { basename, join, resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { valid } from "semver";
 
-// Dependency order: a package is published only after everything it depends on.
 const PACKAGE_DIRECTORIES = [
   "packages/reactive",
   "packages/core",
@@ -59,7 +33,6 @@ function step(message) {
   console.log(`\n[1m▸ ${message}[0m`);
 }
 
-/** Runs a command, streaming output, and fails on a non-zero exit code. */
 function run(command, commandArgs, options = {}) {
   const result = spawnSync(command, commandArgs, { stdio: "inherit", ...options });
   if (result.error) fail(`${command} could not start: ${result.error.message}`);
@@ -95,8 +68,6 @@ function readPackageFiles(root) {
     }),
   );
 }
-
-// 1 · Inputs
 
 let input;
 try {
@@ -145,10 +116,7 @@ const manifestFiles = PACKAGES.map(({ dir }) => manifestPath(dir));
 const current = readManifest(PACKAGES[0].dir).version;
 console.log(`\nDougong release: ${current} → ${version}${dryRun ? "  (dry run)" : ""}`);
 
-// 2 · Repository state
-//
-// Publishing from a tree that differs from origin produces an artifact whose
-// source nobody can check out later.
+// Publish only reproducible source states so recovery cannot include unrelated commits.
 
 step("Verifying repository state");
 
@@ -164,8 +132,7 @@ const ahead = capture("git", ["rev-list", "--count", "origin/main..HEAD"]);
 const behind = capture("git", ["rev-list", "--count", "HEAD..origin/main"]);
 if (behind !== "0") fail(`local main is ${behind} commit(s) behind origin/main`);
 
-// Git owns the release record. A failed tag or push leaves this exact version
-// commit, not an independent recovery marker or a second release state machine.
+// Git owns the release record; a separate recovery marker could disagree with the actual commit.
 function isPendingReleaseCommit() {
   if (ahead !== "1") return false;
   if (capture("git", ["show", "-s", "--format=%B", "HEAD"]) !== `chore: release ${version}`) {
@@ -206,11 +173,6 @@ console.log(
   `  main is clean${pendingReleaseCommit ? "; resuming its release record" : " and equals origin/main"} at ${head}`,
 );
 
-// 3 · Registry state
-//
-// Capture publication facts before packaging. Even a fully uploaded release
-// must compare every artifact before it can finish recording the release.
-
 step("Verifying registry state");
 
 if (!dryRun) {
@@ -219,7 +181,7 @@ if (!dryRun) {
   console.log(`  publishing as ${whoami.stdout.trim()}`);
 }
 
-/** Only an explicit registry miss permits absence; failed observation leaves publication unknown. */
+// Only an explicit registry miss proves absence; failed observation leaves publication unknown.
 function registryHasVersion(name) {
   const result = spawnSync(
     "npm",
@@ -245,10 +207,7 @@ function registryHasVersion(name) {
   unreadable(`npm query failed (${response?.error?.code ?? result.status})`);
 }
 
-// A release can stop midway — npm's two-factor wait is interruptible and
-// versions are immutable. Rather than force a version bump, packages already
-// at this version are skipped, but only after their published contents are
-// compared with what this run would upload.
+// Immutable npm versions permit resume only when uploaded bytes match the intended artifact.
 const alreadyPublished = new Set();
 for (const { name } of PACKAGES) {
   if (registryHasVersion(name)) alreadyPublished.add(name);
@@ -262,24 +221,12 @@ if (alreadyPublished.size) {
   console.log(`  ${version} is unused on the registry`);
 }
 
-// 4 · The gate
-//
-// `pnpm check` ends with build, so dist/ is regenerated from this exact commit.
-// Its status is read directly rather than through a pipeline, because reading
-// `$?` after a pipe reports the last command in the pipe and hid a real failure
-// here once.
-
 step("Running the full gate (pnpm check)");
 run("pnpm", ["check"]);
 
-// 5 · Version bump
-//
-// All four move together. `workspace:*` is rewritten by pnpm at pack time, so
-// the dependency versions follow automatically once the manifests agree.
-
 step("Bumping versions");
 
-// Capture every original before writing; a later read or partial write may fail.
+// Capture all originals before writing so a partial write can restore every manifest.
 const originalManifests = new Map(
   PACKAGES.map(({ dir }) => [dir, readFileSync(manifestPath(dir))]),
 );
@@ -287,8 +234,7 @@ let recordingIndex = false;
 
 function restoreManifests() {
   if (recordingIndex) {
-    // A command may report failure after committing. Never roll back a Git
-    // fact using the process exit code as a competing source of truth.
+    // A failed process can still commit; rollback must follow the Git fact rather than its exit code.
     if (capture("git", ["rev-parse", "HEAD"]) !== head) {
       originalManifests.clear();
       return false;
@@ -325,9 +271,7 @@ process.on("exit", (code) => {
   }
 });
 
-// A signal terminates the process without emitting `exit`, so the handler above
-// never runs. Interrupting at the confirmation prompt, or during npm's browser
-// two-factor wait, once left all four manifests bumped in a clean checkout.
+// Signals bypass the exit hook, so interrupted releases need their own restoration path.
 for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) {
   process.on(signal, () => {
     if (originalManifests.size) {
@@ -353,11 +297,6 @@ for (const { dir, name } of PACKAGES) {
   console.log(`  ${name} → ${version}`);
 }
 
-// 6 · Pack and inspect
-//
-// The tarball is the artifact consumers receive. Everything before this point
-// describes intent; this is the only step that reads what actually ships.
-
 step("Packing and inspecting tarballs");
 
 const stage = mkdtempSync(join(tmpdir(), "dougong-release-"));
@@ -373,8 +312,7 @@ for (const { dir, name } of PACKAGES) {
 
   const extracted = join(stage, `candidate__${basename(dir)}`);
   execFileSync("mkdir", ["-p", extracted]);
-  // Extract rather than list: `tar --wildcards` is not portable, and a listing
-  // filter that silently matched nothing once reported a broken tarball as clean.
+  // Extract artifacts because nonportable listing filters can silently inspect no files.
   execFileSync("tar", ["-xzf", tarball, "-C", extracted]);
   const root = join(extracted, "package");
 
@@ -412,7 +350,6 @@ for (const { dir, name } of PACKAGES) {
     if (!existsSync(join(root, required))) fail(`${name}: tarball is missing ${required}`);
   }
 
-  // Nothing in a shipped bundle may reference a workspace path or a retired scope.
   const bundle = readFileSync(join(root, "dist/index.js"), "utf8");
   const declaration = readFileSync(join(root, "dist/index.d.ts"), "utf8");
   for (const [label, contents] of [
@@ -426,9 +363,7 @@ for (const { dir, name } of PACKAGES) {
     }
   }
 
-  // A package already at this version is only safe to skip if what is on the
-  // registry matches what this run would upload. Contents are compared rather
-  // than tarball bytes, because archive metadata is not reproducible.
+  // Compare existing registry bytes because immutable versions cannot accept a different artifact on resume.
   if (alreadyPublished.has(name)) {
     const downloaded = join(stage, `published__${basename(dir)}`);
     execFileSync("mkdir", ["-p", downloaded]);
@@ -458,8 +393,6 @@ for (const { dir, name } of PACKAGES) {
   console.log(`  ${name.padEnd(22)} ${size.padStart(7)} KB  ${packedManifest.version}`);
 }
 
-// 7 · Confirm
-
 if (dryRun) {
   restoreManifests();
   step("Dry run complete");
@@ -479,14 +412,7 @@ if (!assumeYes) {
   }
 }
 
-// 8 · Publish
-//
-// In dependency order, from the inspected tarball rather than from the working
-// directory, so what was verified is exactly what is uploaded.
-//
-// Each upload is then confirmed against the registry. An exit code alone is not
-// evidence: npm's browser two-factor flow polls for an authorization that may
-// never arrive, and an interrupted release once looked like a finished one.
+// Publish inspected tarballs so verified bytes are the uploaded bytes; confirm registry presence before recording success.
 
 step("Publishing");
 
@@ -496,16 +422,9 @@ console.log(
     "  Pass --otp=<code> instead to authorize from the terminal.\n",
 );
 
-/**
- * Confirms the upload is resolvable before a dependent package is published.
- *
- * The registry is read-your-writes only eventually, so a single immediate read
- * can miss a version that did land — which once aborted a healthy release right
- * after its first successful upload. Poll instead of asking once.
- */
+// Await registry visibility before publishing dependents because successful uploads can remain temporarily unreadable.
 function awaitRegistry(name) {
-  // Publish-time scanning commonly takes five minutes and can exceed fifteen.
-  // https://github.blog/changelog/2026-07-28-npm-publish-time-malware-scanning-and-dual-use-metadata/
+  // Publish-time scanning can exceed fifteen minutes; the visibility timeout must cover that delay.
   for (let attempt = 0; attempt < 120; attempt++) {
     if (registryHasVersion(name)) return true;
     if (attempt === 0) console.log(`  waiting for ${name}@${version} to become readable...`);
@@ -543,10 +462,7 @@ for (const { name } of PACKAGES) {
   console.log(`  ✓ ${name}@${version}`);
 }
 
-// 9 · Record
-//
-// The commit and tag land only after every package is on the registry, so a tag
-// never points at a release that does not exist.
+// Record the release only after every registry upload is confirmed so tags cannot imply partial publication.
 
 step("Recording the release");
 

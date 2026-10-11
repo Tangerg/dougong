@@ -16,7 +16,7 @@ interface PreparedActivation {
   readonly services: ReadonlyMap<string, unknown>;
 }
 
-// Only this internal outcome carries cleanup authority. Public errors are data.
+// Only this internal outcome carries cleanup authority; public errors must not.
 export class ActivationFailure {
   constructor(
     readonly error: unknown,
@@ -35,19 +35,7 @@ export interface InstanceCoordinatorPort {
   readonly report: (error: unknown) => void;
 }
 
-/**
- * Owns live Instances and the capabilities reachable from their Lifetimes.
- *
- * The only place in Core where `setup()` is called and where a Service value
- * exists as a value. Above this line everything is declarations and plans; below
- * it there are running objects.
- *
- * Activation is prepare-then-commit, per layer. Every Instance in a layer is
- * built first, and only once the whole layer succeeds does any of it become
- * visible. That is why a failing sibling cannot be observed by one that
- * succeeded, and why cleanup after a failed layer can still reach everything the
- * layer created.
- */
+// Build the complete layer before publication so no sibling can observe a partially activated layer.
 export class InstanceCoordinator {
   readonly #hostName: string;
   readonly #logger: Logger;
@@ -110,9 +98,7 @@ export class InstanceCoordinator {
       );
       if (!candidates.length) continue;
 
-      // Siblings share cancellation, but each failure fixes its attribution
-      // before cleanup or another sibling can abort its signal. Every setup
-      // returns an explicit outcome so all resources remain available for disposal.
+      // Fix each failure attribution before shared cancellation can change a sibling signal.
       const controller = new AbortController();
       const results = await Promise.all(
         candidates.map(async (installation) => {
@@ -175,12 +161,7 @@ export class InstanceCoordinator {
     return undefined;
   }
 
-  /**
-   * Stops in reverse activation order, sequentially, and collects every failure
-   * instead of stopping at the first. A dependent must be gone before the
-   * Service it consumed, and one Instance that refuses to shut down cleanly must
-   * not leave the rest running — its error is returned, not thrown.
-   */
+  // Dependents must stop before providers; one cleanup failure must not strand the remaining Instances.
   async deactivate(installations: ReadonlySet<InstallationRecord>) {
     const errors: unknown[] = [];
     const order = this.#activationOrder
@@ -205,17 +186,7 @@ export class InstanceCoordinator {
     return errors;
   }
 
-  /**
-   * Runs one operation with contribution publication deferred to its end, so a
-   * change that withdraws and adds contributions is observed once rather than as
-   * an intermediate state.
-   *
-   * Publication happens even when the operation failed, because contributions
-   * withdrawn by Instances that did stop must not stay visible. If both the
-   * operation and the publication fail, both errors are reported — the
-   * publication failure must not hide the reason the change failed, and the
-   * operation failure must not hide a store left inconsistent.
-   */
+  // Publish withdrawals even after failure, and retain both operation and publication errors.
   async withContributionBatch<T>(operation: () => Promise<T>) {
     this.#contributions.beginBatch();
     let outcome:
@@ -265,10 +236,7 @@ export class InstanceCoordinator {
       const context = this.#createContext(lifetime, meta, requirements);
       const output = await plugin.setup(context, config);
       const services = new Map<string, unknown>();
-      // The types already require these, but `setup()` may come from JavaScript
-      // or from a Plugin loaded at runtime, where nothing checked them. A missing
-      // Service has to fail here rather than surface later as an `undefined`
-      // dependency inside whatever consumed it.
+      // Loaded JavaScript can bypass static checks; missing Services must fail before publication.
       for (const [alias, token] of Object.entries(plugin.provides)) {
         if (typeof output !== "object" || output === null || !Object.hasOwn(output, alias)) {
           throw new DougongError(
@@ -281,8 +249,7 @@ export class InstanceCoordinator {
 
       return Object.freeze({
         installation,
-        // The view remains readable after Lifetime releases its live binding,
-        // including the interval before this Instance finishes deactivating.
+        // Diagnostics must remain readable after the live Lifetime binding is released.
         instance: Object.freeze({ plugin, config, lifetime, diagnostics: lifetime.diagnostics }),
         services,
       });
@@ -292,11 +259,7 @@ export class InstanceCoordinator {
       try {
         await lifetime.dispose();
       } catch (cleanupError) {
-        // A failed `setup()` may have already registered listeners, tasks or
-        // cleanups. If disposing them also fails, this Installation is not
-        // merely broken — something it created is still alive and unowned. The
-        // internal outcome tells Engine that rollback is unsafe. The error
-        // itself cannot grant cleanup authority to a later unrelated activation.
+        // A failed setup may own resources; failed cleanup must prevent rollback over those resources.
         return new ActivationFailure(
           new AggregateError(
             [failure, cleanupError],
@@ -311,9 +274,7 @@ export class InstanceCoordinator {
   }
 
   #commitActivations(candidates: ReadonlyArray<PreparedActivation>) {
-    // Establish ownership for the complete layer before publishing any of its
-    // resources. If publication exposes an internal invariant failure, reverse
-    // activation cleanup can still find every prepared Instance in the layer.
+    // Own the complete layer before publication so invariant failure can still unwind every Instance.
     for (const { installation, instance, services } of candidates) {
       this.#services.set(installation, services);
       installation.activate(instance);
@@ -343,12 +304,7 @@ export class InstanceCoordinator {
     plugin: NormalizedPlugin,
     lifetime: Lifetime,
   ): Record<string, unknown> {
-    // Requirements resolve through `plan.providerFor`, the edge recorded when the
-    // graph was built — not by searching for whoever currently provides the id.
-    // The dependency a Plugin was validated against is the one it receives.
-    //
-    // A null prototype because these keys come from the declaration: an alias
-    // called `toString` must be a requirement, not an inherited method.
+    // Resolve against captured plan edges so dependency identity cannot drift during activation.
     const values: Record<string, unknown> = Object.create(null);
     for (const [alias, requirement] of Object.entries(plugin.requires)) {
       if (requirement.kind === "optional") {

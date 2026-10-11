@@ -28,20 +28,6 @@ export type {
 const defaultLogger: Logger = console;
 const hostOptionFields = new Set(["name", "logger", "onError"]);
 
-/**
- * The Host owns no domain state. It is a serialization boundary over three
- * peers, each of which is the single source of truth for one thing:
- *
- *   InstallationRegistry  committed membership and authority grants
- *   GroupCoordinator      installation ownership structure
- *   Engine                the committed plan, and commit/rollback/fail-closed
- *
- * What the Host adds is the `SerialQueue`, the `HostStatus` transitions, and the
- * decision of which path a change takes — direct application while idle, a full
- * transaction while active. Any state kept here as well would be a second state
- * machine to keep in agreement with one of the three; `check-layers.mjs` has an
- * inverted rule that fails if one appears.
- */
 class HostImpl implements Host {
   readonly name: string;
   readonly diagnostics: SnapshotView<HostSnapshot>;
@@ -131,11 +117,7 @@ class HostImpl implements Host {
   get<T>(token: Service<T>): T;
   get<T>(token: OptionalService<T>): T | undefined;
   get<T>(token: Service<T> | OptionalService<T>): T | undefined {
-    // Only `active` opens the read window. During `starting`, `changing` and
-    // `stopping` a plan exists but is not the committed one, so answering would
-    // expose an intermediate graph — the Engine raises SERVICE_UNAVAILABLE
-    // instead. An `optional()` token does not soften this: the difference
-    // between "not installed" and "not readable yet" has to stay visible.
+    // Reads require active status because starting, changing and stopping may hold intermediate plans.
     const availability = this.#status === "active" ? "available" : "unavailable";
     return this.#engine.get(token, availability);
   }
@@ -169,11 +151,7 @@ class HostImpl implements Host {
         this.#setStatus("active");
         this.#installations.settleReadiness(plan.order);
       } catch (error) {
-        // Back to `idle`, not to a `failed` Host: the Engine has already
-        // disposed whatever it activated, so there is no partial graph left to
-        // describe and `start()` may be attempted again. Every Installation
-        // still needs its readiness settled, or a caller already awaiting
-        // `ready()` would wait for an attempt that no longer exists.
+        // Settle every Installation readiness after failed startup so existing waiters cannot outlive the attempt.
         this.#setStatus("idle");
         for (const installation of this.#installations.values()) {
           if (installation.status !== "active") installation.fail(error);
@@ -208,9 +186,7 @@ class HostImpl implements Host {
         if (operations.length && !pending.length) return;
         if (!group.attached) throw groupRemovedError(group);
         if (!pending.length) return;
-        // While idle there are no Instances to stop or start, so the change is
-        // just a declaration edit. A transaction is only needed once a committed
-        // plan exists that the change could break.
+        // Idle changes only edit declarations because there are no live Instances to transact against.
         if (this.#status === "active") {
           await this.#transact(pending);
         } else {
@@ -219,9 +195,6 @@ class HostImpl implements Host {
         }
         this.#publishDiagnostics();
       } catch (error) {
-        // An install that never reached the registry leaves a handle the caller
-        // already holds. Discarding it makes that handle report the real failure
-        // rather than behave like an Installation that is merely not ready yet.
         for (const installation of installed) {
           if (!this.#installations.contains(installation)) {
             this.#installations.discard(installation, error);
@@ -298,10 +271,9 @@ function reportToFallbackLogger(logger: Logger, error: unknown, reporterError: u
     const result: unknown = logger.error(
       new AggregateError([error, reporterError], "Host error reporter failed"),
     );
-    // The logger is the terminal error sink. Its own asynchronous failure has
-    // no lower reporting channel, but it must still be observed.
+    // The terminal logger has no lower error sink, but its rejection still needs observation.
     void Promise.resolve(result).catch(() => undefined);
   } catch {
-    // Error observation must never mutate the Host command being observed.
+    // Error observation must not mutate the command being observed.
   }
 }

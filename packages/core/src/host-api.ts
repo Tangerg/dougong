@@ -11,11 +11,6 @@ export type { InstallationUpdate } from "./installation";
 
 declare const installationBrand: unique symbol;
 
-/**
- * Makes the config argument required exactly when the Plugin declares one, so
- * `install(needsConfig)` fails to compile while `install(needsNothing)` stays a
- * one-argument call.
- */
 export type PluginConfigArguments<Declaration extends AnyPlugin> =
   Declaration extends Plugin<infer _Config, infer _Requires, infer _Provides, infer ConfigInput>
     ? [ConfigInput] extends [void]
@@ -23,21 +18,6 @@ export type PluginConfigArguments<Declaration extends AnyPlugin> =
       : [config: ConfigInput]
     : [config?: unknown];
 
-/**
- * One installed Plugin, as a stable identity. The declaration behind it may be
- * replaced; this identity and its position in the ownership tree may not.
- *
- * Installation and Group state their own capabilities instead of sharing a
- * framework-wide lifecycle interface. Code that wants to treat them uniformly
- * declares the minimum it needs on the consuming side:
- *
- * ```ts
- * interface Removable {
- *   ready(): Promise<void>
- *   remove(): Promise<void>
- * }
- * ```
- */
 export interface Installation<Declaration extends AnyPlugin = AnyPlugin> {
   readonly [installationBrand]: (declaration: Declaration) => Declaration;
   readonly id: string;
@@ -49,14 +29,7 @@ export interface Installation<Declaration extends AnyPlugin = AnyPlugin> {
   remove(): Promise<void>;
 }
 
-/**
- * One transaction. Staged operations apply together or not at all, so a batch
- * that would leave a missing dependency between two of its own steps is valid —
- * only the committed end state has to resolve.
- *
- * `group()` is deliberately absent: a ChangeSet moves installations, and Group
- * structure is created through an `Installer`.
- */
+// Only the final graph needs to resolve; validating each staged operation would reject valid atomic batches.
 export interface ChangeSet extends Pick<Installer, "install"> {
   update<Declaration extends AnyPlugin>(
     installation: Installation<Declaration>,
@@ -69,15 +42,9 @@ export interface ChangeSet extends Pick<Installer, "install"> {
 export interface HostOptions {
   readonly name?: string;
   readonly logger?: Logger;
-  /**
-   * Terminal sink for failures with nowhere left to propagate — a background
-   * task's rejection, a diagnostics subscriber that threw. It does not see
-   * errors from `start()` or `commit()`; those are returned to their caller.
-   */
   readonly onError?: (error: unknown) => Awaitable<void>;
 }
 
-/** Capability to install into an ownership position without controlling Host execution. */
 export interface Installer {
   install<Declaration extends AnyPlugin>(
     plugin: Declaration,
@@ -87,7 +54,6 @@ export interface Installer {
   change(): ChangeSet;
 }
 
-/** Installation ownership only: never a capability scope or a permission boundary. */
 export interface Group extends Installer {
   readonly id: string;
   readonly name: string;
@@ -96,15 +62,7 @@ export interface Group extends Installer {
   remove(): Promise<void>;
 }
 
-/**
- * The execution boundary Dougong owns: commands, transactions, orchestration.
- *
- * `get()` and `contributions()` are for application code — the code that embeds
- * Dougong from outside the graph. A Plugin never reaches its dependencies this
- * way; it declares them in `requires` and receives them as context. That is the
- * difference between a declared dependency and a Service Locator, and it is why
- * `Host` is not reachable from `PluginContext`.
- */
+// Plugins receive declared dependencies through context so Host lookup cannot become a Service Locator.
 export interface Host extends Installer {
   readonly name: string;
   readonly status: HostStatus;

@@ -411,9 +411,7 @@ async function createRevokedGroup() {
       group = current;
       throw new Error("Group configuration failed");
     });
-  } catch {
-    // The captured Group must be terminal even when configuration throws.
-  }
+  } catch {}
   if (!group) throw new TypeError("Retention fixture did not capture a Group");
   await host.stop();
   return { group, reference: new WeakRef(host) };
@@ -500,9 +498,7 @@ async function createRetainedTerminalResourceHandle(
     if ("dispose" in handle && typeof handle.dispose === "function") {
       try {
         await handle.dispose();
-      } catch {
-        // This fixture intentionally gives terminal handles a payload-bearing failure.
-      }
+      } catch {}
     }
   }
   await host.stop();
@@ -681,8 +677,7 @@ async function collectReleasedResources(
 ) {
   let retained = countRetained(references);
   for (let pass = 0; pass < RELEASE_PASSES && hasRetained(retained); pass++) {
-    // WeakRef collection is not tied to promise settlement. Cross several
-    // event-loop and explicit GC boundaries before making it observable.
+    // WeakRef collection requires event-loop and GC boundaries; Promise settlement alone proves nothing.
     await nextTurn();
     forceGc();
     forceGc();

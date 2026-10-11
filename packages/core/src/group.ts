@@ -2,15 +2,7 @@ type GroupNodeState =
   | { readonly phase: "attached"; readonly parent: GroupNode | undefined }
   | { readonly phase: "detached" };
 
-/**
- * A Group is an ownership tree over installations, never a capability scope.
- * Service resolution and ExtensionPoint/Event visibility remain Host-wide.
- *
- * So a Plugin inside a Group sees exactly what it would see outside one: the
- * same providers, the same contributions. The only thing membership decides is
- * what gets removed together. Ids are paths (`/ui/panels`) because a position in
- * this tree is the whole meaning of a Group.
- */
+// Groups define ownership only; changing placement must not change Contract visibility.
 export class GroupNode {
   readonly #children = new Map<string, GroupNode>();
   #state: GroupNodeState;
@@ -64,10 +56,7 @@ export class GroupNode {
     }
   }
 
-  // Depth-first, and children are detached before this node unlinks itself from
-  // its parent. A node that unlinked first would leave its subtree unreachable
-  // but still attached, so those groups would report themselves as live with no
-  // path back to the root.
+  // Detach descendants first so no live subtree becomes unreachable from its owner.
   detach() {
     const state = this.#state;
     if (state.phase === "detached") return [];

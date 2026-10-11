@@ -1,26 +1,4 @@
-// Structured ownership. Everything an Instance creates during `setup()` — child
-// lifetimes, background tasks, event listeners, contributions, cleanups — is
-// owned by a Lifetime and released when it disposes. A Plugin that only uses the
-// context it was given cannot leak, because there is nowhere to put a resource
-// that is not owned.
-//
-// Two properties are worth stating before reading the code:
-//
-// Terminal resources detach. A finished task, a disposed cleanup, a withdrawn
-// contribution removes itself from its owner's set, so a long-lived Instance that
-// spawns a million short tasks holds none of them. That is what
-// `LifetimeResources.release` is for, and why every record is handed its own
-// release function rather than searching for itself later.
-//
-// Disposal order is fixed and not alphabetical:
-//
-//   1. seal the subtree; listeners, subscriptions, views, contributions withdraw
-//   2. abort the signal                                 cancel in-flight work
-//   3. tasks, children, cleanups                        await completion
-//
-// Capabilities go first so nothing new arrives mid-teardown; cancellation comes
-// before awaiting, or a task waiting on its signal would never finish; user
-// cleanups run last, when the resources they might touch are already quiet.
+// Withdraw capabilities before cancellation to stop incoming work; cancel before awaiting to unblock tasks.
 
 import { normalizeContract, type Event, type ExtensionPoint } from "./contracts";
 import type { Contribution, ContributionLeaseKind } from "./contribution-store";
@@ -46,11 +24,7 @@ export interface Logger {
   readonly error: (message: unknown, ...details: unknown[]) => void;
 }
 
-/**
- * Structural, so `console` and any four-method object both qualify without
- * importing a Dougong type. The try/catch is for hostile getters: a validator
- * must not throw the very error it was asked to prevent.
- */
+// Hostile logger getters must fail validation without escaping the recognition boundary.
 export function isLogger(value: unknown): value is Logger {
   if (!value || (typeof value !== "object" && typeof value !== "function")) return false;
   try {
@@ -78,17 +52,9 @@ export type Cleanup = () => unknown;
 export type BackgroundTask<T> = (signal: AbortSignal) => T | PromiseLike<T>;
 type EventArguments<T> = [T] extends [void] ? [payload?: T] : [payload: T];
 
-// One shared reason object, so `isCancellationReason` can recognise a disposal
-// by identity. An `AbortError` name alone is a convention that unrelated code
-// also uses; identity is proof that this disposal caused it.
+// Use one reason object so cancellation attribution does not rely solely on the AbortError name.
 const disposalReason = Object.freeze(new DOMException("Resource disposed", "AbortError"));
 
-/**
- * The complete set of things an Instance can do. Seven members, each returning
- * something the Lifetime already owns — there is no `register()` that takes a
- * resource from elsewhere, which is why ownership is structural rather than a
- * convention Plugin authors have to follow.
- */
 export interface LifetimeOperations {
   readonly signal: AbortSignal;
   readonly cleanup: (dispose: Cleanup) => AsyncDisposable;
@@ -102,7 +68,6 @@ export interface LifetimeOperations {
 export interface LifetimeContext extends LifetimeOperations, AsyncDisposable {}
 
 export interface LifetimePort {
-  // Lifetime grants live access only after capturing inert Contract identities.
   readonly stageOn: <T>(
     token: Event<T>,
     listener: EventListener<T>,
@@ -125,17 +90,7 @@ export interface LifetimePort {
   readonly report: (error: unknown) => void;
 }
 
-/**
- * Whether this Instance's declarations are visible yet — one cell, owned by the
- * root Lifetime and read by every scope beneath it.
- *
- * Staging belongs to the activation, not to an individual scope: everything
- * declared during `setup()` becomes visible together, and anything declared
- * afterwards is visible at once. Giving each Lifetime its own copy would let one
- * fact advance in as many places as there are scopes, and a scope that could not
- * advance its copy — one that began disposing during `setup()` — would have to
- * be arbitrated instead of simply reading the owner.
- */
+// The root owns declaration visibility so child scopes cannot advance competing publication phases.
 class DeclarationPhase {
   #published = false;
 
@@ -170,7 +125,6 @@ interface LifetimeBinding {
   readonly diagnostics: SnapshotPublisher<LifetimeSnapshot>;
 }
 
-/** Owns live resource membership; diagnostics read its size without separate counters. */
 class LifetimeResources<T extends Resource> implements Iterable<T> {
   readonly #resources = new Set<T>();
   #changed: (() => void) | undefined;
@@ -200,12 +154,7 @@ class LifetimeResources<T extends Resource> implements Iterable<T> {
     return true;
   };
 
-  /**
-   * Disposes in reverse creation order, collecting failures rather than
-   * throwing. Later resources may depend on earlier ones, and a resource that
-   * refuses to shut down cleanly must not strand its siblings. The caller
-   * aggregates the collected errors.
-   */
+  // Later resources may depend on earlier ones; failed teardown must not strand siblings.
   async dispose(errors: unknown[]) {
     try {
       for (const resource of [...this.#resources].reverse()) {
@@ -222,7 +171,7 @@ class LifetimeResources<T extends Resource> implements Iterable<T> {
     }
   }
 
-  /** Capability withdrawal must finish without yielding to callbacks or tasks. */
+  // Capability withdrawal must finish without yielding to callbacks or tasks.
   disposeSynchronously<U extends Disposable>(this: LifetimeResources<U>, errors: unknown[]) {
     try {
       for (const resource of [...this.#resources].reverse()) {
@@ -290,20 +239,7 @@ type TaskState =
   | { readonly phase: "disposing"; readonly completion: Promise<void> }
   | { readonly phase: "settled" };
 
-/**
- * One background task. Three things it has to get right:
- *
- * A task that finishes detaches itself from its Lifetime, so an Instance that
- * spawns work in a loop does not accumulate settled tasks.
- *
- * Its abort listener on the parent signal is removed the moment it settles,
- * because a listener on a long-lived signal is itself a retained reference.
- *
- * A rejection that is not a cancellation goes to `report()`. A background task
- * has no caller to return an error to, so this is where it would otherwise
- * vanish — and `dispose()` deliberately resolves rather than rejects, since
- * cancelling a task is not a failure of whoever cancelled it.
- */
+// Detach settled tasks and abort listeners to avoid retention. Background failures need the owner error sink.
 class TaskRecord<T> implements Task<T> {
   #detachParentAbortListener: (() => void) | undefined;
   #detachFromParent: ((task: AsyncDisposable) => void) | undefined;
@@ -322,9 +258,7 @@ class TaskRecord<T> implements Task<T> {
     parentSignal.addEventListener("abort", abort, { once: true });
     this.#detachParentAbortListener = () => parentSignal.removeEventListener("abort", abort);
     this.#detachFromParent = detachFromParent;
-    // Already-aborted parent: `addEventListener` would never fire, so the abort
-    // is applied directly. A task spawned into a dying Lifetime starts cancelled
-    // rather than running unowned.
+    // An already-aborted parent will never fire a new abort listener.
     if (parentSignal.aborted) abort();
 
     // Disposal cannot reclassify a failure that has already happened.
@@ -451,7 +385,6 @@ export class Lifetime implements LifetimeContext {
     return this.#requireBinding().diagnostics.view;
   }
 
-  /** A facade whose only InstanceCoordinator edge disappears when this Lifetime terminates. */
   contextLogger(meta: InstanceMeta): Logger {
     const write =
       (level: keyof Logger) =>
@@ -473,15 +406,7 @@ export class Lifetime implements LifetimeContext {
     return resource;
   }
 
-  /**
-   * A child scope. It inherits this Lifetime's signal, so cancellation flows
-   * down, and its declaration phase, so a child created during `setup()` also
-   * stages rather than publishing immediately.
-   *
-   * Disposing a child detaches it from both the resource set and the diagnostics
-   * tree. A Plugin can therefore use child lifetimes as a unit of work — one per
-   * open document, per connection — without the parent growing.
-   */
+  // Children share declaration visibility so setup cannot publish only part of one Instance.
   lifetime(label: string) {
     const { port, diagnostics } = this.#requireActive();
     validateLifetimeLabel(label);
@@ -547,28 +472,19 @@ export class Lifetime implements LifetimeContext {
     return publication.handle;
   }
 
-  /** Owns an internal live capability without exposing a second Context API. */
   ownLease(resource: Disposable, kind: ContributionLeaseKind) {
     this.#requireActive();
     const resources = kind === "view" ? this.#contributionViews : this.#subscriptions;
     return resources.own(resource);
   }
 
-  /** Releases a temporary startup cancellation edge after its layer commits. */
   detachStartupSignal() {
     const remove = this.#detachParentAbortListener;
     this.#detachParentAbortListener = undefined;
     remove?.();
   }
 
-  /**
-   * Atomically makes everything staged during setup visible.
-   *
-   * Advancing the shared phase is the whole state change; the walk that follows
-   * only flushes what each scope already staged. Called by the
-   * InstanceCoordinator once the whole activation layer has succeeded — which is
-   * what makes "no half-built Instance is observable" true.
-   */
+  // Advance the shared phase before flushing scopes so callbacks cannot observe mixed publication states.
   publish() {
     this.#requireActive();
     if (this.#declarations.published) return;
@@ -576,25 +492,14 @@ export class Lifetime implements LifetimeContext {
     this.#flushStaged();
   }
 
-  // Disposing a child scope during `setup()` is ordinary, and a child detaches
-  // only once its own teardown has drained, so one can still be attached here.
-  // It needs no special case: `dispose()` empties a scope's publication sets
-  // synchronously, so a draining child contributes nothing to this walk.
+  // An unactivated subtree must finish detaching before its shared declaration phase advances.
   #flushStaged() {
     for (const publication of this.#listeners) publication.publish();
     for (const publication of this.#contributions) publication.publish();
     for (const child of this.#children) child.#flushStaged();
   }
 
-  /**
-   * Disposal is idempotent and joinable: concurrent callers share one completion
-   * promise, so a Lifetime disposed by both its owner and a `using` block runs
-   * its teardown once.
-   *
-   * The three-stage order is the module header's; see it for why. Errors from
-   * every stage accumulate and are aggregated at the end, so one failing cleanup
-   * neither hides the others nor prevents them from running.
-   */
+  // Join disposal to run teardown once; aggregate failures so one cleanup cannot hide or prevent another.
   dispose() {
     const state = this.#state;
     if (state.phase === "disposing") return state.completion;
@@ -602,8 +507,7 @@ export class Lifetime implements LifetimeContext {
 
     const closing: LifetimeDisposal[] = [];
     const completion = this.#prepareDisposal(closing);
-    // Phase and membership share one notification boundary; every callback reads
-    // the sealed ownership tree after incoming capabilities have been withdrawn.
+    // Notify only after sealing membership so callbacks cannot observe a partially sealed ownership tree.
     batchSnapshotNotifications(() => {
       this.#requireBinding().diagnostics.invalidate();
       for (const { lifetime, errors } of closing) {
@@ -623,7 +527,6 @@ export class Lifetime implements LifetimeContext {
     return completion;
   }
 
-  /** Stages joinable completions without running any externally observable work. */
   #prepareDisposal(closing: LifetimeDisposal[]): Promise<void> {
     const state = this.#state;
     if (state.phase === "disposing") return state.completion;
@@ -636,9 +539,7 @@ export class Lifetime implements LifetimeContext {
       controller: state.controller,
       completion: completion.promise,
     };
-    // Observe child completions immediately, including failures that settle
-    // while this parent's tasks are still draining. Descendants drain on their
-    // own so a cancelling parent task may await child.dispose() without a cycle.
+    // Observe child failures before awaiting parent tasks so fast rejections cannot escape ownership.
     const children = Promise.allSettled(
       [...this.#children].reverse().map((child) => child.#prepareDisposal(closing)),
     );
@@ -693,9 +594,7 @@ export class Lifetime implements LifetimeContext {
     });
   }
 
-  // The gate on every operation that creates a resource. `signal.aborted` is
-  // checked as well as the phase, because a parent's disposal aborts this signal
-  // during startup cancellation as well as disposal. Both boundaries close work.
+  // Parent cancellation can arrive before local disposal, so resource creation also checks the signal.
   #requireActive() {
     const binding = this.#binding;
     if (this.#state.phase !== "active" || this.signal.aborted || !binding) {
@@ -720,11 +619,7 @@ type LifetimeState =
     }
   | { readonly phase: "disposed"; readonly signal: AbortSignal };
 
-/**
- * What a Plugin actually receives. Forwarding only, and deliberately without
- * `publish()`, `ownLease()`, `detachStartupSignal()` or `diagnostics` — those
- * belong to whoever owns the Lifetime, not to the code running inside it.
- */
+// The Plugin facade omits publication and diagnostic capabilities reserved for the Lifetime owner.
 class LifetimeHandle implements LifetimeContext {
   readonly #lifetime: Lifetime;
 

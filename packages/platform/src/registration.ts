@@ -80,21 +80,7 @@ class RegistrationFacade<Reference> implements Registration<Reference> {
   }
 }
 
-/**
- * Internal state machine behind one public Registration.
- *
- * Two independent axes, which is why there are two state fields:
- *
- *   #authority   draft -> granted -> terminal    may this Registration act?
- *   #state       pending -> registered -> loading -> loaded | failed | removed
- *
- * A Registration can hold authority and be failed at once — still ours, currently
- * broken, retryable. Collapsing the two would make that state unrepresentable.
- *
- * `admission` is the promise of the change that admitted this Registration.
- * `activate()` awaits it first, so activation triggered immediately after
- * `register()` waits for the registration to actually commit instead of racing it.
- */
+// Authority and delivery state are independent: a failed Registration can remain authorized and retryable.
 export class RegistrationRecord<Reference> {
   #authority: RegistrationAuthority<Reference>;
   #state: RegistrationState = { phase: "pending" };
@@ -146,7 +132,6 @@ export class RegistrationRecord<Reference> {
     if (this.status === "unavailable") throw this.unavailableError();
   }
 
-  /** Whether the owning ChangeSet has granted this Registration Platform authority. */
   get hasAuthority() {
     return this.#authority.phase === "granted";
   }
@@ -257,20 +242,14 @@ export class RegistrationRecord<Reference> {
     this.#state = { phase: "loaded", installation };
     this.#observeInstallation();
     this.assertInstallable();
-    // Waiters are forwarded to the Installation rather than resolved here.
-    // `ready()` on a Registration means "its Plugin has started", and only Core
-    // knows that — activation merely means the Installation now exists.
+    // Forward readiness to Core because creating an Installation does not prove its Plugin has started.
     for (const waiter of this.#readyWaiters) {
       void installation.ready().then(waiter.resolve, waiter.reject);
     }
     this.#readyWaiters.clear();
   }
 
-  /**
-   * Splits validation from mutation: everything that can fail happens now, and
-   * the returned closure only assigns. Platform calls it after the Core commit
-   * succeeds, so a Registration's own state can never move ahead of the graph.
-   */
+  // Prepare fallible validation before Core commits so applying Registration state cannot fail afterward.
   prepareCommit(artifact: NormalizedArtifact<Reference>, state: RegistrationCommitState) {
     const authority = this.#authority;
     if (authority.phase !== "granted") throw this.unavailableError();
@@ -295,7 +274,6 @@ export class RegistrationRecord<Reference> {
     return failure;
   }
 
-  /** Terminal failures retain bounded diagnostics and release all authority. */
   discard(error: unknown) {
     const failure = new RecordedFailure(normalizeRegistrationFailure(error, this.manifestName));
     this.#state = { phase: "failed", installation: undefined, error: failure };
@@ -341,9 +319,7 @@ export class RegistrationRecord<Reference> {
     rejectUnavailable();
     if (!installation || installation.status === "removed" || !authority) return;
     this.#installationSubscription = installation.diagnostics.subscribe(() => {
-      // Core may remove a placeholder before the Platform commits its new
-      // Artifact. Classify the current binding after that structural command,
-      // rather than treating an intermediate Core projection as a delivery failure.
+      // Classify bindings after structural settlement because Core can remove a placeholder before Platform commits.
       void authority.port.settled().then(() => {
         rejectUnavailable();
         authority.port.notifyChanged();

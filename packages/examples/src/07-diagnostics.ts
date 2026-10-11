@@ -19,14 +19,12 @@ interface Workbench {
 const PANELS = extensionPoint<Panel>("examples/diagnostics/panels");
 const WORKBENCH = service<Workbench>("examples/diagnostics/workbench");
 
-/** Renders one ownership tree the way a devtools panel would. */
 function describe(node: LifetimeSnapshot): string {
   const own = `${node.label}[${node.phase} c${node.contributions} t${node.tasks} k${node.cleanups}]`;
   if (!node.children.length) return own;
   return `${own}(${node.children.map(describe).join(", ")})`;
 }
 
-/** An immutable read model: it reports what is running, and cannot steer it. */
 export async function diagnostics(): Promise<ExampleResult> {
   let openGate!: () => void;
   const gate = new Promise<void>((resolve) => {
@@ -57,8 +55,6 @@ export async function diagnostics(): Promise<ExampleResult> {
   const installation = host.install(workbenchPlugin);
   host.install(shellPlugin);
 
-  // The view is a `get()` + `subscribe()` pair — the same protocol an
-  // ContributionView and a signal expose, so `observe()` accepts it unchanged.
   const revisions: number[] = [];
   const subscription = host.diagnostics.subscribe(() => {
     revisions.push(host.diagnostics.get().revision);
@@ -74,7 +70,6 @@ export async function diagnostics(): Promise<ExampleResult> {
   const lifetime = workbench.lifetime;
   const busy = lifetime.get();
 
-  // A finished task detaches itself from its owner. Nothing has to be swept.
   openGate();
   await indexing.result;
   const settled = lifetime.get();
@@ -82,8 +77,6 @@ export async function diagnostics(): Promise<ExampleResult> {
   subscription.dispose();
   await host.stop();
 
-  // The tree is gone, but a view kept from before still reads its final
-  // state — as plain data, without holding the Host alive.
   const final = lifetime.get();
   let acceptsNewSubscribers = true;
   try {

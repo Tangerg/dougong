@@ -16,7 +16,6 @@ interface Greeter {
 }
 
 interface PlanEntry {
-  /** Explicit content identity; the Manifest name remains the Registration identity. */
   readonly revision: string;
   readonly artifact: Artifact<string>;
 }
@@ -31,11 +30,6 @@ const GREETER_NAME = "examples.declarative-plan.greeter";
 const LEGACY_NAME = "examples.declarative-plan.legacy";
 const TOOL_NAME = "examples.declarative-plan.tool";
 
-/**
- * An application-owned desired-state controller. It remembers stable Registrations,
- * but delegates all validation, loading, atomicity and rollback to one
- * canonical Platform ChangeSet.
- */
 class PlanDeployment {
   readonly #platform: Platform<string>;
   #records = new Map<string, DeploymentRecord>();
@@ -105,12 +99,6 @@ function entry(name: string, revision: string, reference: string, version: strin
   return Object.freeze({ revision, artifact: artifact(name, version, reference) });
 }
 
-/**
- * The last two chapters build what mature plugin frameworks ship as built-in
- * subsystems — a config loader and a hot-reload engine — in about 200 lines
- * each, using only the public API and adding no new primitive. That is the
- * test of whether Core's abstractions are open enough to be composed on.
- */
 export async function declarativePlan(): Promise<ExampleResult> {
   let legacyDisposals = 0;
   let toolStarts = 0;

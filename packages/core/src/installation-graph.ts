@@ -3,16 +3,8 @@ import { rememberContractKind } from "./contract-registry";
 import { DougongError } from "./errors";
 import type { InstallationDeclaration, InstallationRecord } from "./installation";
 
-// The dependency plan. Built fresh for every candidate state, never mutated:
-// a transition compares two whole graphs rather than editing one in place, which
-// is what makes rollback a matter of re-activating the old plan.
-//
-// Layers, not just a topological order. Everything in one layer has its
-// dependencies satisfied by earlier layers and nothing in the layer depends on a
-// sibling, so a layer can activate concurrently. `order` flattens the layers and
-// gives shutdown its exact reverse.
+// Immutable candidate plans preserve the previous declaration versions for rollback.
 
-/** Immutable validated dependency plan over one Host-wide installation graph. */
 export class InstallationGraph {
   readonly #declarations: ReadonlyMap<InstallationRecord, InstallationDeclaration>;
   readonly #resolvedProviders: ReadonlyMap<
@@ -37,10 +29,7 @@ export class InstallationGraph {
     declarations: ReadonlyMap<InstallationRecord, InstallationDeclaration>,
     committedKinds: ReadonlyMap<string, ContractKind>,
   ) {
-    // Sorted by installation index so the plan is a function of the declarations
-    // alone. Two Hosts given the same installs in the same order produce the
-    // same layers, which is what makes an activation order reproducible rather
-    // than dependent on Map iteration.
+    // Sort by installation index so activation layers are reproducible across equivalent declarations.
     const installations = [...declarations.keys()].sort((left, right) => left.index - right.index);
     const contractKinds = new Map(committedKinds);
     const providers = collectProviders(declarations, contractKinds);
@@ -76,12 +65,7 @@ export class InstallationGraph {
     return this.providers.get(serviceId);
   }
 
-  /**
-   * Transitive dependents in *both* plans. A Service being replaced has old
-   * consumers that must stop and new ones that must start, and only the union
-   * covers both — expanding in the current plan alone would leave an Instance
-   * running against a dependency that no longer exists.
-   */
+  // Use both plans because replacing a Service affects both its old consumers and its new consumers.
   affectedByTransitionTo(other: InstallationGraph, changed: ReadonlySet<InstallationRecord>) {
     const affected = new Set<InstallationRecord>();
     this.#expand(changed, affected);
@@ -201,10 +185,7 @@ function sortDependencies(
   return { order, layers };
 }
 
-// Only runs once the topological sort has already proven a cycle exists. Its job
-// is the error message, not the detection — walking the graph a second time to
-// name the actual path costs nothing on a failure path and turns "there is a
-// cycle" into something a reader can act on.
+// Recover a concrete cycle on failure so diagnostics identify actionable dependency edges.
 function findDependencyCycle(
   installations: ReadonlyArray<InstallationRecord>,
   dependents: ReadonlyMap<InstallationRecord, ReadonlySet<InstallationRecord>>,

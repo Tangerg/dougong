@@ -1,22 +1,8 @@
 #!/usr/bin/env node
-// Analyze the workspace and fail on any cycle not on the
-// allowlist. Allowlist entries are full file-sets of a known, benign cycle.
-//
-// Cycles matter more here than in an app: every package ships as a library, and
-// a value-level cycle between two modules of `@dougongjs/core` would surface as a
-// partially-initialised binding in a consumer's bundler, not in our tests.
 
 import { analyzeDependencies } from "./analyze-dependencies.mjs";
 
-// Each entry is the full set of files in a known cycle, sorted. A reported
-// cycle matches if its sorted file list deep-equals one of these. Paths are
-// relative to `packages/`.
-//
-// Empty today: the core modules form a strict order (see check-layers.mjs), and
-// `contracts.ts` / `errors.ts` import nothing at all. If a type-only cycle
-// becomes genuinely worthwhile, add it here with a comment saying why breaking
-// it would cost more than the cycle does. madge cannot tell `import type` from
-// a value import, so type-only cycles are the only defensible entries.
+// madge cannot distinguish type-only edges, so any allowed cycle needs a demonstrated ownership rationale.
 const ALLOWED = [];
 
 const allowedKeys = new Set(ALLOWED.map((cycle) => [...cycle].sort().join("|")));

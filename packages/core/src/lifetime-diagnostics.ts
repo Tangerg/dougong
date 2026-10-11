@@ -1,6 +1,5 @@
 export type LifetimePhase = "active" | "disposing" | "disposed";
 
-/** Immutable projection of one real Lifetime ownership node. */
 export interface LifetimeSnapshot {
   readonly label: string;
   readonly phase: LifetimePhase;

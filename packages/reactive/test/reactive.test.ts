@@ -24,6 +24,26 @@ describe("public API surface", () => {
 });
 
 describe("signal", () => {
+  it("keeps detached public methods bound to one signal owner", () => {
+    const count = signal(0);
+    const { get, set, subscribe } = count;
+    const doubled = computed(() => get() * 2);
+    const values: number[] = [];
+    const subscription = subscribe(() => values.push(doubled.get()));
+
+    expect(doubled.get()).toBe(0);
+    set(1);
+    expect(get()).toBe(1);
+    expect(doubled.get()).toBe(2);
+    expect(values).toEqual([2]);
+
+    subscription.dispose();
+    set(2);
+    expect(get()).toBe(2);
+    expect(doubled.get()).toBe(4);
+    expect(values).toEqual([2]);
+  });
+
   it("stores values and only notifies changes", () => {
     const count = signal(0);
     const listener = vi.fn<() => void>();
@@ -309,8 +329,6 @@ describe("computed", () => {
   });
 
   it("rejects a computed signal that reads itself", () => {
-    // There is no value to return, so recursing would exhaust the stack instead
-    // of reporting the mistake. Both the direct case and the indirect one fail.
     let self!: { get(): number };
     self = computed(() => self.get() + 1);
 
@@ -325,10 +343,6 @@ describe("computed", () => {
   });
 
   it("detaches its dependency subscriptions when its last subscriber leaves", () => {
-    // Observed and unobserved are genuinely different modes. While observed, a
-    // computed subscribes to its dependencies so it can notify onward; dropping
-    // the last subscriber must release those edges, or an unread computed would
-    // keep the signals it reads alive through a listener nobody wants.
     const value = signal(1);
     const calculate = vi.fn<() => number>(() => value.get() * 2);
     const doubled = computed(calculate);
@@ -342,15 +356,10 @@ describe("computed", () => {
     subscription.dispose();
     value.set(3);
     expect(listener).toHaveBeenCalledOnce();
-    // Still correct on demand: freshness is rechecked at read time.
     expect(doubled.get()).toBe(6);
   });
 
   it("stops an unobserved chain when a dependency recomputes to an equal value", () => {
-    // `#version` advances only when a computed value actually changes. An
-    // unobserved reader dirty-checks by comparing dependency versions, so an
-    // upstream edit it cannot observe costs one recomputation of the dependency
-    // and none of its own.
     const value = signal(1);
     const parity = vi.fn<() => number>(() => value.get() % 2);
     const oddness = computed(parity);
@@ -367,7 +376,6 @@ describe("computed", () => {
     expect(parity).toHaveBeenCalledTimes(2);
     expect(label).toHaveBeenCalledTimes(1);
 
-    // A change that does move the value propagates normally.
     value.set(2);
     expect(described.get()).toBe("parity:0");
     expect(label).toHaveBeenCalledTimes(2);

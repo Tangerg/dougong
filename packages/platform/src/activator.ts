@@ -13,7 +13,6 @@ interface ActivationPorts<Reference> {
   readonly authorizer: Authorizer;
 }
 
-/** A closed activation boundary that detaches from its owner when released. */
 export class ActivationBarrier {
   #release: (() => void) | undefined;
   readonly settled: Promise<void>;
@@ -32,18 +31,7 @@ export class ActivationBarrier {
   }
 }
 
-/**
- * Owns activation admission, dependency activation and target exclusion.
- *
- * Activation is depth-first: authorize, then activate dependencies, then load
- * this module, then install. Dependencies come before the load so a Registration
- * whose dependency cannot activate never imports its own module — the cheapest
- * failure happens first.
- *
- * `#locked` is separate from the gate. The gate stops *new* activation trees
- * during a change; `#locked` marks the specific Registrations that change is
- * touching, so they stay refused even after the gate reopens.
- */
+// The gate blocks new trees; target locks also reject a changing Registration within an admitted tree.
 export class Activator<Reference> {
   readonly #registrations: ReadonlyMap<string, RegistrationRecord<Reference>>;
   readonly #ports: () => ActivationPorts<Reference>;
@@ -74,8 +62,6 @@ export class Activator<Reference> {
         `Registration '${registration.manifestName}' is being changed`,
       );
     }
-    // Already installed is success, not an error. Several activation events, or
-    // several dependents, routinely ask for the same Registration.
     if (registration.status === "installed") return;
 
     const permit = inheritedPermit ?? this.#gate.enter();
@@ -98,10 +84,6 @@ export class Activator<Reference> {
         await this.#activateDependencies(registration, signal, permit);
         const plugin = await loadPlugin(loader, registration.artifact, signal);
         signal.throwIfAborted();
-        // Update when a placeholder is already installed, install when it is not.
-        // The update path is the whole point of placeholders: the Installation
-        // identity survives activation, so dependents see the Service change
-        // rather than an Installation appear.
         let installation = registration.installation;
         if (installation) {
           change.update(installation, { plugin, config: registration.artifact.config });

@@ -18,11 +18,6 @@ export type { Awaitable } from "./resource";
 
 export type Requirements = Readonly<Record<string, Requirement>>;
 
-/**
- * Only Services can be provided. An ExtensionPoint is an open set that many
- * Installations contribute to, and an Event has no owner at all, so neither is
- * something one Plugin can claim to supply.
- */
 export type Provisions = Readonly<
   Record<string, Extract<Requirement, { readonly kind: "service" }>>
 >;
@@ -46,22 +41,8 @@ export type ProvidedServices<T extends Provisions> = {
   readonly [Key in keyof T]: ServiceValue<T[Key]>;
 };
 
-/**
- * A Plugin that provides nothing returns `void`; one that provides Services must
- * return exactly them. Forgetting a provided Service is therefore a compile
- * error, not a `SERVICE_NOT_RETURNED` at activation time.
- */
 type SetupOutput<T extends Provisions> = keyof T extends never ? void : ProvidedServices<T>;
 
-/**
- * Everything one Instance can reach, and nothing more. Resolved requirements
- * arrive under the same aliases they were declared with, alongside the Lifetime
- * operations that own whatever `setup()` creates.
- *
- * There is no Host, no registry and no parent here. A Plugin's dependencies are
- * exactly what it declared — which is what makes a declaration readable in
- * isolation.
- */
 export type PluginContext<T extends Requirements = Requirements> = LifetimeOperations &
   ResolvedRequirements<T> & {
     readonly meta: InstanceMeta;
@@ -84,11 +65,7 @@ export interface Plugin<
   ) => Awaitable<SetupOutput<NoInfer<Provides>>>;
 }
 
-/**
- * A heterogeneous view of a Plugin after its authoring-specific generic information is
- * irrelevant. Its uncallable setup signature preserves strict variance without introducing
- * `any`.
- */
+// The uncallable setup signature preserves variance across heterogeneous declarations.
 export interface AnyPlugin {
   readonly name: string;
   readonly config?: unknown;
@@ -97,14 +74,12 @@ export interface AnyPlugin {
   readonly setup: (context: never, config: never) => unknown;
 }
 
-/** Internal Instance context after authoring aliases cross the normalization boundary. */
 export type InstanceContext = LifetimeOperations &
   Readonly<Record<string, unknown>> & {
     readonly meta: InstanceMeta;
     readonly log: Logger;
   };
 
-/** Canonical Plugin declaration stored after public generics and structure are checked. */
 export interface NormalizedPlugin {
   readonly name: string;
   readonly config?: StandardSchemaV1<unknown, unknown>;
@@ -116,9 +91,7 @@ export interface NormalizedPlugin {
   ) => Awaitable<void | Readonly<Record<string, unknown>>>;
 }
 
-// Requirement aliases become context properties, so an alias named `spawn` would
-// shadow a Lifetime operation. Rejecting the collision at declaration time is
-// the only point where the Plugin author can still rename it.
+// Requirement aliases must not shadow Lifetime operations on the context.
 const reservedContextKeys = new Set([
   "signal",
   "meta",
@@ -138,13 +111,7 @@ interface PluginContractDeclaration {
   readonly role: "requirement" | "provision";
 }
 
-/**
- * Validates and freezes a Plugin declaration.
- *
- * The `NoInfer` wrappers on the return type stop a caller's annotation from
- * widening the inferred generics back out, which would let `setup()` see a
- * looser context than the declaration actually promises.
- */
+// NoInfer prevents a caller annotation from widening the inferred setup contract.
 export function definePlugin<
   Config = void,
   Requires extends Requirements = {},
@@ -179,66 +146,19 @@ function normalizePluginDeclaration(plugin: AnyPlugin): AnyPlugin {
     declaration.provides === undefined
       ? undefined
       : normalizePlainRecord(declaration.provides, `Plugin '${name}' provides`);
-  const requires: Record<string, Requirement> = Object.create(null);
-  const provides: Record<string, Provisions[string]> = Object.create(null);
-
-  const contracts = new Map<string, PluginContractDeclaration>();
-  for (const [key, requirement] of Object.entries(declaredRequirements ?? {})) {
-    if (!key.trim()) throw new TypeError("Plugin requirement alias cannot be empty");
-    if (key !== key.trim()) {
-      throw new TypeError("Plugin requirement alias cannot start or end with whitespace");
-    }
-    if (reservedContextKeys.has(key)) {
-      throw new TypeError(`Plugin requirement '${key}' conflicts with the context API`);
-    }
-
-    if (!requirement || typeof requirement !== "object") {
-      throw new TypeError(`Plugin requirement '${key}' is not a contract`);
-    }
-    requires[key] = normalizeRequirement(
-      normalizePlainRecord(requirement, `Plugin requirement '${key}'`),
-      `Plugin requirement '${key}' must be a Service or ExtensionPoint`,
-      `Optional requirement '${key}' must wrap a Service`,
-    );
-    const normalized = requires[key]!;
-    rememberPluginContract(
-      name,
-      contracts,
-      "requirement",
-      key,
-      normalized.kind === "optional" ? normalized.service : normalized,
-    );
-  }
-
-  for (const [key, provision] of Object.entries(declaredProvisions ?? {})) {
-    if (!key.trim()) throw new TypeError("Plugin provision alias cannot be empty");
-    if (key !== key.trim()) {
-      throw new TypeError("Plugin provision alias cannot start or end with whitespace");
-    }
-    if (key === "then") {
-      throw new TypeError("Plugin provision alias 'then' conflicts with the Promise protocol");
-    }
-    provides[key] = normalizeContract(
-      provision,
-      "service",
-      `Plugin provision '${key}' must be a Service`,
-    );
-    rememberPluginContract(name, contracts, "provision", key, provides[key]);
-  }
+  const contracts = new PluginContracts(name);
+  const requires = contracts.normalizeRequirements(declaredRequirements ?? {});
+  const provides = contracts.normalizeProvisions(declaredProvisions ?? {});
 
   return Object.freeze({
     name,
     ...(config === undefined ? {} : { config }),
-    requires: Object.freeze(requires),
-    provides: Object.freeze(provides),
+    requires,
+    provides,
     setup,
   });
 }
 
-// Structural, because Standard Schema is a protocol rather than a base class:
-// zod, valibot and arktype all satisfy it without sharing an ancestor. Checking
-// the shape here means an object that merely looks close fails at `definePlugin`
-// instead of at activation.
 function isStandardSchemaV1(value: unknown): value is StandardSchemaV1 {
   if (!value || (typeof value !== "object" && typeof value !== "function")) return false;
   const standard = (value as { readonly "~standard"?: unknown })["~standard"];
@@ -255,37 +175,82 @@ function isStandardSchemaV1(value: unknown): value is StandardSchemaV1 {
   );
 }
 
-// Rejects three distinct mistakes that all look like "this Contract appears
-// twice": using one id as two kinds, requiring and providing the same Service
-// (an unsatisfiable self-dependency), and two aliases for one Contract (where
-// only one of the two names could ever be the real one). Each gets its own
-// message because each has a different fix.
-function rememberPluginContract(
-  pluginName: string,
-  contracts: Map<string, PluginContractDeclaration>,
-  role: PluginContractDeclaration["role"],
-  alias: string,
-  contract: ContractIdentity,
-) {
-  const previous = contracts.get(contract.id);
-  if (!previous) {
-    contracts.set(contract.id, { alias, kind: contract.kind, role });
-    return;
+class PluginContracts {
+  readonly #declarations = new Map<string, PluginContractDeclaration>();
+
+  constructor(private readonly pluginName: string) {}
+
+  normalizeRequirements(declarations: Requirements): Requirements {
+    const requires: Record<string, Requirement> = Object.create(null);
+    for (const [alias, value] of Object.entries(declarations)) {
+      this.#assertAlias(alias, "requirement");
+      if (reservedContextKeys.has(alias)) {
+        throw new TypeError(`Plugin requirement '${alias}' conflicts with the context API`);
+      }
+      if (!value || typeof value !== "object") {
+        throw new TypeError(`Plugin requirement '${alias}' is not a contract`);
+      }
+      const requirement = normalizeRequirement(
+        normalizePlainRecord(value, `Plugin requirement '${alias}'`),
+        `Plugin requirement '${alias}' must be a Service or ExtensionPoint`,
+        `Optional requirement '${alias}' must wrap a Service`,
+      );
+      this.#remember(
+        "requirement",
+        alias,
+        requirement.kind === "optional" ? requirement.service : requirement,
+      );
+      requires[alias] = requirement;
+    }
+    return Object.freeze(requires);
   }
-  if (previous.kind !== contract.kind) {
+
+  normalizeProvisions(declarations: Provisions): Provisions {
+    const provides: Record<string, Provisions[string]> = Object.create(null);
+    for (const [alias, value] of Object.entries(declarations)) {
+      this.#assertAlias(alias, "provision");
+      if (alias === "then") {
+        throw new TypeError("Plugin provision alias 'then' conflicts with the Promise protocol");
+      }
+      const provision = normalizeContract(
+        value,
+        "service",
+        `Plugin provision '${alias}' must be a Service`,
+      );
+      this.#remember("provision", alias, provision);
+      provides[alias] = provision;
+    }
+    return Object.freeze(provides);
+  }
+
+  #assertAlias(alias: string, role: PluginContractDeclaration["role"]) {
+    if (!alias.trim()) throw new TypeError(`Plugin ${role} alias cannot be empty`);
+    if (alias !== alias.trim()) {
+      throw new TypeError(`Plugin ${role} alias cannot start or end with whitespace`);
+    }
+  }
+
+  #remember(role: PluginContractDeclaration["role"], alias: string, contract: ContractIdentity) {
+    const previous = this.#declarations.get(contract.id);
+    if (!previous) {
+      this.#declarations.set(contract.id, { alias, kind: contract.kind, role });
+      return;
+    }
+    if (previous.kind !== contract.kind) {
+      throw new TypeError(
+        `Plugin '${this.pluginName}' uses Contract '${contract.id}' as both ${contractLabel(previous.kind)} and ${contractLabel(contract.kind)}`,
+      );
+    }
+    const label = contractLabel(contract.kind);
+    if (previous.role !== role) {
+      throw new TypeError(
+        `Plugin '${this.pluginName}' cannot both require and provide ${label} '${contract.id}'`,
+      );
+    }
     throw new TypeError(
-      `Plugin '${pluginName}' uses Contract '${contract.id}' as both ${contractLabel(previous.kind)} and ${contractLabel(contract.kind)}`,
+      `Plugin '${this.pluginName}' ${role} aliases '${previous.alias}' and '${alias}' reference the same ${label} '${contract.id}'`,
     );
   }
-  const label = contractLabel(contract.kind);
-  if (previous.role !== role) {
-    throw new TypeError(
-      `Plugin '${pluginName}' cannot both require and provide ${label} '${contract.id}'`,
-    );
-  }
-  throw new TypeError(
-    `Plugin '${pluginName}' ${role} aliases '${previous.alias}' and '${alias}' reference the same ${label} '${contract.id}'`,
-  );
 }
 
 function contractLabel(kind: ContractKind) {
@@ -294,9 +259,7 @@ function contractLabel(kind: ContractKind) {
   return "Service";
 }
 
-/** The sole boundary that validates a public Plugin and erases authoring-only generics. */
 export function normalizePlugin(plugin: AnyPlugin): NormalizedPlugin {
-  // Config and alias types are authoring constraints. Core has already checked
-  // the declaration here and deliberately stores the same value type-erased.
+  // Authoring generics are erased only after the declaration has passed validation.
   return normalizePluginDeclaration(plugin) as unknown as NormalizedPlugin;
 }

@@ -1,22 +1,15 @@
 import { batch, computed, createHost, definePlugin, observe, signal } from "dougong";
 import { exampleResult, nextTurn, type ExampleResult } from "./example";
 
-/**
- * Signals model values. Chapter 03's Lifetime models resources. `observe()` is
- * the single seam between them: one value change, one resource rebuild.
- */
 export async function reactiveLifetime(): Promise<ExampleResult> {
   const origin = signal("https://api.example");
   const account = signal("alice");
-  // Pure derivation. A computed owns no resource and releases nothing.
   const endpoint = computed(() => `${origin.get()}/events/${account.get()}`);
   const trace: string[] = [];
 
   const connectionPlugin = definePlugin({
     name: "examples.reactive.connection",
     setup(ctx) {
-      // The plugin's Lifetime owns the observation; each value gets a child
-      // Lifetime that is disposed before the next one is built.
       observe(ctx, endpoint, (url, lifetime) => {
         trace.push(`connect:${url}`);
         lifetime.cleanup(() => trace.push(`disconnect:${url}`));
@@ -28,8 +21,6 @@ export async function reactiveLifetime(): Promise<ExampleResult> {
   host.install(connectionPlugin);
   await host.start();
 
-  // Two writes, one coherent value, one rebuild. Without the batch the
-  // intermediate `edge.example/events/alice` would have opened a connection.
   batch(() => {
     origin.set("https://edge.example");
     account.set("bob");

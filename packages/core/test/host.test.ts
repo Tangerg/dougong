@@ -353,10 +353,6 @@ describe("Host", () => {
   });
 
   it("rejects requirement aliases that would shadow the context API", () => {
-    // Requirement aliases become properties on the context a Plugin receives, so
-    // an alias named `spawn` would replace a Lifetime operation. Declaration time
-    // is the only point where the author can still rename it; discovering the
-    // collision inside setup() would mean discovering it as a missing method.
     const TOKEN = service<string>("test/reserved-alias");
 
     for (const reserved of [
@@ -396,8 +392,6 @@ describe("Host", () => {
         setup() {},
       }),
     ).toThrowError(new TypeError("Plugin requirement 'token' is not a contract"));
-    // `optional()` refuses a non-Service, so an object that only claims to be an
-    // optional requirement has to be rejected here too.
     expect(() =>
       definePlugin({
         name: "test.fake-optional",
@@ -429,8 +423,6 @@ describe("Host", () => {
         setup: () => ({ " token": "value" }) as never,
       }),
     ).toThrowError(new TypeError("Plugin provision alias cannot start or end with whitespace"));
-    // Only a Service can be provided: an ExtensionPoint is an open set many
-    // Installations write into, so no single Plugin can claim to supply it.
     expect(() =>
       definePlugin({
         name: "test.point-provision",
@@ -441,8 +433,6 @@ describe("Host", () => {
   });
 
   it("names both kinds when one Contract id is declared as two", () => {
-    // One id must mean one kind. The message says which two, because the fix
-    // depends on which of the two declarations was the mistake.
     const id = "test/conflicting-kind";
 
     expect(() =>
@@ -1196,10 +1186,6 @@ describe("Host", () => {
   });
 
   it("fails closed when a failed activation cannot dispose what it already created", async () => {
-    // Rollback is only safe when the abandoned activation left nothing behind.
-    // Here setup() registers a cleanup and then throws, and the cleanup throws
-    // too — so something the new Instance created is still owned by nobody.
-    // Restoring the previous Instance would run two owners of it at once.
     const WORKER = service<string>("test/unclean-activation-worker");
     const setupFailure = new Error("replacement setup failed");
     const cleanupFailure = new Error("replacement resource is still owned");
@@ -1235,16 +1221,11 @@ describe("Host", () => {
       message:
         "Installation change failed and its partial activation could not be cleanly disposed",
     });
-    // Fail closed, not rolled back: the Host reports idle and refuses reads
-    // rather than presenting the previous Service as healthy.
     expect(host.status).toBe("idle");
     expect(() => host.get(WORKER)).toThrow("Host services are not active");
   });
 
   it("aggregates a failed startup with the cleanup failures it caused", async () => {
-    // The provider activates, the consumer fails, and disposing the provider
-    // fails too. Both errors reach the caller: neither the reason startup failed
-    // nor the resource left behind may be dropped.
     const ROOT = service<string>("test/startup-aggregate-root");
     const startupFailure = new Error("consumer setup failed");
     const cleanupFailure = new Error("provider resource is still owned");
@@ -1283,10 +1264,6 @@ describe("Host", () => {
   });
 
   it("discards staged Installations when a ChangeSet cannot claim authority", async () => {
-    // The Group is removed between staging and commit, so `attach` fails before
-    // any operation executes. The handle the caller already holds must report
-    // the real reason instead of behaving like an Installation that is merely
-    // not ready yet.
     const plugin = definePlugin({ name: "test.unclaimed-install", setup() {} });
     const host = createHost();
     await host.start();

@@ -13,15 +13,7 @@ type GroupConfigurationState<Draft> =
     }
   | { readonly phase: "sealed" };
 
-/**
- * One explicit transaction shared by every nested Group configure callback.
- *
- * Nested `group()` calls join the outer session instead of opening their own, so
- * a whole tree of groups declared in one statement commits once. A failure
- * anywhere in that tree fails the session, which is why `fail()` records the
- * first error and later calls return it unchanged: the cause of a collapsed tree
- * is the first thing that went wrong, not the last.
- */
+// Nested Groups share one session so a failure anywhere prevents a partial subtree commit.
 export class GroupConfigurationSession<Draft> {
   #state: GroupConfigurationState<Draft>;
 

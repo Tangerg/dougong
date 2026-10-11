@@ -1,12 +1,4 @@
-// What an Artifact claims about itself, before anything is loaded.
-//
-// A Manifest is data, so it can be read, cached and authorized without importing
-// a single line of the code it describes. That ordering is the reason permissions
-// are meaningful at all: policy decides on the declaration, not on the module.
-//
-// `.strict()` rejects unknown fields rather than ignoring them, so a typo in a
-// manifest is an error the author sees instead of a setting that silently does
-// nothing.
+// Manifest policy must run before import so denied code cannot execute during admission.
 
 import { satisfies, valid, validRange } from "semver";
 import { z } from "zod";
@@ -55,8 +47,7 @@ export function matchesVersion(version: string, range: string) {
 
 export type ManifestInput = z.input<typeof manifestSchema>;
 
-// Only our declaration checks grant provenance, independent of Error classes
-// and constructors reachable through a previously returned error.
+// Only declaration validation grants error provenance; copied constructors cannot.
 const manifestDeclarationFailures = new WeakSet<object>();
 
 function manifestDeclarationError(message: string) {
@@ -66,14 +57,7 @@ function manifestDeclarationError(message: string) {
   return failure;
 }
 
-/**
- * Every failure here is one `MANIFEST_INVALID`, whatever went wrong inside.
- *
- * A manifest may come from a file, a registry response or another process, so
- * zod itself can throw on input it was not built to see. Wrapping all three
- * paths — unreadable declaration, validator crash, validation failure — means a
- * caller has one code to handle, with the original always kept as `cause`.
- */
+// Untrusted manifests can crash validators; preserve the cause under one public failure code.
 export function defineManifest(input: ManifestInput | Manifest): Manifest {
   let declaration: Readonly<Record<string, unknown>>;
   try {
@@ -112,9 +96,7 @@ export function defineManifest(input: ManifestInput | Manifest): Manifest {
   });
 }
 
-// Copied to own data before validation, because the object may be shared with
-// whoever supplied it. Validating one object and storing another that has since
-// been mutated is exactly the gap this closes.
+// Own the validated data so the supplier cannot mutate it between validation and storage.
 function snapshotManifestDeclaration(input: unknown) {
   const declaration = normalizePlainRecord(input, "Manifest declaration", {
     createError: manifestDeclarationError,

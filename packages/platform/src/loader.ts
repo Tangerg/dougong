@@ -1,17 +1,8 @@
-// How a Reference becomes a module. One method, returning `unknown`, because a
-// Loader's job ends at "here is what that reference resolved to" — validating
-// that it default-exports a Plugin whose name matches the Manifest belongs to
-// `artifact.ts`, in one place, for every Loader.
-//
-// The two implementations here are the honest ones for a same-realm runtime.
-// Neither isolates anything, and neither pretends to.
-
 export interface Loader<Reference> {
-  /** The result is awaited and structurally validated at the Artifact boundary. */
   readonly load: (reference: Reference, signal: AbortSignal) => unknown;
 }
 
-/** Trusted same-Realm ESM loading. It is intentionally not presented as a sandbox. */
+// Same-realm imports provide no isolation; authorization cannot constrain admitted code.
 export class ImportLoader implements Loader<string | URL> {
   readonly load = async (reference: string | URL, signal: AbortSignal): Promise<unknown> => {
     signal.throwIfAborted();
@@ -21,7 +12,6 @@ export class ImportLoader implements Loader<string | URL> {
   };
 }
 
-/** Deterministic loader useful for embedded bundles, tests and application-owned modules. */
 export class MemoryLoader<Reference> implements Loader<Reference> {
   readonly #modules: ReadonlyMap<unknown, unknown>;
 

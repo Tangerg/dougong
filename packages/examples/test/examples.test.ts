@@ -34,9 +34,6 @@ describe("the learning path", () => {
       "applications",
     ]);
 
-    // The syllabus IS the reading order. Concatenating what each chapter
-    // declares must reproduce `concepts` exactly: no gaps, no repeats, and no
-    // concept taught after the chapter that already relied on it.
     expect(results.flatMap((result) => result.introduces)).toEqual([...concepts]);
 
     for (const result of results) {
@@ -50,42 +47,33 @@ describe("the learning path", () => {
       (await runAllExamples()).map((result) => [result.id, result.facts.join("\n")]),
     );
 
-    // 03 · Ownership is a tree released in reverse, and a child is independent.
     expect(facts.get("03")).toContain("cancel:session-watcher → close:session");
     expect(facts.get("03")).toContain("cancel:editor-watcher → close:window → close:index");
 
-    // 04 · A batch coalesces writes into one resource rebuild, and nothing leaks.
     expect(facts.get("04")).toContain("produced 1 rebuild, not two");
     expect(facts.get("04")).toContain("2 opened, 2 closed");
 
-    // 05 · Validation precedes shutdown; rollback undoes work that already ran.
     expect(facts.get("05")).toContain("capacity must be a positive integer");
     expect(facts.get("05")).toContain("capacity 128 → 128");
     expect(facts.get("05")).toContain("started 1 time and was released 1 time");
     expect(facts.get("05")).toContain("AUDIT published = false");
 
-    // 06 · Removing a Group removes its subtree and nothing else.
     expect(facts.get("06")).toContain("ALPHA_STORE available = false");
     expect(facts.get("06")).toContain("/beta kept serving version 2");
 
-    // 07 · A settled task detaches; a retained view finalizes instead of retaining.
     expect(facts.get("07")).toContain("tasks 1 → 0, with the plugin still active");
     expect(facts.get("07")).toContain("finalized to phase 'disposed'");
     expect(facts.get("07")).toContain("accepts new subscribers = false");
 
-    // 08 · The placeholder swap is one committed step, never a duplicate key.
     expect(facts.get("08")).toContain("ExtensionPoint held 1 throughout");
 
-    // 09 · Replacing playback cancels in-flight work through structural ownership.
     expect(facts.get("09")).toContain(
       "Replacing playback aborted 1 in-flight resolve through its child Lifetime",
     );
 
-    // 11 · A failed plan restores the whole plan, not just the failing entry.
     expect(facts.get("11")).toContain("invalid plan was rejected = true");
     expect(facts.get("11")).toContain("running service remained 'hello-v1'");
 
-    // 12 · Invalidation follows importers, and several Registration updates publish once.
     expect(facts.get("12")).toContain(
       "Affected Registrations were examples.hmr-module-graph.outline, examples.hmr-module-graph.search",
     );

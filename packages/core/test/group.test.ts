@@ -11,9 +11,6 @@ import {
 } from "../src/index";
 
 describe("group structure", () => {
-  // A Group id is a path, so its name is the segment. Rejecting a blank, padded
-  // or slash-bearing name at creation keeps `/workspace/session` a faithful
-  // description of the tree instead of a string that only looks like one.
   it.each([
     ["a blank name", "", "Group name must be a non-empty string"],
     ["a whitespace-only name", "   ", "Group name must be a non-empty string"],
@@ -306,9 +303,7 @@ describe("plugin groups", () => {
           outer.group("inner", () => {
             throw failure;
           });
-        } catch {
-          // A nested failure poisons the shared configuration transaction.
-        }
+        } catch {}
         outer.install(plugin);
       }),
     ).toThrowError(

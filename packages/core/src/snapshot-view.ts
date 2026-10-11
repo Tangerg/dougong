@@ -1,12 +1,4 @@
-// The observation protocol behind every diagnostics surface in Dougong.
-//
-// Reads are lazy: `invalidate()` only marks the snapshot dirty and notifies, and
-// the reader function runs on the next `get()`. A Host that changes a hundred
-// times while nobody is looking therefore builds zero snapshots.
-//
-// Subscribers must be synchronous. An async subscriber would resume after the
-// state it was told about had already moved on, which is exactly the torn read
-// this type exists to prevent.
+// Async snapshot subscribers could resume against a state newer than the notification they received.
 
 import { disposeSymbol, type Disposable } from "./resource";
 import { assertSynchronous } from "./sync-result";
@@ -23,23 +15,17 @@ interface SnapshotSubscriptionBinding {
   readonly detach: (subscription: SnapshotSubscription) => void;
 }
 
-// The listener and the detach closure live outside the subscription object so
-// the handle a caller retains holds no strong edge to either. Disposing deletes
-// the entry, and a dropped handle takes its binding with it — a retained
-// subscription cannot keep a Host alive through a callback it no longer needs.
+// Separate bindings let retained subscription handles release their callback and owner edges on disposal.
 const snapshotSubscriptionBindings = new WeakMap<
   SnapshotSubscription,
   SnapshotSubscriptionBinding
 >();
 
-// Core commits all snapshot values before any observer runs. A subscription is
-// the notification identity; writes from a callback join the drain without
-// recursively entering application code. Core and reactive own separate queues.
+// Commit related snapshots before callbacks so reentrant reads cannot observe a torn update.
 const pendingSubscriptions = new Set<SnapshotSubscription>();
 let batchDepth = 0;
 let flushing = false;
 
-/** Internal synchronous commit boundary for related snapshots. */
 export function batchSnapshotNotifications(operation: () => void) {
   batchDepth++;
   const errors: unknown[] = [];
@@ -92,7 +78,6 @@ type SnapshotResult<T> =
   | { readonly phase: "value"; readonly value: T }
   | { readonly phase: "error"; readonly error: RecordedFailure };
 
-/** Synchronous writer for immutable operational snapshots. */
 export class SnapshotPublisher<T> implements Disposable {
   readonly #subscriptions = new Set<SnapshotSubscription>();
   #state: SnapshotPublisherState<T>;
@@ -130,8 +115,7 @@ export class SnapshotPublisher<T> implements Disposable {
     }
     this.#state = { phase: "disposed" };
     try {
-      // Seal the final value or failure before severing the reader. A retained
-      // view must not present a stale value as a successful final result.
+      // Seal the final read before detaching so retained views cannot present stale data as success.
       this.#materialize(state.read);
     } finally {
       this.#dirty = false;
@@ -168,8 +152,7 @@ export class SnapshotPublisher<T> implements Disposable {
   #materialize(read: () => T) {
     if (!this.#dirty) return;
     batchSnapshotNotifications(() => {
-      // A read may invalidate another snapshot and trigger a subscriber that
-      // reads this one. Commit this result before notifications can reenter it.
+      // Commit the read before notification because reading another snapshot can reenter this publisher.
       this.#dirty = false;
       this.#reading = true;
       try {
@@ -177,8 +160,7 @@ export class SnapshotPublisher<T> implements Disposable {
       } catch (error) {
         this.#dirty = true;
         if (this.#state.phase === "disposed") {
-          // A terminal view cannot retry or retain an obsolete value and the
-          // failed reader's object graph as though the final read succeeded.
+          // A terminal read cannot retain an obsolete successful value after its final read failed.
           this.#snapshot = { phase: "error", error: new RecordedFailure(error) };
         }
         throw error;

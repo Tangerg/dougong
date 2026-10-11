@@ -1,5 +1,3 @@
-// Disposal declarations; runtime semantics come from the generated protocol.
-
 export type Awaitable<T> = T | PromiseLike<T>;
 
 export {
@@ -9,9 +7,7 @@ export {
   disposeSymbol,
 } from "./disposal-runtime";
 
-// Split into two interfaces rather than one with optional members so the symbol
-// method is required in each. A single `Disposable | AsyncDisposable` shape with
-// optional symbols would let a half-implemented resource typecheck.
+// Required symbol methods prevent half-implemented resources from satisfying the disposal protocol.
 
 export interface Disposable {
   dispose(): void;
@@ -25,16 +21,11 @@ export interface AsyncDisposable {
 
 export type Resource = Disposable | AsyncDisposable;
 
-/**
- * A resource created in one step and made visible in another. Declarations made
- * during `setup()` stage first and publish only once their whole layer
- * activates, so no half-built Instance is ever observable.
- */
+// Stage declarations until their complete activation layer succeeds to hide partially built Instances.
 export interface Publication extends Disposable {
   publish(): void;
 }
 
-/** A Publication paired with the public handle its owner hands to Plugin code. */
 export interface StagedResource<T extends Disposable> extends Publication {
   readonly handle: T;
 }

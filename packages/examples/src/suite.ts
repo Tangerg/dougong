@@ -12,19 +12,15 @@ import { declarativePlan } from "./11-declarative-plan";
 import { hmrModuleGraph } from "./12-hmr-module-graph";
 import type { Example, ExampleResult } from "./example";
 
-/** The reading order. Chapters run in sequence and each owns its Host. */
 const examples: ReadonlyArray<Example> = [
-  // Atoms.
   serviceBasics,
   extensionAndEvent,
   lifetimeOwnership,
   reactiveLifetime,
-  // Composition.
   configAndFailure,
   contractsAndGroups,
   diagnostics,
   lazyPlatform,
-  // Complete application shapes.
   planetScenario,
   lynxScenario,
   declarativePlan,

@@ -53,7 +53,7 @@ describe("explicitly abandoning an operation on abort", () => {
       return operation.promise;
     });
 
-    // With separate check/start reactions this abort runs between them.
+    // This abort falls between check and start if they run in separate Promise reactions.
     queueMicrotask(() => controller.abort(reason));
     await expect(result).rejects.toBe(reason);
     operation.resolve();

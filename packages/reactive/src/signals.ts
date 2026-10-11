@@ -1,26 +1,8 @@
-// A small synchronous reactive graph. Independent of @dougongjs/core by design:
-// neither package imports the other, and `check-layers.mjs` enforces it. They
-// meet only at the structural `Readable` protocol — `get()` plus `subscribe()` —
-// which a Signal, a ContributionView and a diagnostics view all satisfy without
-// knowing about each other.
-//
-// Three ideas, and that is the whole model:
-//
-//   signal    a value with subscribers
-//   computed  a derived value that tracks its own dependencies
-//   batch     defer notification until a group of writes is done
-//
-// Everything is synchronous and pull-based. `set()` marks and notifies; nothing
-// recomputes until someone reads. A `computed` nobody reads costs nothing, and a
-// read is never stale, because staleness is checked at read time rather than
-// pushed eagerly.
-
 import { disposeSymbol, type Disposable, type Readable } from "./protocol";
 import { assertSynchronous } from "./sync-result";
 
 declare const dougongSignal: unique symbol;
 
-/** A reactive node created by Dougong and safe to compose with computed(). */
 export interface ReadonlySignal<T> extends Readable<T> {
   readonly [dougongSignal]: true;
 }
@@ -46,29 +28,13 @@ type Dependency = {
   subscription: Disposable | undefined;
 };
 
-// Module-level state, which is unusual enough to justify.
-//
-// `activeCollector` is how dependency tracking works without the caller
-// declaring anything: while a `computed` evaluates, it installs a collector, and
-// every `get()` reached during that evaluation reports itself. The alternative —
-// passing a context through every read — would put the mechanism in the API.
-//
-// `batchDepth` and `pendingSlots` are the batch. `nodes` maps a public signal
-// back to its internal node, weakly, so a signal nobody holds is collectable.
-//
-// All of it is single-threaded and synchronous. Nothing here survives a turn:
-// the collector is restored in a `finally`, and pending slots are flushed before
-// the outermost `batch()` returns.
+// Synchronous collection avoids adding tracking context to every read; restore it before the calculation returns.
 let batchDepth = 0;
 let flushing = false;
 const pendingSlots = new Set<ListenerSlot>();
 const pendingInvalidations = new Set<ListenerSlot>();
 let activeCollector: ((source: ReadonlySignal<unknown>) => void) | undefined;
 const nodes = new WeakMap<ReadonlySignal<unknown>, ReactiveNode>();
-
-function createSubscription(dispose: () => void): Disposable {
-  return new ReactiveSubscription(dispose);
-}
 
 class ReactiveSubscription implements Disposable {
   #dispose: (() => void) | undefined;
@@ -89,9 +55,7 @@ class ReactiveSubscription implements Disposable {
   }
 }
 
-// Settle dependency invalidations before delivering observer callbacks. This
-// holds for unequal paths too: notifying halfway through a diamond would let a
-// read clear its dirty flag before the other path invalidates it again.
+// Drain dependency invalidations first so diamond observers cannot read before all paths become dirty.
 function flushPendingListeners() {
   if (flushing) return;
   const errors: unknown[] = [];
@@ -118,8 +82,7 @@ function flushPendingListeners() {
 }
 
 function publish(slots: ReadonlySet<ListenerSlot>) {
-  // Capture membership before invoking anyone. Subscribing during notification
-  // only creates a slot; a subsequent publication must enqueue it explicitly.
+  // Capture membership before delivery so new subscriptions wait for a subsequent publication.
   for (const slot of slots) {
     (slot.kind === "dependency" ? pendingInvalidations : pendingSlots).add(slot);
   }
@@ -130,11 +93,11 @@ function subscribeSlot(
   listeners: Set<ListenerSlot>,
   listener: Listener,
   kind: ListenerSlot["kind"],
-) {
+): Disposable {
   assertListener(listener);
   const slot: ListenerSlot = { kind, listener };
   listeners.add(slot);
-  return createSubscription(() => {
+  return new ReactiveSubscription(() => {
     slot.listener = undefined;
     listeners.delete(slot);
   });
@@ -151,17 +114,7 @@ function track(source: ReadonlySignal<unknown>) {
   activeCollector?.(source);
 }
 
-/**
- * Defers notification until the outermost batch returns, so a group of writes is
- * observed once. Nested calls join the outer batch.
- *
- * Notifications are queued by subscription, not by callback, so the same
- * function subscribed to two signals is still called twice — deduplicating by
- * callback would silently merge two independent subscriptions.
- *
- * If both the body and the flush fail, both errors are reported. A subscriber
- * failing during flush must not hide why the batch itself failed.
- */
+// Queue subscriptions rather than callbacks so distinct subscriptions are never merged.
 export function batch<T>(callback: () => T): T {
   if (typeof callback !== "function") throw new TypeError("batch() expects a function");
   batchDepth++;
@@ -192,47 +145,8 @@ export function batch<T>(callback: () => T): T {
   return outcome.value;
 }
 
-/**
- * A value with subscribers. Writes are compared with `Object.is`, so setting the
- * same value notifies nobody — which is what makes `computed` chains stable
- * under idempotent updates.
- */
 export function signal<T>(initialValue: T): Signal<T> {
-  let value = initialValue;
-  let version = 0;
-  const listeners = new Set<ListenerSlot>();
-
-  const source = {
-    get() {
-      track(source as ReadonlySignal<unknown>);
-      return value;
-    },
-
-    set(nextValue) {
-      if (activeCollector) {
-        throw new TypeError("Computed signal calculations cannot write signals");
-      }
-      if (Object.is(value, nextValue)) return;
-      value = nextValue;
-      version++;
-
-      publish(listeners);
-    },
-
-    subscribe(listener) {
-      return subscribeSlot(listeners, listener, "observer");
-    },
-  } as Signal<T>;
-
-  nodes.set(source as ReadonlySignal<unknown>, {
-    get version() {
-      return version;
-    },
-    refresh() {},
-    subscribeInvalidation: (listener) => subscribeSlot(listeners, listener, "dependency"),
-  });
-
-  return Object.freeze(source);
+  return new SignalNode(initialValue).view;
 }
 
 export function computed<T>(calculate: () => T): ReadonlySignal<T> {
@@ -240,28 +154,51 @@ export function computed<T>(calculate: () => T): ReadonlySignal<T> {
   return new ComputedNode(calculate).view;
 }
 
+class SignalNode<T> implements ReactiveNode {
+  readonly #listeners = new Set<ListenerSlot>();
+  #value: T;
+  #version = 0;
+  readonly view: Signal<T>;
+
+  constructor(initialValue: T) {
+    this.#value = initialValue;
+    this.view = Object.freeze({
+      get: () => {
+        track(this.view);
+        return this.#value;
+      },
+      set: (value: T) => this.#set(value),
+      subscribe: (listener: Listener) => subscribeSlot(this.#listeners, listener, "observer"),
+    }) as Signal<T>;
+    nodes.set(this.view, this);
+  }
+
+  get version() {
+    return this.#version;
+  }
+
+  refresh() {}
+
+  subscribeInvalidation(listener: Listener) {
+    return subscribeSlot(this.#listeners, listener, "dependency");
+  }
+
+  #set(value: T) {
+    if (activeCollector) {
+      throw new TypeError("Computed signal calculations cannot write signals");
+    }
+    if (Object.is(this.#value, value)) return;
+    this.#value = value;
+    this.#version++;
+    publish(this.#listeners);
+  }
+}
+
 type ComputedResult<T> =
   | { readonly phase: "value"; readonly value: T }
   | { readonly phase: "error"; readonly error: unknown };
 
-/**
- * A derived value that discovers its own dependencies by evaluating.
- *
- * Two modes, and the difference matters:
- *
- * Unobserved — nobody has subscribed — it holds no subscriptions to its
- * dependencies at all. Freshness is checked lazily on read by comparing each
- * dependency's version. So an unused `computed` is inert and cannot keep the
- * signals it reads alive through a listener.
- *
- * Observed — someone has subscribed — it subscribes to its dependencies so it can
- * notify onward. Dropping the last subscriber detaches them again.
- *
- * Dependencies are re-collected on every evaluation, so a conditional branch that
- * stops being taken stops being a dependency. `#version` advances only when the
- * result changes (including transitions into and out of failure), so an equal
- * result does not force an unobserved downstream calculation to run again.
- */
+// Unobserved computed nodes hold no subscriptions, preventing unused derived values from retaining their sources.
 class ComputedNode<T> implements ReactiveNode {
   readonly #calculate: () => T;
   readonly #listeners = new Set<ListenerSlot>();
@@ -298,8 +235,7 @@ class ComputedNode<T> implements ReactiveNode {
 
   #get() {
     this.refresh();
-    // An unsuccessful calculation is still a dependency. A circular refresh,
-    // however, must fail before creating an edge back to an evaluating node.
+    // Failed calculations still create dependencies; circular refresh must fail before adding a back edge.
     track(this.view);
     return this.#readResult();
   }
@@ -314,7 +250,7 @@ class ComputedNode<T> implements ReactiveNode {
     return this.#subscribe(listener, "dependency");
   }
 
-  #subscribe(listener: Listener, kind: ListenerSlot["kind"] = "observer") {
+  #subscribe(listener: Listener, kind: ListenerSlot["kind"] = "observer"): Disposable {
     assertListener(listener);
     const slot: ListenerSlot = { kind, listener };
     const wasUnobserved = this.#listeners.size === 0;
@@ -332,7 +268,7 @@ class ComputedNode<T> implements ReactiveNode {
       }
     }
 
-    return createSubscription(() => {
+    return new ReactiveSubscription(() => {
       slot.listener = undefined;
       this.#listeners.delete(slot);
       if (!this.#listeners.size) this.#detachDependencies();
@@ -360,34 +296,51 @@ class ComputedNode<T> implements ReactiveNode {
 
   #refresh() {
     const current = this.#result;
-    if (current && !this.#dirty) {
-      for (const dependency of this.#dependencies.values()) {
-        dependency.node.refresh();
-        if (dependency.version !== dependency.node.version) {
-          this.#dirty = true;
-          break;
-        }
-      }
-      if (!this.#dirty) return;
-    }
+    if (current && !this.#dirty && !this.#dependenciesChanged()) return;
+    this.#dirty = true;
 
     const sources = new Set<ReadonlySignal<unknown>>();
+    const next = this.#evaluate(sources);
+    this.#reconcileDependencies(sources);
+
+    if (
+      !current ||
+      (next.phase === "value"
+        ? current.phase !== "value" || !Object.is(current.value, next.value)
+        : current.phase !== "error" || !Object.is(current.error, next.error))
+    ) {
+      this.#version++;
+    }
+    this.#result = next;
+    this.#dirty = false;
+    if (this.#listeners.size) this.#attachDependencies();
+  }
+
+  #dependenciesChanged() {
+    for (const dependency of this.#dependencies.values()) {
+      dependency.node.refresh();
+      if (dependency.version !== dependency.node.version) return true;
+    }
+    return this.#dirty;
+  }
+
+  #evaluate(sources: Set<ReadonlySignal<unknown>>): ComputedResult<T> {
     const previousCollector = activeCollector;
     activeCollector = (source) => sources.add(source);
 
-    let next: ComputedResult<T>;
     try {
       const value = this.#calculate();
       assertSynchronous(value, "Computed signal calculations must be synchronous");
-      next = { phase: "value", value };
+      return { phase: "value", value };
     } catch (error) {
-      next = { phase: "error", error };
+      return { phase: "error", error };
     } finally {
       activeCollector = previousCollector;
     }
+  }
 
-    // Failure is a settled result too. Collect its dependencies so subsequent
-    // changes can recover, and let callers handle it in their own calculation.
+  #reconcileDependencies(sources: ReadonlySet<ReadonlySignal<unknown>>) {
+    // Track dependencies on failure too so later source changes can recover the calculation.
     for (const [dependency, entry] of this.#dependencies) {
       if (sources.has(dependency)) continue;
       entry.subscription?.dispose();
@@ -406,18 +359,6 @@ class ComputedNode<T> implements ReactiveNode {
       entry.version = node.version;
       this.#dependencies.set(dependency, entry);
     }
-
-    if (
-      !current ||
-      (next.phase === "value"
-        ? current.phase !== "value" || !Object.is(current.value, next.value)
-        : current.phase !== "error" || !Object.is(current.error, next.error))
-    ) {
-      this.#version++;
-    }
-    this.#result = next;
-    this.#dirty = false;
-    if (this.#listeners.size) this.#attachDependencies();
   }
 }
 

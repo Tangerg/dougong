@@ -27,8 +27,6 @@ describe("host composition scenarios", () => {
     let playerStarts = 0;
     let player!: Player;
 
-    // Host adapters are ordinary provider plugins, so they participate in the
-    // same graph, rollback and ownership rules as every external plugin.
     const audioAdapter = definePlugin({
       name: "planet.host.audio",
       provides: { audio: AUDIO },

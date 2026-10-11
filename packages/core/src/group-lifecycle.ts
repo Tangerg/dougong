@@ -2,11 +2,7 @@ import { DougongError, normalizeFailure } from "./errors";
 import type { GroupNode } from "./group";
 import type { LifecycleStatus } from "./lifecycle-status";
 
-/**
- * Owns the readiness barrier for one structural Group node. A failed mutation
- * cannot poison an established Group because transactions expose only the
- * restored committed state.
- */
+// Failed mutations must preserve the established Group readiness of the restored committed state.
 export class GroupLifecycle {
   #state: GroupLifecycleState;
   #notifyChanged: (() => void) | undefined;
@@ -83,7 +79,7 @@ export class GroupLifecycle {
       baseline: preserveCommittedState ? "established" : "new",
     };
     this.#notifyChanged?.();
-    // ready() owns this barrier's failure; mark the internal observer branch handled.
+    // ready() owns this failure; observing the internal branch prevents an unhandled rejection.
     void barrier.catch(() => undefined);
   }
 

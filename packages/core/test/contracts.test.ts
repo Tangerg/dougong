@@ -2,10 +2,6 @@ import { describe, expect, it } from "vitest";
 import { normalizeContract, event, extensionPoint, optional, service } from "../src/contracts";
 
 describe("Contract identity", () => {
-  // A Contract id is a namespaced key that outlives the code declaring it, so a
-  // blank or padded one is rejected at the factory. Accepting `" app/theme "`
-  // would create a second, invisible identity that never matches the intended
-  // one and cannot be spotted by reading either declaration.
   it.each([
     ["service", service],
     ["event", event],

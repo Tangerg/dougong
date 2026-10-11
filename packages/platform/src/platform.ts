@@ -51,7 +51,6 @@ interface PlatformPorts<Reference> {
   readonly logger: Logger;
 }
 
-/** The fixed meaning of one structural change before asynchronous preflight begins. */
 interface PlatformChangePlan<Reference> {
   readonly targets: ReadonlyArray<RegistrationRecord<Reference>>;
   readonly installedUpdates: ReadonlySet<RegistrationRecord<Reference>>;
@@ -66,18 +65,7 @@ type PlatformState<Reference> =
     }
   | { readonly phase: "disposed" };
 
-/**
- * Serializes public structural commands over the Activator and Core compiler.
- *
- * Owns committed Registration membership and serializes its changes.
- * Registrations hold their own state machines, the Activator owns admission,
- * and `core-change.ts` owns the compilation to Core.
- *
- * `PlatformAuthority` is the indirection worth understanding. Every port closes
- * over a mutable `{ current }` cell rather than over `this`, so disposal can
- * clear one field and every callback a Registration still holds becomes a clean
- * `PLATFORM_UNAVAILABLE` — instead of a live edge back into a disposed Platform.
- */
+// Revocable authority cells let retained Registration callbacks detach from a disposed Platform.
 class PlatformImpl<Reference> implements Platform<Reference> {
   readonly #registrations = new Map<string, RegistrationRecord<Reference>>();
   readonly #ownedRegistrations = new WeakMap<object, RegistrationRecord<Reference>>();
@@ -182,11 +170,6 @@ class PlatformImpl<Reference> implements Platform<Reference> {
     return new PlatformChangeSetDraft(this.#changePort);
   }
 
-  /**
-   * Fires one activation event. Every Registration that names it activates
-   * concurrently, and every failure is reported — one Registration failing to
-   * activate must not silence the rest, and must not hide the others' failures.
-   */
   async trigger(event: string) {
     this.#assertActive();
     if (typeof event !== "string" || !event.trim()) {
@@ -259,7 +242,7 @@ class PlatformImpl<Reference> implements Platform<Reference> {
       )
       .map((operation) => operation.registration);
 
-    return this.#enqueueChange(async () => {
+    return this.#changeQueue.run(async () => {
       try {
         this.#assertActive();
         const pending = operations.filter(
@@ -278,21 +261,7 @@ class PlatformImpl<Reference> implements Platform<Reference> {
     });
   }
 
-  /**
-   * The change pipeline. Order matters at every step:
-   *
-   *   1. plan            fix what this change means before anything awaits
-   *   2. validate        the graph that *would* exist — cycles, versions
-   *   3. authorize       before loading, so denied code is never imported
-   *   4. load            only for Registrations already installed
-   *   5. stabilize       close the activation gate; wait for in-flight trees
-   *   6. validate again  concurrent activations may have moved the graph
-   *   7. compile+commit  one Core ChangeSet, atomic
-   *
-   * Step 6 is not redundant. Between steps 2 and 5 an activation that was already
-   * running can commit and change what the graph looks like, so the check is
-   * repeated once nothing else can be in flight.
-   */
+  // Validate again after stabilization because earlier in-flight activations may have changed the graph.
   async #applyChanges(operations: ReadonlyArray<PlatformChangeOperation<Reference>>) {
     const controller = new AbortController();
     this.#changeController = controller;
@@ -429,20 +398,7 @@ class PlatformImpl<Reference> implements Platform<Reference> {
     this.#diagnosticModel.publish();
   }
 
-  #enqueueChange(operation: () => Promise<void>) {
-    return this.#changeQueue.run(operation);
-  }
-
-  /**
-   * Cancels every activation, waits for them to settle, then removes the
-   * installations in one Core change.
-   *
-   * Waiting is not optional: an activation mid-commit would otherwise install
-   * into a Host the Platform is in the middle of vacating. And if the removal
-   * fails, the Platform returns to `active` rather than claiming to be disposed —
-   * a Platform whose installations are still in the graph has not been disposed,
-   * whatever it would prefer to report.
-   */
+  // Await activations before removal to prevent late commits; failed removal must retain active ownership.
   async #disposeRegistrations() {
     const ports = this.#requirePorts();
     const registrations = [...this.#registrations.values()];
@@ -499,7 +455,7 @@ function createDiagnosticReporter(logger: Logger) {
       // The terminal logger has no lower sink, but its rejection must be observed.
       void Promise.resolve(result).catch(() => undefined);
     } catch {
-      // Diagnostics cannot mutate the command being observed.
+      // Diagnostics must not mutate the command being observed.
     }
   };
 }

@@ -7,26 +7,7 @@ import {
 } from "./protocol";
 import { assertSynchronous, captureThenable } from "./sync-result";
 
-// `observe()` — the bridge between a changing value and structured ownership.
-//
-// The idea: each observed value gets its own child lifetime. When the value
-// changes, that lifetime is disposed and a fresh one is created for the new
-// value. So an observer can create tasks, listeners and cleanups freely and
-// never write teardown code — the lifetime it was handed *is* the teardown.
-//
-// The owner is described structurally (`cleanup`/`lifetime`/`spawn`), not as a
-// Core type. A Core `Lifetime` satisfies it, and so does a test double. That is
-// why this lives in @dougongjs/reactive and yet composes with Core: it is a
-// combinator over two public protocols, not a privileged hook.
-//
-// Replacement is serialized through a drain loop rather than done inline in the
-// subscription callback. Disposing the previous lifetime is asynchronous, and two
-// rapid changes must not overlap two teardowns — the loop guarantees the previous
-// lifetime is fully gone before the next observer call.
-//
-// The return-value checks at the bottom validate the owner's protocol because the
-// owner is a caller-supplied object. A `lifetime()` that returns something
-// undisposable would leak silently, so it is rejected at the boundary instead.
+// Serialize replacement so the previous resource owner finishes before the next observer begins.
 
 export interface ObservationTask<T = void> extends AsyncDisposable {
   readonly result: Promise<T>;
@@ -122,16 +103,7 @@ class Observation<T, Child extends AsyncDisposable> {
     this.#wakeDrain?.();
   }
 
-  /**
-   * The serialization point. Sleeps until invalidated, then replaces the current
-   * lifetime, repeating while the value keeps changing. The inner loop collapses
-   * a burst of changes into one replacement per settled value rather than one per
-   * notification.
-   *
-   * A failure here stops the observation and reports it. There is no caller to
-   * return to — this runs in a spawned task — so continuing would mean silently
-   * observing a value with a lifetime that failed to establish.
-   */
+  // Stop on drain failure because continuing would observe a value whose resource ownership never established.
   async #drain(signal: AbortSignal) {
     try {
       while (this.#state.phase === "active" && !signal.aborted) {
@@ -163,21 +135,11 @@ class Observation<T, Child extends AsyncDisposable> {
     });
   }
 
-  /**
-   * Dispose the old lifetime, then create the new one, then call the observer.
-   * Strictly in that order: overlapping them would run two owners of whatever the
-   * observer set up, and a failed observer would leave the previous lifetime half
-   * disposed.
-   *
-   * `#observed` is cleared while no lifetime is current, so an interrupted
-   * replacement cannot leave a value marked as observed when nothing is
-   * observing it.
-   */
+  // Clear the observed marker during replacement so interruption cannot leave a value without its owner.
   async #replaceCurrent(signal: AbortSignal) {
     if (this.#state.phase !== "active" || signal.aborted) return;
     const beforeCleanup = this.#state.binding.source.get();
-    // A notification does not guarantee a different value. Re-reading and
-    // comparing avoids tearing down a live lifetime to rebuild an identical one.
+    // Notifications can preserve the value; compare again before tearing down its live resources.
     if (this.#observed.present && Object.is(beforeCleanup, this.#observed.value)) return;
 
     const previous = this.#takeCurrent();
@@ -193,8 +155,7 @@ class Observation<T, Child extends AsyncDisposable> {
     const current = owner.lifetime("observation");
     assertAsyncDisposable(current, "ObservationOwner.lifetime()");
     this.#current = current;
-    // Subscribe before establishing ownership, then read after it. Creating a
-    // child can publish diagnostics and synchronously change the source too.
+    // Creating a child can synchronously change the source, so subscribe before ownership and read afterward.
     const value = source.get();
     this.#invokeObserver(value, current);
 
@@ -246,8 +207,7 @@ class Observation<T, Child extends AsyncDisposable> {
     this.#wakeDrain?.();
     await this.#disposeSubscription(errors);
     await collect(this.#takeCurrent(), errors);
-    // The current drain task cannot await its own disposal. Release that edge
-    // before disposing the cleanup handle that owns this Observation.
+    // Detach the current drain task before cleanup so disposal cannot await itself.
     this.#drainTask = undefined;
     await collect(this.#takeOwnerCleanup(), errors);
     if (errors.length === 1) throw errors[0];
@@ -267,10 +227,6 @@ class Observation<T, Child extends AsyncDisposable> {
   }
 }
 
-/**
- * Lifetime-aware synchronization built only from the public source and
- * Lifetime protocols. It is a reactive-layer combinator, not a Core hook.
- */
 export function observe<T, Child extends AsyncDisposable>(
   owner: ObservationOwner<Child>,
   source: Readable<T>,
@@ -296,9 +252,7 @@ export function observe<T, Child extends AsyncDisposable>(
     observation.start();
     return handle;
   } catch (error) {
-    // Dispose immediately so synchronous setup rollback cannot race live work.
-    // The owner cleanup remains authoritative because construction did not
-    // return a handle; owner rollback must still observe async cleanup failure.
+    // Owner rollback still owns async cleanup failure when construction never returned a handle.
     void observation.dispose().catch(() => undefined);
     throw error;
   }

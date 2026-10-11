@@ -1,4 +1,4 @@
-// Only use this policy when the operation's late values and failures are safe to ignore.
+// Only abandon operations whose late values and failures are safe to ignore.
 export function abandonOnAbort<T>(signal: AbortSignal, start: () => PromiseLike<T>): Promise<T> {
   if (signal.aborted) return Promise.reject(signal.reason);
 
@@ -11,7 +11,7 @@ export function abandonOnAbort<T>(signal: AbortSignal, start: () => PromiseLike<
 
     void Promise.resolve()
       .then(() => {
-        // A separate reaction for start would allow abort to arrive after the check.
+        // A separate start reaction would allow abort to arrive after the check.
         signal.throwIfAborted();
         return start();
       })

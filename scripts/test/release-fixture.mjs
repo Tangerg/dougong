@@ -3,7 +3,7 @@ import { promisify } from "node:util";
 
 const executeFile = promisify(execFile);
 
-// Recovery runs two CLIs, each bounded at ten seconds, plus real Git and archives.
+// Recovery runs two bounded CLIs plus real Git and archive operations.
 export const releaseTestTimeout = 30000;
 
 export async function executeRelease(args, { cwd, env }) {

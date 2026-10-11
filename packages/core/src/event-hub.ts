@@ -1,11 +1,3 @@
-// Events are transient facts: no history, no replay, no ordering guarantee
-// between listeners. Nothing here stores a payload, which is what keeps an Event
-// from quietly becoming a state container.
-//
-// A listener is staged when `on()` is called during `setup()` and added to the
-// hub only when its Lifetime publishes, so an Instance cannot receive an Event
-// before it finishes starting.
-
 import { disposeSymbol, type Disposable, type Publication, type StagedResource } from "./resource";
 
 export type EventListener<T> = (payload: T) => unknown;
@@ -104,17 +96,7 @@ export class EventHub {
     if (!listeners.size) this.#listeners.delete(eventId);
   }
 
-  /**
-   * Every still-subscribed listener runs, then failures are aggregated. Three details, all
-   * deliberate:
-   *
-   * - the listener set is copied first; a new subscription does not join this
-   *   emission. A disposed slot is skipped if its callback has not started;
-   * - each call is wrapped in a resolved promise, so a listener that throws
-   *   synchronously is collected like one that rejects;
-   * - `allSettled`, so one broken listener cannot stop the others from being
-   *   told. The emitter still learns about it — every error comes back.
-   */
+  // Capture listener membership before delivery so subscriptions created by a callback wait for the next event.
   async emit<T>(eventId: string, payload: T) {
     const listeners = [...(this.#listeners.get(eventId) ?? [])];
     const results = await Promise.allSettled(

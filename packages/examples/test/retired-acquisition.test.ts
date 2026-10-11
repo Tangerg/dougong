@@ -212,7 +212,7 @@ describe("resource acquisition with explicit waiter retirement", () => {
     let operationsDisposed = false;
     try {
       await started.promise;
-      // Fulfillment transfers ownership in its reaction; abort precedes delivery to the waiter.
+      // Abort follows ownership transfer but precedes delivery to the waiting generation.
       operation.resolve(resource);
       queueMicrotask(() => {
         void generation.dispose().then(() => {

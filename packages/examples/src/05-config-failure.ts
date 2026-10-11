@@ -10,12 +10,10 @@ interface Audit {
   readonly entries: number;
 }
 
-/** What a caller may pass. */
 interface CacheOptions {
   readonly capacity?: number;
 }
 
-/** What `setup` receives after validation: defaults applied, invariants held. */
 interface CacheConfig {
   readonly capacity: number;
 }
@@ -23,10 +21,6 @@ interface CacheConfig {
 const CACHE = service<Cache>("examples/config/cache");
 const AUDIT = service<Audit>("examples/config/audit");
 
-/**
- * Core ships no validator. It speaks Standard Schema, so zod, valibot or
- * arktype drop in unchanged — and so does this hand-written one.
- */
 const cacheConfig: StandardSchemaV1<CacheOptions, CacheConfig> = {
   "~standard": {
     version: 1,
@@ -46,7 +40,6 @@ const cacheConfig: StandardSchemaV1<CacheOptions, CacheConfig> = {
   },
 };
 
-/** A rejected declaration and a failed setup both leave the running graph untouched. */
 export async function configAndFailure(): Promise<ExampleResult> {
   let auditStarts = 0;
   let auditReleases = 0;
@@ -55,7 +48,6 @@ export async function configAndFailure(): Promise<ExampleResult> {
     name: "examples.config.cache",
     config: cacheConfig,
     provides: { cache: CACHE },
-    // `config` is the validated output type, so the default is already applied.
     setup: (_ctx, config) => ({ cache: { capacity: config.capacity } }),
   });
 
@@ -70,8 +62,6 @@ export async function configAndFailure(): Promise<ExampleResult> {
     },
   });
 
-  // Depends on the audit service, so the layer above must start first — which
-  // makes "started, then rolled back" observable rather than racy.
   const exporterPlugin = definePlugin({
     name: "examples.config.exporter",
     requires: { audit: AUDIT },
@@ -85,7 +75,6 @@ export async function configAndFailure(): Promise<ExampleResult> {
   await host.start();
   const running = host.get(CACHE).capacity;
 
-  // 1. An invalid declaration. Validation runs before anything is stopped.
   let issues: ReadonlyArray<string> = [];
   try {
     await cacheInstallation.update({ config: { capacity: 0 } });
@@ -95,7 +84,6 @@ export async function configAndFailure(): Promise<ExampleResult> {
   }
   const afterInvalidConfig = host.get(CACHE).capacity;
 
-  // 2. A valid declaration whose setup fails, inside one ChangeSet.
   const change = host.change();
   change.install(auditPlugin);
   change.install(exporterPlugin);

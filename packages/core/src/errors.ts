@@ -1,14 +1,3 @@
-// Error vocabulary for Core. Four jobs, kept apart on purpose:
-//
-//   DougongError      a failure with a stable machine-readable `code`
-//   RecordedFailure   a bounded pure-value rejection record for objects that must not retain
-//                     the failed object graph
-//   isError           the shared recognition boundary for external rejection values
-//   normalizeFailure  Core's coded normalization of non-Error rejection reasons
-//
-// `docs/reference/errors.md` lists every code, and the api-surface gate derives
-// the codes from this source and fails when the two disagree.
-
 import type { StandardSchemaV1 } from "@standard-schema/spec";
 
 export class DougongError extends Error {
@@ -25,7 +14,6 @@ export class DougongError extends Error {
   }
 }
 
-/** Bounded diagnostic values, with no references to the failed object graph. */
 export interface ErrorSnapshot {
   readonly name: string;
   readonly message: string;
@@ -42,11 +30,7 @@ export interface ErrorSnapshot {
   readonly truncated?: true;
 }
 
-/**
- * Diagnostic failures are records, never reconstructions of the original class.
- * Operations still reject with their live error; snapshots and terminal handles
- * use this class so causes and custom fields cannot retain application resources.
- */
+// Terminal diagnostics must not retain application resources through Error causes or custom fields.
 export class RecordedFailure extends Error {
   override readonly name = "RecordedFailure";
   readonly code: string | undefined;
@@ -64,8 +48,7 @@ export class RecordedFailure extends Error {
     super(snapshot.message);
     this.code = snapshot.code;
     this.#snapshot = snapshot;
-    // Always replace V8's constructor trace: even a missing source stack must
-    // not leave native frames retaining the application that records this failure.
+    // Replace even a missing stack so V8 constructor frames cannot retain the recorded application.
     this.stack = snapshot.stack ?? `${this.name}: ${snapshot.message}`;
     Object.freeze(this);
   }
@@ -155,7 +138,7 @@ function captureError(error: unknown): ErrorSnapshot {
   return visit(error, 0);
 }
 
-/** Unreadable prototypes are not evidence that a rejection value is an Error. */
+// Unreadable prototypes do not prove that a rejection value is an Error.
 export function isError(value: unknown): value is Error {
   try {
     return value instanceof Error;
@@ -182,22 +165,9 @@ function readErrorProperty(value: unknown, key: PropertyKey): unknown {
   }
 }
 
-// Only this normalization boundary grants provenance. Copying an Error's
-// constructor or prototype cannot grant permission to reclassify it.
+// Only normalization grants provenance; copying constructors or prototypes cannot authorize reclassification.
 const normalizedFailures = new WeakSet<Error>();
 
-/**
- * Preserves explicit Error values and classifies non-Error rejection reasons.
- *
- * `throw "nope"` in a Plugin must not become an unnamed failure at the Host
- * boundary, so a non-Error reason is wrapped in a coded Error with the original
- * kept as `cause`. A real Error is returned untouched — Core never rewrites a
- * failure a Plugin author deliberately threw.
- *
- * The private provenance set is why re-normalizing is safe: a wrapper that already
- * belongs to Core can be re-coded as it passes an outer boundary instead of
- * being wrapped a second time.
- */
 export function normalizeFailure(error: unknown, code: string, message: string): Error {
   let reason = error;
   if (isError(error)) {
@@ -211,15 +181,7 @@ export function normalizeFailure(error: unknown, code: string, message: string):
   return failure;
 }
 
-/**
- * Classifies the exact signal reason or a conventional AbortError, but only
- * after abort.
- *
- * This is the one place Core is allowed to stop propagating a failure, so the
- * test is deliberately narrow. Checking `signal.aborted` first means an
- * `AbortError` thrown by unrelated code on a live signal stays a real error, and
- * only a cancellation that this Lifetime actually requested is treated as one.
- */
+// A live signal must not classify an unrelated AbortError as requested cancellation.
 export function isCancellationReason(signal: AbortSignal, error: unknown) {
   if (
     !signal ||
@@ -250,9 +212,7 @@ export class ConfigValidationError extends DougongError {
   }
 }
 
-// Issues come from a third-party validator, so they are copied and frozen
-// rather than stored by reference. A retained ConfigValidationError otherwise
-// keeps whatever object graph that library hung off its issue objects alive.
+// Copy validator issues so retained errors cannot retain third-party object graphs.
 function snapshotValidationIssues(issues: unknown): ReadonlyArray<StandardSchemaV1.Issue> {
   if (!Array.isArray(issues)) {
     throw new TypeError("Config validation issues must be an array");

@@ -8,12 +8,6 @@ import type { Manifest } from "./manifest";
 
 export type PlatformStatus = "active" | "disposing" | "disposed";
 
-/**
- * `registered` and `installed` are the distinction the whole Platform exists to
- * make: admitted, versus loaded and committed as a Core Installation. Only
- * `ready()` establishes execution readiness. `loading` is visible in
- * between so a slow import is observable rather than looking like a hang.
- */
 export type RegistrationStatus =
   "pending" | "registered" | "loading" | "installed" | "unavailable" | "failed" | "removed";
 
@@ -40,12 +34,7 @@ export interface DiagnosableRegistration {
   readonly error: Error | undefined;
 }
 
-/**
- * Immutable operational read model compiled to Core's snapshot protocol.
- *
- * Built on Core's `SnapshotPublisher` rather than a second observation mechanism,
- * so a consumer subscribes to Platform and Host diagnostics the same way.
- */
+// Reuse Core snapshot publication so Platform does not introduce a second observation mechanism.
 export class PlatformDiagnostics {
   readonly #apiVersion: string;
   readonly #publisher: SnapshotPublisher<PlatformSnapshot>;

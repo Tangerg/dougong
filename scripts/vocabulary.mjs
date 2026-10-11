@@ -1,12 +1,8 @@
-// One source of truth for names retired by the domain-vocabulary rebuild.
-// Both source and built-declaration guards consume exact tokens from this list;
-// patterns would accidentally reject valid names such as PluginContext.
+// Use exact retired tokens so valid names sharing a substring are not rejected.
 export const retiredVocabulary = Object.freeze([
-  // Replaced diagnostic and internal lifecycle contracts.
   "ErrorSummary",
   "ObservationLifetime",
   "ContractRegistryDraft",
-  // Host and its former internal collaborators.
   "Application",
   "ApplicationDiagnostics",
   "ApplicationImpl",
@@ -19,12 +15,10 @@ export const retiredVocabulary = Object.freeze([
   "CreateAppOptions",
   "RuntimeChangeOutcome",
   "createApp",
-  // Former callback-protocol suffixes now expressed as Ports.
   "GroupCoordinatorHost",
   "LifetimeHost",
   "PlatformChangeHost",
   "PluginChangeHost",
-  // Core installation and contribution vocabulary.
   "Extension",
   "ExtensionLeaseKind",
   "ExtensionRegistry",
@@ -48,7 +42,6 @@ export const retiredVocabulary = Object.freeze([
   "PluginUpdate",
   "discardPluginChangeSetDraft",
   "extension",
-  // Platform stages formerly collapsed under the Plugin prefix.
   "CreatePlatformOptions",
   "ImportPluginLoader",
   "ManagedPlugin",
@@ -64,7 +57,6 @@ export const retiredVocabulary = Object.freeze([
   "PluginPlatformSnapshot",
   "PluginPlatformStatus",
   "loadPluginDefinition",
-  // Error codes renamed around the stable Registration identity.
   "PLUGIN_CYCLE",
   "PLUGIN_DEPENDENCY_INACTIVE",
   "PLUGIN_DEPENDENCY_INCOMPATIBLE",

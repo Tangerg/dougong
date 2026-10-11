@@ -17,12 +17,9 @@ interface CommandExecuted {
   readonly id: string;
 }
 
-// One Service has one provider. One ExtensionPoint has any number of contributors.
 const COMMANDS = extensionPoint<Command>("examples/commands");
-// An Event is a fact that already happened. It stores nothing.
 const COMMAND_EXECUTED = event<CommandExecuted>("examples/command-executed");
 
-/** Why an open set and a transient fact cannot stand in for each other. */
 export async function extensionAndEvent(): Promise<ExampleResult> {
   const executed: string[] = [];
   let commands!: ContributionView<Command>;
@@ -32,7 +29,6 @@ export async function extensionAndEvent(): Promise<ExampleResult> {
     name: "examples.commands.shell",
     requires: { commands: COMMANDS },
     setup(ctx) {
-      // A live view, not a copy: later contributions appear without a restart.
       commands = ctx.commands;
       ctx.on(COMMAND_EXECUTED, ({ id }) => executed.push(id));
     },
@@ -41,7 +37,6 @@ export async function extensionAndEvent(): Promise<ExampleResult> {
   const helloPlugin = definePlugin({
     name: "examples.commands.hello",
     setup(ctx) {
-      // The returned Contribution is the contributor's own withdrawal right.
       contribution = ctx.contribute(COMMANDS, "hello", {
         id: "hello",
         run: () => ctx.emit(COMMAND_EXECUTED, { id: "hello" }),
@@ -59,7 +54,6 @@ export async function extensionAndEvent(): Promise<ExampleResult> {
   if (!command) throw new TypeError("The command contribution was not published");
   await command.run();
 
-  // Withdrawing early is ordinary: the ExtensionPoint is a set, not a registration log.
   contribution.dispose();
   const remaining = commands.get().size;
   await host.stop();

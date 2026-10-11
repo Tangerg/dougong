@@ -6,11 +6,6 @@ interface WorkspaceStore {
   readonly version: number;
 }
 
-/**
- * A Contract family: one shape, many identities, each spelled out. Two
- * workspaces are two Services — not one Service resolved differently depending
- * on who is asking.
- */
 const workspaceStore = (workspace: string) =>
   service<WorkspaceStore>(`examples/workspaces/${encodeURIComponent(workspace)}/store`);
 
@@ -35,15 +30,12 @@ function readerPlugin(name: string, token: Service<WorkspaceStore>, trace: strin
   });
 }
 
-/** Contract identity, installation ownership and atomic change stay three separate ideas. */
 export async function contractsAndGroups(): Promise<ExampleResult> {
   const trace: string[] = [];
   const host = createHost({ name: "contracts-groups" });
   let alphaProviderInstallation!: Installation<ReturnType<typeof storePlugin>>;
   let betaProviderInstallation!: Installation<ReturnType<typeof storePlugin>>;
 
-  // A Group owns an installation subtree. It is not a capability scope, not a
-  // provider shadow tree and not a permission boundary.
   const alpha = host.group("alpha", (group) => {
     alphaProviderInstallation = group.install(
       storePlugin("examples.workspaces.alpha.store", ALPHA_STORE, "alpha"),
@@ -63,8 +55,6 @@ export async function contractsAndGroups(): Promise<ExampleResult> {
   const distinct = host.get(ALPHA_STORE).workspace !== host.get(BETA_STORE).workspace;
   const atStartup = [...trace];
 
-  // One ChangeSet spanning two Groups: consumers see version 1 or version 2,
-  // never one workspace ahead of the other.
   const change = host.change();
   change.update(alphaProviderInstallation, { config: 2 });
   change.update(betaProviderInstallation, { config: 2 });
