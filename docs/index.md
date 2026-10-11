@@ -106,7 +106,7 @@ await host.start()                    // 从 Service 声明推导拓扑，同层
 10. [整体架构](./reference/architecture.md) —— 分层、依赖方向与设计论证
 11. [Platform 规范](./reference/platform.md) —— 外部插件边界
 12. [错误码](./reference/errors.md) —— 稳定错误码及触发条件
-13. [机械守卫](./reference/guards.md) —— `pnpm check` 十步各自守护什么
+13. [机械守卫](./reference/guards.md) —— `pnpm check` 每项检查守护什么
 
 </div>
 

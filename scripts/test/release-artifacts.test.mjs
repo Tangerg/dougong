@@ -1,4 +1,4 @@
-import { execFile, execFileSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import {
   existsSync,
   mkdirSync,
@@ -11,12 +11,10 @@ import {
 import { tmpdir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { promisify } from "node:util";
 import { expect, it, vi } from "vitest";
+import { executeRelease, releaseTestTimeout } from "./release-fixture.mjs";
 
-// Recovery runs two CLIs, each bounded at ten seconds, plus real Git and archives.
-vi.setConfig({ testTimeout: 30000 });
-const executeFile = promisify(execFile);
+vi.setConfig({ testTimeout: releaseTestTimeout });
 const environment = {
   ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("GIT_"))),
   GIT_CONFIG_NOSYSTEM: "1",
@@ -191,31 +189,21 @@ async function runRelease(
     }
     const execute = async (interruption) => {
       try {
-        const { stdout, stderr } = await executeFile(
-          process.execPath,
-          [release, version, dryRun ? "--dry-run" : "--yes"],
-          {
-            cwd: workspace,
-            env: {
-              ...environment,
-              PATH: bin,
-              DOUGONG_RELEASE_FIXTURE: workspace,
-              DOUGONG_RELEASE_ALL_PUBLISHED: String(allPublished),
-              DOUGONG_RELEASE_PACKED_NAME: packedName,
-              DOUGONG_RELEASE_PACKED_DEPENDENCIES:
-                packedDependencies === undefined ? "" : JSON.stringify(packedDependencies),
-              DOUGONG_RELEASE_REAL_GIT: realGit ?? "",
-              DOUGONG_RELEASE_INTERRUPT: interruption ?? "",
-              DOUGONG_RELEASE_INTERRUPT_AFTER: String(interruptAfter),
-            },
-            encoding: "utf8",
-            timeout: 10000,
+        return await executeRelease([release, version, dryRun ? "--dry-run" : "--yes"], {
+          cwd: workspace,
+          env: {
+            ...environment,
+            PATH: bin,
+            DOUGONG_RELEASE_FIXTURE: workspace,
+            DOUGONG_RELEASE_ALL_PUBLISHED: String(allPublished),
+            DOUGONG_RELEASE_PACKED_NAME: packedName,
+            DOUGONG_RELEASE_PACKED_DEPENDENCIES:
+              packedDependencies === undefined ? "" : JSON.stringify(packedDependencies),
+            DOUGONG_RELEASE_REAL_GIT: realGit ?? "",
+            DOUGONG_RELEASE_INTERRUPT: interruption ?? "",
+            DOUGONG_RELEASE_INTERRUPT_AFTER: String(interruptAfter),
           },
-        );
-        return { status: 0, stdout, stderr };
-      } catch (error) {
-        if (typeof error.code !== "number") throw error;
-        return { status: error.code, stdout: error.stdout, stderr: error.stderr };
+        });
       } finally {
         const stageRecord = join(workspace, "release-stage");
         if (existsSync(stageRecord)) stages.add(readFileSync(stageRecord, "utf8"));

@@ -85,6 +85,7 @@ Mutable owners and projections are separated for each fact:
 | Published package versions and contents | npm registry | Release execution reads and compares local candidates; failed queries cannot establish absence |
 | Release commits and tags | Git object graph | Release execution validates and advances the same record without a separate recovery state |
 | Promise and disposal Symbol runtime rules | scripts/internal/disposal-runtime.ts | Generated Core / reactive modules |
+| Workspace source import paths | baseUrl and paths in tsconfig.base.json | Vitest derives runtime aliases without a second handwritten path table |
 
 Snapshots and caches cannot originate transitions. Commands validate target identity before asking the owner to advance it; terminal records retain data while releasing control, callbacks and payload references.
 
@@ -447,7 +448,7 @@ Group removal handles installation ownership; a workspace ID inside domain value
 
 ## 13. These constraints are enforced by the gate
 
-An architectural constraint that exists only in prose degrades into a suggestion within months. Every relationship this document describes — layering direction, single path, ownership, vocabulary — has a matching mechanical check, and `pnpm check` aborts on the first of its ten steps to fail.
+An architectural constraint that exists only in prose degrades into a suggestion within months. Every relationship this document describes — layering direction, single path, ownership, vocabulary — has a matching mechanical check, and `pnpm check` aborts when any step fails.
 
 Three families are worth naming here, because they map directly onto the arguments above:
 

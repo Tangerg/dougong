@@ -1,9 +1,11 @@
-import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
+import { executeRelease, releaseTestTimeout } from "./release-fixture.mjs";
+
+vi.setConfig({ testTimeout: releaseTestTimeout });
 
 const release = fileURLToPath(new URL("../release.mjs", import.meta.url));
 const packages = ["reactive", "core", "platform", "dougong"];
@@ -31,7 +33,7 @@ if (name === "git") {
 } else process.exit(99);
 `;
 
-function runRelease(failure) {
+async function runRelease(failure) {
   const workspace = mkdtempSync(join(tmpdir(), "dougong-release-manifests-test-"));
   try {
     const bin = join(workspace, "bin");
@@ -88,17 +90,10 @@ syncBuiltinESMExports();
 `,
     );
 
-    const result = spawnSync(
-      process.execPath,
-      ["--import", preload, release, version, "--dry-run"],
-      {
-        cwd: workspace,
-        env: { ...process.env, PATH: bin },
-        encoding: "utf8",
-        timeout: 5000,
-      },
-    );
-    if (result.error) throw result.error;
+    const result = await executeRelease(["--import", preload, release, version, "--dry-run"], {
+      cwd: workspace,
+      env: { ...process.env, PATH: bin },
+    });
     return {
       ...result,
       originals,
@@ -121,8 +116,8 @@ syncBuiltinESMExports();
 
 it.each(["read", "write"])(
   "restores every manifest when the second package's %s fails",
-  (failure) => {
-    const result = runRelease(failure);
+  async (failure) => {
+    const result = await runRelease(failure);
     expect(result.status).toBe(1);
     expect(result.stderr).toContain(`fixture manifest ${failure} failure`);
     expect(result.manifests).toEqual(result.originals);
@@ -130,15 +125,15 @@ it.each(["read", "write"])(
   },
 );
 
-it("restores the original manifest bytes after packaging fails", () => {
-  const result = runRelease("pack");
+it("restores the original manifest bytes after packaging fails", async () => {
+  const result = await runRelease("pack");
   expect(result.status).toBe(1);
   expect(result.packStarted).toBe(true);
   expect(result.manifests).toEqual(result.originals);
 });
 
-it("attempts the remaining restorations and reports a manifest it cannot restore", () => {
-  const result = runRelease("restore");
+it("attempts the remaining restorations and reports a manifest it cannot restore", async () => {
+  const result = await runRelease("restore");
   expect(result.status).toBe(1);
   expect(JSON.parse(result.manifests.reactive).version).toBe(version);
   expect(result.manifests.core).toBe(result.originals.core);

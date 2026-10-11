@@ -1,9 +1,11 @@
-import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
+import { executeRelease, releaseTestTimeout } from "./release-fixture.mjs";
+
+vi.setConfig({ testTimeout: releaseTestTimeout });
 
 const release = fileURLToPath(new URL("../release.mjs", import.meta.url));
 const version = "0.7.2";
@@ -31,7 +33,7 @@ if (name === "git") {
 } else process.exit(99);
 `;
 
-function runRelease(
+async function runRelease(
   response,
   names = ["@dougongjs/reactive", "@dougongjs/core", "@dougongjs/platform", "dougong"],
   releaseArgs = [version, "--dry-run"],
@@ -53,13 +55,10 @@ function runRelease(
     for (const name of ["git", "pnpm", ...(response.missing ? [] : ["npm"])]) {
       writeFileSync(join(bin, name), command, { mode: 0o755 });
     }
-    const result = spawnSync(process.execPath, [release, ...releaseArgs], {
+    const result = await executeRelease([release, ...releaseArgs], {
       cwd: workspace,
       env: { ...process.env, PATH: bin },
-      encoding: "utf8",
-      timeout: 5000,
     });
-    if (result.error) throw result.error;
     return {
       ...result,
       gateStarted: existsSync(join(workspace, "gate-started")),
@@ -72,8 +71,8 @@ function runRelease(
 
 it.each(["E503", "ENOTFOUND", "E401"])(
   "stops release preflight when the registry reports %s",
-  (code) => {
-    const result = runRelease({ status: 1, stdout: JSON.stringify({ error: { code } }) });
+  async (code) => {
+    const result = await runRelease({ status: 1, stdout: JSON.stringify({ error: { code } }) });
     expect(result.status).toBe(1);
     expect(result.gateStarted).toBe(false);
     expect(result.stdout).not.toContain(`${version} is unused on the registry`);
@@ -87,8 +86,8 @@ it.each([
   { label: "malformed output", status: 1, stdout: "not JSON" },
   { label: "empty successful output", status: 0, stdout: "" },
   { label: "a different version", status: 0, stdout: JSON.stringify("0.7.3"), plain: "0.7.3" },
-])("stops release preflight on $label", (response) => {
-  const result = runRelease(response);
+])("stops release preflight on $label", async (response) => {
+  const result = await runRelease(response);
   expect(result.status).toBe(1);
   expect(result.gateStarted).toBe(false);
   expect(result.stdout).not.toContain(`${version} is unused on the registry`);
@@ -102,8 +101,8 @@ it.each([
   "1.2.3-alpha..1",
   "1.2.3-alpha.",
   "1.2.3-.alpha",
-])("rejects invalid release version %s before external commands", (candidate) => {
-  const result = runRelease(
+])("rejects invalid release version %s before external commands", async (candidate) => {
+  const result = await runRelease(
     { status: 1, stdout: JSON.stringify({ error: { code: "E404" } }) },
     undefined,
     [candidate, "--dry-run"],
@@ -127,8 +126,8 @@ it.each([
     args: [version, "--dry-run", "--otp=123456", "--otp=654321"],
     error: "specified once",
   },
-])("rejects ambiguous or malformed release arguments $args", ({ args, error }) => {
-  const result = runRelease(
+])("rejects ambiguous or malformed release arguments $args", async ({ args, error }) => {
+  const result = await runRelease(
     { status: 1, stdout: JSON.stringify({ error: { code: "E404" } }) },
     undefined,
     args,
@@ -143,8 +142,8 @@ it.each([
   ["0.7.2-alpha.1", "--dry-run"],
   ["--otp=123456", "--dry-run", version],
   [version, "--yes", "--dry-run", "--otp=123456"],
-])("accepts canonical release inputs %s", (...args) => {
-  const result = runRelease(
+])("accepts canonical release inputs %s", async (...args) => {
+  const result = await runRelease(
     { status: 1, stdout: JSON.stringify({ error: { code: "E404" } }) },
     undefined,
     args,
@@ -153,24 +152,27 @@ it.each([
   expect(result.gateStarted).toBe(true);
 });
 
-it("continues to verification only for an explicit missing version", () => {
-  const result = runRelease({ status: 1, stdout: JSON.stringify({ error: { code: "E404" } }) });
+it("continues to verification only for an explicit missing version", async () => {
+  const result = await runRelease({
+    status: 1,
+    stdout: JSON.stringify({ error: { code: "E404" } }),
+  });
   expect(result.status).toBe(1);
   expect(result.gateStarted).toBe(true);
   expect(result.stdout).toContain(`${version} is unused on the registry`);
 });
 
-it("verifies a fully published version before finishing its release record", () => {
-  const result = runRelease({ status: 0, stdout: JSON.stringify(version), plain: version });
+it("verifies a fully published version before finishing its release record", async () => {
+  const result = await runRelease({ status: 0, stdout: JSON.stringify(version), plain: version });
   expect(result.status).toBe(1);
   expect(result.gateStarted).toBe(true);
   expect(result.queries).toHaveLength(4);
   expect(result.stdout).toContain("resuming:");
 });
 
-it("queries the release identities captured from package manifests", () => {
+it("queries the release identities captured from package manifests", async () => {
   const names = ["@fixture/reactive", "@fixture/core", "@fixture/platform", "fixture-facade"];
-  const result = runRelease(
+  const result = await runRelease(
     { status: 1, stdout: JSON.stringify({ error: { code: "E404" } }) },
     names,
   );
@@ -181,8 +183,8 @@ it("queries the release identities captured from package manifests", () => {
 it.each([
   { label: "missing", names: [undefined, "core", "platform", "facade"], error: "package name" },
   { label: "duplicate", names: ["shared", "shared", "platform", "facade"], error: "unique" },
-])("rejects $label release identities before querying npm", ({ names, error }) => {
-  const result = runRelease(
+])("rejects $label release identities before querying npm", async ({ names, error }) => {
+  const result = await runRelease(
     { status: 1, stdout: JSON.stringify({ error: { code: "E404" } }) },
     names,
   );

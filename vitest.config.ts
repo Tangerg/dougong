@@ -1,23 +1,32 @@
 /// <reference types="vitest/config" />
 
-import { fileURLToPath, URL } from "node:url";
+import { resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { defineConfig } from "vitest/config";
+import tsconfig from "./tsconfig.base.json";
+
+const sourceRoot = fileURLToPath(new URL("./", import.meta.url));
+const aliases = Object.fromEntries(
+  Object.entries(tsconfig.compilerOptions.paths).map(([specifier, targets]) => {
+    const [target] = targets;
+    if (
+      specifier.includes("*") ||
+      targets.length !== 1 ||
+      typeof target !== "string" ||
+      target.includes("*")
+    ) {
+      throw new TypeError("Workspace test paths must have an exact specifier and one exact target");
+    }
+    return [specifier, resolve(sourceRoot, tsconfig.compilerOptions.baseUrl, target)];
+  }),
+);
 
 export default defineConfig({
   // Tests import the workspace packages by their published names so the suite
   // exercises the same specifiers a consumer writes, while resolving to source
-  // rather than a stale `dist/`. Keep in sync with tsconfig.base.json's paths.
+  // rather than a stale `dist/`. TypeScript owns the source resolution paths.
   resolve: {
-    alias: {
-      "@dougongjs/reactive": fileURLToPath(
-        new URL("./packages/reactive/src/index.ts", import.meta.url),
-      ),
-      "@dougongjs/core": fileURLToPath(new URL("./packages/core/src/index.ts", import.meta.url)),
-      "@dougongjs/platform": fileURLToPath(
-        new URL("./packages/platform/src/index.ts", import.meta.url),
-      ),
-      dougong: fileURLToPath(new URL("./packages/dougong/src/index.ts", import.meta.url)),
-    },
+    alias: aliases,
   },
 
   test: {

@@ -167,6 +167,8 @@ Each package's `public-api.types.ts` uses `expectTypeOf` and TypeScript expected
 
 ### Runtime shape
 
+Runtime test source paths also belong to `baseUrl/paths` in `tsconfig.base.json`; Vitest derives its aliases directly. Each exact package name must have one exact target. Wildcards or multiple candidates abort configuration loading instead of silently selecting different resolution semantics. `scripts/test/workspace-resolution.test.mjs` changes only the TypeScript paths in a temporary directory and uses Vite's real configuration loader to verify changed targets, additional mappings and special filenames reach runtime resolution without manual synchronization.
+
 `packages/core/test/api-surface.test.ts` asserts exact `Object.keys()` results: which keys a Context exposes, whether handles are frozen, whether internal orchestration methods leak. `check:api` guards built-declaration type relationships, exported vocabulary and `any`, while runtime tests guard actual object shape. They are complementary, because after type erasure `Object.keys` is what a consumer can actually see.
 
 ### Release query and artifact boundaries
@@ -184,6 +186,8 @@ Git's object graph owns release commits and tags; the process keeps no recovery 
 Version changes are local staging owned by the release process. Before the first write, it captures the original bytes of all four `package.json` files and registers exit and signal handlers; changes derive from that snapshot. Until Git confirms a commit exists, failure, interruption, declined publication and dry runs restore those exact bytes. Recording failures also restore these manifests in the index. A failed restoration must not prevent attempts for the remaining files, and must name the failed path without claiming success. An established Git commit is never rolled back based on a command's exit code: tag or push failures preserve it, and the same version resumes from Git's facts.
 
 `scripts/test/release.test.mjs` runs the actual release CLI in a temporary workspace with an executable search path containing only test commands, verifying strict version and option parsing, that declarations supply package identities, that missing or duplicate identities are rejected, and that unknown state cannot pass preflight. `scripts/test/release-artifacts.test.mjs` uses isolated commands and real temporary archives to check package identity, complete dependency declarations and exact internal dependency versions, as well as complete content equality, missing and additional files, and changes to declarations, documentation and binary contents when resuming a partial release. Temporary Git workspaces and bare remotes also inject add, commit, tag and push failures to verify recovery, established commits, tag conflicts and atomic pushes. `scripts/test/release-manifests.test.mjs` injects file-read, partial-write and restoration failures in an isolated CLI process to check complete rollback and failure reporting; dry runs also verify exact byte restoration. These cases run under `pnpm test` without accessing the registry, publishing packages or changing the project's or a shared remote's Git state.
+
+All three release fixtures share asynchronous subprocess execution in `scripts/test/release-fixture.mjs`, using one execution deadline policy and result format; timeouts, signals and launch failures still fail the tests.
 
 ### Coverage floors
 
