@@ -8,7 +8,6 @@ const summary = {
   en: "A capability composition and structured lifetime kernel for JavaScript/TypeScript.",
 };
 
-/** Open Graph and Twitter cards, per locale so shares carry the right language. */
 function social(lang: string, description: string, url: string): HeadConfig[] {
   return [
     ["meta", { property: "og:type", content: "website" }],

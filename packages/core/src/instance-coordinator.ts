@@ -35,7 +35,6 @@ export interface InstanceCoordinatorPort {
   readonly report: (error: unknown) => void;
 }
 
-// Build the complete layer before publication so no sibling can observe a partially activated layer.
 export class InstanceCoordinator {
   readonly #hostName: string;
   readonly #logger: Logger;

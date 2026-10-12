@@ -1,9 +1,9 @@
 import type { Installer } from "@dougongjs/core";
+import { satisfies } from "semver";
 import { ActivationGate, type ActivationPermit } from "./activation-gate";
 import { loadPlugin } from "./artifact";
 import { PlatformError } from "./errors";
 import type { Loader } from "./loader";
-import { matchesVersion } from "./manifest";
 import type { Authorizer } from "./permissions";
 import { assertCurrentRegistration, type RegistrationRecord } from "./registration";
 
@@ -130,7 +130,7 @@ export class Activator<Reference> {
           `Registration '${registration.manifestName}' requires missing Registration '${name}'`,
         );
       }
-      if (!matchesVersion(dependency.manifest.version, range)) {
+      if (!satisfies(dependency.manifest.version, range)) {
         throw new PlatformError(
           "REGISTRATION_DEPENDENCY_INCOMPATIBLE",
           `Registration '${registration.manifestName}' requires Registration '${name}' ${range}, found ${dependency.manifest.version}`,

@@ -27,6 +27,7 @@ export type {
 
 const defaultLogger: Logger = console;
 const hostOptionFields = new Set(["name", "logger", "onError"]);
+type HostCommandPhase = Exclude<HostStatus, "active" | "idle">;
 
 class HostImpl implements Host {
   readonly name: string;
@@ -39,7 +40,7 @@ class HostImpl implements Host {
   readonly #onError: NonNullable<HostOptions["onError"]>;
   readonly #engine: Engine;
 
-  #status: HostStatus = "idle";
+  #commandPhase: HostCommandPhase | undefined;
   readonly #commands = new SerialQueue();
 
   constructor(options: HostOptions = {}) {
@@ -67,7 +68,7 @@ class HostImpl implements Host {
     this.#installations = new InstallationRegistry({
       settled: () => this.#commands.settled,
       report: (error) => this.#report(error),
-      notifyChanged: () => this.#publishDiagnostics(),
+      notifyChanged: () => this.#diagnosticModel.publish(),
       update: (installation, facade, update) => {
         const change = this.#groups.change(installation.group);
         change.update(facade, update);
@@ -95,12 +96,12 @@ class HostImpl implements Host {
       runExclusive: (operation) => this.#commands.run(operation),
       settled: () => this.#commands.settled,
       removeInstallations: (operations) => this.#removeInstallations(operations),
-      notifyChanged: () => this.#publishDiagnostics(),
+      notifyChanged: () => this.#diagnosticModel.publish(),
     });
     this.#diagnosticModel = new HostDiagnostics(
       name,
       () => ({
-        status: this.#status,
+        status: this.status,
         installations: this.#installations.values(),
         groups: this.#groups.nodes(),
       }),
@@ -110,15 +111,15 @@ class HostImpl implements Host {
     Object.freeze(this);
   }
 
-  get status() {
-    return this.#status;
+  get status(): HostStatus {
+    return this.#commandPhase ?? (this.#engine.hasCommittedPlan ? "active" : "idle");
   }
 
   get<T>(token: Service<T>): T;
   get<T>(token: OptionalService<T>): T | undefined;
   get<T>(token: Service<T> | OptionalService<T>): T | undefined {
     // Reads require active status because starting, changing and stopping may hold intermediate plans.
-    const availability = this.#status === "active" ? "available" : "unavailable";
+    const availability = this.status === "active" ? "available" : "unavailable";
     return this.#engine.get(token, availability);
   }
 
@@ -143,16 +144,16 @@ class HostImpl implements Host {
 
   start() {
     return this.#commands.run(async () => {
-      if (this.#status === "active") return;
-      this.#setStatus("starting");
+      if (this.status === "active") return;
+      this.#setCommandPhase("starting");
       try {
         const plan = this.#engine.buildPlan(this.#installations.declarations());
         await this.#engine.start(plan);
-        this.#setStatus("active");
+        this.#setCommandPhase(undefined);
         this.#installations.settleReadiness(plan.order);
       } catch (error) {
         // Settle every Installation readiness after failed startup so existing waiters cannot outlive the attempt.
-        this.#setStatus("idle");
+        this.#setCommandPhase(undefined);
         for (const installation of this.#installations.values()) {
           if (installation.status !== "active") installation.fail(error);
         }
@@ -164,10 +165,10 @@ class HostImpl implements Host {
 
   stop() {
     return this.#commands.run(async () => {
-      if (this.#status === "idle") return;
-      this.#setStatus("stopping");
+      if (this.status === "idle") return;
+      this.#setCommandPhase("stopping");
       const errors = await this.#engine.stop();
-      this.#setStatus("idle");
+      this.#setCommandPhase(undefined);
       if (errors.length === 1) throw errors[0];
       if (errors.length > 1) throw new AggregateError(errors, "Host shutdown failed");
     });
@@ -187,13 +188,13 @@ class HostImpl implements Host {
         if (!group.attached) throw groupRemovedError(group);
         if (!pending.length) return;
         // Idle changes only edit declarations because there are no live Instances to transact against.
-        if (this.#status === "active") {
+        if (this.status === "active") {
           await this.#transact(pending);
         } else {
           this.#installations.commit(this.#installations.draft(pending), pending, false);
           this.#installations.settleReadiness(pending.map((operation) => operation.installation));
         }
-        this.#publishDiagnostics();
+        this.#diagnosticModel.publish();
       } catch (error) {
         for (const installation of installed) {
           if (!this.#installations.contains(installation)) {
@@ -206,7 +207,7 @@ class HostImpl implements Host {
   }
 
   async #removeInstallations(operations: ReadonlyArray<ChangeOperation>) {
-    if (operations.length && this.#status === "active") {
+    if (operations.length && this.status === "active") {
       await this.#transact(operations);
     } else {
       this.#installations.commit(this.#installations.draft(operations), operations, false);
@@ -225,18 +226,18 @@ class HostImpl implements Host {
 
   async #runTransaction(operations: ReadonlyArray<ChangeOperation>): Promise<TransitionOutcome> {
     const changed = new Set(operations.map((operation) => operation.installation));
-    this.#setStatus("changing");
+    this.#setCommandPhase("changing");
     try {
       const draft = this.#installations.draft(operations);
       const nextPlan = this.#engine.buildPlan(draft);
       return await this.#engine.transition(nextPlan, changed, () => {
         batchSnapshotNotifications(() => {
           this.#installations.commit(draft, operations, true);
-          this.#setStatus("active");
+          this.#setCommandPhase(undefined);
         });
       });
     } finally {
-      this.#setStatus(this.#engine.hasCommittedPlan ? "active" : "idle");
+      this.#setCommandPhase(undefined);
     }
   }
 
@@ -252,12 +253,8 @@ class HostImpl implements Host {
     }
   }
 
-  #setStatus(status: HostStatus) {
-    this.#status = status;
-    this.#publishDiagnostics();
-  }
-
-  #publishDiagnostics() {
+  #setCommandPhase(phase: HostCommandPhase | undefined) {
+    this.#commandPhase = phase;
     this.#diagnosticModel.publish();
   }
 }

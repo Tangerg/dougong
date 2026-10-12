@@ -68,6 +68,7 @@ Constraints the type system cannot express but source text can decide. Two kinds
 | Installation diagnostics cannot reach through Lifetime's execution binding for a view | Instance retains the same read-only view for terminal reads during disposal |
 | Event listener registrations cannot store a publication phase | EventHub membership is the sole visibility owner |
 | Installation facades cannot keep lifecycle or authority state | InstallationRecord is the sole owner |
+| Host derives `active/idle` from Engine's committed plan without a separate state field | Engine owns steady execution availability; Host only tracks the in-flight command phase |
 | RegistrationRecord cannot keep a mutable Manifest mirror | Manifest derives from the same Artifact; terminal data is immutable |
 | Group facades cannot keep configuration or structural phases | Read GroupConfigurationSession and GroupNode |
 | ContributionStore cannot store or assign a second contribution value | ContributionRecord owns the value; Store owns publication |

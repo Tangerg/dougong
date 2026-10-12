@@ -7,9 +7,10 @@ import {
   type Provisions,
   type Requirements,
 } from "@dougongjs/core";
+import { satisfies } from "semver";
 import { PlatformError } from "./errors";
 import type { Loader } from "./loader";
-import { defineManifest, matchesVersion, type Manifest } from "./manifest";
+import { defineManifest, type Manifest } from "./manifest";
 import type { Artifact, NormalizedArtifact } from "./platform-api";
 
 const artifactFields = new Set(["manifest", "reference", "config", "placeholder"]);
@@ -32,7 +33,7 @@ export function normalizeArtifact<Reference>(
   const config = declaration.config;
   const declaredPlaceholder = declaration.placeholder;
   const manifest = defineManifest(declaredManifest);
-  if (!matchesVersion(apiVersion, manifest.apiVersion)) {
+  if (!satisfies(apiVersion, manifest.apiVersion)) {
     throw new PlatformError(
       "API_INCOMPATIBLE",
       `Manifest '${manifest.name}' requires API ${manifest.apiVersion}, Platform provides ${apiVersion}`,

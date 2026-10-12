@@ -68,6 +68,7 @@ pnpm check
 | Installation 诊断不通过 Lifetime 的执行绑定读取 view | Instance 已保存同一只读 view，释放期间仍能读取终态投影 |
 | Event listener 不另存发布阶段 | EventHub 成员关系是可见性唯一拥有者 |
 | Installation facade 不另建状态机 | 权限只保存在 InstallationRecord |
+| Host 不另存 `active/idle` 状态，必须读取 Engine 的已提交计划 | 稳态执行可用性只有一个拥有者，Host 只保存在途命令阶段 |
 | RegistrationRecord 不另存可变 Manifest | manifest 直接来自同一 Artifact，终态只保留不可变数据 |
 | Group facade 不另建配置或附着状态 | 直接读取配置会话与 GroupNode |
 | ContributionStore 不另存或修改贡献值 | 值只由 ContributionRecord 推进，Store 只拥有 claim 与发布状态 |

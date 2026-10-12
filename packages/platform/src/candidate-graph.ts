@@ -1,6 +1,6 @@
 import { PlatformError } from "./errors";
+import { satisfies } from "semver";
 import type { RegistrationRecord } from "./registration";
-import { matchesVersion } from "./manifest";
 import type { NormalizedArtifact } from "./platform-api";
 import type { PlatformChangeOperation } from "./platform-change-set";
 
@@ -101,7 +101,7 @@ function assertInstalledDependencies<Reference>(
           `Installed Registration '${registrationName}' requires missing Registration '${name}'`,
         );
       }
-      if (!matchesVersion(dependency.artifact.manifest.version, range)) {
+      if (!satisfies(dependency.artifact.manifest.version, range)) {
         throw new PlatformError(
           "REGISTRATION_DEPENDENCY_INCOMPATIBLE",
           `Registration '${registrationName}' requires Registration '${name}' ${range}, found ${dependency.artifact.manifest.version}`,

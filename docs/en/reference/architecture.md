@@ -60,6 +60,8 @@ Mutable owners and projections are separated for each fact:
 | Committed Installation membership | InstallationRegistry | Group queries, Host diagnostics and candidate graphs |
 | Installation declaration, Instance state and control binding | InstallationRecord | Installation facade, immutable graph versions and diagnostics |
 | Host command completion boundary | Host's SerialQueue | Installation / Group ready await the same boundary |
+| Steady Host execution availability | Engine's committed plan | With no in-flight command, Host status and diagnostics derive active/idle without storing or reconciling another state |
+| In-flight Host command phase | Host | starting/changing/stopping temporarily close Service reads; completion exposes Engine's committed fact directly |
 | Platform structural command completion boundary | Platform's SerialQueue | Registration ready and Core lifecycle observation await the same boundary instead of independently classifying uncommitted binding changes |
 | Group attachment and parent-child relationships | GroupNode | Group facade and structural diagnostics |
 | Group configuration phase | GroupConfigurationSession | Group facade reads it without advancing it independently |
@@ -215,9 +217,9 @@ Services do not use live proxies:
 provider A ──► consumer B ──► consumer C
 ```
 
-When A is updated, Host computes the affected closure over both the old and new graph, stops in `C → B → A` order and starts in `A → B → C` order. Unaffected plugins never restart.
+When A is updated, Engine computes the affected closure over both the old and new graph. InstanceCoordinator stops in `C → B → A` order and starts in `A → B → C` order. Unaffected Installations never restart.
 
-Host caches only the validated graph corresponding to committed execution state. `host.get()` is a constant-time map lookup on that graph; candidate graphs are built only during `start()` or ChangeSet validation, and replace the cache only after the transaction fully succeeds. An idle installation plan may temporarily lack dependencies, which preserves the "declare several Installations, then start once" workflow.
+Engine caches only the validated graph corresponding to committed execution state. `host.get()` is a constant-time map lookup on that graph; candidate graphs are built only during `start()` or ChangeSet validation, and replace the cache only after the transaction fully succeeds. An idle installation plan may temporarily lack dependencies, which preserves the "declare several Installations, then start once" workflow.
 
 When a ChangeSet commits while the Host is active, its stop-and-rebuild window is an explicit `changing` status, not a fake active. Application-code Service reads are closed during it and only resume at `active` after a successful commit or complete rollback, so one read boundary never mixes the old graph with new Instances.
 

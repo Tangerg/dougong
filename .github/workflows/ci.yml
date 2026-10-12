@@ -17,9 +17,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
-      # `pnpm install` runs the root `prepare` script, which installs the git
-      # hooks. There is nothing to hook in CI, and husky exits non-zero when it
-      # cannot find a working tree it owns.
+      # CI runs full verification directly; local Git hooks would repeat its checks.
       HUSKY: "0"
 
     steps:
@@ -35,8 +33,5 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      # One gate: types, lint, formatting, tests + coverage thresholds, dead
-      # code, import cycles, layer boundaries, and the published build. Same
-      # command a contributor runs locally, so a green local run means a green CI.
       - name: Run repository verification
         run: pnpm check

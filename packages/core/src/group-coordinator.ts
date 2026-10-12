@@ -127,7 +127,6 @@ class GroupFacade implements Group {
   }
 }
 
-// Revocable facades must not retain structural nodes after detachment.
 export class GroupCoordinator {
   readonly root: GroupNode;
   readonly #port: GroupCoordinatorPort;

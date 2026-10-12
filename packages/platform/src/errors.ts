@@ -2,10 +2,6 @@ import { DougongError } from "@dougongjs/core";
 
 export class PlatformError extends DougongError {
   override name = "PlatformError";
-
-  constructor(code: string, message: string, options?: ErrorOptions) {
-    super(code, message, options);
-  }
 }
 
 // Permission errors can outlive the operation; own their denied-permission data to avoid mutable sharing.

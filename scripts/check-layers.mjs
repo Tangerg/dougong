@@ -236,6 +236,13 @@ const FILE_RULES = [
   {
     matches: (file) => file === "core/src/host.ts",
     test: (source) =>
+      /#(?:status|active|idle|running|started)\b/.test(source) ||
+      !/this\.#engine\.hasCommittedPlan\b/.test(source),
+    message: "Host must derive active/idle state from Engine's committed plan",
+  },
+  {
+    matches: (file) => file === "core/src/host.ts",
+    test: (source) =>
       !/new\s+InstallationRegistry\s*\(/.test(source) ||
       /#(?:ownedInstallations|publicInstallations|installationSequence)\b/.test(source),
     message:

@@ -125,12 +125,12 @@ class PlatformImpl<Reference> implements Platform<Reference> {
     this.#activator = new Activator(
       this.#registrations,
       () => this.#requirePorts(),
-      () => this.#publish(),
+      () => this.#diagnosticModel.publish(),
     );
     this.#registrationPort = {
       notifyChanged: () => {
         const platform = authority.current;
-        if (platform) platform.#publish();
+        if (platform) platform.#diagnosticModel.publish();
       },
       change: () => requirePlatform(authority).change(),
       settled: () => requirePlatform(authority).#changeQueue.settled,
@@ -200,7 +200,7 @@ class PlatformImpl<Reference> implements Platform<Reference> {
     this.#state = { phase: "disposing", ports: state.ports, completion };
     this.#changeController?.abort();
     for (const registration of this.#registrations.values()) registration.cancelActivation();
-    this.#publish();
+    this.#diagnosticModel.publish();
     return completion;
   }
 
@@ -255,7 +255,7 @@ class PlatformImpl<Reference> implements Platform<Reference> {
       } catch (error) {
         const failure = normalizePlatformOperationFailure(error, "change");
         for (const registration of registrations) registration.discard(failure);
-        this.#publish();
+        this.#diagnosticModel.publish();
         throw failure;
       }
     });
@@ -292,7 +292,7 @@ class PlatformImpl<Reference> implements Platform<Reference> {
       controller.signal.throwIfAborted();
       await coreChange.commit();
       commitPlatformChange();
-      this.#publish();
+      this.#diagnosticModel.publish();
     } finally {
       activationBarrier?.release();
       if (this.#changeController === controller) this.#changeController = undefined;
@@ -394,10 +394,6 @@ class PlatformImpl<Reference> implements Platform<Reference> {
     return state.phase === "disposed" ? undefined : state.ports;
   }
 
-  #publish() {
-    this.#diagnosticModel.publish();
-  }
-
   // Await activations before removal to prevent late commits; failed removal must retain active ownership.
   async #disposeRegistrations() {
     const ports = this.#requirePorts();
@@ -418,12 +414,12 @@ class PlatformImpl<Reference> implements Platform<Reference> {
       this.#registrations.clear();
       for (const registration of registrations) registration.markRemoved();
       this.#state = { phase: "disposed" };
-      this.#publish();
+      this.#diagnosticModel.publish();
       this.#diagnosticModel.dispose();
       this.#authority.current = undefined;
     } catch (error) {
       this.#state = { phase: "active", ports };
-      this.#publish();
+      this.#diagnosticModel.publish();
       throw normalizePlatformOperationFailure(error, "disposal");
     }
   }

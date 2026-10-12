@@ -13,6 +13,7 @@ import {
   type Logger,
   type Plugin,
   type Service,
+  type HostStatus,
 } from "../src/index";
 import { InstallationGraph } from "../src/installation-graph";
 import { Lifetime } from "../src/lifetime";
@@ -888,6 +889,54 @@ describe("Host", () => {
     await host.stop();
     expect(() => host.get(CLOCK)).toThrow("not active");
     expect(() => host.get(optional(MISSING))).toThrow("not active");
+  });
+
+  it("projects committed availability while command phases keep reads closed", async () => {
+    const VALUE = service<string>("test/host-availability-owner");
+    const setupEntered = Promise.withResolvers<void>();
+    const allowSetup = Promise.withResolvers<void>();
+    const cleanupEntered = Promise.withResolvers<void>();
+    const allowCleanup = Promise.withResolvers<void>();
+    const host = createHost();
+    host.install(
+      definePlugin({
+        name: "test.host-availability-owner",
+        provides: { value: VALUE },
+        async setup(ctx) {
+          setupEntered.resolve();
+          await allowSetup.promise;
+          ctx.cleanup(async () => {
+            cleanupEntered.resolve();
+            await allowCleanup.promise;
+          });
+          return { value: "ready" };
+        },
+      }),
+    );
+    const check = (status: HostStatus) => {
+      expect(host.status).toBe(status);
+      expect(host.diagnostics.get().status).toBe(status);
+    };
+    const checkClosed = (status: Exclude<HostStatus, "active">) => {
+      check(status);
+      expect(() => host.get(VALUE)).toThrow("Host services are not active");
+    };
+
+    checkClosed("idle");
+    const starting = host.start();
+    await setupEntered.promise;
+    checkClosed("starting");
+    allowSetup.resolve();
+    await starting;
+    check("active");
+    expect(host.get(VALUE)).toBe("ready");
+
+    const stopping = host.stop();
+    await cleanupEntered.promise;
+    checkClosed("stopping");
+    allowCleanup.resolve();
+    await stopping;
+    checkClosed("idle");
   });
 
   it("reads services from the cached active graph and swaps it only after commit", async () => {

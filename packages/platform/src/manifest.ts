@@ -1,6 +1,6 @@
 // Manifest policy must run before import so denied code cannot execute during admission.
 
-import { satisfies, valid, validRange } from "semver";
+import { valid, validRange } from "semver";
 import { z } from "zod";
 import { normalizePlainRecord } from "@dougongjs/core";
 import { PlatformError } from "./errors";
@@ -39,10 +39,6 @@ export interface Manifest {
 
 export function isConcreteVersion(version: string) {
   return version === version.trim() && valid(version) !== null;
-}
-
-export function matchesVersion(version: string, range: string) {
-  return satisfies(version, range);
 }
 
 export type ManifestInput = z.input<typeof manifestSchema>;

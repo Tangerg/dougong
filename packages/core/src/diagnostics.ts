@@ -3,7 +3,6 @@ import type { InstallationRecord, InstallationSnapshot } from "./installation";
 import { ReadonlyMapSnapshot } from "./readonly-map";
 import { SnapshotPublisher, type SnapshotView } from "./snapshot-view";
 
-// The changing phase closes reads so a transaction cannot expose an intermediate Service graph.
 export type HostStatus = "idle" | "starting" | "active" | "changing" | "stopping";
 
 export type { InstallationSnapshot } from "./installation";

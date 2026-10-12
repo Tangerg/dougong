@@ -86,7 +86,6 @@ type InstallationState =
   | { readonly phase: "removed"; readonly readiness: "unsettled" | "settled" }
   | { readonly phase: "discarded"; readonly error: RecordedFailure };
 
-// Keep state transitions with the Instance so orchestration cannot publish a contradictory status.
 export class InstallationRecord {
   #state: InstallationState = { phase: "pending" };
   #attachment: InstallationAttachment | undefined;

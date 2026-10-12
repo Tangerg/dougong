@@ -6,6 +6,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readFileSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -93,4 +94,22 @@ it("rejects an actual upward layer dependency", () => {
   });
   expect(result.status).toBe(1);
   expect(result.output).toContain("core:0 -> core:10");
+});
+
+it("rejects a competing Host execution state", () => {
+  const result = runGuard("check-layers.mjs", (workspace) => {
+    const path = join(workspace, "packages/core/src/host.ts");
+    const source = readFileSync(path, "utf8");
+    writeFileSync(
+      path,
+      source.replace(
+        "class HostImpl implements Host {",
+        'class HostImpl implements Host {\n  #status: HostStatus = "idle";',
+      ),
+    );
+  });
+  expect(result.status).toBe(1);
+  expect(result.output).toContain(
+    "Host must derive active/idle state from Engine's committed plan",
+  );
 });

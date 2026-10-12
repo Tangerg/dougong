@@ -492,7 +492,7 @@ export class Lifetime implements LifetimeContext {
     this.#flushStaged();
   }
 
-  // An unactivated subtree must finish detaching before its shared declaration phase advances.
+  // Disposing children stay attached until teardown settles; flushing must tolerate revoked publications.
   #flushStaged() {
     for (const publication of this.#listeners) publication.publish();
     for (const publication of this.#contributions) publication.publish();

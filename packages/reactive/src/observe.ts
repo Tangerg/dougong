@@ -89,7 +89,7 @@ class Observation<T, Child extends AsyncDisposable> {
 
   async #disposeResources() {
     const errors: unknown[] = [];
-    // Finish synchronous factory handoffs before draining their returned resources.
+    // Reentrant disposal can precede factory return; yield until returned resources enter ownership.
     await this.#disposeSubscription(errors);
     await collect(this.#takeDrainTask(), errors);
     await collect(this.#takeCurrent(), errors);

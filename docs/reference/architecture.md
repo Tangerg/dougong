@@ -60,6 +60,8 @@ Host 与 Platform 诊断通过 SnapshotPublisher 的 reader 构造集合。publi
 | 已提交 Installation 成员关系 | InstallationRegistry | Group 查询、Host 诊断、候选图 |
 | Installation 声明、Instance 状态与控制绑定 | InstallationRecord | Installation facade、不可变图版本与诊断 |
 | Host 命令完成边界 | Host 的 SerialQueue | Installation / Group ready 等待同一边界 |
+| Host 稳态执行可用性 | Engine 的已提交计划 | 无在途命令时，Host status 与诊断直接投影为 active/idle，不保存或校准第二份状态 |
+| Host 在途命令阶段 | Host | starting/changing/stopping 临时关闭 Service 读取；结束后直接读取 Engine 的已提交事实 |
 | Platform 结构命令完成边界 | Platform 的 SerialQueue | Registration ready 与 Core 生命周期观察等待同一边界；不独立判定尚未提交的绑定变化 |
 | Group 附着与父子关系 | GroupNode | Group facade、结构诊断 |
 | Group 配置会话阶段 | GroupConfigurationSession | Group facade 读取，不自行推进 |
@@ -215,9 +217,9 @@ Service 不使用 live Proxy：
 provider A ──► consumer B ──► consumer C
 ```
 
-更新 A 时，Host 计算新旧图的影响闭包，按 `C → B → A` 停止，再按 `A → B → C` 启动。未受影响 Installation 的 Instance 不重启。
+更新 A 时，Engine 计算新旧图的影响闭包，InstanceCoordinator 按 `C → B → A` 停止，再按 `A → B → C` 启动。未受影响 Installation 的 Instance 不重启。
 
-Host 只缓存已提交执行状态对应的已验证图。`host.get()` 在该图上做常数级 Map 查询；候选图只在 `start()` 或 ChangeSet 校验时构建，并在事务完全成功后替换缓存。idle 安装计划可以暂时缺少依赖，从而不破坏“先声明多个 Installation、最后统一 start”的使用方式。
+Engine 只缓存已提交执行状态对应的已验证图。`host.get()` 在该图上做常数级 Map 查询；候选图只在 `start()` 或 ChangeSet 校验时构建，并在事务完全成功后替换缓存。idle 安装计划可以暂时缺少依赖，从而不破坏“先声明多个 Installation、最后统一 start”的使用方式。
 
 Host active 时提交 ChangeSet，其停止与重建窗口是显式的 `changing` 状态，不是假 active。此时应用代码的 Service 读取关闭；成功提交或完整 rollback 后才恢复 `active`，从而避免同一读取边界混合旧图与新 Instance。
 
