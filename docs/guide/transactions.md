@@ -7,8 +7,8 @@
 ## 单个变更
 
 ```ts
-const installation = host.install(plugin, config)   // 立刻返回 Installation
-await installation.ready()                         // 等待这次安装真正就绪
+const installation = host.install(plugin, config)
+await installation.ready()
 
 await installation.update({ config: nextConfig })
 await installation.remove()
@@ -25,7 +25,7 @@ const changes = host.change()
 changes.install(newProvider)
 changes.update(current, { plugin: nextVersion })
 changes.remove(deprecated)
-await changes.commit()          // 一笔事务
+await changes.commit()
 ```
 
 这是多 Installation 变更的**正式入口**。`install()` / `update()` / `remove()` 只是它的单条退化形式——它们内部走同一条路径，没有第二套状态机。
@@ -49,7 +49,7 @@ const changes = host.change()
 changes.install(brokenPlugin)
 await expect(changes.commit()).rejects.toThrow("setup failed")
 
-expect(host.status).toBe("active")     // 其他 Installation 完全不受影响
+expect(host.status).toBe("active")
 ```
 
 ### 2. Fail closed
@@ -69,10 +69,8 @@ expect(host.status).toBe("active")     // 其他 Installation 完全不受影响
 ```ts
 const changes = host.change()
 changes.update(a, { config: validConfig })
-changes.update(b, { config: invalidConfig })   // 这个会校验失败
+changes.update(b, { config: invalidConfig })
 await expect(changes.commit()).rejects.toMatchObject({ code: "CONFIG_INVALID" })
-
-// a 和 b 都没有被停止过 —— 执行图一动没动
 ```
 
 一个拼错的配置字段不会让你的应用停在半路。
@@ -90,14 +88,15 @@ const observer = definePlugin({
   },
 })
 
-// 一笔 ChangeSet 同时替换 outline 和 search
 const changes = host.change()
 changes.update(outline, { plugin: outlineV2 })
 changes.update(search, { plugin: searchV2 })
 await changes.commit()
 
-snapshots.length   // 1 —— 不是 4，也不曾出现过空集合
+snapshots.length
 ```
+
+这笔变更只产生一次快照通知，观察者不会看到中间的空集合。
 
 没有这个批次边界，观察者会在一次成功的变更中间看到集合短暂变空，然后一条条被填回来。这就是 HMR 与「两次连续更新」的区别：[示例 12](../examples.md#stage-3) 断言的正是这个计数。
 
@@ -161,14 +160,14 @@ const feature = host.group("editor", (group) => {
   group.install(syntax)
   group.install(formatter)
 
-  group.group("lsp", (nested) => {      // 可嵌套
+  group.group("lsp", (nested) => {
     nested.install(languageServer)
   })
 })
 
-await feature.ready()      // 等待整棵子树就绪
-feature.status             // 聚合状态
-await feature.remove()     // 整棵子树一起移除
+await feature.ready()
+feature.status
+await feature.remove()
 ```
 
 `configure` 回调**必须是同步的**（返回 Promise 会抛错），因为整个 Group 的内容需要作为一笔 ChangeSet 提交。
@@ -177,7 +176,7 @@ await feature.remove()     // 整棵子树一起移除
 Group 也可以发起自己的事务：
 
 ```ts
-const changes = feature.change()   // 只能操作这个 Group 子树内的 Installation
+const changes = feature.change()
 changes.install(extra)
 await changes.commit()
 ```
@@ -208,7 +207,7 @@ const changes = group.change()
 changes.install(broken)
 await expect(changes.commit()).rejects.toThrow()
 
-expect(group.status).toBe("active")            // 仍然健康
+expect(group.status).toBe("active")
 await expect(group.ready()).resolves.toBeUndefined()
 ```
 
@@ -218,13 +217,13 @@ await expect(group.ready()).resolves.toBeUndefined()
 
 ```ts
 host.status
-// "idle" | "starting" | "active" | "changing" | "stopping"
 
 host.diagnostics.get()
-// { name, status, installations: ReadonlyMap<string, InstallationSnapshot>, groups, ... }
 
 host.diagnostics.subscribe(() => render())
 ```
+
+`host.status` 为 `idle`、`starting`、`active`、`changing` 或 `stopping`。诊断包含 Host 名称、状态、Installation 快照和 Group 快照。
 
 `changing` 状态存在的意义：Host 事务进行中时，应用代码的读窗口是关闭的——`host.get()` 会抛 `SERVICE_UNAVAILABLE`，而不是让你读到一个正在被替换的中间状态。
 

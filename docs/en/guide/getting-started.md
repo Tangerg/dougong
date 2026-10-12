@@ -26,9 +26,9 @@ npm install dougong
 `dougong` is the facade package; it re-exports the three real packages. Install them individually if you only need part of the system:
 
 ```sh
-npm install @dougongjs/core       # the six atoms, dependency graph, transactions, diagnostics
-npm install @dougongjs/reactive   # signal value layer and observe (zero dependencies)
-npm install @dougongjs/platform   # manifests, permissions, lazy activation, HMR
+npm install @dougongjs/core
+npm install @dougongjs/reactive
+npm install @dougongjs/platform
 ```
 
 ### TypeScript configuration
@@ -72,18 +72,15 @@ interface Greeter {
   greet(name: string): string
 }
 
-// 1. A Contract is a frozen identity token binding a type to a string ID
 const CLOCK = service<Clock>("example/clock")
 const GREETER = service<Greeter>("example/greeter")
 
-// 2. Provider: declare in provides, return the implementation from setup
 const clock = definePlugin({
   name: "example.clock",
   provides: { clock: CLOCK },
   setup: () => ({ clock: { now: () => new Date() } }),
 })
 
-// 3. Consumer: declare in requires, read from ctx
 const greeter = definePlugin({
   name: "example.greeter",
   requires: { clock: CLOCK },
@@ -96,8 +93,8 @@ const greeter = definePlugin({
 })
 
 const host = createHost({ name: "hello" })
-host.install(greeter)   // note: the consumer goes first
-host.install(clock)     // the provider second — order does not matter
+host.install(greeter)
+host.install(clock)
 
 await host.start()
 console.log(host.get(GREETER).greet("Dougong"))
@@ -124,10 +121,12 @@ You never sort by hand, and there is no `dependsOn: ["example.clock"]` string ar
 definePlugin({
   name: "bad",
   setup(ctx) {
-    ctx.clock.now()   // ❌ compile error
-  },                  //    Property 'clock' does not exist on type 'PluginContext<{}>'
+    ctx.clock.now()
+  },
 })
 ```
+
+TypeScript rejects this with `Property 'clock' does not exist on type 'PluginContext<{}>'` because no clock dependency was declared.
 
 The type of `ctx` is derived from `requires`. Undeclared means the property does not exist — a **compile-time** error, not an `undefined` discovered during execution.
 
@@ -136,9 +135,10 @@ This is the most practical difference from most plugin frameworks. Where depende
 ### `host.get()` is for application code, not for Plugins
 
 ```ts
-host.get(GREETER)     // ✓ application code crossing the Host boundary
-ctx.get(GREETER)     // ✗ no such method
+host.get(GREETER)
 ```
+
+Plugins have no `ctx.get()` method.
 
 Plugins relate to each other through `requires` so that the dependency graph is complete. If a plugin could pull any capability from a service locator at will, the graph would stop reflecting real dependencies, and both topological ordering and transactional rollback would lose their meaning.
 
@@ -152,9 +152,9 @@ To see fuller scenarios directly:
 git clone https://github.com/Tangerg/dougong.git
 cd dougong
 pnpm install
-pnpm examples        # run the nine examples in order
-pnpm check           # the full verification gate
-pnpm docs:dev        # serve this documentation site locally
+pnpm examples
+pnpm check
+pnpm docs:dev
 ```
 
 Twelve chapters climb three stages — atoms, composition, complete applications — from a minimal Service through the Planet / Lynx scenarios to declarative plans and module-graph HMR, all in CI. See [runnable examples](../examples.md).

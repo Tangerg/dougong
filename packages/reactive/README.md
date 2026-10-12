@@ -19,8 +19,10 @@ const count = signal(0)
 const double = computed(() => count.get() * 2)
 
 batch(() => count.set(21))
-double.get() // 42
+double.get()
 ```
+
+`double.get()` 返回 `42`。
 
 `computed` 是惰性的，依赖动态追踪。`batch` 按订阅身份合并回调内的重复通知。三者都拒绝异步回调——同步追踪和批次边界不能跨越 `await`，与其产生静默的错误结果，不如立刻抛错。
 
@@ -56,8 +58,10 @@ const count = signal(0)
 const double = computed(() => count.get() * 2)
 
 batch(() => count.set(21))
-double.get() // 42
+double.get()
 ```
+
+`double.get()` returns `42`.
 
 `computed` is lazy with dynamic dependency tracking. `batch` coalesces repeated notifications per subscription identity. All three reject asynchronous callbacks — synchronous tracking and batch boundaries cannot survive an `await`, and throwing immediately beats producing a silently wrong result.
 

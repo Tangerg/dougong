@@ -14,7 +14,7 @@ host.get(PLAYER).play(track)
 `get()` 在 idle 或 changing 时抛 `SERVICE_UNAVAILABLE`，从不返回候选图或半重建状态。应用代码要探测一个可选能力时，仍使用同一个入口和同一个可选性原子：
 
 ```ts
-const analyser = host.get(optional(ANALYSER)) // Analyser | undefined
+const analyser = host.get(optional(ANALYSER))
 ```
 
 必需 Service 缺失仍会抛错；只有 `optional()` 明确标注“允许没有 provider”。`Service<void>` 的存在与缺失都会得到 `undefined`；依赖应提供真实的 port 接口或有意义的领域状态，不能用 `Service<void>` / `Service<true>` 伪装安装顺序钩子。
@@ -34,7 +34,6 @@ const subscription = commands.subscribe(render)
 await host.start()
 render()
 
-// 应用代码拥有这份订阅
 subscription.dispose()
 ```
 

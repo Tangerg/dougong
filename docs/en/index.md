@@ -56,16 +56,16 @@ const clock = definePlugin({
 
 const greeter = definePlugin({
   name: "app.greeter",
-  requires: { clock: CLOCK },        // the dependency lives here
+  requires: { clock: CLOCK },
   setup(ctx) {
-    console.log(ctx.clock.now())     // only declared dependencies exist, or it fails to compile
+    console.log(ctx.clock.now())
   },
 })
 
 const host = createHost({ name: "hello" })
-host.install(greeter)                 // install order does not decide start order
+host.install(greeter)
 host.install(clock)
-await host.start()                    // topology derived from declarations, layers start concurrently
+await host.start()
 ```
 
 ## When it fits

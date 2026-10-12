@@ -266,8 +266,9 @@ Platform 自身拥有全部 Registration：
 
 ```ts
 await platform.dispose();
-// 也支持 await using / Symbol.asyncDispose
 ```
+
+同一释放协议也支持 `await using` 和 `Symbol.asyncDispose`。
 
 释放是同一条变更队列里的终态命令：它先禁止新操作与新的 draft authority，等待此前变更，取消飞行中加载，再用一份 Core ChangeSet 原子移除全部 Core Installation。成功后 Platform 进入 `disposed`，全部 Registration 进入 `removed`；重复释放是幂等的。若 Core 清理失败，Platform 恢复为 `active` 并把错误抛给调用方，不谎报已经释放。
 

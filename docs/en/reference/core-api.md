@@ -254,7 +254,6 @@ requires: {
   analytics: ANALYTICS_DATABASE,
 }
 
-// setup
 ctx.primary
 ctx.analytics
 ```
@@ -348,7 +347,7 @@ A Service is a stable snapshot for the lifetime of an Instance:
 
 ```ts
 const db = ctx.db
-db === ctx.db // always true while this Instance lives
+db === ctx.db
 ```
 
 Live Service proxies are forbidden. When a provider updates, the Host:
@@ -367,12 +366,12 @@ Outside the Host and at test boundaries you may read:
 
 ```ts
 const users = host.get(USERS)
-const cache = host.get(optional(CACHE)) // Cache | undefined
+const cache = host.get(optional(CACHE))
 ```
 
 `host.get()` accepts only a Service or the existing `optional(Service)` wrapper, and reads only while the Host is active. A required Service that is unavailable throws `SERVICE_UNAVAILABLE`; an optional Service with no provider returns `undefined`. Inside a Plugin, only declared dependencies are available. Core adds no semantically duplicate `tryGet()`.
 
-The Host caches the validated dependency graph corresponding to committed execution state; `host.get()` performs provider and Service map lookups without rebuilding the graph. The idle state allows a stepwise, temporarily incomplete plan, so candidate graphs are built only during `start()` or a ChangeSet committed while the Host is active.
+Engine owns the validated dependency graph corresponding to committed execution state; `host.get()` performs provider and Service map lookups without rebuilding the graph. The idle state allows a stepwise, temporarily incomplete plan, so candidate graphs are built only during `start()` or a ChangeSet committed while the Host is active.
 
 Executing a ChangeSet while the Host is active explicitly enters `changing`, and application-code `host.get()` refuses reads for that window. It never poses as a stable active state while old Instances stop and new Instances start. Only after the transaction succeeds or a rollback completes does it re-enter `active` and switch to the corresponding graph; if recovery is impossible it fails closed to `idle`. Application-code reads therefore see only "before commit" and "after commit"; candidate graphs and half-rebuilt Service maps never leak.
 
@@ -549,7 +548,7 @@ Each value references the native well-known symbol when available and otherwise 
 
 ```ts
 const cleanup = ctx.cleanup(() => server.close())
-await cleanup.dispose() // may release early; idempotent
+await cleanup.dispose()
 ```
 
 Cleanups run in reverse registration order, and one failure never skips earlier resources. A single failure is rethrown as-is; multiple failures aggregate.
@@ -642,9 +641,11 @@ Core expresses that semantic with a single `SerialQueue`, which Platform's chang
 
 ```ts
 const commands = new SerialQueue()
-const result = commands.run(operation) // the caller receives its own value or error
-await commands.settled                 // await everything queued at read time
+const result = commands.run(operation)
+await commands.settled
 ```
+
+`settled` waits for every operation queued when it is read.
 
 `run()` continues with the next item whether the previous one succeeded or failed; the internal tail records only completion boundaries and never rejects, and each item's raw result goes only to its own caller. It is the command serialization protocol shared by Hosts and higher-level orchestrators, and owns no Host, transaction or error-classification state.
 
@@ -798,9 +799,9 @@ Producing such operational diagnostics uses Core's single write-side primitive, 
 ```ts
 const snapshots = new SnapshotPublisher(readSnapshot, reportError)
 
-export const diagnostics = snapshots.view // exposes only get / subscribe
-snapshots.invalidate()                     // mark invalid and notify
-snapshots.dispose()                        // freeze the terminal state and sever closures
+export const diagnostics = snapshots.view
+snapshots.invalidate()
+snapshots.dispose()
 ```
 
 `view` is an authority narrowing, not a second observation API: a reader may only `get/subscribe`, and the owner may drive invalidation and termination only through `SnapshotPublisher`. Every subscription has independent identity; disposal immediately withdraws a notification whose turn has not started. Subscribers and the error reporter must be synchronous; an accidental thenable is observed and enters the same error boundary as a precise `TypeError`, never as an unrelated unhandled rejection. A subscriber failure is handed to the explicit reporter without preventing later subscribers from being notified; if the reporter itself fails, the Publisher finishes the notification pass and then preserves both failures in an `AggregateError`. `dispose()` seals the final read result and severs the reader, reporter and existing subscriptions. A historical view reads the last snapshot after successful closure or throws RecordedFailure after a failed final read, without retaining obsolete snapshot payloads or the original error object. Host, Installation, Lifetime and Platform diagnostics take this path directly; `ContributionStore` composes the same Publisher and adds only Lifetime ownership around each subscription, so registering one function twice still creates two independent subscriptions. No higher layer may rewrite the subscription registry or error boundary.

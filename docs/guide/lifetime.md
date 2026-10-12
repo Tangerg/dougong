@@ -13,12 +13,11 @@ Dougong 用一个概念解决全部情况：**Lifetime**。
 ```ts
 setup(ctx) {
   const client = createClient()
-  ctx.cleanup(() => client.close())      // 注册清理
-  ctx.on(TICK, handler)                  // 监听器 —— 自动归属
-  ctx.contribute(ROUTES, "a", route)     // 贡献 —— 自动归属
-  ctx.spawn(async (signal) => poll(signal))  // 任务 —— 自动归属
+  ctx.cleanup(() => client.close())
+  ctx.on(TICK, handler)
+  ctx.contribute(ROUTES, "a", route)
+  ctx.spawn(async (signal) => poll(signal))
 }
-// Instance 停止时：任务被 abort 并等待、监听器注销、贡献撤回、client.close() 执行
 ```
 
 ## 七种资源，同一套规则
@@ -47,13 +46,13 @@ setup(ctx) {
 
 ```ts
 const subscription = ctx.on(TICK, handler)
-subscription.dispose()          // 提前注销，不影响插件其余部分
+subscription.dispose()
 
 const contribution = ctx.contribute(ROUTES, "a", route)
-contribution.dispose()          // 提前撤回
+contribution.dispose()
 
 const cleanup = ctx.cleanup(fn)
-await cleanup.dispose()         // 提前执行 fn（只会执行一次）
+await cleanup.dispose()
 ```
 
 `dispose()` 是**幂等**的：重复调用不会重复执行清理，也不会抛错。Instance 停止时不会再执行一遍已经释放的项。
@@ -64,14 +63,14 @@ await cleanup.dispose()         // 提前执行 fn（只会执行一次）
 async function listenDuring(session) {
   using subscription = session.on(TICK, handler)
   await session.emit(TICK)
-  // 函数结束时自动 dispose
 }
 
 async function run(ctx) {
   await using session = ctx.lifetime("session")
-  // 块结束时等待 session 完整释放
 }
 ```
+
+`using` 在函数退出时释放监听器；`await using` 在代码块退出前等待子 Lifetime 完整释放。
 
 ## 后台任务
 
@@ -84,8 +83,8 @@ const task = ctx.spawn(async (signal) => {
   return "done"
 })
 
-task.result      // Promise<string>
-await task.dispose() // abort 并等待结束
+task.result
+await task.dispose()
 ```
 
 `spawn` 传给回调一个 `AbortSignal`。释放 Lifetime 时：
@@ -124,8 +123,8 @@ async setup(ctx) {
   let current: LifetimeContext | undefined
 
   const connect = async (url: string) => {
-    await current?.dispose()                  // 完整释放上一组
-    const scope = ctx.lifetime(`conn:${url}`) // label 用于诊断
+    await current?.dispose()
+    const scope = ctx.lifetime(`conn:${url}`)
     const socket = openSocket(url)
     scope.cleanup(() => socket.close())
     scope.spawn((signal) => readLoop(socket, signal))
@@ -220,17 +219,36 @@ const snapshot = host.diagnostics.get()
 const lifetime = snapshot.installations.get(installationId)?.lifetime
 
 lifetime.get()
-// {
-//   label: "app.users:1",
-//   phase: "active",
-//   cleanups: 1, tasks: 1, listeners: 2,
-//   contributions: 3, contributionViews: 1, subscriptions: 1,
-//   children: [
-//     { label: "conn:wss://a", phase: "active", tasks: 1, ... }
-//   ]
-// }
 
-lifetime.subscribe(() => render())   // 资源变化时通知
+lifetime.subscribe(() => render())
+```
+
+`lifetime.get()` 的返回值示例：
+
+```json
+{
+  "label": "app.users:1",
+  "phase": "active",
+  "cleanups": 1,
+  "tasks": 1,
+  "listeners": 2,
+  "contributions": 3,
+  "contributionViews": 1,
+  "subscriptions": 1,
+  "children": [
+    {
+      "label": "conn:wss://a",
+      "phase": "active",
+      "cleanups": 0,
+      "tasks": 1,
+      "listeners": 0,
+      "contributions": 0,
+      "contributionViews": 0,
+      "subscriptions": 0,
+      "children": []
+    }
+  ]
+}
 ```
 
 这份快照是**递归冻结的纯数据**——只有标签、阶段和计数，不暴露 Lifetime 对象、资源、回调或 Store。节点计数只描述该 Lifetime **直接**拥有的资源，子树合计由 `children` 递归推导，快照里不保存第二份聚合状态。
@@ -260,10 +278,12 @@ lifetime.subscribe(() => render())   // 资源变化时通知
 ```ts
 setup(ctx) {
   setTimeout(() => {
-    ctx.cleanup(() => {})   // ❌ 插件可能已经停止 → 抛错
+    ctx.cleanup(() => {})
   }, 1000)
 }
 ```
+
+定时器触发时 Instance 可能已经停止，`ctx.cleanup()` 因此可能抛出 `LIFETIME_DISPOSED`。
 
 要在延迟逻辑里获取资源，用 `ctx.spawn()`，它的 signal 会在释放时 abort。
 
@@ -271,7 +291,7 @@ setup(ctx) {
 
 ```ts
 setup(ctx) {
-  const disposables = []                      // ❌ 不需要
+  const disposables = []
   disposables.push(ctx.on(A, f))
   ctx.cleanup(() => disposables.forEach(d => d.dispose()))
 }

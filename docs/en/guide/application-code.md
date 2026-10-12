@@ -14,7 +14,7 @@ host.get(PLAYER).play(track)
 `get()` throws `SERVICE_UNAVAILABLE` while idle or changing; it never returns a candidate graph or half-rebuilt state. To probe an optional capability, application code keeps the same entry point and the same optionality atom:
 
 ```ts
-const analyser = host.get(optional(ANALYSER)) // Analyser | undefined
+const analyser = host.get(optional(ANALYSER))
 ```
 
 A missing required Service still throws; only `optional()` explicitly permits an absent provider. Presence and absence of `Service<void>` both produce `undefined`; dependencies should provide a real port interface or meaningful domain state, never disguise an installation-order hook as `Service<void>` / `Service<true>`.
@@ -34,7 +34,6 @@ const subscription = commands.subscribe(render)
 await host.start()
 render()
 
-// The caller owns this subscription.
 subscription.dispose()
 ```
 

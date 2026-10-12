@@ -13,13 +13,11 @@ You do not collect resources, keep a `dispose` array, or worry about exception p
 ```ts
 setup(ctx) {
   const client = createClient()
-  ctx.cleanup(() => client.close())      // register a cleanup
-  ctx.on(TICK, handler)                  // listener — owned automatically
-  ctx.contribute(ROUTES, "a", route)     // contribution — owned automatically
-  ctx.spawn(async (signal) => poll(signal))  // task — owned automatically
+  ctx.cleanup(() => client.close())
+  ctx.on(TICK, handler)
+  ctx.contribute(ROUTES, "a", route)
+  ctx.spawn(async (signal) => poll(signal))
 }
-// On stop: tasks abort and are awaited, listeners deregister,
-// contributions withdraw, client.close() runs.
 ```
 
 ## Seven kinds, one rule
@@ -48,13 +46,13 @@ Every releasable resource uses the same `dispose()` operation. Synchronous resou
 
 ```ts
 const subscription = ctx.on(TICK, handler)
-subscription.dispose()          // deregister early, nothing else affected
+subscription.dispose()
 
 const contribution = ctx.contribute(ROUTES, "a", route)
-contribution.dispose()          // withdraw early
+contribution.dispose()
 
 const cleanup = ctx.cleanup(fn)
-await cleanup.dispose()         // run fn early (exactly once)
+await cleanup.dispose()
 ```
 
 `dispose()` is **idempotent**: calling it again neither repeats the cleanup nor throws. Stopping the plugin will not run an already-released item a second time.
@@ -65,14 +63,14 @@ await cleanup.dispose()         // run fn early (exactly once)
 async function listenDuring(session) {
   using subscription = session.on(TICK, handler)
   await session.emit(TICK)
-  // disposed when the function exits
 }
 
 async function run(ctx) {
   await using session = ctx.lifetime("session")
-  // fully released before the block exits
 }
 ```
+
+`using` disposes the listener when the function exits; `await using` waits for the child Lifetime to finish releasing before the block exits.
 
 ## Background tasks
 
@@ -85,8 +83,8 @@ const task = ctx.spawn(async (signal) => {
   return "done"
 })
 
-task.result      // Promise<string>
-await task.dispose() // abort and await completion
+task.result
+await task.dispose()
 ```
 
 `spawn` hands the callback an `AbortSignal`. When the Lifetime is released:
@@ -125,8 +123,8 @@ async setup(ctx) {
   let current: LifetimeContext | undefined
 
   const connect = async (url: string) => {
-    await current?.dispose()                  // fully release the previous group
-    const scope = ctx.lifetime(`conn:${url}`) // the label is for diagnostics
+    await current?.dispose()
+    const scope = ctx.lifetime(`conn:${url}`)
     const socket = openSocket(url)
     scope.cleanup(() => socket.close())
     scope.spawn((signal) => readLoop(socket, signal))
@@ -221,17 +219,36 @@ const snapshot = host.diagnostics.get()
 const lifetime = snapshot.installations.get(installationId)?.lifetime
 
 lifetime.get()
-// {
-//   label: "app.users:1",
-//   phase: "active",
-//   cleanups: 1, tasks: 1, listeners: 2,
-//   contributions: 3, contributionViews: 1, subscriptions: 1,
-//   children: [
-//     { label: "conn:wss://a", phase: "active", tasks: 1, ... }
-//   ]
-// }
 
-lifetime.subscribe(() => render())   // notified when resources change
+lifetime.subscribe(() => render())
+```
+
+For example, `lifetime.get()` can return:
+
+```json
+{
+  "label": "app.users:1",
+  "phase": "active",
+  "cleanups": 1,
+  "tasks": 1,
+  "listeners": 2,
+  "contributions": 3,
+  "contributionViews": 1,
+  "subscriptions": 1,
+  "children": [
+    {
+      "label": "conn:wss://a",
+      "phase": "active",
+      "cleanups": 0,
+      "tasks": 1,
+      "listeners": 0,
+      "contributions": 0,
+      "contributionViews": 0,
+      "subscriptions": 0,
+      "children": []
+    }
+  ]
+}
 ```
 
 The snapshot is **recursively frozen plain data** — labels, phases and counts only. It never exposes Lifetime objects, resources, callbacks or stores. Each node counts only what that Lifetime owns **directly**; subtree totals are derived by walking `children`, because the snapshot deliberately keeps no second aggregate state.
@@ -261,10 +278,12 @@ Recoverable failed Installations attached to a live Host retain the original Err
 ```ts
 setup(ctx) {
   setTimeout(() => {
-    ctx.cleanup(() => {})   // ❌ the plugin may already have stopped → throws
+    ctx.cleanup(() => {})
   }, 1000)
 }
 ```
+
+The Instance may have stopped before the timer fires, so `ctx.cleanup()` can throw `LIFETIME_DISPOSED`.
 
 To acquire resources from deferred logic, use `ctx.spawn()`, whose signal aborts on release.
 
@@ -272,7 +291,7 @@ To acquire resources from deferred logic, use `ctx.spawn()`, whose signal aborts
 
 ```ts
 setup(ctx) {
-  const disposables = []                      // ❌ unnecessary
+  const disposables = []
   disposables.push(ctx.on(A, f))
   ctx.cleanup(() => disposables.forEach(d => d.dispose()))
 }

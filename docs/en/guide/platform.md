@@ -25,18 +25,19 @@ Platform consumes the `change()` capability of an `Installer` (normally a Host o
 
 ```ts
 import { createHost } from "dougong"
-import { createPlatform, ImportLoader, defineManifest } from "dougong"
+import { createPlatform, ImportLoader, PermissionSet, defineManifest } from "dougong"
 
 const host = createHost({ name: "editor" })
 await host.start()
 
 const platform = createPlatform({
-  installer: host,                      // the compilation target
-  apiVersion: "1.0.0",                  // the application API version
-  loader: new ImportLoader(),     // how modules are loaded
+  installer: host,
+  apiVersion: "1.0.0",
+  loader: new ImportLoader(),
+  authorizer: new PermissionSet(["fs:read"]),
 })
 
-const registration = await platform.register({
+await platform.register({
   manifest: defineManifest({
     name: "acme.markdown",
     version: "1.2.0",
@@ -47,7 +48,7 @@ const registration = await platform.register({
   reference: "https://cdn.example.com/acme-markdown.js",
 })
 
-await platform.trigger("onLanguage:markdown")   // activate
+await platform.trigger("onLanguage:markdown")
 ```
 
 ## Manifest
@@ -58,8 +59,8 @@ A manifest is an external plugin's **declaration**, validated and frozen at the 
 interface Manifest {
   readonly name: string
   readonly version: string
-  readonly apiVersion: string                        // required application API range
-  readonly activation: ReadonlyArray<string>         // activation events
+  readonly apiVersion: string
+  readonly activation: ReadonlyArray<string>
   readonly permissions: ReadonlyArray<string>
   readonly dependencies: Readonly<Record<string, string>>
 }
@@ -82,9 +83,11 @@ interface Loader<Reference> {
 Two implementations ship with it:
 
 ```ts
-new ImportLoader()        // dynamic import(); Reference is string | URL
-new MemoryLoader(map)     // from a Map, for tests
+new ImportLoader()
+new MemoryLoader(map)
 ```
+
+`ImportLoader` resolves a `string | URL` through dynamic import; `MemoryLoader` reads a supplied Map for deterministic tests.
 
 The Loader is the **only** place external code executes. A failed load throws `MODULE_LOAD_FAILED`; a module that does not export a valid `Plugin` throws `MODULE_INVALID`.
 
@@ -132,13 +135,15 @@ External plugins usually should not all load at startup. Platform's model is **r
 const registration = await platform.register({
   manifest,
   reference: "./heavy-plugin.js",
-  placeholder: lightweightStub,     // optional: an application-authored Plugin
+  placeholder: lightweightStub,
 })
 
-registration.status      // "registered" → not loaded yet
-await registration.activate()       // activate explicitly
-registration.status      // "installed"
+registration.status
+await registration.activate()
+registration.status
 ```
+
+The status is `registered` before activation and `installed` after successful activation.
 
 The `placeholder` is an **application-authored Plugin** standing in until the loaded Plugin activates. That is what makes "the command is already in the menu, but the implementation loads on click" possible — and the swap is **atomic**, through the same Core ChangeSet.
 
@@ -147,7 +152,6 @@ The `placeholder` is an **application-authored Plugin** standing in until the lo
 Activation can also be event-driven:
 
 ```ts
-// manifest.activation: ["onLanguage:markdown", "onCommand:acme.format"]
 await platform.trigger("onLanguage:markdown")
 ```
 
@@ -160,6 +164,7 @@ External plugins may depend on each other:
 ```ts
 defineManifest({
   name: "acme.theme-dark",
+  version: "1.0.0",
   dependencies: { "acme.theme-base": "^2.0.0" },
 })
 ```
@@ -215,7 +220,6 @@ Underneath it is Core's `installation.update({ plugin })`, so only the affected 
 
 ```ts
 platform.diagnostics.get()
-// { apiVersion, status, registrations: ReadonlyMap<string, RegistrationSnapshot> }
 
 platform.diagnostics.subscribe(() => render())
 ```
@@ -226,7 +230,11 @@ The same `get` / `subscribe` protocol Core uses — Platform's diagnostics compi
 
 ```ts
 await platform.dispose()
-// or
+```
+
+For a Platform created within a block, use `await using` to release it at block exit:
+
+```ts
 await using platform = createPlatform({ ... })
 ```
 

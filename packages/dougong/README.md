@@ -27,16 +27,16 @@ const clock = definePlugin({
 
 const greeter = definePlugin({
   name: "app.greeter",
-  requires: { clock: CLOCK },        // 依赖写在这里
+  requires: { clock: CLOCK },
   setup(ctx) {
-    console.log(ctx.clock.now())     // 只能读声明过的依赖，否则编译错误
+    console.log(ctx.clock.now())
   },
 })
 
 const host = createHost({ name: "hello" })
-host.install(greeter)                 // 安装顺序不决定启动顺序
+host.install(greeter)
 host.install(clock)
-await host.start()                    // 从声明推导拓扑，同层并发启动
+await host.start()
 ```
 
 六个原子：**Service**（稳定的一对一能力）、**ExtensionPoint**（开放贡献集合）、**Event**（瞬时事实）、**Lifetime**（结构化所有权）、**Plugin**、**Host**。
@@ -76,16 +76,16 @@ const clock = definePlugin({
 
 const greeter = definePlugin({
   name: "app.greeter",
-  requires: { clock: CLOCK },        // the dependency lives here
+  requires: { clock: CLOCK },
   setup(ctx) {
-    console.log(ctx.clock.now())     // only declared dependencies exist, or it fails to compile
+    console.log(ctx.clock.now())
   },
 })
 
 const host = createHost({ name: "hello" })
-host.install(greeter)                 // install order does not decide start order
+host.install(greeter)
 host.install(clock)
-await host.start()                    // topology derived from declarations, layers start concurrently
+await host.start()
 ```
 
 Six atoms: **Service** (a stable one-to-one capability), **ExtensionPoint** (an open contribution set), **Event** (a transient fact), **Lifetime** (structured ownership), **Plugin**, **Host**.

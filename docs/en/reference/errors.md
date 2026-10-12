@@ -25,13 +25,13 @@ class DougongError extends Error {
   readonly code: string
 }
 
-class ConfigValidationError extends DougongError {   // code: "CONFIG_INVALID"
+class ConfigValidationError extends DougongError {
   readonly issues: ReadonlyArray<StandardSchemaV1.Issue>
 }
 
 class PlatformError extends DougongError {}
 
-class PermissionDeniedError extends PlatformError {  // code: "PERMISSION_DENIED"
+class PermissionDeniedError extends PlatformError {
   readonly manifestName: string
   readonly denied: ReadonlyArray<string>
 }
@@ -169,13 +169,13 @@ try {
 
 ### Receive background errors
 
-Exceptions from background tasks, listeners and diagnostic subscribers never interrupt a Host command; they arrive through the Host's reporting channel:
+Background task and diagnostic subscriber failures reach the Host's reporting channel without changing the command being observed. Event listener failures instead reject `emit()` with an aggregate error for the sender to handle:
 
 ```ts
 const host = createHost({
   name: "app",
   onError: (error) => reportToSentry(error),
-  logger: myLogger,          // fallback when onError is absent or itself throws
+  logger: myLogger,
 })
 ```
 

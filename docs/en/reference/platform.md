@@ -266,8 +266,9 @@ Platform owns every Registration:
 
 ```ts
 await platform.dispose();
-// await using / Symbol.asyncDispose are supported too
 ```
+
+The same disposal protocol supports `await using` and `Symbol.asyncDispose`.
 
 Disposal is a terminal command on the same change queue: it first forbids new operations and new draft authority, waits for preceding changes, cancels in-flight loads, then removes every Core Installation atomically through one Core ChangeSet. On success Platform enters `disposed` and every Registration enters `removed`; repeated disposal is idempotent. If Core cleanup fails, Platform returns to `active` and throws the error to the caller rather than falsely reporting that it was released.
 

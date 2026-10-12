@@ -20,7 +20,7 @@ const host = createHost({ name: "editor" })
 await host.start()
 
 const platform = createPlatform({
-  installer: host,                    // 编译目标：Host 或 Group
+  installer: host,
   apiVersion: "1.0.0",
   loader: new ImportLoader(),
   authorizer: new PermissionSet(["fs:read"]),
@@ -64,7 +64,7 @@ const host = createHost({ name: "editor" })
 await host.start()
 
 const platform = createPlatform({
-  installer: host,                    // compilation target: a Host or a Group
+  installer: host,
   apiVersion: "1.0.0",
   loader: new ImportLoader(),
   authorizer: new PermissionSet(["fs:read"]),

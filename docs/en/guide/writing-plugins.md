@@ -30,8 +30,8 @@ const ROUTES = extensionPoint<Route>("http/routes")
 definePlugin({
   name: "app.users",
   requires: {
-    db: DATABASE,      // Service → ctx.db is a Database
-    routes: ROUTES,    // ExtensionPoint → ctx.routes is a ContributionView<Route>
+    db: DATABASE,
+    routes: ROUTES,
   },
   setup(ctx) {
     ctx.db.query("select 1")
@@ -64,7 +64,7 @@ definePlugin({
   name: "app.telemetry",
   requires: { tracer: optional(TRACER) },
   setup(ctx) {
-    ctx.tracer?.startSpan("boot")   // typed as Tracer | undefined
+    ctx.tracer?.startSpan("boot")
   },
 })
 ```
@@ -84,7 +84,7 @@ definePlugin({
   provides: { users: USERS },
   setup(ctx) {
     return {
-      users: createUserService(ctx.db),   // keys must match provides
+      users: createUserService(ctx.db),
     }
   },
 })
@@ -94,9 +94,10 @@ Every key in `provides` must appear in the return value; a missing one is `SERVI
 
 ```ts
 provides: { users: USERS },
-setup() {},        // ❌ Type '() => void' is not assignable to
-                   //    '(context, config) => Awaitable<ProvidedServices<...>>'
+setup() {},
 ```
+
+TypeScript rejects `() => void` because `setup` must return the declared `ProvidedServices`.
 
 Two Plugin declarations providing the same Contract throw `SERVICE_CONFLICT` while the graph is built — before any Instance starts.
 
@@ -126,8 +127,8 @@ The returned `Contribution` supports update and early withdrawal:
 
 ```ts
 const c = ctx.contribute(ROUTES, "users.list", route)
-c.update(nextRoute)   // update in place, notifying subscribers
-c.dispose()           // withdraw early
+c.update(nextRoute)
+c.dispose()
 ```
 
 Not calling `dispose()` is fine — every contribution is withdrawn when the Instance stops.
@@ -149,12 +150,11 @@ const db = definePlugin({
   config: schema,
   provides: { db: DATABASE },
   setup(ctx, config) {
-    //             ^ the schema **output** type; port is always present
     return { db: connect(config.hostname, config.port) }
   },
 })
 
-host.install(db, { hostname: "localhost" })   // the input type; port may be omitted
+host.install(db, { hostname: "localhost" })
 ```
 
 Input and output are two distinct types: `host.install()` accepts the **input** (`port` optional), while `setup` receives the **output** (`port` defaulted).
@@ -210,7 +210,7 @@ When setup throws:
 ```ts
 const installation = host.install(brokenPlugin)
 await expect(installation.ready()).rejects.toThrow("setup failed")
-expect(host.status).toBe("active")     // other Installations are untouched
+expect(host.status).toBe("active")
 ```
 
 Throwing a non-`Error` value (`throw "boom"`) is classified as a `DougongError` with code `INSTALLATION_UNAVAILABLE`, keeping the original value in `cause` — so `undefined` never means both "the failure value" and "no failure".
@@ -220,19 +220,21 @@ Throwing a non-`Error` value (`throw "boom"`) is classified as a `DougongError` 
 ```ts
 const installation = host.install(plugin, { hostname: "a" })
 
-await installation.update({ config: { hostname: "b" } })   // swap config
-await installation.update({ plugin: nextVersion })     // swap declaration, keep Installation identity
+await installation.update({ config: { hostname: "b" } })
+await installation.update({ plugin: nextVersion })
 await installation.remove()
 ```
 
 An update preserves **Installation identity**: the ID, the position in diagnostics and the Group membership all stay. The active Instance is replaced, and only the affected dependency closure restarts; unrelated Installations are untouched.
 
 ```ts
-installation.id        // "app.db:1"
-installation.status    // "pending" | "active" | "stopping" | "failed" | "removed"
-installation.groupId   // the owning Group's ID
-await installation.ready()   // resolve when this installation is ready; reject on failure
+installation.id
+installation.status
+installation.groupId
+await installation.ready()
 ```
+
+`id` is stable (for example, `app.db:1`); `groupId` identifies the owning Group. Status is `pending`, `active`, `stopping`, `failed` or `removed`. `ready()` resolves after committed readiness and rejects on failure.
 
 ## A complete example
 

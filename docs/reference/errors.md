@@ -25,13 +25,13 @@ class DougongError extends Error {
   readonly code: string
 }
 
-class ConfigValidationError extends DougongError {   // code: "CONFIG_INVALID"
+class ConfigValidationError extends DougongError {
   readonly issues: ReadonlyArray<StandardSchemaV1.Issue>
 }
 
 class PlatformError extends DougongError {}
 
-class PermissionDeniedError extends PlatformError {  // code: "PERMISSION_DENIED"
+class PermissionDeniedError extends PlatformError {
   readonly manifestName: string
   readonly denied: ReadonlyArray<string>
 }
@@ -169,13 +169,13 @@ try {
 
 ### 接收后台错误
 
-后台任务、监听器和诊断订阅者抛出的异常不会中断 Host 命令，它们通过 Host 的上报通道送出：
+后台任务和诊断订阅者的异常通过 Host 的上报通道送出，不改变它们正在观察的命令。Event 监听器失败则由 `emit()` 聚合并拒绝，交给发送方处理：
 
 ```ts
 const host = createHost({
   name: "app",
   onError: (error) => reportToSentry(error),
-  logger: myLogger,          // onError 未提供或自身抛错时的兜底
+  logger: myLogger,
 })
 ```
 

@@ -254,7 +254,6 @@ requires: {
   analytics: ANALYTICS_DATABASE,
 }
 
-// setup
 ctx.primary
 ctx.analytics
 ```
@@ -348,7 +347,7 @@ Service 是 Instance 生命周期内的稳定快照：
 
 ```ts
 const db = ctx.db
-db === ctx.db // 该实例存活期间恒为 true
+db === ctx.db
 ```
 
 禁止 live Service Proxy。提供者更新时，Host：
@@ -367,12 +366,12 @@ Host 外部和测试边界可以读取：
 
 ```ts
 const users = host.get(USERS)
-const cache = host.get(optional(CACHE)) // Cache | undefined
+const cache = host.get(optional(CACHE))
 ```
 
 `host.get()` 只接受 Service 或现有的 `optional(Service)` 包装，并且只在 Host 为 active 时读取。必需 Service 当前不可用时抛 `SERVICE_UNAVAILABLE`；optional Service 没有 provider 时返回 `undefined`。Plugin 内部仍只能使用声明依赖。Core 不增加语义重复的 `tryGet()`。
 
-Host 缓存已提交执行状态对应的已验证依赖图；`host.get()` 只做 provider 与 Service Map 查询，不重新构图。idle 状态允许分步安装暂时不完整的计划，因此只在 `start()` 或 Host active 时提交的 ChangeSet 中构造候选图。
+Engine 拥有已提交执行状态对应的已验证依赖图；`host.get()` 只做 provider 与 Service Map 查询，不重新构图。idle 状态允许分步安装暂时不完整的计划，因此只在 `start()` 或 Host active 时提交的 ChangeSet 中构造候选图。
 
 Host active 时执行 ChangeSet 会明确进入 `changing`，应用代码的 `host.get()` 暂时拒绝读取；它不会在旧 Instance 停止、新 Instance 启动的窗口中伪装成稳定的 active。事务成功或 rollback 完成后才重新进入 `active` 并切换对应图；无法恢复则 fail closed 到 `idle`。因此应用代码的读取边界只存在“提交前”和“提交后”，候选图或半重建的 Service Map 都不会泄漏。
 
@@ -549,7 +548,7 @@ class Session implements AsyncDisposable {
 
 ```ts
 const cleanup = ctx.cleanup(() => server.close())
-await cleanup.dispose() // 可提前释放，幂等
+await cleanup.dispose()
 ```
 
 cleanup 按注册逆序执行；某项失败不会跳过更早资源。一个失败原样抛出，多个失败聚合。
@@ -642,9 +641,11 @@ Core 用唯一的 `SerialQueue` 表达这条语义，Platform 的变更与激活
 
 ```ts
 const commands = new SerialQueue()
-const result = commands.run(operation) // 调用方收到自己的值或错误
-await commands.settled                 // 等待读取时已经排入的全部操作
+const result = commands.run(operation)
+await commands.settled
 ```
+
+`settled` 等待读取它时已经排入队列的全部操作。
 
 `run()` 无论前一项成功还是失败都会继续执行下一项；内部 tail 只记录完成边界且永不 reject，单项原始结果只返回给对应调用方。它是 Host 和高层编排器共享的命令串行协议，不拥有 Host、事务或错误分类状态。
 
@@ -798,9 +799,9 @@ interface Readable<T> {
 ```ts
 const snapshots = new SnapshotPublisher(readSnapshot, reportError)
 
-export const diagnostics = snapshots.view // 只暴露 get / subscribe
-snapshots.invalidate()                     // 标记失效并通知
-snapshots.dispose()                        // 固化终态并切断闭包
+export const diagnostics = snapshots.view
+snapshots.invalidate()
+snapshots.dispose()
 ```
 
 `view` 是权限收窄，不是第二套观察 API：读取方只能 `get/subscribe`，拥有方只能通过 `SnapshotPublisher` 驱动失效和终止。每次订阅都有独立身份；释放会立即撤回尚未轮到的通知。订阅者与错误 reporter 都必须同步；意外返回的 thenable 会被观察并作为精确 `TypeError` 进入同一个错误边界，不能变成无关的 unhandled rejection。订阅者失败交给显式 reporter 后仍继续通知其余订阅者；若 reporter 自身失败，Publisher 完成整轮通知后用 `AggregateError` 同时保留订阅者错误与 reporter 错误。`dispose()` 会固化最终读取的结果并切断 reader、reporter 与现有订阅；历史 view 在成功终态读取最后快照，失败终态则抛 RecordedFailure，不保留过期快照载荷或原始异常对象。Host、Installation、Lifetime 与 Platform diagnostics 直接走这条路径；`ContributionStore` 同样组合这一个 Publisher，只在订阅外层增加 Lifetime 所有权，因而重复注册同一个函数仍是两份独立订阅。任何高层都不得重写订阅注册表和错误边界。

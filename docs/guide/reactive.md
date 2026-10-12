@@ -30,12 +30,14 @@ import { signal, computed, batch } from "dougong"
 const count = signal(0)
 const double = computed(() => count.get() * 2)
 
-count.get()      // 0
-double.get()     // 0
+count.get()
+double.get()
 
 count.set(21)
-double.get()     // 42
+double.get()
 ```
+
+最初两次读取都返回 `0`；`count.set(21)` 后，`double.get()` 返回 `42`。
 
 `computed` 是**惰性**的：没有订阅者时不会主动计算，只在 `get()` 时按需求值并缓存。依赖是**动态追踪**的——每次求值重新收集，分支里没走到的 signal 不会成为依赖。
 
@@ -44,8 +46,9 @@ double.get()     // 42
 ```ts
 const a = signal(1), b = signal(2), useA = signal(true)
 const value = computed(() => (useA.get() ? a.get() : b.get()))
-// useA 为 true 时，b 的变化不会让 value 失效
 ```
+
+`useA` 为 true 时，计算没有读取 `b`，因此 `b` 的变化不会让 `value` 失效。
 
 ### batch
 
@@ -53,17 +56,19 @@ const value = computed(() => (useA.get() ? a.get() : b.get()))
 batch(() => {
   first.set(1)
   second.set(2)
-})   // 订阅者只被通知一次
+})
 ```
 
 `batch` 按订阅身份合并回调内的重复通知。嵌套 `batch` 只在最外层结束时 flush。
 
 ::: warning 三个入口都拒绝异步
 ```ts
-batch(async () => { ... })            // ✗ TypeError: Reactive batches must be synchronous
-computed(async () => { ... })         // ✗ TypeError: Computed signal calculations must be synchronous
-observe(owner, source, async () => { ... }) // ✗ TypeError: Observers must be synchronous
+batch(async () => { ... })
+computed(async () => { ... })
+observe(owner, source, async () => { ... })
 ```
+
+三个调用分别抛出 `TypeError`：`Reactive batches must be synchronous`、`Computed signal calculations must be synchronous`、`Observers must be synchronous`。
 
 原因是同步追踪和批次边界不能跨越 `await`——一旦跨过去，依赖收集会收到错误的集合，批次会在异步工作完成前就 flush。与其产生静默的错误结果，不如立刻抛错。
 
@@ -103,9 +108,7 @@ Core 的 `ContributionView` 和 `diagnostics` 用的是**同一个协议**。这
 ```ts
 import { observe } from "dougong"
 
-observe(owner, source, (value, lifetime) => {
-  // 每次 source 变化：先释放上一个 lifetime，再用新值建一个新的
-})
+observe(owner, source, observer)
 ```
 
 三个参数：
@@ -193,15 +196,12 @@ interface ObservationOwner<Child extends AsyncDisposable = AsyncDisposable> {
 Core 里有两个地方产出 `Readable`：
 
 ```ts
-// ExtensionPoint 视图 —— 集合变化
-ctx.routes.get()                    // ReadonlyMap<string, Route>
+ctx.routes.get()
 ctx.routes.subscribe(() => ...)
 
-// 诊断 —— Host 状态
 host.diagnostics.get()
 host.diagnostics.subscribe(() => ...)
 
-// 插件的 Lifetime 所有权树
 snapshot.installations.get(id)?.lifetime?.get()
 ```
 

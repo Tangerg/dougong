@@ -30,12 +30,14 @@ import { signal, computed, batch } from "dougong"
 const count = signal(0)
 const double = computed(() => count.get() * 2)
 
-count.get()      // 0
-double.get()     // 0
+count.get()
+double.get()
 
 count.set(21)
-double.get()     // 42
+double.get()
 ```
+
+Both initial reads return `0`; after `count.set(21)`, `double.get()` returns `42`.
 
 `computed` is **lazy**: with no subscribers it does not recompute eagerly; it evaluates on demand at `get()` and caches. Dependencies are **tracked dynamically** — collected fresh on each evaluation, so a signal in a branch that was not taken does not become a dependency.
 
@@ -44,8 +46,9 @@ Both values and thrown errors are cached until a dependency changes. A failed ca
 ```ts
 const a = signal(1), b = signal(2), useA = signal(true)
 const value = computed(() => (useA.get() ? a.get() : b.get()))
-// while useA is true, changes to b never invalidate value
 ```
+
+While `useA` is true, changes to `b` do not invalidate `value` because the calculation did not read `b`.
 
 ### batch
 
@@ -53,17 +56,19 @@ const value = computed(() => (useA.get() ? a.get() : b.get()))
 batch(() => {
   first.set(1)
   second.set(2)
-})   // subscribers are notified once
+})
 ```
 
 `batch` coalesces repeated notifications per subscription identity. Nested batches flush only when the outermost one ends.
 
 ::: warning All three entry points reject async callbacks
 ```ts
-batch(async () => { ... })            // ✗ TypeError: Reactive batches must be synchronous
-computed(async () => { ... })         // ✗ TypeError: Computed signal calculations must be synchronous
-observe(owner, source, async () => { ... }) // ✗ TypeError: Observers must be synchronous
+batch(async () => { ... })
+computed(async () => { ... })
+observe(owner, source, async () => { ... })
 ```
+
+Each call throws `TypeError`: `Reactive batches must be synchronous`, `Computed signal calculations must be synchronous`, or `Observers must be synchronous`, respectively.
 
 Synchronous tracking and batch boundaries cannot survive an `await` — once they do, dependency collection captures the wrong set and the batch flushes before the async work finishes. Rather than produce a silently wrong result, these throw immediately.
 
@@ -103,9 +108,7 @@ Notifications capture subscription membership at publication time. Subscribing a
 ```ts
 import { observe } from "dougong"
 
-observe(owner, source, (value, lifetime) => {
-  // On each change: release the previous lifetime, then build a new one from the new value
-})
+observe(owner, source, observer)
 ```
 
 Three parameters:
@@ -193,15 +196,12 @@ A permanent stop after startup is a real terminal state: the observation immedia
 Core produces `Readable` in two places:
 
 ```ts
-// ExtensionPoint view — collection change
-ctx.routes.get()                    // ReadonlyMap<string, Route>
+ctx.routes.get()
 ctx.routes.subscribe(() => ...)
 
-// Diagnostics — Host state
 host.diagnostics.get()
 host.diagnostics.subscribe(() => ...)
 
-// A plugin's Lifetime ownership tree
 snapshot.installations.get(id)?.lifetime?.get()
 ```
 

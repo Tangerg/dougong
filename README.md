@@ -37,16 +37,16 @@ const clock = definePlugin({
 
 const greeter = definePlugin({
   name: "app.greeter",
-  requires: { clock: CLOCK },        // 依赖写在这里
+  requires: { clock: CLOCK },
   setup(ctx) {
-    console.log(ctx.clock.now())     // 只能读声明过的依赖，否则编译错误
+    console.log(ctx.clock.now())
   },
 })
 
 const host = createHost({ name: "hello" })
-host.install(greeter)                 // 安装顺序不决定启动顺序
+host.install(greeter)
 host.install(clock)
-await host.start()                    // 从声明推导拓扑，同层并发启动
+await host.start()
 ```
 
 ## 为什么是这样
@@ -140,8 +140,8 @@ TypeScript 消费者的 `tsconfig.json` 需要：
 
 ```sh
 pnpm install
-pnpm check      # 完整验证门禁
-pnpm docs:dev   # 本地文档站
+pnpm check
+pnpm docs:dev
 ```
 
 `package.json` 中的 `check` 是统一验证入口，执行生成源码校验、类型与静态检查、行为测试、构建及文档检查。

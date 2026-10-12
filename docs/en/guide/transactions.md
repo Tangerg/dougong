@@ -7,8 +7,8 @@ A running application needs to install plugins, remove them and swap configurati
 ## A single change
 
 ```ts
-const installation = host.install(plugin, config)   // returns immediately
-await installation.ready()                         // await this installation becoming ready
+const installation = host.install(plugin, config)
+await installation.ready()
 
 await installation.update({ config: nextConfig })
 await installation.remove()
@@ -25,7 +25,7 @@ const changes = host.change()
 changes.install(newProvider)
 changes.update(current, { plugin: nextVersion })
 changes.remove(deprecated)
-await changes.commit()          // one transaction
+await changes.commit()
 ```
 
 This is the **canonical** entry point for multi-Installation change. `install()` / `update()` / `remove()` are its single-item degenerate forms — they run the same path internally and own no second state machine.
@@ -49,7 +49,7 @@ const changes = host.change()
 changes.install(brokenPlugin)
 await expect(changes.commit()).rejects.toThrow("setup failed")
 
-expect(host.status).toBe("active")     // other Installations are entirely unaffected
+expect(host.status).toBe("active")
 ```
 
 ### 2. Fail closed
@@ -69,10 +69,8 @@ Multiple failures during shutdown aggregate into an `AggregateError` with every 
 ```ts
 const changes = host.change()
 changes.update(a, { config: validConfig })
-changes.update(b, { config: invalidConfig })   // this one fails validation
+changes.update(b, { config: invalidConfig })
 await expect(changes.commit()).rejects.toMatchObject({ code: "CONFIG_INVALID" })
-
-// Neither a nor b was ever stopped — the execution graph did not move
 ```
 
 A misspelled config field never leaves your application halfway down.
@@ -91,14 +89,15 @@ const observer = definePlugin({
   },
 })
 
-// One ChangeSet replaces outline and search together
 const changes = host.change()
 changes.update(outline, { plugin: outlineV2 })
 changes.update(search, { plugin: searchV2 })
 await changes.commit()
 
-snapshots.length   // 1 — not 4, and the set is never observed empty
+snapshots.length
 ```
+
+This change produces one snapshot notification. Observers never see an intermediate empty set.
 
 Without that batch boundary an observer would watch the set briefly empty in the
 middle of a *successful* change, then refill one entry at a time. This is the
@@ -165,14 +164,14 @@ const feature = host.group("editor", (group) => {
   group.install(syntax)
   group.install(formatter)
 
-  group.group("lsp", (nested) => {      // nesting is allowed
+  group.group("lsp", (nested) => {
     nested.install(languageServer)
   })
 })
 
-await feature.ready()      // await the whole subtree
-feature.status             // aggregated status
-await feature.remove()     // remove the whole subtree
+await feature.ready()
+feature.status
+await feature.remove()
 ```
 
 The `configure` callback **must be synchronous** (returning a promise throws), because the entire Group's content is committed as one ChangeSet.
@@ -181,7 +180,7 @@ Nested Groups share that commit, but an Installation created by `nested.install(
 A Group can also run its own transaction:
 
 ```ts
-const changes = feature.change()   // scoped to installations inside this subtree
+const changes = feature.change()
 changes.install(extra)
 await changes.commit()
 ```
@@ -212,7 +211,7 @@ const changes = group.change()
 changes.install(broken)
 await expect(changes.commit()).rejects.toThrow()
 
-expect(group.status).toBe("active")            // still healthy
+expect(group.status).toBe("active")
 await expect(group.ready()).resolves.toBeUndefined()
 ```
 
@@ -222,13 +221,13 @@ A Group that has been established at least once keeps presenting its last commit
 
 ```ts
 host.status
-// "idle" | "starting" | "active" | "changing" | "stopping"
 
 host.diagnostics.get()
-// { name, status, installations: ReadonlyMap<string, InstallationSnapshot>, groups, ... }
 
 host.diagnostics.subscribe(() => render())
 ```
+
+`host.status` is `idle`, `starting`, `active`, `changing` or `stopping`. Diagnostics expose the Host name, status, Installation snapshots and Group snapshots.
 
 The `changing` status exists for a reason: while a Host transaction is in flight the application-code read window is closed — `host.get()` throws `SERVICE_UNAVAILABLE` rather than handing you an intermediate state that is being replaced.
 

@@ -11,8 +11,8 @@
 在仓库根目录运行：
 
 ```sh
-pnpm examples             # 依次运行十二章并打印观察到的事实
-pnpm examples:benchmark   # 单独运行启动拓扑基准
+pnpm examples
+pnpm examples:benchmark
 ```
 
 ### 三段十二章
@@ -52,7 +52,7 @@ pnpm examples:benchmark   # 单独运行启动拓扑基准
 
 ### 「层层递进」是一条测试，不是一句话
 
-[`example.ts`](./src/example.ts) 里的 `concepts` 数组是这门课的教学大纲，也是阅读顺序。每章声明自己**首次**引入哪些概念：
+[`example.ts`](./src/example.ts) 里的 `concepts` 数组是这门课的教学大纲，也是阅读顺序。每章声明自己**首次**引入哪些概念，`observedFacts` 收集本次运行真实观察到的结果：
 
 ```ts
 return exampleResult({
@@ -60,7 +60,7 @@ return exampleResult({
   stage: "atoms",
   title: "Structured ownership: cleanups, child Lifetimes and tasks",
   introduces: ["cleanup", "child-lifetime", "spawn", "abort-signal"],
-  facts: [ /* 这一轮真实观察到的输出 */ ],
+  facts: observedFacts,
 })
 ```
 
@@ -138,8 +138,8 @@ This package is an **executable** progressive learning path. Twelve chapters, ea
 Run it from the repository root:
 
 ```sh
-pnpm examples             # run all twelve chapters and print what each observed
-pnpm examples:benchmark   # run the startup-topology benchmark separately
+pnpm examples
+pnpm examples:benchmark
 ```
 
 ### Three stages, twelve chapters
@@ -179,7 +179,7 @@ pnpm examples:benchmark   # run the startup-topology benchmark separately
 
 ### "Strictly progressive" is a test, not a claim
 
-The `concepts` array in [`example.ts`](./src/example.ts) is both the syllabus and the reading order. Each chapter declares which concepts it is the **first** to use:
+The `concepts` array in [`example.ts`](./src/example.ts) is both the syllabus and the reading order. Each chapter declares which concepts it is the **first** to use; `observedFacts` collects the results observed in that run:
 
 ```ts
 return exampleResult({
@@ -187,7 +187,7 @@ return exampleResult({
   stage: "atoms",
   title: "Structured ownership: cleanups, child Lifetimes and tasks",
   introduces: ["cleanup", "child-lifetime", "spawn", "abort-signal"],
-  facts: [ /* what this run actually observed */ ],
+  facts: observedFacts,
 })
 ```
 

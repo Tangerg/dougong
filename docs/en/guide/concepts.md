@@ -31,18 +31,22 @@ The three kinds correspond to the three capability semantics. One ID cannot serv
 Contracts hold no execution state, are reusable across Hosts, and should be exported **once** from a stable module:
 
 ```ts
-// contracts.ts — both providers and consumers import from here
 export const DATABASE = service<Database>("app/database")
 ```
 
 ::: warning One thing TypeScript cannot catch
 Two modules can write different type arguments for the same ID:
 
+In `a.ts`:
+
 ```ts
-// a.ts
 export const FOO = service<Logger>("app/foo")
-// b.ts
-export const FOO = service<Database>("app/foo")   // same ID, same kind, different type
+```
+
+In `b.ts`:
+
+```ts
+export const FOO = service<Database>("app/foo")
 ```
 
 TypeScript alone cannot prevent this, and a same-kind conflict cannot be recovered from erased generics at execution time — consumers silently receive the wrong type. **A fixed Contract ID should be declared exactly once and exported from a stable module.** Dougong's architecture guard rejects duplicate fixed-string declarations in this repository; codebases using Dougong should enforce the same static rule. Parameterized IDs created by a Contract family are not duplicate fixed declarations.
@@ -53,45 +57,41 @@ TypeScript alone cannot prevent this, and a same-kind conflict cannot be recover
 This is the most common decision. There is a single criterion: **does this capability have one provider, or arbitrarily many?**
 
 ```ts
-// Service: exactly one provider per Host
 const DATABASE = service<Database>("app/database")
-// Two plugins declaring provides: { db: DATABASE } → SERVICE_CONFLICT
 
-// ExtensionPoint: any number of Plugins contribute, including while the Host is active
 const ROUTES = extensionPoint<Route>("http/routes")
 ```
 
 How they differ in use:
 
 ```ts
-// Service — the provider returns it from setup
 definePlugin({
   name: "app.db",
   provides: { db: DATABASE },
-  setup: () => ({ db: createClient() }),      // missing → SERVICE_NOT_RETURNED
+  setup: () => ({ db: createClient() }),
 })
 
-// Service — the consumer receives the implementation directly
 definePlugin({
+  name: "app.db-consumer",
   requires: { db: DATABASE },
-  setup: (ctx) => { ctx.db.query("...") },     // ctx.db is a Database
+  setup: (ctx) => { ctx.db.query("...") },
 })
 
-// ExtensionPoint — contributors get an updatable, releasable Contribution
 definePlugin({
+  name: "app.routes",
   setup(ctx) {
     const c = ctx.contribute(ROUTES, "users.list", { path: "/users", run })
-    c.update({ path: "/users", run: newRun })  // update in place
-    c.dispose()                                // withdraw early
+    c.update({ path: "/users", run: newRun })
+    c.dispose()
   },
 })
 
-// ExtensionPoint — consumers get a live view, not a snapshot
 definePlugin({
+  name: "app.router",
   requires: { routes: ROUTES },
   setup(ctx) {
-    ctx.routes.get()                            // ReadonlyMap<string, Route>
-    ctx.routes.subscribe(() => rebuildRouter()) // notified when the set changes
+    ctx.routes.get()
+    ctx.routes.subscribe(() => rebuildRouter())
   },
 })
 ```
@@ -115,8 +115,8 @@ That is what makes this safe:
 
 ```ts
 setup(ctx) {
-  const db = ctx.db                     // capture it
-  ctx.spawn(async () => { db.query() }) // use it in a background task without re-reading
+  const db = ctx.db
+  ctx.spawn(async () => { db.query() })
 }
 ```
 
@@ -128,14 +128,16 @@ An Event is **transient** — no retained state, no notion of a provider, and la
 
 ```ts
 definePlugin({
+  name: "app.welcome",
   setup(ctx) {
     ctx.on(USER_CREATED, (user) => sendWelcomeMail(user))
   },
 })
 
 definePlugin({
-  setup(ctx) {
-    await ctx.emit(USER_CREATED, user)   // awaits every listener
+  name: "app.user-events",
+  async setup(ctx) {
+    await ctx.emit(USER_CREATED, user)
   },
 })
 ```
@@ -155,7 +157,7 @@ Ask: **does the consumer need "the current state" or "the fact that something ch
 A common mistake is shipping state through an Event:
 
 ```ts
-ctx.emit(CONFIG_CHANGED, newConfig)   // ❌ plugins installed later never see the current config
+ctx.emit(CONFIG_CHANGED, newConfig)
 ```
 
 Configuration is state. It belongs in a Service or an ExtensionPoint. In particular, never use an Event in `setup()` to seed initial state: listeners and contributions stay staged until their startup layer commits, and same-layer setup order is unspecified. Initial state belongs in a Service getter, a Signal exposed by a Service, or the current ExtensionPoint snapshot.
@@ -165,14 +167,14 @@ Configuration is state. It belongs in a Service or an ExtensionPoint. In particu
 Every Instance has a root Lifetime. Everything acquired during `setup` belongs to that Instance and is **released in reverse order** when the Instance stops.
 
 ```ts
-setup(ctx) {
-  ctx.cleanup(() => client.close())          // register a cleanup
-  const task = ctx.spawn(async (signal) => { // a background task; signal aborts on release
+async setup(ctx) {
+  ctx.cleanup(() => client.close())
+  const task = ctx.spawn(async (signal) => {
     await poll(signal)
   })
-  const child = ctx.lifetime("connection")   // a child lifetime, releasable as a unit
+  const child = ctx.lifetime("connection")
   child.cleanup(() => socket.close())
-  await child.dispose()                      // release the subtree early
+  await child.dispose()
 }
 ```
 
@@ -186,11 +188,11 @@ See [Lifetime and resources](./lifetime.md).
 
 ```ts
 const plugin = definePlugin({
-  name: "app.users",                    // a stable name
-  config: UserConfigSchema,             // optional: any Standard Schema
-  requires: { db: DATABASE },           // dependencies
-  provides: { users: USER_SERVICE },    // provisions
-  setup(ctx, config) {                  // one call producing every capability
+  name: "app.users",
+  config: UserConfigSchema,
+  requires: { db: DATABASE },
+  provides: { users: USER_SERVICE },
+  setup(ctx, config) {
     return { users: createUserService(ctx.db, config) }
   },
 })
@@ -205,12 +207,12 @@ const plugin = definePlugin({
 ```ts
 const host = createHost({ name: "my-app" })
 
-const installation = host.install(plugin, config)  // returns a stable Installation
-await host.start()                           // build the graph, sort, start layers concurrently
-host.status                                  // "idle" | "starting" | "active" | "changing" | "stopping"
-host.get(SOME_SERVICE)                       // application-code read (only while active)
-host.diagnostics.get()                       // an immutable execution snapshot
-await host.stop()                            // stop in reverse order
+const installation = host.install(plugin, config)
+await host.start()
+host.status
+host.get(SOME_SERVICE)
+host.diagnostics.get()
+await host.stop()
 ```
 
 A Host owns four things:
@@ -238,7 +240,7 @@ const feature = host.group("feature", (group) => {
   group.install(b)
 })
 await feature.ready()
-await feature.remove()   // removes the whole subtree
+await feature.remove()
 ```
 
 A Group changes **no** visibility: Service resolution and ExtensionPoint/Event visibility are always **Host-wide**. It is not a capability scope, not a provider shadow tree, not a permission boundary and not a security sandbox.

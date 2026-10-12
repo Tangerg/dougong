@@ -25,18 +25,19 @@ Platform 消费一个 `Installer` 的 `change()` 能力（通常来自 Host 或 
 
 ```ts
 import { createHost } from "dougong"
-import { createPlatform, ImportLoader, defineManifest } from "dougong"
+import { createPlatform, ImportLoader, PermissionSet, defineManifest } from "dougong"
 
 const host = createHost({ name: "editor" })
 await host.start()
 
 const platform = createPlatform({
-  installer: host,                      // 编译目标
-  apiVersion: "1.0.0",                  // 应用 API 版本
-  loader: new ImportLoader(),     // 怎么加载模块
+  installer: host,
+  apiVersion: "1.0.0",
+  loader: new ImportLoader(),
+  authorizer: new PermissionSet(["fs:read"]),
 })
 
-const registration = await platform.register({
+await platform.register({
   manifest: defineManifest({
     name: "acme.markdown",
     version: "1.2.0",
@@ -47,7 +48,7 @@ const registration = await platform.register({
   reference: "https://cdn.example.com/acme-markdown.js",
 })
 
-await platform.trigger("onLanguage:markdown")   // 触发激活
+await platform.trigger("onLanguage:markdown")
 ```
 
 ## Manifest
@@ -58,8 +59,8 @@ Manifest 是外部插件的**声明**，在信任边界上被校验和冻结：
 interface Manifest {
   readonly name: string
   readonly version: string
-  readonly apiVersion: string                        // 对应用 API 的要求
-  readonly activation: ReadonlyArray<string>         // 激活事件
+  readonly apiVersion: string
+  readonly activation: ReadonlyArray<string>
   readonly permissions: ReadonlyArray<string>
   readonly dependencies: Readonly<Record<string, string>>
 }
@@ -82,9 +83,11 @@ interface Loader<Reference> {
 内置两个实现：
 
 ```ts
-new ImportLoader()        // 动态 import()，Reference 是 string | URL
-new MemoryLoader(map)     // 从 Map 取，测试用
+new ImportLoader()
+new MemoryLoader(map)
 ```
+
+`ImportLoader` 用动态 import 解析 `string | URL`；`MemoryLoader` 从提供的 Map 读取模块，适合确定性测试。
 
 Loader 是**唯一**执行外部代码的地方。加载失败抛 `MODULE_LOAD_FAILED`，模块没有导出合法 `Plugin` 时抛 `MODULE_INVALID`。
 
@@ -132,13 +135,15 @@ JavaScript 模块一旦被 `import` 就和应用代码在同一个 realm 里，�
 const registration = await platform.register({
   manifest,
   reference: "./heavy-plugin.js",
-  placeholder: lightweightStub,     // 可选：激活前对外提供的应用侧定义
+  placeholder: lightweightStub,
 })
 
-registration.status      // "registered" → 尚未加载
-await registration.activate()       // 显式激活
-registration.status      // "installed"
+registration.status
+await registration.activate()
+registration.status
 ```
+
+激活前状态为 `registered`，成功激活后为 `installed`。
 
 `placeholder` 是一个**应用代码编写的 Plugin**，在加载所得 Plugin 激活之前占位。它让「命令已经在菜单里，但点击时才加载实现」这类体验成为可能——而且两者替换是**原子**的，走同一笔 Core ChangeSet。
 
@@ -147,7 +152,6 @@ registration.status      // "installed"
 激活也可以由事件触发：
 
 ```ts
-// manifest.activation: ["onLanguage:markdown", "onCommand:acme.format"]
 await platform.trigger("onLanguage:markdown")
 ```
 
@@ -160,6 +164,7 @@ await platform.trigger("onLanguage:markdown")
 ```ts
 defineManifest({
   name: "acme.theme-dark",
+  version: "1.0.0",
   dependencies: { "acme.theme-base": "^2.0.0" },
 })
 ```
@@ -215,7 +220,6 @@ await registration.update({
 
 ```ts
 platform.diagnostics.get()
-// { apiVersion, status, registrations: ReadonlyMap<string, RegistrationSnapshot> }
 
 platform.diagnostics.subscribe(() => render())
 ```
@@ -226,7 +230,11 @@ platform.diagnostics.subscribe(() => render())
 
 ```ts
 await platform.dispose()
-// 或
+```
+
+在代码块内创建 Platform 时，也可以用 `await using` 在退出时释放：
+
+```ts
 await using platform = createPlatform({ ... })
 ```
 

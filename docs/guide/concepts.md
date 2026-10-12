@@ -31,18 +31,22 @@ const USER_CREATED = event<User>("users/created")
 Contract 不持有执行状态，可以跨 Host 复用，应该从稳定模块导出**一次**：
 
 ```ts
-// contracts.ts —— 提供方和消费方都从这里 import
 export const DATABASE = service<Database>("app/database")
 ```
 
 ::: warning 一个 TypeScript 管不到的地方
 两个模块可以为同一个 ID 写出不同的类型参数：
 
+`a.ts`：
+
 ```ts
-// a.ts
 export const FOO = service<Logger>("app/foo")
-// b.ts
-export const FOO = service<Database>("app/foo")   // 同 ID、同 kind、不同类型
+```
+
+`b.ts`：
+
+```ts
+export const FOO = service<Database>("app/foo")
 ```
 
 TypeScript 本身无法阻止这件事；同 kind 的冲突在执行时也无法从擦除后的泛型中识别，消费者会静默拿到错误类型的实现。**固定 Contract 的同一 ID 应在代码库中只声明一次并从稳定模块导出。** Dougong 仓库的架构门禁会拒绝重复的固定字符串声明；使用 Dougong 的代码库也应建立同样的静态规则。动态 Contract family 使用参数化 ID，不属于重复的固定声明。
@@ -53,45 +57,41 @@ TypeScript 本身无法阻止这件事；同 kind 的冲突在执行时也无法
 这是最常见的选择题。判据只有一条：**这个能力有一个提供者，还是任意多个？**
 
 ```ts
-// Service：整个 Host 里只能有一个提供者
 const DATABASE = service<Database>("app/database")
-// 两个插件都声明 provides: { db: DATABASE } → SERVICE_CONFLICT
 
-// ExtensionPoint：任意多个 Plugin 可以贡献，Host active 时也能增删
 const ROUTES = extensionPoint<Route>("http/routes")
 ```
 
 用法上的区别：
 
 ```ts
-// Service —— 提供方从 setup 返回
 definePlugin({
   name: "app.db",
   provides: { db: DATABASE },
-  setup: () => ({ db: createClient() }),      // 不返回 → SERVICE_NOT_RETURNED
+  setup: () => ({ db: createClient() }),
 })
 
-// Service —— 消费方直接拿到实现
 definePlugin({
+  name: "app.db-consumer",
   requires: { db: DATABASE },
-  setup: (ctx) => { ctx.db.query("...") },     // ctx.db 就是 Database
+  setup: (ctx) => { ctx.db.query("...") },
 })
 
-// ExtensionPoint —— 贡献方用 contribute，拿到一个可更新可释放的 Contribution
 definePlugin({
+  name: "app.routes",
   setup(ctx) {
     const c = ctx.contribute(ROUTES, "users.list", { path: "/users", run })
-    c.update({ path: "/users", run: newRun })  // 原地更新
-    c.dispose()                                // 提前撤回
+    c.update({ path: "/users", run: newRun })
+    c.dispose()
   },
 })
 
-// ExtensionPoint —— 消费方拿到的是一个实时视图，不是快照
 definePlugin({
+  name: "app.router",
   requires: { routes: ROUTES },
   setup(ctx) {
-    ctx.routes.get()                            // ReadonlyMap<string, Route>
-    ctx.routes.subscribe(() => rebuildRouter()) // 集合变化时通知
+    ctx.routes.get()
+    ctx.routes.subscribe(() => rebuildRouter())
   },
 })
 ```
@@ -115,8 +115,8 @@ definePlugin({
 
 ```ts
 setup(ctx) {
-  const db = ctx.db                     // 存起来
-  ctx.spawn(async () => { db.query() }) // 后台任务里用，不用担心它变了
+  const db = ctx.db
+  ctx.spawn(async () => { db.query() })
 }
 ```
 
@@ -128,14 +128,16 @@ Event 是**瞬时**的——不保存状态，没有「提供者」的概念，�
 
 ```ts
 definePlugin({
+  name: "app.welcome",
   setup(ctx) {
-    ctx.on(USER_CREATED, (user) => sendWelcomeMail(user))  // 监听
+    ctx.on(USER_CREATED, (user) => sendWelcomeMail(user))
   },
 })
 
 definePlugin({
-  setup(ctx) {
-    await ctx.emit(USER_CREATED, user)   // 发送，等待所有监听器完成
+  name: "app.user-events",
+  async setup(ctx) {
+    await ctx.emit(USER_CREATED, user)
   },
 })
 ```
@@ -155,7 +157,7 @@ definePlugin({
 一个常见错误是用 Event 传递状态：
 
 ```ts
-ctx.emit(CONFIG_CHANGED, newConfig)   // ❌ 晚安装的插件永远收不到当前配置
+ctx.emit(CONFIG_CHANGED, newConfig)
 ```
 
 配置是状态，应该是 Service 或 ExtensionPoint。尤其不要在 `setup()` 中用 Event “播种初始值”：监听器与贡献在所属启动层提交前保持 staged，同层 setup 的相对顺序也没有承诺。初始状态应由 Service getter、Service 中的 Signal，或 ExtensionPoint 当前快照表达。
@@ -165,14 +167,14 @@ ctx.emit(CONFIG_CHANGED, newConfig)   // ❌ 晚安装的插件永远收不到�
 每个 Instance 有一个根 Lifetime。`setup` 获取的一切资源都归该 Instance 所有，Instance 停止时**自动逆序释放**。
 
 ```ts
-setup(ctx) {
-  ctx.cleanup(() => client.close())          // 注册清理
-  const task = ctx.spawn(async (signal) => { // 后台任务，signal 在释放时 abort
+async setup(ctx) {
+  ctx.cleanup(() => client.close())
+  const task = ctx.spawn(async (signal) => {
     await poll(signal)
   })
-  const child = ctx.lifetime("connection")   // 子生命周期，可整体释放
+  const child = ctx.lifetime("connection")
   child.cleanup(() => socket.close())
-  await child.dispose()                      // 提前释放子树
+  await child.dispose()
 }
 ```
 
@@ -186,11 +188,11 @@ setup(ctx) {
 
 ```ts
 const plugin = definePlugin({
-  name: "app.users",                    // 稳定名字
-  config: UserConfigSchema,             // 可选：Standard Schema 校验
-  requires: { db: DATABASE },           // 依赖
-  provides: { users: USER_SERVICE },    // 提供
-  setup(ctx, config) {                  // 一次调用产生全部能力
+  name: "app.users",
+  config: UserConfigSchema,
+  requires: { db: DATABASE },
+  provides: { users: USER_SERVICE },
+  setup(ctx, config) {
     return { users: createUserService(ctx.db, config) }
   },
 })
@@ -205,12 +207,12 @@ const plugin = definePlugin({
 ```ts
 const host = createHost({ name: "my-app" })
 
-const installation = host.install(plugin, config)  // 返回稳定 Installation
-await host.start()                           // 构图、拓扑排序、分层并发启动
-host.status                                  // "idle" | "starting" | "active" | "changing" | "stopping"
-host.get(SOME_SERVICE)                       // 应用代码读取（仅 active 时）
-host.diagnostics.get()                       // 不可变执行状态快照
-await host.stop()                            // 逆序停止
+const installation = host.install(plugin, config)
+await host.start()
+host.status
+host.get(SOME_SERVICE)
+host.diagnostics.get()
+await host.stop()
 ```
 
 Host 负责四件事：
@@ -238,7 +240,7 @@ const feature = host.group("feature", (group) => {
   group.install(b)
 })
 await feature.ready()
-await feature.remove()   // 整棵子树一起移除
+await feature.remove()
 ```
 
 Group **不改变**任何可见性：Service 解析、ExtensionPoint 和 Event 的可见范围始终是**整个 Host**。它不是能力作用域、不是 provider 影子树、不是权限边界、也不是安全沙箱。

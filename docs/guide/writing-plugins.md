@@ -30,8 +30,8 @@ const ROUTES = extensionPoint<Route>("http/routes")
 definePlugin({
   name: "app.users",
   requires: {
-    db: DATABASE,      // Service → ctx.db 是 Database
-    routes: ROUTES,    // ExtensionPoint → ctx.routes 是 ContributionView<Route>
+    db: DATABASE,
+    routes: ROUTES,
   },
   setup(ctx) {
     ctx.db.query("select 1")
@@ -64,7 +64,7 @@ definePlugin({
   name: "app.telemetry",
   requires: { tracer: optional(TRACER) },
   setup(ctx) {
-    ctx.tracer?.startSpan("boot")   // 类型是 Tracer | undefined
+    ctx.tracer?.startSpan("boot")
   },
 })
 ```
@@ -84,7 +84,7 @@ definePlugin({
   provides: { users: USERS },
   setup(ctx) {
     return {
-      users: createUserService(ctx.db),   // key 必须和 provides 一致
+      users: createUserService(ctx.db),
     }
   },
 })
@@ -94,9 +94,10 @@ definePlugin({
 
 ```ts
 provides: { users: USERS },
-setup() {},        // ❌ Type '() => void' is not assignable to
-                   //    '(context, config) => Awaitable<ProvidedServices<...>>'
+setup() {},
 ```
+
+TypeScript 会拒绝 `() => void`，因为 `setup` 必须返回声明的 `ProvidedServices`。
 
 同一个 Contract 被两个 Plugin 的 `provides` 声明占用，会在构图时抛 `SERVICE_CONFLICT`——在任何 Instance 启动之前。
 
@@ -126,8 +127,8 @@ definePlugin({
 
 ```ts
 const c = ctx.contribute(ROUTES, "users.list", route)
-c.update(nextRoute)   // 原地更新，通知订阅者
-c.dispose()           // 提前撤回
+c.update(nextRoute)
+c.dispose()
 ```
 
 不调用 `dispose()` 也没关系——Instance 停止时全部贡献自动撤回。
@@ -149,12 +150,11 @@ const db = definePlugin({
   config: schema,
   provides: { db: DATABASE },
   setup(ctx, config) {
-    //             ^ 类型是 schema 的 **输出** 类型，port 一定存在
     return { db: connect(config.hostname, config.port) }
   },
 })
 
-host.install(db, { hostname: "localhost" })   // 输入类型，port 可省略
+host.install(db, { hostname: "localhost" })
 ```
 
 注意输入和输出是两个类型：`host.install()` 接受**输入**（`port` 可选），`setup` 收到**输出**（`port` 已填默认值）。
@@ -210,7 +210,7 @@ setup 抛异常时：
 ```ts
 const installation = host.install(brokenPlugin)
 await expect(installation.ready()).rejects.toThrow("setup failed")
-expect(host.status).toBe("active")     // 其他 Installation 不受影响
+expect(host.status).toBe("active")
 ```
 
 抛出非 `Error` 的值（`throw "boom"`）会被分类为 `INSTALLATION_UNAVAILABLE` 的 `DougongError`，原值保留在 `cause` 里——`undefined` 永远不会同时表示「失败值」和「没有失败」。
@@ -220,19 +220,21 @@ expect(host.status).toBe("active")     // 其他 Installation 不受影响
 ```ts
 const installation = host.install(plugin, { hostname: "a" })
 
-await installation.update({ config: { hostname: "b" } })   // 换配置
-await installation.update({ plugin: nextVersion })     // 换声明，保持 Installation 身份
+await installation.update({ config: { hostname: "b" } })
+await installation.update({ plugin: nextVersion })
 await installation.remove()
 ```
 
 更新保持 **Installation 身份**：ID、诊断位置和 Group 归属不变。活动 Instance 会被替换，且只有受影响的依赖闭包会重启；无关 Installation 不动。
 
 ```ts
-installation.id        // "app.db:1"
-installation.status    // "pending" | "active" | "stopping" | "failed" | "removed"
-installation.groupId   // 所属 Group 的 ID
-await installation.ready()   // 等待这次安装就绪；失败则 reject
+installation.id
+installation.status
+installation.groupId
+await installation.ready()
 ```
+
+`id` 是稳定身份（如 `app.db:1`），`groupId` 指向拥有它的 Group。状态为 `pending`、`active`、`stopping`、`failed` 或 `removed`。`ready()` 在已提交状态就绪后完成，失败则拒绝。
 
 ## 一个完整的例子
 

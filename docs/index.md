@@ -56,16 +56,16 @@ const clock = definePlugin({
 
 const greeter = definePlugin({
   name: "app.greeter",
-  requires: { clock: CLOCK },        // 依赖写在这里
+  requires: { clock: CLOCK },
   setup(ctx) {
-    console.log(ctx.clock.now())     // 只能读声明过的依赖，否则编译错误
+    console.log(ctx.clock.now())
   },
 })
 
 const host = createHost({ name: "hello" })
-host.install(greeter)                 // 安装顺序不决定启动顺序
+host.install(greeter)
 host.install(clock)
-await host.start()                    // 从 Service 声明推导拓扑，同层并发启动
+await host.start()
 ```
 
 ## 它适合什么

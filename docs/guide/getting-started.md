@@ -26,9 +26,9 @@ npm install dougong
 `dougong` 是门面包，它 re-export 三个实包。如果你只需要内核，也可以单独安装：
 
 ```sh
-npm install @dougongjs/core       # 六个原子、依赖图、事务、诊断
-npm install @dougongjs/reactive   # Signal 值层与 observe（零依赖）
-npm install @dougongjs/platform   # Manifest、权限、懒激活、HMR
+npm install @dougongjs/core
+npm install @dougongjs/reactive
+npm install @dougongjs/platform
 ```
 
 ### TypeScript 配置
@@ -72,18 +72,15 @@ interface Greeter {
   greet(name: string): string
 }
 
-// 1. Contract 是一个冻结的身份令牌，把类型和字符串 ID 绑在一起
 const CLOCK = service<Clock>("example/clock")
 const GREETER = service<Greeter>("example/greeter")
 
-// 2. provider：在 provides 里声明，从 setup 返回实现
 const clock = definePlugin({
   name: "example.clock",
   provides: { clock: CLOCK },
   setup: () => ({ clock: { now: () => new Date() } }),
 })
 
-// 3. consumer：在 requires 里声明，从 ctx 读取
 const greeter = definePlugin({
   name: "example.greeter",
   requires: { clock: CLOCK },
@@ -96,8 +93,8 @@ const greeter = definePlugin({
 })
 
 const host = createHost({ name: "hello" })
-host.install(greeter)   // 注意：先装 consumer
-host.install(clock)     // 后装 provider —— 顺序无所谓
+host.install(greeter)
+host.install(clock)
 
 await host.start()
 console.log(host.get(GREETER).greet("Dougong"))
@@ -124,10 +121,12 @@ await host.stop()
 definePlugin({
   name: "bad",
   setup(ctx) {
-    ctx.clock.now()   // ❌ 编译错误
-  },                  //    Property 'clock' does not exist on type 'PluginContext<{}>'
+    ctx.clock.now()
+  },
 })
 ```
+
+这里没有声明 clock 依赖，TypeScript 会报 `Property 'clock' does not exist on type 'PluginContext<{}>'`。
 
 `ctx` 的类型是从 `requires` 推导出来的。没声明就没有这个属性——这是**编译期**错误，不会在执行阶段才得到 `undefined`。
 
@@ -136,9 +135,10 @@ definePlugin({
 ### `host.get()` 是给应用代码用的，不是给插件用的
 
 ```ts
-host.get(GREETER)     // ✓ 应用代码跨越 Host 边界读取能力
-ctx.get(GREETER)     // ✗ 不存在这个方法
+host.get(GREETER)
 ```
+
+Plugin 的 Context 没有 `ctx.get()` 方法。
 
 插件之间通过 `requires` 建立关系，这样依赖图才是完整的。如果插件能随时用 Service Locator 拿任意能力，依赖图就不再反映真实依赖，拓扑排序和事务回滚都会失去意义。
 
@@ -152,9 +152,9 @@ ctx.get(GREETER)     // ✗ 不存在这个方法
 git clone https://github.com/Tangerg/dougong.git
 cd dougong
 pnpm install
-pnpm examples        # 依次运行九个示例
-pnpm check           # 完整验证门禁
-pnpm docs:dev        # 本地启动这个文档站
+pnpm examples
+pnpm check
+pnpm docs:dev
 ```
 
 十二章示例分三段递进——原子、组合、完整应用——从最小 Service 一路走到 Planet / Lynx 场景、声明式计划和模块图 HMR，全部进 CI。详见[可执行示例](../examples.md)。
