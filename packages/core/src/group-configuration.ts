@@ -25,23 +25,23 @@ export class GroupConfigurationSession<Draft> {
     this.#state = { phase: "open", draft, discard, normalize };
   }
 
-  get failure() {
-    return this.#state.phase === "failed" ? this.#state.error : undefined;
-  }
-
   get sealed() {
     return this.#state.phase === "sealed";
   }
 
-  requireDraft() {
+  run<Result>(operation: (draft: Draft) => Result): Result {
     const state = this.#state;
     if (state.phase === "failed") throw state.error;
     if (state.phase === "sealed") throw groupConfigurationSealedError();
-    return state.draft;
-  }
-
-  assertOpen() {
-    void this.requireDraft();
+    try {
+      const result = operation(state.draft);
+      // A nested operation can fail even when application code catches its exception.
+      const current = this.#state;
+      if (current.phase === "failed") throw current.error;
+      return result;
+    } catch (error) {
+      throw this.fail(error);
+    }
   }
 
   fail(error: unknown) {

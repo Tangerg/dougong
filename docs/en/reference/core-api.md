@@ -743,7 +743,7 @@ Group rules:
 - `Group` and `Installation` share `status/ready/remove`; `Installation` also has `update` and `diagnostics`
 - a Group changes no capability visibility: Services, ExtensionPoints and Events belong to the whole Host
 
-Nested Group configures share one explicit configuration session. Any child failure marks the entire session `failed`, so even a caller that catches the exception in an outer scope cannot keep appending declarations or commit a partial configuration. Non-`Error` failure values are classified at the configuration and Host transaction boundaries as `GROUP_UNAVAILABLE`; after a failed `ready()` the Group status must be `failed` and may not appear healthy merely because the failure value happened to be `undefined`.
+Nested Group configures share one explicit configuration session. A rejected name, duplicate child, invalid Plugin, forbidden `change()` / `remove()` call or callback failure marks the entire session `failed`. Even a caller that catches the exception cannot keep appending declarations or commit a partial configuration; the session preserves its first error. Non-`Error` failure values are classified at the configuration and Host transaction boundaries as `GROUP_UNAVAILABLE`; after a failed `ready()` the Group status must be `failed` and may not appear healthy merely because the failure value happened to be `undefined`.
 
 Each Group keeps exactly one current readiness barrier. A Group that has not yet been established stays `failed` after a failed commit, and a later successful change replaces the old barrier and establishes it. An already-established Group whose change failed and whose previously committed state Core restored stays healthy. `status` and `ready()` always read the same lifecycle state.
 

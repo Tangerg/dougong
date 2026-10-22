@@ -61,10 +61,10 @@ Mutable owners and projections are separated for each fact:
 | Installation declaration, Instance state and control binding | InstallationRecord | Installation facade, immutable graph versions and diagnostics |
 | Host command completion boundary | Host's SerialQueue | Installation / Group ready await the same boundary |
 | Steady Host execution availability | Engine's committed plan | With no in-flight command, Host status and diagnostics derive active/idle without storing or reconciling another state |
-| In-flight Host command phase | Host | starting/changing/stopping temporarily close Service reads; completion exposes Engine's committed fact directly |
+| In-flight Host command phase | Host | starting/changing/stopping close Service reads until snapshot publication and Installation outcomes settle; one completion path then exposes Engine's committed fact |
 | Platform structural command completion boundary | Platform's SerialQueue | Registration ready and Core lifecycle observation await the same boundary instead of independently classifying uncommitted binding changes |
 | Group attachment and parent-child relationships | GroupNode | Group facade and structural diagnostics |
-| Group configuration phase | GroupConfigurationSession | Group facade reads it without advancing it independently |
+| Group configuration phase and first failure | GroupConfigurationSession | Group facade routes configuration operations through the same session; caught validation errors cannot authorize a partial commit |
 | Permission to append ChangeSet operations | Each draft's current phase | A check before input reads cannot authorize later writes; staging reads the sole phase again |
 | Accepted declaration fields | The frozen record returned by normalizePlainRecord | Core and Platform consume captured data; ordinary reads of the original cannot select fields again |
 | Requirement optionality and Contract identity | The frozen requirement returned by Contract normalization | Plugin normalization and Host lookups consume the capture without checking a wrapper and then rereading its original Service |
@@ -319,7 +319,7 @@ A ChangeSet committed while the Host is active first produces a committed or rol
 
 ### Multi-Installation graph change
 
-A ChangeSet builds and validates the complete candidate graph before touching committed execution state. Once inside the execution window the Host is `changing`, so `host.get()` never observes per-Instance stops and starts; it returns to active only after success or a completed rollback. Any incomplete cleanup fails closed rather than leaving a mixed state that merely "looks active".
+A ChangeSet builds and validates the complete candidate graph before touching committed execution state. Once inside the execution window the Host is `changing`, so `host.get()` never observes per-Instance stops and starts. It returns to active only after Engine finishes both execution and Contribution snapshot publication, on success or completed rollback. Committing declarations cannot end the command phase early: an active Host notification must never expose new Services alongside the previous Contribution snapshot. Any incomplete cleanup fails closed rather than leaving a mixed state that merely "looks active".
 
 Top-level side effects of a dynamic import, network requests and operating-system resources cannot be rolled back by an in-memory transaction. Those are the loader's or the plugin's compensation responsibility, and the documentation must not dress a framework transaction up as a distributed-transaction promise.
 
@@ -339,7 +339,7 @@ The Group configuration session is `open / failed / sealed`, the structural node
 
 Those state machines are composed by an internal `GroupCoordinator` instead of being scattered through the Host orchestrator. The coordinator fully owns the Group tree, facade authority and readiness; Host supplies only Installation ChangeSets, serialized commands and diagnostics publication through narrow ports. That boundary adds no public concept and grants a Group no capability-resolution power.
 
-A nested `configure` shares one configuration session and one ChangeSet, but not one ownership position. Every inner `install()` still records its Installation against the current Group, so the inner Group can be removed independently while the whole declaration commits atomically. The first failure poisons the whole draft, so an outer caller that swallows the exception still cannot continue declaring or commit. Any non-`Error` failure is classified at the boundary before entering the lifecycle, so `undefined` never means both "the failure value" and "no failure". A failed change against an established Group that rolls back completely keeps presenting the committed state; a Group that was never established can have its failed barrier replaced by a later successful change.
+A nested `configure` shares one configuration session and one ChangeSet, but not one ownership position. Every inner `install()` still records its Installation against the current Group, so the inner Group can be removed independently while the whole declaration commits atomically. The session records the first failure from configuration callbacks and Group operations, including invalid names, duplicate children, rejected Plugin declarations and forbidden `change()` / `remove()` calls. Catching that exception cannot restore the session's authority: later operations rethrow the same failure and the complete draft is discarded. Any non-`Error` failure is classified at the boundary before entering the lifecycle, so `undefined` never means both "the failure value" and "no failure". A failed change against an established Group that rolls back completely keeps presenting the committed state; a Group that was never established can have its failed barrier replaced by a later successful change.
 
 What a Group does not solve is "who can see which capability". Services, ExtensionPoints and Events are globally consistent within one Host.
 

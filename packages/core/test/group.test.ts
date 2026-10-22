@@ -317,6 +317,51 @@ describe("plugin groups", () => {
     expect(host.diagnostics.get().installations.size).toBe(0);
   });
 
+  it.each(["name", "duplicate", "callback", "plugin", "change", "remove"] as const)(
+    "discards the shared configuration after a swallowed %s rejection",
+    async (kind) => {
+      const host = createHost();
+      const setup = vi.fn<() => void>();
+      const plugin = definePlugin({ name: "group.rejected-configuration", setup });
+      let installation!: Installation<typeof plugin>;
+      let failure: unknown;
+      let laterFailure: unknown;
+
+      expect(() =>
+        host.group("outer", (outer) => {
+          installation = outer.install(plugin);
+          const inner = outer.group("inner", () => undefined);
+          try {
+            if (kind === "name") inner.group("bad/name", () => undefined);
+            else if (kind === "duplicate") outer.group("inner", () => undefined);
+            else if (kind === "callback") inner.group("child", undefined as never);
+            else if (kind === "plugin") inner.install({ name: " invalid", setup() {} });
+            else if (kind === "change") inner.change();
+            else void inner.remove();
+          } catch (error) {
+            failure = error;
+          }
+          try {
+            outer.install(plugin);
+          } catch (error) {
+            laterFailure = error;
+          }
+        }),
+      ).toThrow(TypeError);
+
+      expect(laterFailure).toBe(failure);
+      await expect(installation.ready()).rejects.toMatchObject({
+        message: (failure as Error).message,
+      });
+      expect(installation.status).toBe("failed");
+      expect(host.diagnostics.get().groups.has("/outer")).toBe(false);
+      await host.start();
+      expect(host.diagnostics.get().installations.size).toBe(0);
+      expect(setup).not.toHaveBeenCalled();
+      await host.stop();
+    },
+  );
+
   it("enforces synchronous configuration, identity and ChangeSet authority", async () => {
     const host = createHost();
     const plugin = definePlugin({ name: "group.authority", setup() {} });

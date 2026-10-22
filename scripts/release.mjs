@@ -4,10 +4,9 @@ import { execFileSync, spawnSync } from "node:child_process";
 import {
   existsSync,
   globSync,
-  lstatSync,
+  mkdirSync,
   mkdtempSync,
   readFileSync,
-  readdirSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -16,6 +15,7 @@ import { tmpdir } from "node:os";
 import { basename, join, resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { valid } from "semver";
+import { readPackageFiles } from "./release-archive.mjs";
 
 const PACKAGE_DIRECTORIES = [
   "packages/reactive",
@@ -55,18 +55,6 @@ function readManifest(dir) {
 
 function writeManifest(dir, manifest) {
   writeFileSync(manifestPath(dir), `${JSON.stringify(manifest, null, 2)}\n`);
-}
-
-function readPackageFiles(root) {
-  return new Map(
-    readdirSync(root, { recursive: true }).flatMap((file) => {
-      const path = join(root, file);
-      const entry = lstatSync(path);
-      if (entry.isDirectory()) return [];
-      if (!entry.isFile()) fail(`Package entry '${file}' must be a regular file`);
-      return [[file, readFileSync(path)]];
-    }),
-  );
 }
 
 let input;
@@ -310,13 +298,18 @@ for (const { dir, name } of PACKAGES) {
   if (!existsSync(tarball)) fail(`${name}: pnpm pack did not produce ${tarball}`);
   tarballs.set(name, tarball);
 
-  const extracted = join(stage, `candidate__${basename(dir)}`);
-  execFileSync("mkdir", ["-p", extracted]);
-  // Extract artifacts because nonportable listing filters can silently inspect no files.
-  execFileSync("tar", ["-xzf", tarball, "-C", extracted]);
-  const root = join(extracted, "package");
+  const candidateFiles = readPackageFiles(tarball);
+  for (const required of [
+    "package.json",
+    "dist/index.js",
+    "dist/index.d.ts",
+    "README.md",
+    "LICENSE",
+  ]) {
+    if (!candidateFiles.has(required)) fail(`${name}: tarball is missing ${required}`);
+  }
 
-  const packedManifest = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
+  const packedManifest = JSON.parse(candidateFiles.get("package.json"));
   if (packedManifest.name !== name) {
     fail(`${name}: tarball declares name ${packedManifest.name}`);
   }
@@ -346,12 +339,8 @@ for (const { dir, name } of PACKAGES) {
       );
     }
   }
-  for (const required of ["dist/index.js", "dist/index.d.ts", "README.md", "LICENSE"]) {
-    if (!existsSync(join(root, required))) fail(`${name}: tarball is missing ${required}`);
-  }
-
-  const bundle = readFileSync(join(root, "dist/index.js"), "utf8");
-  const declaration = readFileSync(join(root, "dist/index.d.ts"), "utf8");
+  const bundle = candidateFiles.get("dist/index.js").toString("utf8");
+  const declaration = candidateFiles.get("dist/index.d.ts").toString("utf8");
   for (const [label, contents] of [
     ["dist/index.js", bundle],
     ["dist/index.d.ts", declaration],
@@ -366,16 +355,13 @@ for (const { dir, name } of PACKAGES) {
   // Compare existing registry bytes because immutable versions cannot accept a different artifact on resume.
   if (alreadyPublished.has(name)) {
     const downloaded = join(stage, `published__${basename(dir)}`);
-    execFileSync("mkdir", ["-p", downloaded]);
+    mkdirSync(downloaded, { recursive: true });
     execFileSync("npm", ["pack", `${name}@${version}`, "--pack-destination", downloaded], {
       stdio: "ignore",
     });
     const [archive] = globSync(join(downloaded, "*.tgz"));
     if (!archive) fail(`${name}: cannot download the published ${version} to compare`);
-    execFileSync("tar", ["-xzf", archive, "-C", downloaded]);
-    const publishedRoot = join(downloaded, "package");
-    const publishedFiles = readPackageFiles(publishedRoot);
-    const candidateFiles = readPackageFiles(root);
+    const publishedFiles = readPackageFiles(archive);
     for (const file of new Set([...publishedFiles.keys(), ...candidateFiles.keys()])) {
       const publishedContents = publishedFiles.get(file);
       const candidateContents = candidateFiles.get(file);

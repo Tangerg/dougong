@@ -743,7 +743,7 @@ Group 的规则：
 - Group 与 Installation 共享 `status/ready/remove`，Installation 另有 `update` 与 `diagnostics`；
 - Group 不改变能力可见性：Service、ExtensionPoint 和 Event 都属于整个 Host。
 
-嵌套 Group configure 共享同一个显式配置会话。任一子级失败都会把整份会话置为 `failed`，即使调用方在外层捕获了该异常，也不能继续向已经失败的草稿追加声明或提交部分配置。非 `Error` 的失败值在配置和运行事务边界统一分类为 `GROUP_UNAVAILABLE`；`ready()` 失败后 Group 状态必须是 `failed`，不能因为失败值恰好为 `undefined` 而呈现为健康。
+嵌套 Group configure 共享同一个显式配置会话。名称校验失败、重复子节点、非法 Plugin、禁止的 `change()` / `remove()` 调用或回调失败，都会把整份会话置为 `failed`。即使调用方捕获了异常，也不能继续追加声明或提交部分配置；会话始终保留首次错误。非 `Error` 的失败值在配置和运行事务边界统一分类为 `GROUP_UNAVAILABLE`；`ready()` 失败后 Group 状态必须是 `failed`，不能因为失败值恰好为 `undefined` 而呈现为健康。
 
 每个 Group 只保留一份当前 readiness barrier。尚未成功建立的 Group 在提交失败后保持 `failed`，后续成功变更会替换旧 barrier 并建立 Group；已经建立的 Group 若变更失败且 Core 恢复了原提交状态，则继续保持健康。`status` 与 `ready()` 始终读取同一份生命周期状态。
 

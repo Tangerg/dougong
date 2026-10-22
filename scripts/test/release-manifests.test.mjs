@@ -11,36 +11,13 @@ const release = fileURLToPath(new URL("../release.mjs", import.meta.url));
 const packages = ["reactive", "core", "platform", "dougong"];
 const version = "0.7.2";
 
-const command = `#!${process.execPath}
-import { writeFileSync } from "node:fs";
-import { basename } from "node:path";
-const name = basename(process.argv[1]);
-const args = process.argv.slice(2);
-if (name === "git") {
-  if (args[0] === "rev-parse") console.log(args.includes("--abbrev-ref") ? "main" : "a".repeat(40));
-  else if (args[0] === "rev-list") console.log("0");
-  else if (!["status", "fetch", "tag"].includes(args[0])) process.exit(99);
-} else if (name === "npm" && args[0] === "view") {
-  console.log(JSON.stringify({ error: { code: "E404" } }));
-  process.exit(1);
-} else if (name === "pnpm") {
-  if (args[0] === "check") writeFileSync("gate-finished", "");
-  else if (args[0] === "pack") {
-    writeFileSync("../../pack-started", "");
-    writeFileSync("../../release-stage", args[args.indexOf("--pack-destination") + 1]);
-    process.exit(1);
-  } else process.exit(99);
-} else process.exit(99);
-`;
+const preload = fileURLToPath(new URL("./fixtures/release-manifests.mjs", import.meta.url));
 
 async function runRelease(failure) {
   const workspace = mkdtempSync(join(tmpdir(), "dougong-release-manifests-test-"));
   try {
     const bin = join(workspace, "bin");
     mkdirSync(bin);
-    for (const name of ["git", "npm", "pnpm"]) {
-      writeFileSync(join(bin, name), command, { mode: 0o755 });
-    }
     const originals = {};
     for (const name of packages) {
       const packageName = name === "dougong" ? name : `@dougongjs/${name}`;
@@ -55,44 +32,9 @@ async function runRelease(failure) {
       originals[name] = contents;
     }
 
-    const preload = join(workspace, "failure.mjs");
-    writeFileSync(
-      preload,
-      `import fs from "node:fs";
-import { syncBuiltinESMExports } from "node:module";
-import { join } from "node:path";
-const failure = ${JSON.stringify(failure)};
-const target = join(process.cwd(), "packages", failure === "restore" ? "reactive" : "core", "package.json");
-const gate = join(process.cwd(), "gate-finished");
-const read = fs.readFileSync;
-const write = fs.writeFileSync;
-let writes = 0;
-fs.readFileSync = (path, ...args) => {
-  if (failure === "read" && path === target && fs.existsSync(gate)) {
-    throw new Error("fixture manifest read failure");
-  }
-  return read(path, ...args);
-};
-fs.writeFileSync = (path, contents, ...args) => {
-  if (path === target && fs.existsSync(gate)) {
-    writes++;
-    if (failure === "write" && writes === 1) {
-      write(path, "partial write", ...args);
-      throw new Error("fixture manifest write failure");
-    }
-    if (failure === "restore" && writes === 2) {
-      throw new Error("fixture manifest restoration failure");
-    }
-  }
-  return write(path, contents, ...args);
-};
-syncBuiltinESMExports();
-`,
-    );
-
     const result = await executeRelease(["--import", preload, release, version, "--dry-run"], {
       cwd: workspace,
-      env: { ...process.env, PATH: bin },
+      env: { ...process.env, PATH: bin, DOUGONG_RELEASE_FAILURE: failure },
     });
     return {
       ...result,
@@ -103,7 +45,7 @@ syncBuiltinESMExports();
           readFileSync(join(workspace, "packages", name, "package.json"), "utf8"),
         ]),
       ),
-      packStarted: existsSync(join(workspace, "pack-started")),
+      packStarted: existsSync(join(workspace, "release-stage")),
     };
   } finally {
     const stageRecord = join(workspace, "release-stage");

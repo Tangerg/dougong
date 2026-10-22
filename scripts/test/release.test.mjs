@@ -10,28 +10,7 @@ vi.setConfig({ testTimeout: releaseTestTimeout });
 const release = fileURLToPath(new URL("../release.mjs", import.meta.url));
 const version = "0.7.2";
 
-const command = `#!${process.execPath}
-import { readFileSync, writeFileSync } from "node:fs";
-import { basename } from "node:path";
-const name = basename(process.argv[1]);
-const args = process.argv.slice(2);
-if (name === "git") {
-  if (args[0] === "rev-parse") console.log(args.includes("--abbrev-ref") ? "main" : "a".repeat(40));
-  else if (args[0] === "rev-list") console.log("0");
-  else if (!["status", "fetch", "tag"].includes(args[0])) process.exit(99);
-} else if (name === "npm") {
-  const queries = JSON.parse(readFileSync("queries.json", "utf8"));
-  queries.push(args[1]);
-  writeFileSync("queries.json", JSON.stringify(queries));
-  const response = JSON.parse(readFileSync("response.json", "utf8"));
-  if (response.signal) process.kill(process.pid, response.signal);
-  process.stdout.write(args.includes("--json") ? response.stdout : (response.plain ?? response.stdout));
-  process.exit(response.status);
-} else if (name === "pnpm") {
-  writeFileSync("gate-started", JSON.stringify(args));
-  process.exit(1);
-} else process.exit(99);
-`;
+const preload = fileURLToPath(new URL("./fixtures/release-preflight.mjs", import.meta.url));
 
 async function runRelease(
   response,
@@ -52,16 +31,15 @@ async function runRelease(
     }
     writeFileSync(join(workspace, "queries.json"), "[]");
     writeFileSync(join(workspace, "response.json"), JSON.stringify(response));
-    for (const name of ["git", "pnpm", ...(response.missing ? [] : ["npm"])]) {
-      writeFileSync(join(bin, name), command, { mode: 0o755 });
-    }
-    const result = await executeRelease([release, ...releaseArgs], {
+    const result = await executeRelease(["--import", preload, release, ...releaseArgs], {
       cwd: workspace,
       env: { ...process.env, PATH: bin },
     });
     return {
       ...result,
-      gateStarted: existsSync(join(workspace, "gate-started")),
+      gate: existsSync(join(workspace, "gate-started"))
+        ? JSON.parse(readFileSync(join(workspace, "gate-started"), "utf8"))
+        : undefined,
       queries: JSON.parse(readFileSync(join(workspace, "queries.json"), "utf8")),
     };
   } finally {
@@ -74,22 +52,22 @@ it.each(["E503", "ENOTFOUND", "E401"])(
   async (code) => {
     const result = await runRelease({ status: 1, stdout: JSON.stringify({ error: { code } }) });
     expect(result.status).toBe(1);
-    expect(result.gateStarted).toBe(false);
+    expect(result.gate).toBeUndefined();
     expect(result.stdout).not.toContain(`${version} is unused on the registry`);
     expect(result.stderr).toContain(code);
   },
 );
 
 it.each([
-  { label: "an unavailable npm executable", missing: true, status: 1, stdout: "" },
-  { label: "a terminated query", signal: "SIGTERM", status: 1, stdout: "" },
+  { label: "an unavailable npm executable", missing: true },
+  { label: "a terminated query", signal: "SIGTERM" },
   { label: "malformed output", status: 1, stdout: "not JSON" },
   { label: "empty successful output", status: 0, stdout: "" },
-  { label: "a different version", status: 0, stdout: JSON.stringify("0.7.3"), plain: "0.7.3" },
+  { label: "a different version", status: 0, stdout: JSON.stringify("0.7.3") },
 ])("stops release preflight on $label", async (response) => {
   const result = await runRelease(response);
   expect(result.status).toBe(1);
-  expect(result.gateStarted).toBe(false);
+  expect(result.gate).toBeUndefined();
   expect(result.stdout).not.toContain(`${version} is unused on the registry`);
 });
 
@@ -109,7 +87,7 @@ it.each([
   );
   expect(result.status).toBe(1);
   expect(result.queries).toEqual([]);
-  expect(result.gateStarted).toBe(false);
+  expect(result.gate).toBeUndefined();
   expect(result.stderr).toContain("version");
 });
 
@@ -134,7 +112,7 @@ it.each([
   );
   expect(result.status).toBe(1);
   expect(result.queries).toEqual([]);
-  expect(result.gateStarted).toBe(false);
+  expect(result.gate).toBeUndefined();
   expect(result.stderr).toContain(error);
 });
 
@@ -149,7 +127,7 @@ it.each([
     args,
   );
   expect(result.status).toBe(1);
-  expect(result.gateStarted).toBe(true);
+  expect(result.gate).toEqual(["check"]);
 });
 
 it("continues to verification only for an explicit missing version", async () => {
@@ -158,14 +136,14 @@ it("continues to verification only for an explicit missing version", async () =>
     stdout: JSON.stringify({ error: { code: "E404" } }),
   });
   expect(result.status).toBe(1);
-  expect(result.gateStarted).toBe(true);
+  expect(result.gate).toEqual(["check"]);
   expect(result.stdout).toContain(`${version} is unused on the registry`);
 });
 
 it("verifies a fully published version before finishing its release record", async () => {
-  const result = await runRelease({ status: 0, stdout: JSON.stringify(version), plain: version });
+  const result = await runRelease({ status: 0, stdout: JSON.stringify(version) });
   expect(result.status).toBe(1);
-  expect(result.gateStarted).toBe(true);
+  expect(result.gate).toEqual(["check"]);
   expect(result.queries).toHaveLength(4);
   expect(result.stdout).toContain("resuming:");
 });
@@ -177,7 +155,7 @@ it("queries the release identities captured from package manifests", async () =>
     names,
   );
   expect(result.queries).toEqual(names.map((name) => `${name}@${version}`));
-  expect(result.gateStarted).toBe(true);
+  expect(result.gate).toEqual(["check"]);
 });
 
 it.each([
@@ -190,6 +168,6 @@ it.each([
   );
   expect(result.status).toBe(1);
   expect(result.queries).toEqual([]);
-  expect(result.gateStarted).toBe(false);
+  expect(result.gate).toBeUndefined();
   expect(result.stderr).toContain(error);
 });

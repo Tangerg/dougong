@@ -1,5 +1,5 @@
 import type { Host, HostOptions, ChangeSet, Group, PluginConfigArguments } from "./host-api";
-import { Engine, type TransitionOutcome } from "./engine";
+import { Engine } from "./engine";
 import type { ChangeOperation } from "./change-set";
 import type { ExtensionPoint, OptionalService, Service } from "./contracts";
 import { HostDiagnostics, type HostSnapshot, type HostStatus } from "./diagnostics";
@@ -10,7 +10,7 @@ import { InstallationRegistry } from "./installation-registry";
 import { isLogger, type Logger } from "./lifetime";
 import type { AnyPlugin } from "./plugin";
 import { SerialQueue } from "./serial-queue";
-import { batchSnapshotNotifications, type SnapshotView } from "./snapshot-view";
+import type { SnapshotView } from "./snapshot-view";
 import { normalizePlainRecord } from "./record";
 
 export type { LifecycleStatus } from "./lifecycle-status";
@@ -149,16 +149,16 @@ class HostImpl implements Host {
       try {
         const plan = this.#engine.buildPlan(this.#installations.declarations());
         await this.#engine.start(plan);
-        this.#setCommandPhase(undefined);
         this.#installations.settleReadiness(plan.order);
       } catch (error) {
         // Settle every Installation readiness after failed startup so existing waiters cannot outlive the attempt.
-        this.#setCommandPhase(undefined);
         for (const installation of this.#installations.values()) {
           if (installation.status !== "active") installation.fail(error);
         }
         this.#installations.settleReadiness(this.#installations.values());
         throw error;
+      } finally {
+        this.#setCommandPhase(undefined);
       }
     });
   }
@@ -167,10 +167,13 @@ class HostImpl implements Host {
     return this.#commands.run(async () => {
       if (this.status === "idle") return;
       this.#setCommandPhase("stopping");
-      const errors = await this.#engine.stop();
-      this.#setCommandPhase(undefined);
-      if (errors.length === 1) throw errors[0];
-      if (errors.length > 1) throw new AggregateError(errors, "Host shutdown failed");
+      try {
+        const errors = await this.#engine.stop();
+        if (errors.length === 1) throw errors[0];
+        if (errors.length > 1) throw new AggregateError(errors, "Host shutdown failed");
+      } finally {
+        this.#setCommandPhase(undefined);
+      }
     });
   }
 
@@ -216,26 +219,19 @@ class HostImpl implements Host {
   }
 
   async #transact(operations: ReadonlyArray<ChangeOperation>) {
-    const outcome = await this.#runTransaction(operations);
-    if (outcome.kind === "failed-closed") {
-      for (const installation of outcome.affected) installation.fail(outcome.error);
-    }
-    this.#installations.settleReadiness(outcome.affected);
-    if (outcome.kind !== "committed") throw outcome.error;
-  }
-
-  async #runTransaction(operations: ReadonlyArray<ChangeOperation>): Promise<TransitionOutcome> {
     const changed = new Set(operations.map((operation) => operation.installation));
     this.#setCommandPhase("changing");
     try {
       const draft = this.#installations.draft(operations);
       const nextPlan = this.#engine.buildPlan(draft);
-      return await this.#engine.transition(nextPlan, changed, () => {
-        batchSnapshotNotifications(() => {
-          this.#installations.commit(draft, operations, true);
-          this.#setCommandPhase(undefined);
-        });
+      const outcome = await this.#engine.transition(nextPlan, changed, () => {
+        this.#installations.commit(draft, operations, true);
       });
+      if (outcome.kind === "failed-closed") {
+        for (const installation of outcome.affected) installation.fail(outcome.error);
+      }
+      this.#installations.settleReadiness(outcome.affected);
+      if (outcome.kind !== "committed") throw outcome.error;
     } finally {
       this.#setCommandPhase(undefined);
     }

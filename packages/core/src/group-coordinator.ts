@@ -95,8 +95,11 @@ class GroupFacade implements Group {
   }
 
   change() {
-    if (this.#configuration()) {
-      throw new TypeError("Cannot create a ChangeSet while a Group is being configured");
+    const configuration = this.#configuration();
+    if (configuration) {
+      throw configuration.fail(
+        new TypeError("Cannot create a ChangeSet while a Group is being configured"),
+      );
     }
     return this.#requireBinding().coordinator.change(this.#node);
   }
@@ -104,14 +107,16 @@ class GroupFacade implements Group {
   group(name: string, configure: (group: Group) => void) {
     const { coordinator } = this.#requireBinding();
     const configuration = this.#configuration();
-    configuration?.assertOpen();
-    return coordinator.create(this.#node, name, configure, configuration);
+    return configuration
+      ? configuration.run(() => coordinator.create(this.#node, name, configure, configuration))
+      : coordinator.create(this.#node, name, configure);
   }
 
   remove() {
     if (!this.#node.attached) return Promise.resolve();
-    if (this.#configuration()) {
-      throw new TypeError("Cannot remove a Group while it is being configured");
+    const configuration = this.#configuration();
+    if (configuration) {
+      throw configuration.fail(new TypeError("Cannot remove a Group while it is being configured"));
     }
     return this.#requireBinding().coordinator.remove(this.#node);
   }
@@ -163,15 +168,11 @@ export class GroupCoordinator {
     plugin: Declaration,
     ...config: PluginConfigArguments<Declaration>
   ): Installation<Declaration> {
-    this.#requireLifecycle(group);
-    return stageChangeSetInstallation(
-      configuration.requireDraft(),
-      plugin,
-      config[0],
-      (normalized, value) => {
+    return configuration.run((draft) =>
+      stageChangeSetInstallation(draft, plugin, config[0], (normalized, value) => {
         this.#requireLifecycle(group);
         return this.#port.createDraft(group, normalized, value);
-      },
+      }),
     );
   }
 
@@ -231,18 +232,16 @@ export class GroupCoordinator {
     this.#facades.set(node, facade);
 
     try {
-      // An async configure callback would seal the draft before its awaited installs were staged.
-      const result: unknown = configure(facade);
-      assertSynchronous(result, "Group configure must be synchronous");
-      // Nested configuration records failure on the shared session so it cannot commit a partial subtree.
-      const failure = configuration.failure;
-      if (failure) throw failure;
+      configuration.run(() => {
+        // An async configure callback would seal the draft before its awaited installs were staged.
+        const result: unknown = configure(facade);
+        assertSynchronous(result, "Group configure must be synchronous");
+      });
     } catch (error) {
-      const failure = configuration.fail(error);
       this.#revoke(node.detach());
-      if (ownsConfiguration) configuration.discard(failure);
+      if (ownsConfiguration) configuration.discard(error);
       this.#port.notifyChanged();
-      throw failure;
+      throw error;
     }
 
     if (ownsConfiguration) {

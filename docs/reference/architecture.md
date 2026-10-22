@@ -61,10 +61,10 @@ Host 与 Platform 诊断通过 SnapshotPublisher 的 reader 构造集合。publi
 | Installation 声明、Instance 状态与控制绑定 | InstallationRecord | Installation facade、不可变图版本与诊断 |
 | Host 命令完成边界 | Host 的 SerialQueue | Installation / Group ready 等待同一边界 |
 | Host 稳态执行可用性 | Engine 的已提交计划 | 无在途命令时，Host status 与诊断直接投影为 active/idle，不保存或校准第二份状态 |
-| Host 在途命令阶段 | Host | starting/changing/stopping 临时关闭 Service 读取；结束后直接读取 Engine 的已提交事实 |
+| Host 在途命令阶段 | Host | starting/changing/stopping 关闭 Service 读取，直到快照发布与 Installation 结果收尾完成；唯一结束路径再暴露 Engine 的已提交事实 |
 | Platform 结构命令完成边界 | Platform 的 SerialQueue | Registration ready 与 Core 生命周期观察等待同一边界；不独立判定尚未提交的绑定变化 |
 | Group 附着与父子关系 | GroupNode | Group facade、结构诊断 |
-| Group 配置会话阶段 | GroupConfigurationSession | Group facade 读取，不自行推进 |
+| Group 配置阶段与首次失败 | GroupConfigurationSession | Group facade 将配置操作交给同一会话；捕获校验错误不能授权局部提交 |
 | ChangeSet 是否允许追加操作 | 各草稿的当前阶段 | 输入读取前的检查不能授权读取后的写入；暂存入口重新读取唯一阶段 |
 | 已接受的声明字段 | normalizePlainRecord 返回的冻结 record | Core 与 Platform 只消费同一份捕获数据，不让原对象的属性读取重新决定字段 |
 | requirement 的 optional 语义与 Contract 身份 | Contract 归一化返回的冻结 requirement | Plugin 与 Host 查找消费捕获结果，不再先判定包装再读取原 Service |
@@ -319,7 +319,7 @@ Host active 时提交的 ChangeSet 先产生 committed 或 rolled-back outcome�
 
 ### 多 Installation 图变更
 
-ChangeSet 先构造和验证完整候选图，再触碰已提交执行状态。进入执行窗口后 Host 为 `changing`，`host.get()` 不观察逐 Instance 停止与启动；成功或 rollback 完成后才恢复 active。任何清理不完整都会 fail closed，而不是留下“看起来 active”的混合状态。
+ChangeSet 先构造和验证完整候选图，再触碰已提交执行状态。进入执行窗口后 Host 为 `changing`，`host.get()` 不观察逐 Instance 停止与启动。成功或完整 rollback 后，都要等 Engine 完成执行与 Contribution 快照发布，才能恢复 active。声明提交不能提前结束命令阶段：Host 的 active 通知不得同时暴露新 Service 和旧 Contribution 快照。任何清理不完整都会 fail closed，而不是留下“看起来 active”的混合状态。
 
 动态 import 的模块顶层副作用、网络请求或操作系统资源本身无法由内存事务回滚。这些属于 Loader/插件的补偿责任，文档不能把框架事务包装成分布式事务承诺。
 
@@ -339,7 +339,7 @@ Group 配置会话是 `open / failed / sealed`，结构节点是 `attached / det
 
 这些状态机由一个内部 `GroupCoordinator` 组合，不再散落在 Host 编排器中。Coordinator 完整拥有 Group 树、facade authority 与 readiness；Host 只通过窄端口提供 Installation ChangeSet、串行命令和诊断发布。这个边界不会新增公共概念，也不会让 Group 获得能力解析权。
 
-嵌套 configure 共享一份配置会话和一笔 ChangeSet，但不共享所有权位置；每个内层 `install()` 仍把它的 Installation 明确记在当前 Group，因此内层可单独移除，而整份声明仍原子提交。第一次失败会毒化整笔草稿，外层即使捕获异常也不能继续声明或提交。任意非 `Error` 失败在边界分类后再进入生命周期，因此 `undefined` 永远不同时承担“失败值”和“没有失败”两种含义。已建立 Group 的失败变更若完整回滚，就继续呈现已提交状态；未建立 Group 可由后续成功变更替换失败 barrier。
+嵌套 configure 共享一份配置会话和一笔 ChangeSet，但不共享所有权位置；每个内层 `install()` 仍把它的 Installation 明确记在当前 Group，因此内层可单独移除，而整份声明仍原子提交。会话记录配置回调与 Group 操作的首次失败，包括非法名称、重复子节点、Plugin 声明校验失败以及禁止的 `change()` / `remove()` 调用。捕获异常不能恢复会话权限：后续操作继续抛出同一错误，整份草稿被丢弃。任意非 `Error` 失败在边界分类后再进入生命周期，因此 `undefined` 永远不同时承担“失败值”和“没有失败”两种含义。已建立 Group 的失败变更若完整回滚，就继续呈现已提交状态；未建立 Group 可由后续成功变更替换失败 barrier。
 
 它不解决“谁能看见什么能力”。Service、ExtensionPoint 和 Event 在同一个 Host 内全局一致。
 

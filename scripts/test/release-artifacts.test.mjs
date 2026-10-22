@@ -1,9 +1,11 @@
 import { execFileSync } from "node:child_process";
 import {
   existsSync,
+  linkSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  renameSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -25,76 +27,21 @@ const release = fileURLToPath(new URL("../release.mjs", import.meta.url));
 const version = "0.7.2";
 const packages = ["reactive", "core", "platform", "dougong"];
 
-const command = `#!${process.execPath}
-import { spawnSync } from "node:child_process";
-import { cpSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { basename, join } from "node:path";
-const name = basename(process.argv[1]);
-const args = process.argv.slice(2);
-const workspace = process.env.DOUGONG_RELEASE_FIXTURE;
-if (name === "git") {
-  const recording = ["add", "commit", "push"].includes(args[0]) || (args[0] === "tag" && args.includes("-a"));
-  if (recording) {
-    const path = join(workspace, "recorded.json");
-    let calls = [];
-    try { calls = JSON.parse(readFileSync(path, "utf8")); } catch (error) { if (error.code !== "ENOENT") throw error; }
-    calls.push(args[0]);
-    writeFileSync(path, JSON.stringify(calls));
-  }
-  if (process.env.DOUGONG_RELEASE_REAL_GIT) {
-    const interrupt = recording && args[0] === process.env.DOUGONG_RELEASE_INTERRUPT;
-    if (interrupt && process.env.DOUGONG_RELEASE_INTERRUPT_AFTER !== "true") process.exit(1);
-    const result = spawnSync(process.env.DOUGONG_RELEASE_REAL_GIT, args, { stdio: "inherit" });
-    process.exit(interrupt ? 1 : result.status ?? 99);
-  }
-  if (args[0] === "rev-parse") console.log(args.includes("--abbrev-ref") ? "main" : "a".repeat(40));
-  else if (args[0] === "rev-list") console.log("0");
-  else if (args[0] === "diff" && args.includes("--cached")) process.exit(1);
-  else if (!recording && !["status", "fetch", "tag"].includes(args[0])) process.exit(99);
-} else if (name === "mkdir") {
-  mkdirSync(args[1], { recursive: true });
-} else if (name === "pnpm" && args[0] === "check") {
-  process.exit(0);
-} else if (args[0] === "pack" && (name === "pnpm" || name === "npm")) {
-  const stage = args[args.indexOf("--pack-destination") + 1];
-  const packageName = name === "pnpm" ? basename(process.cwd()) : args[1].split("@").at(-2).split("/").at(-1);
-  const source = join(workspace, name === "pnpm" ? "local" : "published", packageName);
-  if (name === "pnpm") {
-    cpSync(join(process.cwd(), "package.json"), join(source, "package/package.json"));
-    if (packageName === "core") {
-      const manifestPath = join(source, "package/package.json");
-      const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
-      if (process.env.DOUGONG_RELEASE_PACKED_NAME) manifest.name = process.env.DOUGONG_RELEASE_PACKED_NAME;
-      if (process.env.DOUGONG_RELEASE_PACKED_DEPENDENCIES) {
-        manifest.dependencies = JSON.parse(process.env.DOUGONG_RELEASE_PACKED_DEPENDENCIES);
-      }
-      writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + "\\n");
-    }
-    writeFileSync(join(workspace, "release-stage"), stage);
-  }
-  const archive = join(stage, packageName + ".tgz");
-  const packed = spawnSync("tar", ["-czf", archive, "-C", source, "package"]);
-  if (packed.error || packed.status !== 0) process.exit(99);
-  console.log(archive);
-} else if (name === "npm" && args[0] === "view") {
-  if (process.env.DOUGONG_RELEASE_ALL_PUBLISHED === "true" || args[1].startsWith("@dougongjs/reactive@")) console.log(JSON.stringify("${version}"));
-  else {
-    console.log(JSON.stringify({ error: { code: "E404" } }));
-    process.exit(1);
-  }
-} else if (name === "npm" && args[0] === "whoami") console.log("fixture");
-else process.exit(99);
-`;
+const preload = fileURLToPath(new URL("./fixtures/release-artifacts.mjs", import.meta.url));
 
 async function runRelease(
   mutate,
   {
-    packedName = "",
-    packedDependencies,
+    packedOverrides = {},
     declaredDependencies = { "@standard-schema/spec": "^1.0.0" },
     escapedNames = false,
-    allPublished = false,
+    publishedPackages = ["reactive"],
+    publishedArchivePrefix = "",
     dryRun = true,
+    realPack = false,
+    publishFailure,
+    visibility = "immediate",
+    otp,
     interruptAt,
     interruptAfter = false,
     resume = false,
@@ -106,9 +53,6 @@ async function runRelease(
   try {
     const bin = join(workspace, "bin");
     mkdirSync(bin);
-    for (const name of ["git", "npm", "pnpm", "mkdir"]) {
-      writeFileSync(join(bin, name), command, { mode: 0o755 });
-    }
     for (const name of ["tar", "gzip"]) {
       const executable = (process.env.PATH ?? "")
         .split(delimiter)
@@ -118,7 +62,16 @@ async function runRelease(
       symlinkSync(executable, join(bin, name));
     }
 
-    const originals = new Map();
+    writeFileSync(
+      join(workspace, "package.json"),
+      JSON.stringify({
+        private: true,
+        packageManager: JSON.parse(
+          readFileSync(new URL("../../package.json", import.meta.url), "utf8"),
+        ).packageManager,
+      }),
+    );
+    writeFileSync(join(workspace, "pnpm-workspace.yaml"), 'packages:\n  - "packages/*"\n');
     for (const name of packages) {
       const packageName = name === "dougong" ? name : `@dougongjs/${name}`;
       const manifest =
@@ -129,7 +82,6 @@ async function runRelease(
       const path = join(workspace, "packages", name, "package.json");
       mkdirSync(join(workspace, "packages", name), { recursive: true });
       writeFileSync(path, manifest);
-      originals.set(path, manifest);
       const files = {
         "dist/index.js": "export const signal = value => value;\n",
         "dist/index.d.ts": 'export { signal } from "./signals";\n',
@@ -138,18 +90,30 @@ async function runRelease(
         "dist/payload.bin": Buffer.from([0xff, 0x00, 0x01]),
         "README.md": "Fixture documentation\n",
         LICENSE: "Fixture license\n",
-        "package.json": `${JSON.stringify({ name: packageName, version, ...(name === "core" ? { dependencies: declaredDependencies } : {}) }, null, 2)}\n`,
       };
-      for (const side of ["local", "published"]) {
-        const root = join(workspace, side, name, "package");
+      for (const side of ["packages", "published"]) {
+        if (side === "published" && !publishedPackages.includes(name)) continue;
+        const root = join(workspace, side, name, ...(side === "published" ? ["package"] : []));
         for (const [file, contents] of Object.entries(files)) {
           mkdirSync(dirname(join(root, file)), { recursive: true });
           writeFileSync(join(root, file), contents);
         }
+        if (side === "published") {
+          writeFileSync(
+            join(root, "package.json"),
+            JSON.stringify({ ...JSON.parse(manifest), version }, null, 2),
+          );
+        }
       }
     }
-    mutate(join(workspace, "published/reactive/package"));
-    const realGit = interruptAt
+    mutate(join(workspace, "published/reactive/package"), workspace);
+    const originals = new Map(
+      packages.map((name) => {
+        const path = join(workspace, "packages", name, "package.json");
+        return [path, readFileSync(path, "utf8")];
+      }),
+    );
+    const realGit = !dryRun
       ? (process.env.PATH ?? "")
           .split(delimiter)
           .map((directory) => join(directory, "git"))
@@ -162,7 +126,8 @@ async function runRelease(
         encoding: "utf8",
         stdio: ["ignore", "pipe", "pipe"],
       }).trim();
-    if (interruptAt) {
+    let initialHead;
+    if (!dryRun) {
       if (!realGit) throw new Error("Release recording fixture requires git");
       git(["init", "--bare", join(workspace, "remote.git")]);
       git(["init", "-b", "main"]);
@@ -172,44 +137,72 @@ async function runRelease(
       git(["config", "tag.gpgsign", "false"]);
       git(["add", "packages"]);
       git(["commit", "-m", "Initial packages"]);
+      initialHead = git(["rev-parse", "HEAD"]);
       git(["remote", "add", "origin", join(workspace, "remote.git")]);
       git(["push", "origin", "main"]);
       writeFileSync(
         join(workspace, ".git/info/exclude"),
         [
           "/bin/",
-          "/local/",
           "/published/",
+          "/pending/",
           "/remote.git/",
-          "/recorded.json",
+          "/commands.jsonl",
           "/release-stage",
+          "/package.json",
+          "/pnpm-workspace.yaml",
           "",
         ].join("\n"),
       );
     }
-    const execute = async (interruption) => {
+    const pnpm = realPack
+      ? (process.env.PATH ?? "")
+          .split(delimiter)
+          .map((directory) => join(directory, "pnpm"))
+          .find((path) => existsSync(path))
+      : undefined;
+    if (realPack && !pnpm) throw new Error("Release packaging fixture requires pnpm");
+    const execute = async (interruption, publicationFailure) => {
       try {
-        return await executeRelease([release, version, dryRun ? "--dry-run" : "--yes"], {
-          cwd: workspace,
-          env: {
-            ...environment,
-            PATH: bin,
-            DOUGONG_RELEASE_FIXTURE: workspace,
-            DOUGONG_RELEASE_ALL_PUBLISHED: String(allPublished),
-            DOUGONG_RELEASE_PACKED_NAME: packedName,
-            DOUGONG_RELEASE_PACKED_DEPENDENCIES:
-              packedDependencies === undefined ? "" : JSON.stringify(packedDependencies),
-            DOUGONG_RELEASE_REAL_GIT: realGit ?? "",
-            DOUGONG_RELEASE_INTERRUPT: interruption ?? "",
-            DOUGONG_RELEASE_INTERRUPT_AFTER: String(interruptAfter),
+        return await executeRelease(
+          [
+            "--import",
+            preload,
+            release,
+            version,
+            dryRun ? "--dry-run" : "--yes",
+            ...(otp ? [`--otp=${otp}`] : []),
+          ],
+          {
+            cwd: workspace,
+            env: {
+              ...environment,
+              PATH: bin,
+              DOUGONG_RELEASE_PACKED_OVERRIDES: JSON.stringify(packedOverrides),
+              DOUGONG_RELEASE_REAL_GIT: realGit ?? "",
+              DOUGONG_RELEASE_REAL_PNPM: pnpm ?? "",
+              DOUGONG_RELEASE_PUBLISH_FAILURE: publicationFailure ?? "",
+              DOUGONG_RELEASE_VISIBILITY: visibility,
+              DOUGONG_RELEASE_PUBLISHED_ARCHIVE_PREFIX: publishedArchivePrefix,
+              DOUGONG_RELEASE_INTERRUPT: interruption ?? "",
+              DOUGONG_RELEASE_INTERRUPT_AFTER: String(interruptAfter),
+            },
           },
-        });
+        );
       } finally {
         const stageRecord = join(workspace, "release-stage");
         if (existsSync(stageRecord)) stages.add(readFileSync(stageRecord, "utf8"));
       }
     };
-    const interrupted = await execute(interruptAt);
+    const publishedManifests = () =>
+      Object.fromEntries(
+        packages.flatMap((name) => {
+          const path = join(workspace, "published", name, "package/package.json");
+          return existsSync(path) ? [[name, JSON.parse(readFileSync(path, "utf8"))]] : [];
+        }),
+      );
+    const interrupted = await execute(interruptAt, publishFailure);
+    const publishedAfterFirstAttempt = publishedManifests();
     const interruptedState = interruptAt
       ? {
           status: git(["status", "--porcelain"]),
@@ -224,24 +217,34 @@ async function runRelease(
       : undefined;
     if (resume) beforeResume(git, workspace);
     const result = resume ? await execute(undefined) : interrupted;
+    const head = realGit ? git(["rev-parse", "HEAD"]) : undefined;
     for (const [path, contents] of originals) {
       const expected =
-        dryRun || (!resume && result.status !== 0)
-          ? contents
-          : `${JSON.stringify({ ...JSON.parse(contents), version }, null, 2)}\n`;
+        realGit && head !== initialHead
+          ? `${JSON.stringify({ ...JSON.parse(contents), version }, null, 2)}\n`
+          : contents;
       expect(readFileSync(path, "utf8")).toBe(expected);
     }
-    const recorded = join(workspace, "recorded.json");
+    const commands = join(workspace, "commands.jsonl");
+    const calls = existsSync(commands)
+      ? readFileSync(commands, "utf8")
+          .trim()
+          .split("\n")
+          .map((line) => JSON.parse(line))
+      : [];
     return {
       ...result,
       interrupted,
       interruptedState,
-      recorded: existsSync(recorded) ? JSON.parse(readFileSync(recorded, "utf8")) : [],
-      remoteRefs: interruptAt
+      publishedAfterFirstAttempt,
+      published: publishedManifests(),
+      calls,
+      recorded: calls.filter(({ command }) => command === "git").map(({ args }) => args[0]),
+      remoteRefs: realGit
         ? git(["ls-remote", "origin", "refs/heads/main", `refs/tags/v${version}^{}`])
         : undefined,
-      remoteTags: interruptAt ? git(["ls-remote", "--tags", "origin"]) : undefined,
-      head: interruptAt ? git(["rev-parse", "HEAD"]) : undefined,
+      remoteTags: realGit ? git(["ls-remote", "--tags", "origin"]) : undefined,
+      head,
     };
   } finally {
     for (const stage of stages) rmSync(stage, { recursive: true, force: true });
@@ -266,7 +269,7 @@ it.each([false, true])(
   "does not publish unrelated local tags (push.followTags: %s)",
   async (followTags) => {
     const result = await runRelease(() => undefined, {
-      allPublished: true,
+      publishedPackages: packages,
       dryRun: false,
       interruptAt: "push",
       resume: true,
@@ -283,7 +286,7 @@ it.each([false, true])(
 
 it("refuses untracked source even when Git hides it by default", async () => {
   const result = await runRelease(() => undefined, {
-    allPublished: true,
+    publishedPackages: packages,
     dryRun: false,
     interruptAt: "push",
     resume: true,
@@ -301,7 +304,7 @@ it.each(["another commit", "source in the release commit"])(
   "refuses recovery with %s outside the release manifests",
   async (kind) => {
     const result = await runRelease(() => undefined, {
-      allPublished: true,
+      publishedPackages: packages,
       dryRun: false,
       interruptAt: "tag",
       resume: true,
@@ -323,7 +326,7 @@ it.each(["another commit", "source in the release commit"])(
 
 it.each(["lightweight", "another commit"])("refuses a release tag pointing to %s", async (kind) => {
   const result = await runRelease(() => undefined, {
-    allPublished: true,
+    publishedPackages: packages,
     dryRun: false,
     interruptAt: "push",
     resume: true,
@@ -343,7 +346,7 @@ it.each(["lightweight", "another commit"])("refuses a release tag pointing to %s
 
 it("preserves remote main when the remote release tag conflicts", async () => {
   const result = await runRelease(() => undefined, {
-    allPublished: true,
+    publishedPackages: packages,
     dryRun: false,
     interruptAt: "push",
     resume: true,
@@ -377,8 +380,285 @@ it("resumes packaging only when the complete published package matches", async (
   expect(result.stdout).toContain("Dry run complete");
 });
 
+it.each([undefined, "123456"])(
+  "publishes inspected tarballs and confirms every upload before recording the release (OTP: %s)",
+  async (otp) => {
+    const result = await runRelease(() => undefined, { dryRun: false, otp });
+    expect(result.status).toBe(0);
+    expect(Object.keys(result.published)).toEqual(packages);
+    expect(Object.values(result.published).map((manifest) => manifest.version)).toEqual(
+      packages.map(() => version),
+    );
+    const publication = result.calls.filter(
+      ({ command, args }) => command === "npm" && ["publish", "view"].includes(args[0]),
+    );
+    expect(publication.map(({ args }) => args[0])).toEqual([
+      "view",
+      "view",
+      "view",
+      "view",
+      "publish",
+      "view",
+      "publish",
+      "view",
+      "publish",
+      "view",
+    ]);
+    for (const { args } of publication.filter(({ args }) => args[0] === "publish")) {
+      expect(args.slice(2)).toEqual(["--access", "public", ...(otp ? [`--otp=${otp}`] : [])]);
+      expect(args[1]).toMatch(/\.tgz$/);
+    }
+    expect(result.calls.slice(-4).map(({ command }) => command)).toEqual([
+      "git",
+      "git",
+      "git",
+      "git",
+    ]);
+    expect(result.recorded).toEqual(["add", "commit", "tag", "push"]);
+    expect(result.remoteRefs.split("\n")).toEqual([
+      `${result.head}\trefs/heads/main`,
+      `${result.head}\trefs/tags/v${version}^{}`,
+    ]);
+  },
+);
+
+it.each(["immediate", "delayed"])(
+  "publishes every package for an unused registry version (%s)",
+  async (visibility) => {
+    const result = await runRelease(() => undefined, {
+      publishedPackages: [],
+      dryRun: false,
+      visibility,
+    });
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain(`${version} is unused on the registry`);
+    expect(Object.keys(result.published)).toEqual(packages);
+    const uploads = result.calls.filter(
+      ({ command, args }) => command === "npm" && args[0] === "publish",
+    );
+    expect(uploads.map(({ args }) => args[1].split("/").at(-1))).toEqual(
+      packages.map((name) => `${name}.tgz`),
+    );
+    expect(result.recorded).toEqual(["add", "commit", "tag", "push"]);
+    expect(result.remoteRefs.split("\n")).toEqual([
+      `${result.head}\trefs/heads/main`,
+      `${result.head}\trefs/tags/v${version}^{}`,
+    ]);
+  },
+);
+
+it.each(["complete", "excluded dist", "directory README.md"])(
+  "inspects packages produced by the actual pnpm pack command (%s)",
+  async (contents) => {
+    const result = await runRelease(
+      (_published, workspace) => {
+        const dependency = join(workspace, "packages/core/node_modules/@dougongjs/reactive");
+        mkdirSync(dirname(dependency), { recursive: true });
+        symlinkSync(join(workspace, "packages/reactive"), dependency);
+        if (contents === "complete") return;
+        if (contents === "directory README.md") {
+          const path = join(workspace, "packages/core/README.md");
+          rmSync(path);
+          mkdirSync(path);
+          writeFileSync(join(path, "notice.txt"), "Not the required file\n");
+          return;
+        }
+        const path = join(workspace, "packages/core/package.json");
+        const manifest = JSON.parse(readFileSync(path, "utf8"));
+        manifest.files = ["README.md", "LICENSE"];
+        writeFileSync(path, JSON.stringify(manifest, null, 2) + "\n");
+      },
+      {
+        realPack: true,
+        declaredDependencies: { "@dougongjs/reactive": "workspace:*" },
+      },
+    );
+    expect(result.status).toBe(contents === "complete" ? 0 : 1);
+    expect(result[contents === "complete" ? "stdout" : "stderr"]).toContain(
+      contents === "complete"
+        ? "Dry run complete"
+        : `tarball is missing ${contents === "excluded dist" ? "dist/index.js" : "README.md"}`,
+    );
+  },
+);
+
+it.each(["dist/index.js", "dist/index.d.ts", "README.md", "LICENSE"])(
+  "rejects a candidate missing %s",
+  async (file) => {
+    const result = await runRelease((_published, workspace) => {
+      rmSync(join(workspace, "packages/core", file));
+    });
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(`tarball is missing ${file}`);
+    expect(result.recorded).toEqual([]);
+  },
+);
+
+it.each(["dist/index.js", "dist/index.d.ts", "README.md", "LICENSE"])(
+  "rejects a directory in place of the required file %s",
+  async (file) => {
+    const result = await runRelease((_published, workspace) => {
+      const path = join(workspace, "packages/core", file);
+      rmSync(path);
+      mkdirSync(path);
+      writeFileSync(join(path, "notice.txt"), "Not the required file\n");
+    });
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(`tarball is missing ${file}`);
+    expect(result.recorded).toEqual([]);
+  },
+);
+
+it("rejects non-regular candidate entries before first publication", async () => {
+  const result = await runRelease((_published, workspace) => {
+    symlinkSync("index.d.ts", join(workspace, "packages/core/dist/linked.d.ts"));
+  });
+  expect(result.status).toBe(1);
+  expect(result.stderr).toContain("Package entry 'dist/linked.d.ts' must be a regular file");
+  expect(result.recorded).toEqual([]);
+});
+
+it("rejects published hard links even when extracted bytes match the candidate", async () => {
+  const result = await runRelease((root, workspace) => {
+    const target = join(root, "dist/index.js");
+    linkSync(target, join(root, "dist/linked.js"));
+    writeFileSync(join(workspace, "packages/reactive/dist/linked.js"), readFileSync(target));
+  });
+  expect(result.status).toBe(1);
+  expect(result.stderr).toContain("must be a regular file");
+  expect(result.stdout).not.toContain("contents match");
+  expect(result.recorded).toEqual([]);
+});
+
+it.each(["candidate", "published"])(
+  "rejects a symbolic %s package root instead of reading outside the archive",
+  async (side) => {
+    const result = await runRelease((published, workspace) => {
+      const root = side === "candidate" ? join(workspace, "packages/core") : published;
+      const external = join(workspace, "outside-archive");
+      renameSync(root, external);
+      symlinkSync(external, root);
+    });
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("Package root must be a directory");
+    expect(result.stdout).not.toContain("Dry run complete");
+    expect(result.recorded).toEqual([]);
+  },
+);
+
+it.each(["outside.txt", "other/dist/index.js"])(
+  "rejects the uninspected archive entry %s outside package",
+  async (file) => {
+    const result = await runRelease((root) => {
+      const path = join(dirname(root), file);
+      mkdirSync(dirname(path), { recursive: true });
+      writeFileSync(path, "export const different = true;\n");
+    });
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("Package archive must contain only the package directory");
+    expect(result.stdout).not.toContain("contents match");
+    expect(result.recorded).toEqual([]);
+  },
+);
+
+it("rejects archive member roots that extraction would normalize", async () => {
+  const result = await runRelease(() => undefined, { publishedArchivePrefix: "./" });
+  expect(result.status).toBe(1);
+  expect(result.stderr).toContain("Package archive must contain only the package directory");
+  expect(result.stdout).not.toContain("contents match");
+  expect(result.recorded).toEqual([]);
+});
+
+it.each(
+  ["dist/index.js", "dist/index.d.ts"].flatMap((file) =>
+    ["@dougong/", "/Users/", "workspace:", "src/index.ts"].map((reference) => ({
+      file,
+      reference,
+    })),
+  ),
+)("rejects nonportable reference $reference in $file", async ({ file, reference }) => {
+  const result = await runRelease((_published, workspace) => {
+    writeFileSync(join(workspace, "packages/core", file), `export * from "${reference}";\n`);
+  });
+  expect(result.status).toBe(1);
+  expect(result.stderr).toContain(`${file} contains '${reference}'`);
+  expect(result.stdout).not.toContain("Dry run complete");
+  expect(result.recorded).toEqual([]);
+});
+
+it.each([false, true])(
+  "preserves partial publication and resumes from registry contents (resume: %s)",
+  async (resume) => {
+    const result = await runRelease(() => undefined, {
+      dryRun: false,
+      publishFailure: "platform",
+      resume,
+    });
+    expect(result.interrupted.status).toBe(1);
+    expect(result.interrupted.stderr).toContain("@dougongjs/platform failed to publish");
+    expect(Object.keys(result.publishedAfterFirstAttempt)).toEqual(["reactive", "core"]);
+    const uploads = result.calls.filter(
+      ({ command, args }) => command === "npm" && args[0] === "publish",
+    );
+    expect(uploads.map(({ args }) => args[1].split("/").at(-1))).toEqual(
+      resume
+        ? ["core.tgz", "platform.tgz", "platform.tgz", "dougong.tgz"]
+        : ["core.tgz", "platform.tgz"],
+    );
+    expect(result.status).toBe(resume ? 0 : 1);
+    expect(result.recorded).toEqual(resume ? ["add", "commit", "tag", "push"] : []);
+    expect(Object.keys(result.published)).toEqual(resume ? packages : ["reactive", "core"]);
+  },
+);
+
+it("waits for registry visibility before publishing dependents", async () => {
+  const result = await runRelease(() => undefined, { dryRun: false, visibility: "delayed" });
+  expect(result.status).toBe(0);
+  expect(Object.keys(result.published)).toEqual(packages);
+  const publication = result.calls.filter(
+    ({ command, args }) =>
+      command === "sleep" || (command === "npm" && ["publish", "view"].includes(args[0])),
+  );
+  expect(
+    publication.slice(4).map(({ command, args }) => (command === "sleep" ? command : args[0])),
+  ).toEqual([
+    "publish",
+    "view",
+    "sleep",
+    "view",
+    "publish",
+    "view",
+    "sleep",
+    "view",
+    "publish",
+    "view",
+    "sleep",
+    "view",
+  ]);
+  expect(result.recorded).toEqual(["add", "commit", "tag", "push"]);
+});
+
+it.each(["never", "unreadable"])(
+  "does not advance a release when an accepted upload is %s",
+  async (visibility) => {
+    const result = await runRelease(() => undefined, { dryRun: false, visibility });
+    expect(result.status).toBe(1);
+    expect(Object.keys(result.published)).toEqual(["reactive"]);
+    expect(result.recorded).toEqual([]);
+    expect(
+      result.calls.filter(({ command, args }) => command === "npm" && args[0] === "publish"),
+    ).toHaveLength(1);
+    expect(result.calls.filter(({ command }) => command === "sleep")).toHaveLength(
+      visibility === "never" ? 120 : 0,
+    );
+    expect(result.stderr).toContain(
+      visibility === "never" ? "not readable within 30 minutes" : "E503",
+    );
+  },
+);
+
 it("finishes release recording after every upload already completed", async () => {
-  const result = await runRelease(() => undefined, { allPublished: true, dryRun: false });
+  const result = await runRelease(() => undefined, { publishedPackages: packages, dryRun: false });
   expect(result.status).toBe(0);
   expect(result.recorded).toEqual(["add", "commit", "tag", "push"]);
   expect(result.stdout.match(/already published, contents match/g)).toHaveLength(packages.length);
@@ -397,7 +677,7 @@ it.each([
   "resumes release recording after $command fails (after command: $after)",
   async ({ command, after, committed }) => {
     const result = await runRelease(() => undefined, {
-      allPublished: true,
+      publishedPackages: packages,
       dryRun: false,
       interruptAt: command,
       interruptAfter: after,
@@ -429,23 +709,31 @@ it("refuses fully published recovery when the final package differs", async () =
         join(dirname(dirname(root)), "dougong/package/README.md"),
         "Different documentation\n",
       ),
-    { allPublished: true, dryRun: false },
+    { publishedPackages: packages, dryRun: false },
   );
   expect(result.status).toBe(1);
   expect(result.recorded).toEqual([]);
   expect(result.stderr).toContain("README.md differs");
 });
 
-it("restores the original manifest bytes after a successful dry run", async () => {
+it("restores manifest bytes without publishing or recording a successful dry run", async () => {
   const result = await runRelease(() => undefined, { escapedNames: true });
   expect(result.status).toBe(0);
   expect(result.stdout).toContain("package.json versions restored");
+  expect(result.recorded).toEqual([]);
+  expect(
+    result.calls.filter(({ command, args }) => command === "npm" && args[0] === "publish"),
+  ).toEqual([]);
+  expect(Object.keys(result.published)).toEqual(["reactive"]);
 });
 
-it("rejects a tarball carrying another package's identity before publication", async () => {
-  const result = await runRelease(() => undefined, { packedName: "@fixture/unexpected" });
+it.each([
+  { field: "name", value: "@fixture/unexpected" },
+  { field: "version", value: "0.7.3" },
+])("rejects a tarball carrying another $field before publication", async ({ field, value }) => {
+  const result = await runRelease(() => undefined, { packedOverrides: { [field]: value } });
   expect(result.status).toBe(1);
-  expect(result.stderr).toContain("tarball declares name @fixture/unexpected");
+  expect(result.stderr).toContain(`tarball declares ${field} ${value}`);
   expect(result.stdout).not.toContain("Dry run complete");
 });
 
@@ -457,7 +745,7 @@ it.each([
   async ({ range, status, output, message }) => {
     const result = await runRelease(() => undefined, {
       declaredDependencies: { "@dougongjs/reactive": "workspace:*" },
-      packedDependencies: { "@dougongjs/reactive": range },
+      packedOverrides: { dependencies: { "@dougongjs/reactive": range } },
     });
     expect(result.status).toBe(status);
     expect(result[output]).toContain(message);
@@ -477,7 +765,7 @@ it.each([
     label: "an undeclared dependency",
   },
 ])("rejects a tarball with $label", async ({ dependencies, message }) => {
-  const result = await runRelease(() => undefined, { packedDependencies: dependencies });
+  const result = await runRelease(() => undefined, { packedOverrides: { dependencies } });
   expect(result.status).toBe(1);
   expect(result.stderr).toContain(message);
   expect(result.stdout).not.toContain("Dry run complete");

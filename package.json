@@ -58,6 +58,7 @@
     "oxlint": "^1.78.0",
     "prettier": "^3.9.6",
     "semver": "^7.7.4",
+    "tar": "^7.5.22",
     "typescript": "^5.9.2",
     "vite": "^7.1.0",
     "vite-plugin-dts": "^4.5.4",

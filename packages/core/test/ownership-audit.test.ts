@@ -1,5 +1,89 @@
 import { expect, it, vi } from "vitest";
-import { createHost, definePlugin, event, service, type Group, type Installation } from "../src";
+import {
+  createHost,
+  definePlugin,
+  event,
+  extensionPoint,
+  service,
+  type Group,
+  type Installation,
+} from "../src";
+
+it("publishes committed Host availability only with the matching contribution snapshot", async () => {
+  const host = createHost();
+  const value = service<number>("audit/committed-value");
+  const values = extensionPoint<number>("audit/committed-values");
+  const plugin = (current: number) =>
+    definePlugin({
+      name: "audit.commit-publication",
+      provides: { value },
+      setup(ctx) {
+        ctx.contribute(values, "value", current);
+        return { value: current };
+      },
+    });
+  const installation = host.install(plugin(1));
+  const contributions = host.contributions(values);
+  await host.start();
+  const observations: Array<readonly [number, number | undefined]> = [];
+  const subscription = host.diagnostics.subscribe(() => {
+    if (host.status !== "active") return;
+    observations.push([host.get(value), contributions.get().get(`${installation.id}/value`)]);
+  });
+
+  await installation.update({ plugin: plugin(2) });
+  subscription.dispose();
+  await host.stop();
+
+  expect(observations.length).toBeGreaterThan(0);
+  for (const [serviceValue, contributionValue] of observations) {
+    expect(contributionValue).toBe(serviceValue);
+  }
+});
+
+it.each(["startup", "change"] as const)(
+  "finishes failed Installation states before publishing an idle Host after %s",
+  async (operation) => {
+    const host = createHost();
+    const failure = new Error("audit failure");
+    const plugin = definePlugin({
+      name: "audit.failure-publication",
+      setup(ctx) {
+        ctx.cleanup(() => {
+          throw failure;
+        });
+      },
+    });
+    const installation = host.install(plugin);
+    host.install(definePlugin({ name: "audit.unrelated-failure-publication", setup() {} }));
+    if (operation === "change") await host.start();
+    else {
+      host.install(
+        definePlugin({
+          name: "audit.missing-dependency",
+          requires: { missing: service<void>("audit/missing-dependency") },
+          setup() {},
+        }),
+      );
+      await host.change().commit();
+    }
+    const snapshots: string[][] = [];
+    const subscription = host.diagnostics.subscribe(() => {
+      const snapshot = host.diagnostics.get();
+      if (snapshot.status === "idle") {
+        snapshots.push([...snapshot.installations.values()].map((record) => record.status));
+      }
+    });
+
+    const command = operation === "startup" ? host.start() : installation.update({ plugin });
+    await expect(command).rejects.toBeInstanceOf(Error);
+    subscription.dispose();
+    expect(snapshots.length).toBeGreaterThan(0);
+    for (const statuses of snapshots)
+      expect(statuses.every((status) => status === "failed")).toBe(true);
+    await host.stop();
+  },
+);
 
 it("projects the sealed Lifetime phase before resource withdrawal notifies observers", async () => {
   const host = createHost();
