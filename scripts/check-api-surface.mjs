@@ -5,7 +5,7 @@ import { createRequire } from "node:module";
 import { existsSync, globSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { retiredVocabulary } from "./vocabulary.mjs";
-import { runtimeBaseline } from "./runtime-baseline.mjs";
+import { developmentEngines, runtimeBaseline } from "./runtime-baseline.mjs";
 
 const ts = createRequire(import.meta.url)("typescript");
 const retiredIdentifiers = new Set(retiredVocabulary);
@@ -190,7 +190,8 @@ const runtimeManifestPaths = [
 ];
 for (const manifestPath of runtimeManifestPaths) {
   const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
-  if (JSON.stringify(manifest.engines) !== JSON.stringify(runtimeBaseline.engines)) {
+  const engines = manifestPath === "package.json" ? developmentEngines : runtimeBaseline.engines;
+  if (JSON.stringify(manifest.engines) !== JSON.stringify(engines)) {
     failures.push(`${manifestPath}: engines differs from scripts/runtime-baseline.mjs`);
   }
 }

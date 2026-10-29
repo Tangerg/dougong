@@ -32,17 +32,13 @@ export default defineConfig({
 
     // V8 flags require forked workers for the GC boundary used by retention tests.
     pool: "forks",
-    poolOptions: {
-      forks: {
-        execArgv: ["--expose-gc"],
-      },
-    },
+    execArgv: ["--expose-gc"],
 
     restoreMocks: true,
 
     coverage: {
       enabled: true,
-      provider: "istanbul",
+      provider: "v8",
       include: ["packages/*/src/**"],
       // Package floors prevent one layer from masking another layer's coverage regression.
       thresholds: {

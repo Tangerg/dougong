@@ -29,7 +29,7 @@
   },
   "dependencies": {
     "@dougongjs/core": "workspace:*",
-    "zod": "^4.4.3",
+    "zod": "^4.6.7",
     "semver": "^7.7.4"
   },
   "description": "External plugin distribution layer compiled onto @dougongjs/core.",

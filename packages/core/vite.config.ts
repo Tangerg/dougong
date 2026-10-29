@@ -1,5 +1,5 @@
 import { defineConfig } from "vite";
-import dts from "vite-plugin-dts";
+import dts from "unplugin-dts/vite";
 import { runtimeBaseline } from "../../scripts/runtime-baseline.mjs";
 
 export default defineConfig({
