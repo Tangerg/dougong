@@ -3,23 +3,24 @@
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { defineConfig } from "vitest/config";
-import tsconfig from "./tsconfig.base.json";
+import tsconfig from "./tsconfig.base.json" with { type: "json" };
 
 const sourceRoot = fileURLToPath(new URL("./", import.meta.url));
-const aliases = Object.fromEntries(
-  Object.entries(tsconfig.compilerOptions.paths).map(([specifier, targets]) => {
-    const [target] = targets;
-    if (
-      specifier.includes("*") ||
-      targets.length !== 1 ||
-      typeof target !== "string" ||
-      target.includes("*")
-    ) {
-      throw new TypeError("Workspace test paths must have an exact specifier and one exact target");
-    }
-    return [specifier, resolve(sourceRoot, tsconfig.compilerOptions.baseUrl, target)];
-  }),
-);
+const aliases = Object.entries(tsconfig.compilerOptions.paths).map(([specifier, targets]) => {
+  const [target] = targets;
+  if (
+    specifier.includes("*") ||
+    targets.length !== 1 ||
+    typeof target !== "string" ||
+    target.includes("*")
+  ) {
+    throw new TypeError("Workspace test paths must have an exact specifier and one exact target");
+  }
+  return {
+    find: new RegExp(`^${specifier.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`),
+    replacement: resolve(sourceRoot, tsconfig.compilerOptions.baseUrl, target),
+  };
+});
 
 export default defineConfig({
   // Resolve through TypeScript paths so tests cannot drift to stale dist artifacts.
@@ -28,7 +29,11 @@ export default defineConfig({
   },
 
   test: {
-    include: ["packages/*/test/**/*.test.ts", "scripts/test/**/*.test.mjs"],
+    include: [
+      "packages/*/test/**/*.test.ts",
+      "tooling/test/**/*.test.mjs",
+      "examples/test/**/*.test.ts",
+    ],
 
     // V8 flags require forked workers for the GC boundary used by retention tests.
     pool: "forks",
@@ -42,7 +47,7 @@ export default defineConfig({
       include: ["packages/*/src/**"],
       // Package floors prevent one layer from masking another layer's coverage regression.
       thresholds: {
-        "packages/core/src/**": { statements: 93, functions: 96, branches: 86, lines: 96 },
+        "packages/dougong/src/**": { statements: 93, functions: 96, branches: 86, lines: 96 },
         "packages/platform/src/**": {
           statements: 97,
           functions: 100,

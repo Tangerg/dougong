@@ -1,0 +1,544 @@
+import { describe, expect, it, vi } from "vitest";
+import { RecordedFailure } from "../src/index";
+import { SnapshotPublisher } from "../src/advanced";
+import { batchSnapshotNotifications } from "../src/observation/snapshot-view";
+
+const RELEASE_PASSES = 8;
+
+describe("SnapshotPublisher", () => {
+  it("seals an inaccessible non-Error final rejection instead of retaining an obsolete value", () => {
+    const reason = Proxy.revocable({}, {});
+    reason.revoke();
+    let failed = false;
+    const publisher = new SnapshotPublisher(
+      () => {
+        if (failed) throw reason.proxy;
+        return { obsolete: true };
+      },
+      () => undefined,
+    );
+    failed = true;
+    publisher.invalidate();
+
+    expect(
+      Object.is(
+        captureError(() => publisher[Symbol.dispose]()),
+        reason.proxy,
+      ),
+    ).toBe(true);
+    const recorded = captureError(() => publisher.view.get());
+    expect(recorded).toBeInstanceOf(RecordedFailure);
+    expect((recorded as RecordedFailure).snapshot.name).toBe("NonError");
+    publisher[Symbol.dispose]();
+  });
+
+  it("seals a failed final read whose error cause is inaccessible", () => {
+    const cause = Proxy.revocable({}, {});
+    cause.revoke();
+    const failure = new Error("original reader failure", { cause: cause.proxy });
+    let failed = false;
+    const publisher = new SnapshotPublisher(
+      () => {
+        if (failed) throw failure;
+        return 1;
+      },
+      () => undefined,
+    );
+    failed = true;
+    publisher.invalidate();
+
+    expect(
+      Object.is(
+        captureError(() => publisher[Symbol.dispose]()),
+        failure,
+      ),
+    ).toBe(true);
+    expect(captureError(() => publisher.view.get())).toBeInstanceOf(RecordedFailure);
+    publisher[Symbol.dispose]();
+  });
+
+  it("rejects a circular reader instead of returning its previous cached value", () => {
+    let value = 0;
+    const publisher = new SnapshotPublisher(
+      (): number => (value === 1 ? publisher.view.get() : value),
+      () => undefined,
+    );
+    value = 1;
+    publisher.invalidate();
+    expect(() => publisher.view.get()).toThrow("Circular snapshot read");
+    value = 2;
+    expect(publisher.view.get()).toBe(2);
+    publisher[Symbol.dispose]();
+  });
+
+  it("rejects an indirect read cycle and recovers once its source model is acyclic", () => {
+    let circular = false;
+    const first = new SnapshotPublisher(
+      (): number => (circular ? second.view.get() : 0),
+      () => undefined,
+    );
+    const second = new SnapshotPublisher(
+      () => first.view.get() + 1,
+      () => undefined,
+    );
+    circular = true;
+    first.invalidate();
+    second.invalidate();
+    expect(() => second.view.get()).toThrow("Circular snapshot read");
+    circular = false;
+    expect(second.view.get()).toBe(1);
+    first[Symbol.dispose]();
+    second[Symbol.dispose]();
+  });
+
+  it("records a circular final read instead of sealing its previous cached value", () => {
+    let circular = false;
+    const publisher = new SnapshotPublisher(
+      (): number => (circular ? publisher.view.get() : 1),
+      () => undefined,
+    );
+    circular = true;
+    publisher.invalidate();
+    expect(() => publisher[Symbol.dispose]()).toThrow("Circular snapshot read");
+    expect(() => publisher.view.get()).toThrow(RecordedFailure);
+  });
+
+  it("does not seal an unfinished reader as a terminal snapshot", () => {
+    let value = 0;
+    const publisher = new SnapshotPublisher(
+      () => {
+        if (value === 1) publisher[Symbol.dispose]();
+        return value;
+      },
+      () => undefined,
+    );
+    value = 1;
+    publisher.invalidate();
+    expect(() => publisher.view.get()).toThrow(
+      "Cannot dispose a snapshot publisher while its reader is running",
+    );
+    value = 2;
+    expect(publisher.view.get()).toBe(2);
+    publisher[Symbol.dispose]();
+    value = 3;
+    expect(publisher.view.get()).toBe(2);
+  });
+
+  it("preserves invalidation that arrives while a snapshot is being read", () => {
+    let value = 0;
+    const publisher = new SnapshotPublisher(
+      () => {
+        const current = value;
+        if (current === 1) {
+          value = 2;
+          publisher.invalidate();
+        }
+        return current;
+      },
+      () => undefined,
+    );
+    value = 1;
+    publisher.invalidate();
+    expect(publisher.view.get()).toBe(1);
+    expect(publisher.view.get()).toBe(2);
+    publisher[Symbol.dispose]();
+  });
+
+  it("finishes materialization before delivering invalidations raised by its reader", () => {
+    let value = 0;
+    const publisher = new SnapshotPublisher(
+      () => {
+        const current = value;
+        if (current === 1) {
+          value = 2;
+          publisher.invalidate();
+        }
+        return current;
+      },
+      () => undefined,
+    );
+    const seen: number[] = [];
+    value = 1;
+    publisher.invalidate();
+    publisher.view.subscribe(() => seen.push(publisher.view.get()));
+    expect(publisher.view.get()).toBe(2);
+    expect(seen).toEqual([2]);
+    expect(publisher.view.get()).toBe(2);
+    publisher[Symbol.dispose]();
+  });
+
+  it("keeps a failed materialization invalid until its reader succeeds", () => {
+    const failure = new Error("reader failed");
+    let fail = false;
+    const publisher = new SnapshotPublisher(
+      () => {
+        if (fail) throw failure;
+        return 1;
+      },
+      () => undefined,
+    );
+    fail = true;
+    publisher.invalidate();
+    expect(() => publisher.view.get()).toThrow(failure);
+    fail = false;
+    expect(publisher.view.get()).toBe(1);
+    publisher[Symbol.dispose]();
+  });
+
+  it("settles nested snapshot batches and preserves both operation and reporter failures", () => {
+    const subscriberError = new Error("subscriber failed");
+    const reporterError = new Error("reporter failed");
+    const publisher = new SnapshotPublisher(
+      () => 1,
+      () => {
+        throw reporterError;
+      },
+    );
+    const listener = vi.fn<() => void>();
+    publisher.view.subscribe(() => {
+      throw subscriberError;
+    });
+    publisher.view.subscribe(listener);
+    const error = captureError(() =>
+      batchSnapshotNotifications(() => {
+        batchSnapshotNotifications(() => publisher.invalidate());
+        expect(listener).not.toHaveBeenCalled();
+        throw undefined;
+      }),
+    );
+    expect(error).toBeInstanceOf(AggregateError);
+    expect((error as AggregateError).errors).toEqual([
+      undefined,
+      new AggregateError([subscriberError, reporterError], "Snapshot error reporting failed"),
+    ]);
+    expect(listener).toHaveBeenCalledOnce();
+    publisher[Symbol.dispose]();
+  });
+
+  it("seals the final snapshot and withdraws queued callbacks when closed during notification", () => {
+    let value = 0;
+    const publisher = new SnapshotPublisher(
+      () => value,
+      () => undefined,
+    );
+    const listener = vi.fn<() => void>();
+    publisher.view.subscribe(() => {
+      value = 2;
+      publisher.invalidate();
+      publisher[Symbol.dispose]();
+    });
+    publisher.view.subscribe(listener);
+    value = 1;
+    publisher.invalidate();
+    expect(publisher.view.get()).toBe(2);
+    expect(listener).not.toHaveBeenCalled();
+  });
+
+  it("queues reentrant invalidations without reentering the subscriber", () => {
+    let value = 0;
+    const publisher = new SnapshotPublisher(
+      () => value,
+      () => undefined,
+    );
+    const trace: string[] = [];
+    publisher.view.subscribe(() => {
+      trace.push(`enter:${publisher.view.get()}`);
+      if (value === 1) {
+        value = 2;
+        publisher.invalidate();
+      }
+      trace.push(`leave:${publisher.view.get()}`);
+    });
+    publisher.view.subscribe(() => trace.push(`other:${publisher.view.get()}`));
+    value = 1;
+    publisher.invalidate();
+    expect(trace).toEqual(["enter:1", "leave:2", "other:2", "enter:2", "leave:2"]);
+    publisher[Symbol.dispose]();
+  });
+
+  it("publishes invalidations through one read-only protocol", () => {
+    let value = 1;
+    const read = vi.fn<() => number>(() => value);
+    const report = vi.fn<(error: unknown) => void>();
+    const publisher = new SnapshotPublisher(read, report);
+    const listener = vi.fn<() => void>();
+    const subscription = publisher.view.subscribe(listener);
+
+    expect(Object.keys(publisher)).toEqual(["view"]);
+    expect("get" in publisher).toBe(false);
+    expect("subscribe" in publisher).toBe(false);
+    expect(Object.isFrozen(publisher)).toBe(true);
+
+    expect(publisher.view.get()).toBe(1);
+    expect(read).toHaveBeenCalledTimes(1);
+
+    value = 2;
+    publisher.invalidate();
+    expect(listener).toHaveBeenCalledOnce();
+    expect(read).toHaveBeenCalledTimes(1);
+    expect(publisher.view.get()).toBe(2);
+    expect(read).toHaveBeenCalledTimes(2);
+
+    subscription[Symbol.dispose]();
+    publisher.invalidate();
+    expect(listener).toHaveBeenCalledOnce();
+    expect(report).not.toHaveBeenCalled();
+  });
+
+  it("isolates subscriber failures through the configured error boundary", () => {
+    const failure = new Error("subscriber failed");
+    const report = vi.fn<(error: unknown) => void>();
+    const publisher = new SnapshotPublisher(() => 0, report);
+    const succeeding = vi.fn<() => void>();
+    publisher.view.subscribe(() => {
+      throw failure;
+    });
+    publisher.view.subscribe(succeeding);
+
+    publisher.invalidate();
+
+    expect(report).toHaveBeenCalledWith(failure);
+    expect(succeeding).toHaveBeenCalledOnce();
+  });
+
+  it("reports asynchronous subscribers without leaking their rejection", async () => {
+    const report = vi.fn<(error: unknown) => void>();
+    const publisher = new SnapshotPublisher(() => 0, report);
+    const failure = new Error("async subscriber failed");
+    const rejected = Promise.reject(failure);
+    publisher.view.subscribe(() => rejected);
+
+    publisher.invalidate();
+
+    expect(report).toHaveBeenCalledWith(new TypeError("Snapshot subscribers must be synchronous"));
+    await expect(rejected).rejects.toBe(failure);
+  });
+
+  it("withdraws a disposed subscription before its notification turn", () => {
+    const publisher = new SnapshotPublisher(
+      () => 0,
+      () => undefined,
+    );
+    const listener = vi.fn<() => void>();
+    let subscription = publisher.view.subscribe(listener);
+    publisher.view.subscribe(() => subscription[Symbol.dispose]());
+    subscription[Symbol.dispose]();
+    subscription = publisher.view.subscribe(listener);
+
+    publisher.invalidate();
+
+    expect(listener).not.toHaveBeenCalled();
+  });
+
+  it("finishes notification and preserves both failures when error reporting fails", () => {
+    const subscriberFailure = new Error("subscriber failed");
+    const reporterFailure = new Error("reporter failed");
+    const publisher = new SnapshotPublisher(
+      () => 0,
+      () => {
+        throw reporterFailure;
+      },
+    );
+    const succeeding = vi.fn<() => void>();
+    publisher.view.subscribe(() => {
+      throw subscriberFailure;
+    });
+    publisher.view.subscribe(succeeding);
+
+    const failure = captureError(() => publisher.invalidate());
+
+    expect(failure).toBeInstanceOf(AggregateError);
+    expect((failure as AggregateError).errors).toEqual([subscriberFailure, reporterFailure]);
+    expect(succeeding).toHaveBeenCalledOnce();
+  });
+
+  it("rejects asynchronous error reporters without leaking their rejection", async () => {
+    const subscriberFailure = new Error("subscriber failed");
+    const reporterFailure = new Error("async reporter failed");
+    const rejected = Promise.reject(reporterFailure);
+    const publisher = new SnapshotPublisher(
+      () => 0,
+      () => rejected,
+    );
+    publisher.view.subscribe(() => {
+      throw subscriberFailure;
+    });
+
+    const failure = captureError(() => publisher.invalidate());
+
+    expect(failure).toBeInstanceOf(AggregateError);
+    expect((failure as AggregateError).errors).toEqual([
+      subscriberFailure,
+      new TypeError("Snapshot error reporters must be synchronous"),
+    ]);
+    await expect(rejected).rejects.toBe(reporterFailure);
+  });
+
+  it("materializes its final snapshot and severs terminal subscriptions", () => {
+    let value = 1;
+    const publisher = new SnapshotPublisher(
+      () => value,
+      () => undefined,
+    );
+    const listener = vi.fn<() => void>();
+    const subscription = publisher.view.subscribe(listener);
+
+    value = 2;
+    publisher.invalidate();
+    publisher[Symbol.dispose]();
+    publisher[Symbol.dispose]();
+
+    expect(publisher.view.get()).toBe(2);
+    expect(() => publisher.invalidate()).toThrow("Snapshot publisher is disposed");
+    expect(() => publisher.view.subscribe(() => undefined)).toThrow(
+      "Snapshot publisher is disposed",
+    );
+    expect(() => subscription[Symbol.dispose]()).not.toThrow();
+  });
+
+  it.each([new Error("final reader failed"), undefined])(
+    "keeps a failed final read explicit instead of returning the previous snapshot (%s)",
+    (failure) => {
+      let fail = false;
+      const publisher = new SnapshotPublisher(
+        () => {
+          if (fail) throw failure;
+          return 1;
+        },
+        () => undefined,
+      );
+      fail = true;
+      publisher.invalidate();
+      expect(captureError(() => publisher[Symbol.dispose]())).toBe(failure);
+      expect(captureError(() => publisher.view.get())).toBeInstanceOf(RecordedFailure);
+      expect(() => publisher[Symbol.dispose]()).not.toThrow();
+      expect(() => publisher.view.subscribe(() => undefined)).toThrow(
+        "Snapshot publisher is disposed",
+      );
+    },
+  );
+
+  it("releases the failed reader and previous snapshot from a retained terminal view", async () => {
+    const forceGc = (globalThis as typeof globalThis & { gc?: () => void }).gc;
+    if (!forceGc) throw new TypeError("Retention tests require Node.js --expose-gc");
+    const fixture = createFailedTerminalPublisherFixture();
+    for (let pass = 0; pass < RELEASE_PASSES && fixture.reference.deref(); pass++) {
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+      forceGc();
+      forceGc();
+    }
+    expect(fixture.reference.deref()).toBeUndefined();
+    expect(() => fixture.view.get()).toThrow(RecordedFailure);
+  });
+
+  it("is owned by a using declaration through the disposal protocol", () => {
+    const listener = vi.fn<() => void>();
+    let escaped!: SnapshotPublisher<number>;
+
+    {
+      using publisher = new SnapshotPublisher(
+        () => 1,
+        () => undefined,
+      );
+      publisher.view.subscribe(listener);
+      escaped = publisher;
+      expect(() => publisher.invalidate()).not.toThrow();
+      expect(listener).toHaveBeenCalledOnce();
+    }
+
+    expect(() => escaped.invalidate()).toThrow("Snapshot publisher is disposed");
+    expect(escaped.view.get()).toBe(1);
+    expect(listener).toHaveBeenCalledOnce();
+  });
+
+  it("validates callback boundaries", () => {
+    expect(() => new SnapshotPublisher(undefined as never, () => undefined)).toThrow(
+      "Snapshot reader must be a function",
+    );
+    expect(() => new SnapshotPublisher(() => 0, undefined as never)).toThrow(
+      "Snapshot error reporter must be a function",
+    );
+    const publisher = new SnapshotPublisher(
+      () => 0,
+      () => undefined,
+    );
+    expect(() => publisher.view.subscribe(undefined as never)).toThrow(
+      "Subscriber must be a function",
+    );
+  });
+
+  it("does not retain callbacks through a terminal view or subscription", async () => {
+    const forceGc = (globalThis as typeof globalThis & { gc?: () => void }).gc;
+    if (!forceGc) throw new TypeError("Retention tests require Node.js --expose-gc");
+
+    const fixture = createTerminalPublisherFixture();
+    for (
+      let pass = 0;
+      pass < RELEASE_PASSES && Object.values(fixture.references).some((ref) => ref.deref());
+      pass++
+    ) {
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+      forceGc();
+      forceGc();
+    }
+
+    expect(fixture.view.get()).toBe(1);
+    expect(() => fixture.subscription[Symbol.dispose]()).not.toThrow();
+    expect(
+      Object.fromEntries(
+        Object.entries(fixture.references).map(([name, ref]) => [name, ref.deref() === undefined]),
+      ),
+    ).toEqual({ reader: true, reporter: true, listener: true });
+  });
+});
+
+function createFailedTerminalPublisherFixture() {
+  const owner = {};
+  const failure = new Error("final reader failed", { cause: owner });
+  let fail = false;
+  const publisher = new SnapshotPublisher(
+    () => {
+      if (fail) throw failure;
+      return { owner };
+    },
+    () => void owner,
+  );
+  fail = true;
+  publisher.invalidate();
+  try {
+    publisher[Symbol.dispose]();
+  } catch (error) {
+    if (error !== failure) throw error;
+  }
+  return { view: publisher.view, reference: new WeakRef(owner) };
+}
+
+function createTerminalPublisherFixture() {
+  const reader = {};
+  const reporter = {};
+  const listener = {};
+  const publisher = new SnapshotPublisher(
+    () => {
+      void reader;
+      return 1;
+    },
+    () => void reporter,
+  );
+  const subscription = publisher.view.subscribe(() => void listener);
+  const references = {
+    reader: new WeakRef(reader),
+    reporter: new WeakRef(reporter),
+    listener: new WeakRef(listener),
+  };
+  publisher[Symbol.dispose]();
+  return { view: publisher.view, subscription, references };
+}
+
+function captureError(operation: () => void) {
+  try {
+    operation();
+  } catch (error) {
+    return error;
+  }
+  throw new Error("Expected operation to fail");
+}

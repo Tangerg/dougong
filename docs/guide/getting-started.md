@@ -1,167 +1,38 @@
 # 快速开始
 
-本页用十分钟带你装上 Dougong、写出第一个能力组合，并理解它和普通 DI 容器的关键区别。
-
-## 环境要求
-
-| 项目 | 要求 |
-| --- | --- |
-| Node.js | ≥ 22 |
-| JavaScript 运行时 | 需提供 ES2024 标准能力，包括 `Promise.withResolvers()` |
-| TypeScript | ≥ 5.5（如果使用 TypeScript） |
-
-::: warning 浏览器 / WebView 运行时
-`Promise.withResolvers()` 需要 Safari 17.4+（macOS 14.4+）、Chrome 119+、Firefox 121+。
-如果你在 Electron、Tauri 或 Wails 里使用系统 WebView，请先确认目标系统版本。
-
-显式 `.dispose()` 不要求运行时提供 Explicit Resource Management。`using` / `await using` 还要求 `Symbol.dispose` / `Symbol.asyncDispose`；没有原生实现时，由应用在导入 Dougong 前显式 polyfill。Dougong 不修改全局对象。
-:::
-
-## 安装
+Dougong 是 TypeScript 的插件装配与资源生命周期内核。安装主包即可使用契约、插件、显式计划、Host 和 Lifetime。
 
 ```sh
-npm install dougong
+pnpm add dougong
 ```
-
-`dougong` 是门面包，它 re-export 三个实包。如果你只需要内核，也可以单独安装：
-
-```sh
-npm install @dougongjs/core
-npm install @dougongjs/reactive
-npm install @dougongjs/platform
-```
-
-### TypeScript 配置
-
-Dougong 的类型使用 `Symbol.dispose` 和 `AbortSignal`，你的 `tsconfig.json` 必须包含对应的 lib：
-
-```json
-{
-  "compilerOptions": {
-    "target": "ES2024",
-    "lib": ["ES2024", "DOM", "DOM.Iterable", "ESNext.Disposable"],
-    "moduleResolution": "Bundler",
-    "strict": true
-  }
-}
-```
-
-::: danger 少了会怎样
-只写 `"lib": ["ES2024"]` 会得到一串指向 `node_modules` 的报错，看起来像库坏了：
-
-```
-Property 'dispose' does not exist on type 'SymbolConstructor'
-Cannot find name 'AbortSignal'
-```
-
-补上 `DOM` 和 `ESNext.Disposable` 即可。
-:::
-
-## 第一个能力组合
-
-下面是一个完整可运行的例子。provider 发布一个稳定 Service，consumer 通过 `requires` 声明依赖。
 
 ```ts
-import { createHost, definePlugin, service } from "dougong"
+import { createHost, definePlugin, service } from "dougong";
 
-interface Clock {
-  now(): Date
-}
-
-interface Greeter {
-  greet(name: string): string
-}
-
-const CLOCK = service<Clock>("example/clock")
-const GREETER = service<Greeter>("example/greeter")
-
-const clock = definePlugin({
-  name: "example.clock",
-  provides: { clock: CLOCK },
-  setup: () => ({ clock: { now: () => new Date() } }),
-})
-
+const GREETER = service<{ greet(name: string): string }>("app/greeter");
 const greeter = definePlugin({
-  name: "example.greeter",
-  requires: { clock: CLOCK },
+  name: "app.greeter",
   provides: { greeter: GREETER },
-  setup: (ctx) => ({
-    greeter: {
-      greet: (name) => `${ctx.clock.now().toISOString()} Hello, ${name}`,
-    },
-  }),
-})
-
-const host = createHost({ name: "hello" })
-host.install(greeter)
-host.install(clock)
-
-await host.start()
-console.log(host.get(GREETER).greet("Dougong"))
-await host.stop()
-```
-
-运行输出：
-
-```text
-2026-08-15T00:00:00.000Z Hello, Dougong
-```
-
-## 这段代码里发生了什么
-
-### 安装顺序不是启动顺序
-
-`greeter` 先安装，但它依赖 `clock`。`host.start()` 时 Dougong 从 `requires` / `provides` 的声明构建依赖图，做拓扑排序，**同一拓扑层内并发执行 setup**，然后按逆依赖顺序停止 Instance。
-
-你不需要手工排序，也不需要 `dependsOn: ["example.clock"]` 这种字符串数组——依赖关系已经在类型里了。
-
-### 插件只能读它声明过的依赖
-
-```ts
-definePlugin({
-  name: "bad",
-  setup(ctx) {
-    ctx.clock.now()
+  setup() {
+    return { greeter: { greet: (name) => `Hello, ${name}` } };
   },
-})
+});
+
+const host = createHost({
+  name: "app",
+  installations: [{ id: "greeter", plugin: greeter }],
+});
+await host.start();
+const message = await host.use(GREETER, (service) => service.greet("Dougong"));
+await host[Symbol.asyncDispose]();
 ```
 
-这里没有声明 clock 依赖，TypeScript 会报 `Property 'clock' does not exist on type 'PluginContext<{}>'`。
+Service 的字符串 ID 是共享身份；其 TypeScript 类型描述值协议。Plugin 是可重复安装的声明，Installation 是带有稳定 ID 的安装位置，Instance 是一次执行产生的运行代次。应用通过 `host.use` 借用当前代次，回调返回的 Promise 完成后释放借用。
 
-`ctx` 的类型是从 `requires` 推导出来的。没声明就没有这个属性——这是**编译期**错误，不会在执行阶段才得到 `undefined`。
+运行时支持 Node.js 22+，以及 Chrome 119、Edge 119、Firefox 121、Safari 17.4 及以上。发行物是 ESM，释放协议使用标准 `Symbol.dispose` 与 `Symbol.asyncDispose`。源码开发要求 Node.js 22.12+、24 或 26+，使用仓库固定的 pnpm 版本。
 
-这条是 Dougong 和大多数插件框架最实际的区别。在依赖靠字符串或环境上下文解析的系统里，忘记声明依赖通常表现为「有时候能跑、有时候拿到 undefined」，取决于加载顺序。
+需要外部插件交付时添加 `@dougongjs/platform`；需要信号、观察与跨副本桥接时添加 `@dougongjs/reactive`。两个能力按需导入。
 
-### `host.get()` 是给应用代码用的，不是给插件用的
+下一步阅读[核心概念](./concepts.md)和[编写插件](./writing-plugins.md)。
 
-```ts
-host.get(GREETER)
-```
-
-Plugin 的 Context 没有 `ctx.get()` 方法。
-
-插件之间通过 `requires` 建立关系，这样依赖图才是完整的。如果插件能随时用 Service Locator 拿任意能力，依赖图就不再反映真实依赖，拓扑排序和事务回滚都会失去意义。
-
-`host.get()` 只在 `status === "active"` 时可用，否则抛 `SERVICE_UNAVAILABLE`。
-
-## 运行仓库示例
-
-如果你想直接看更完整的场景：
-
-```sh
-git clone https://github.com/Tangerg/dougong.git
-cd dougong
-pnpm install
-pnpm examples
-pnpm check
-pnpm docs:dev
-```
-
-十二章示例分三段递进——原子、组合、完整应用——从最小 Service 一路走到 Planet / Lynx 场景、声明式计划和模块图 HMR，全部进 CI。详见[可执行示例](../examples.md)。
-
-## 接下来
-
-- **想理解模型** → [核心概念](./concepts.md)：六个原子各自解决什么，为什么 ExtensionPoint 不能用 Service 替代
-- **想直接写代码** → [编写插件](./writing-plugins.md)：配置校验、可选依赖、失败处理
-- **关心资源泄漏** → [生命周期与资源](./lifetime.md)
-- **需要精确语义** → [Core API 规范](../reference/core-api.md)
+TypeScript 配置需要 `ES2024`、`DOM` 与 `ESNext.Disposable` 的 lib 定义；发行类型同时支持 Bundler 与 NodeNext 模块解析。

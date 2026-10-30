@@ -2,8 +2,8 @@ import { expectTypeOf } from "vitest";
 import type * as reactive from "@dougongjs/reactive";
 
 type NarrowOwner = {
-  readonly cleanup: reactive.ObservationOwner["cleanup"];
-  lifetime(label: "known"): reactive.AsyncDisposable;
+  readonly defer: reactive.ObservationOwner["defer"];
+  child(label: "known"): reactive.AsyncDisposable;
   readonly spawn: reactive.ObservationOwner["spawn"];
 };
 expectTypeOf<NarrowOwner extends reactive.ObservationOwner ? true : false>().toEqualTypeOf<false>();
@@ -34,5 +34,12 @@ expectTypeOf<
   Parameters<reactive.Observer<number, MinimalChild>>[1]
 >().toEqualTypeOf<MinimalChild>();
 expectTypeOf<
-  ReturnType<reactive.ObservationOwner<MinimalChild>["lifetime"]>
+  ReturnType<reactive.ObservationOwner<MinimalChild>["child"]>
 >().toEqualTypeOf<MinimalChild>();
+
+// Standard resources need no named disposal alias to cross the protocol boundary.
+expectTypeOf<{ [Symbol.dispose](): void }>().toExtend<reactive.Disposable>();
+expectTypeOf<{ [Symbol.asyncDispose](): Promise<void> }>().toExtend<reactive.AsyncDisposable>();
+expectTypeOf<ReturnType<typeof reactive.bridge<number>>>().toEqualTypeOf<
+  reactive.ReadonlySignal<number>
+>();

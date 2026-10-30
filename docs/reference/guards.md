@@ -1,225 +1,35 @@
 # 机械守卫
 
-Dougong 的架构主张只有一条能被检验：**能机械判断的约束，必须交给工具**。写在文档里的规则几个月后会退化成建议；写进门禁的规则不会。
+`pnpm check` 依次执行生成源校验、源码与消费者类型检查、lint、格式、带分包覆盖率的行为测试、未使用代码分析、循环依赖分析、责任边界检查、生产构建、发行声明面检查和文档构建。
 
-这一页列出 `pnpm check` 实际执行的每一项检查，以及它保护的是哪条不变量。
+## 架构规则
 
-```sh
-pnpm check
-```
-
-十一步依次执行，任一步失败即中止：
-
-| # | 步骤 | 保护什么 |
-| --- | --- | --- |
-| 1 | `check:generated` | 生成的同步回调及运行时协议与各自权威源码一致 |
-| 2 | `typecheck` | 五个 tsconfig 项目 + 测试项目，全部 `--noEmit` |
-| 3 | `lint` | oxlint，`--deny-warnings` |
-| 4 | `format:check` | prettier |
-| 5 | `test` | 行为语义 + 覆盖率地板 |
-| 6 | `knip` | 未使用的导出与依赖 |
-| 7 | `check:circular` | 循环依赖 |
-| 8 | `check:layers` | 依赖方向、模块分层、架构不变量、词汇 |
-| 9 | `build` | 四个发布包与 examples 的 dist、声明文件 |
-| 10 | `check:api` | 构建声明的类型契约、公共面、退役词汇、文档覆盖 |
-| 11 | `docs:check` | 文档站构建与死链 |
-
-第 9 步必须在第 10 步之前：发布的声明文件树才是**完整类型面的最终产物**，源码里看不到 `export *` 展开后的最终结果。`dist/index.d.ts` 是这个声明树的入口。
-
-## `check:generated`
-
-`scripts/generate-internal.mjs --check` 将 Core 和 reactive 的 `sync-result.ts`、`disposal-runtime.ts` 分别与 `scripts/internal/` 下的对应源码校验；同步回调、Promise 能力要求与释放 Symbol 解析各只有一个编辑源。两份投影彼此相同并不够，它们必须都来自权威源码。`pnpm generate:internal` 重新生成投影，包构建也在打包前运行同一生成器。
-
-## `check:layers`
-
-`scripts/check-layers.mjs`。四类检查。它与循环依赖检查共用 `scripts/analyze-dependencies.mjs`：扫描范围、TypeScript 解析配置和产物排除规则只有一个配置源，两个门禁只读取 madge 分析结果的不同投影。分析异常或任何无法解析的导入都中止检查，不能将缺失的边解释为“没有违规”。
-
-### 1 · 依赖方向
-
-包级：core 与 reactive 互不导入；platform 只依赖 core；facade 只能 re-export；examples 是最外层消费者，任何发布包都不得反向依赖它。
-
-模块级：`@dougongjs/core` 和 `@dougongjs/platform` 的每个模块在表里声明 rank，只能导入 rank 更低的模块。
-
-::: tip rank 表是穷举的，两个方向都查
-新增模块没有 rank → 失败（必须有人决定它坐在哪一层）。表里的 rank 没有对应文件 → 也失败（重命名文件后忘记改表不会静默通过）。
-:::
-
-### 2 · 源码文本不变量
-
-不能机械从类型推出、但能从源码文本判断的约束。分两类。
-
-**禁止型**——这些东西不该出现：
-
-| 规则 | 理由 |
+| 规则 | 含义 |
 | --- | --- |
-| 源码不导入 `node:` 内建 | 内核必须与运行环境无关 |
-| 不读 `Date.now` / `performance.now` / `Math.random` | 隐藏时钟和熵源让行为不可复现 |
-| 不直接调 `console` | 必须走 Logger 端口 |
-| 不深导入包内部模块 | 只能用包入口 |
-| 全部 TypeScript AST 中不出现显式 `any` | 源码、测试与工具都用精确类型、`unknown` 或 `never` 保留检查边界，不能主动丢失类型信息 |
-| 不使用 `@ts-ignore` / `@ts-nocheck` | 静默抑制会让后续修复也失去检查，必须修正真实类型错误 |
-| `@ts-expect-error` 只出现在 `public-api.types.ts` | 预期错误是编译期契约，不得混进源码或运行期测试 |
-| `*Port` / `*Control` 协作者协议只使用只读函数属性 | 方法参数双变会让过窄的内部实现静默穿过类型边界 |
-| `@dougongjs/reactive` 零外部导入 | 它是独立基础包 |
-| 资源实现不直接使用 `[Symbol.dispose]` / `[Symbol.asyncDispose]` | 必须经过基础协议模块选择稳定 key，避免缺失 Symbol 退化成 `"undefined"` 属性 |
-| facade 只含 re-export | 有逻辑就是第二条执行路径 |
-| Lifetime 诊断模块只声明只读 schema | 阶段与成员关系直接读取真实 Lifetime，不另建诊断树、状态机或计数 |
-| InstanceCoordinator 不重新读取外部 Contract 身份 | 由 Lifetime 捕获纯数据身份后检查操作授权，反射不能越过释放边界 |
-| Installation 诊断不通过 Lifetime 的执行绑定读取 view | Instance 已保存同一只读 view，释放期间仍能读取终态投影 |
-| Event listener 不另存发布阶段 | EventHub 成员关系是可见性唯一拥有者 |
-| Installation facade 不另建状态机 | 权限只保存在 InstallationRecord |
-| Host 不另存 `active/idle` 状态，必须读取 Engine 的已提交计划 | 稳态执行可用性只有一个拥有者，Host 只保存在途命令阶段 |
-| RegistrationRecord 不另存可变 Manifest | manifest 直接来自同一 Artifact，终态只保留不可变数据 |
-| Group facade 不另建配置或附着状态 | 直接读取配置会话与 GroupNode |
-| ContributionStore 不另存或修改贡献值 | 值只由 ContributionRecord 推进，Store 只拥有 claim 与发布状态 |
-| `HostImpl` 不得导出 | `Host` 是接口，`createHost()` 是唯一构造入口 |
-| Lifetime 只能由 `InstanceCoordinator` 和 `Lifetime` 自身构造 | 别处构造会产生无人释放的资源树 |
+| `ownership.package` | 每个源码包必须声明责任 |
+| `ownership.module` | 新的责任目录默认拒绝 |
+| `direction.package` | 包依赖只能沿声明方向 |
+| `direction.module` | 低层不得导入高层责任 |
+| `types.suppressions` | 禁止静默禁用类型检查 |
+| `types.precise` | 禁止显式 any |
+| `callbacks.readonly` | Port 与 Control 使用只读函数属性 |
+| `tests.types` | 编译期断言归 public-api.types.ts |
+| `runtime.portable` | 运行库不能依赖 Node 内建模块 |
+| `exports.public` | 跨包只使用正式公开入口 |
+| `modules.esm` | 相对源码导入具有显式运行时扩展名，发行类型支持 NodeNext |
+| `reactive.independent` | reactive 保持零外部依赖 |
+| `vocabulary.current` | 退休词汇不能返回实现 |
+| `logging.port` | 库日志由 Logger 端口控制 |
+| `policy.explicit` | 库策略不读取环境时钟或随机数 |
+| `lifetime.owner` | Lifetime 根仅由执行层或既有树创建 |
+| `contracts.owner` | 固定 Contract ID 只有一个定义所有者 |
 
-**要求型（反向规则）**——这些东西**必须**出现，否则说明有人另起了一条路径：
+## 覆盖率下限
 
-| 规则 | 它防止的第二条路径 |
-| --- | --- |
-| Host 命令串行化必须用 Core `SerialQueue` | 手写队列会重新引入"失败污染后续命令" |
-| Platform 命令串行化必须用同一个 `SerialQueue` | 同上，跨包复制状态机 |
-| Platform 诊断必须编译到 Core `SnapshotPublisher` | 复制观察协议 |
-| Contribution 观察必须组合同一个 `SnapshotPublisher` | 同上 |
-| Platform 加载取消必须复用 Core `isCancellationReason` | 两套取消判定 |
-| Core 与 Platform 的外部 Error 识别必须复用 Core `isError` | 各边界重复原型判断会覆盖原始拒绝值 |
-| Platform 终态错误必须复用 Core `RecordedFailure` | 两套终态诊断记录语义 |
-| 声明边界必须用 `normalizePlainRecord`，不得恢复旧断言接口 | 校验原对象后仍由原对象的属性读取决定字段 |
-| Service 查找只消费归一化 requirement，不重读原包装 | optional 语义与实际 Service 身份分叉 |
-| 异步结果边界必须一次捕获 then，不保留布尔判定后重读的路径 | 实际观察另一个异步分支，漏掉原始拒绝 |
-| Observation 不得重读 runner.result | 未完成 Task 被另一个完成结果提前摘除 |
-| Platform 声明捕获必须复用 Core `normalizePlainRecord` | 两套普通数据 record 捕获与校验语义 |
-| Host 必须把安装声明与句柄权限委托给 `InstallationRegistry` | Host 重新变成总类 |
-| Platform 结构协调必须把激活委托给 `Activator` | 第二条依赖激活路径 |
-| `Activator` 必须信任 `CandidateGraph` 的环不变量 | 第二份、且不可达的图实现 |
-| ChangeSet draft 的空提交必须过 authority 端口 | 空提交短路会让失效的 Group / Platform draft 提交成功 |
-| Group 空 ChangeSet 必须跨串行化边界 | 同上 |
-| Platform 空 ChangeSet 必须跨串行化命令边界 | 同上 |
-| Platform 释放必须是终态 `SerialQueue` 命令 | 尾部观察者会漏掉排队中的命令 |
-| Platform 释放协议必须复用 Core `asyncDisposeSymbol` | 第三份运行时 Symbol 解析逻辑 |
-| Group 所有权必须用 `GroupNode` 身份 | 用 groupId 前缀编码所有权是隐式关系 |
-
-反向规则是这套门禁里最不常见、也最重要的一类：普通门禁说"不许写 X"，反向规则说"**必须写 X**"。前者防退化，后者防分叉。
-
-### 3 · 退役词汇（源码）
-
-`scripts/vocabulary.mjs` 是唯一真相源，列出词汇重建中被淘汰的所有标识符。
-
-检查走 **TypeScript AST**，只匹配标识符与字符串字面量，所以散文与概念名不会被误判：
-
-```text
-extension-point          概念名，出现在散文里     → 放行
-PluginHandle             类型标识符              → 失败
-"PLUGIN_DEPENDENCY_..."  退役错误码字面量         → 失败
-```
-
-### 4 · 固定 Contract ID 唯一性
-
-全工作区扫描 `service("...")` / `extensionPoint("...")` / `event("...")`，同一个字面量 ID 声明两次即失败，并报出首次声明的位置。
-
-::: warning 它只覆盖字面量
-`` service<T>(`workspaces/${id}/store`) `` 这类动态 Contract family 是**刻意跳过**的——运行期 ID 的唯一性无法静态判定。门禁只声称它能证明的部分，不做过度承诺。
-
-调用被识别的前提是能追踪到工厂来源，因此 `import { service as svc }` 别名和 `import * as dougong` 命名空间两种写法都能识别。
-:::
-
-## `check:circular`
-
-`scripts/check-circular.mjs`，madge，**允许列表为空**。
-
-通过共享分析边界读取循环结果，不再从失败的 CLI 进程中抢救输出。`scripts/test/dependency-guards.test.mjs` 在临时源码副本中运行真实门禁，验证无法解析的导入不会误通过，同时保留有效图、真实循环和向上依赖的行为覆盖。
-
-每个包都作为库发布，`@dougongjs/core` 两个模块之间的值级循环会在消费者的打包器里表现为**半初始化的绑定**，而不是在我们的测试里报错。所以这里比在应用里更严格。
-
-## `check:api`
-
-先用 `tsconfig.dist.json` 对构建后的包入口重放公共类型契约，再由 `scripts/check-api-surface.mjs` 读取四个包的 `dist/index.d.ts`，用 TypeScript checker 解析导出符号——不是文本匹配，所以 `export *` 展开后的最终消费者视角能被看见。
-
-每个包四条独立断言：
-
-1. **导出标识符精确等于 allowlist**（值导出与类型导出分列）。新增导出是一次刻意决定，不能是 `export *` 的副作用。
-2. **退役标识符不得重新进入公共面**。用整 token 列表而非模式，所以合法名字不受影响：
-
-   ```text
-   Plugin  PluginContext  InstanceMeta  definePlugin   → 合法
-   PluginHandle  PluginDefinition  ExtensionView       → 退役
-   ```
-3. **每个公开导出都必须出现在中英双语文档里**。更新 allowlist 不能留下一个没人解释的 API。
-4. **构建后的声明文件不允许出现 `any`**。源码门禁看不到 declaration emit 推断出的类型，因此这里扫描全部发布 `.d.ts`，防止类型信息在包边界静默丢失。
-
-facade 的面不重述而是**算出来**：它必须恰好等于 core + platform + 转发的 reactive 名字，多一个少一个都失败。
-
-`scripts/runtime-baseline.mjs` 是运行时支持范围的唯一真相源：工作区根与全部五个 workspace package 的 `engines` 必须一致，根与四个发布包的 `browserslist` 必须一致，五份 Vite 构建也必须用它派生的 target。包不能声明一套运行环境、却发出另一套环境才能解析的语法。
-
-另外还有跨源码与文档的检查：
-
-- **错误码**从源码派生，两份错误码参考表必须**穷举**列出，其余页面**不得发明**源码不抛的码。
-- **文档的代码片段**不得使用退役标识符。只提取带代码语言标注的围栏块与行内 `` `code` `` span，散文不受影响。
-
-文档导航同样从文件树派生：中英文的每个 guide、reference 和 examples 页面都必须同时出现在对应侧边栏与首页，导航也不得保留已经删除的页面。新增页面不再可能只挂进其中一份清单。
-
-## 测试侧的守卫
-
-### 编译期契约
-
-各包的 `public-api.types.ts` 使用 `expectTypeOf` 与 TypeScript 的预期错误指令保护型变、泛型推导和结构协议，并刻意不匹配 Vitest 的 `*.test.ts` 运行期模式。架构门禁禁止把这两类编译期断言放回运行期测试。`pnpm typecheck` 先通过 workspace path 对源码入口求值；构建后，`check:api` 再用 `tsconfig.dist.json` 把同一批导入重定向到最终 `dist/index.d.ts`，防止私有字段折叠或声明生成改变消费者看到的关系。生成 JavaScript 时这些断言会被擦除；单独运行 `pnpm test` 不能证明契约仍成立，也不会把编译期断言伪装成运行期用例。
-
-### 运行期形状
-
-运行期测试的源码路径同样由 `tsconfig.base.json` 的 `baseUrl/paths` 拥有，Vitest 直接派生别名。路径必须是精确包名对应一个精确目标；通配符或多个候选目标会中止配置加载，不能静默选择另一套解析语义。`scripts/test/workspace-resolution.test.mjs` 在临时目录只改 TypeScript 路径，再通过真实 Vite 配置加载验证目标变更、新增映射和特殊文件名都投影到运行期，不依赖手动同步。
-
-`packages/core/test/api-surface.test.ts` 断言 `Object.keys()` 的精确结果：Context 暴露哪些键、Handle 是否冻结、内部编排方法是否泄露。`check:api` 保护构建声明的类型关系、导出词汇与 `any`，运行期测试保护实际对象形状——两者互补，因为类型擦除后 `Object.keys` 才是消费者真正看得到的东西。
-
-### 发布查询与产物边界
-
-发布命令只通过 `node:util` 的 `parseArgs` 解析输入，要求恰好一个版本参数、每个选项至多出现一次，并拒绝未知选项、缺失或空白 OTP。版本语法由工作区已有的 `semver` 库判定，不再维护手写正则；输入必须与解析后的版本完全一致。非法或含糊的输入在任何外部命令之前被拒绝。
-
-发布包身份与依赖声明由各包的 `package.json` 拥有；release 脚本只声明目录与发布顺序，在预检前捕获包名并拒绝缺失或重复身份。查询、下载、上传确认与内部依赖判定都使用这份捕获值。每个 tarball 的包名和版本必须与本次发布一致；依赖集合及外部依赖范围必须与原始声明一致，内部依赖只投影为本次发布的精确版本。缺失、多余或改写的依赖均被拒绝，不能用另一份硬编码包名或版本子串判定产物正确。
-
-候选与已发布归档都经过 `scripts/release-archive.mjs` 的同一个读取入口。`tar` 解析库以严格模式直接读取归档成员的路径、类型和字节，生成供 Manifest、必需文件、入口内容和恢复时完整比对共同使用的快照。路径首级必须是 `package`，拒绝额外顶层条目、点路径、空路径段和反斜杠；只接受目录与普通文件，拒绝符号链接、硬链接、重复文件和文件/目录冲突。快照不经过磁盘解包，避免链接类型、重复记录和大小写不同的文件名被文件系统合并或隐藏。同名目录不能充当必需文件。返回快照前还必须收到解析器确认的完整归档终止标记；输入耗尽本身不能证明最后一个成员头部完整，损坏或截断的归档不能产生部分成功。
-
-`scripts/release.mjs` 的预检和上传确认共用 `registryHasVersion`。发布事实属于 npm 注册表；查询失败不能生成“版本不存在”的事实。成功响应必须精确返回所查询版本，只有结构化的 `E404` 才表示不存在。网络、权限、进程启动或响应格式失败都立即中止；上传后的等待也只允许重查明确的 `E404`。
-
-恢复发布时，已发布版本的包内容同样属于 npm 注册表。本地候选只有在归档中的完整文件集合与每个文件的字节内容都一致时才能跳过上传；不能只比较入口文件，因为入口引用的声明文件也属于公共契约。文件缺失、多余或内容不同都要求使用新版本，归档元数据不参与比较。即使全部包已经上传，也走同一完整比对与记录流程，不重新上传，不以“所有包已发布”为由提前退出。
-
-Git 对象图拥有发布提交与标签事实，流程不另存恢复标记。预检要求干净的 main 与 origin/main 一致，显式检查全部未跟踪文件，不受用户隐藏配置影响；恢复时仅允许额外的一笔版本提交，其唯一父级必须是 origin/main、提交说明必须匹配本次发布、差异只能是四份包声明的精确版本改写。其他源码、依赖或历史变化不能借恢复发布被推送。已存在的标签必须是指向当前 HEAD 的 annotated tag，且四份声明版本一致；有提交或标签的恢复还要求全部包已发布。完整验证后，已有提交与标签直接复用，不创建空提交，不覆盖标签。推送使用 atomic 并显式关闭 follow-tags，仅更新 main 与本次标签；用户的 push.followTags 配置不能扩大发布范围，远端冲突不会只推进 main。
-
-版本改写属于发布流程的本地暂存。第一次写入前必须完整捕获四份 `package.json` 的原始字节并注册退出与中断处理；改写从这份快照派生。在 Git 确认提交成立之前，失败、中断、拒绝发布与 dry run 都恢复原始字节，进入记录阶段的失败还恢复这四份声明的暂存区。一个文件恢复失败也必须尝试其余文件，并明确报告失败路径，不能宣称恢复成功。Git 已成立的提交不按命令退出码回滚；打标签或推送失败保留它，同版本重跑从 Git 事实继续。
-
-`scripts/test/release-archive.test.mjs` 直接构造归档记录，覆盖磁盘无法忠实保留的大小写文件名、重复成员、链接、扩展路径及损坏输入。`scripts/test/release.test.mjs` 通过临时工作区和隔离的命令边界运行真实发布 CLI，验证版本与选项的严格解析、包身份来自声明、缺失或重复身份被拒绝，以及未知状态不能越过预检。`scripts/test/release-artifacts.test.mjs` 使用真实临时归档，验证包身份、完整依赖声明、内部依赖精确版本及全部文件的字节内容；实际 `pnpm pack` 对照还覆盖 workspace 依赖转换、`files` 白名单导致的必需文件缺失，以及同名目录冒充必需文件的情况。发布用例从被检验的 tarball 解包到模拟注册表，覆盖空注册表首次发布、部分与全部已发布的恢复、OTP 传递、等待可见后再上传依赖方，以及不可见或查询失败时禁止记录成功。成功的 dry run 同时断言没有上传或 Git 写入。所有非 dry-run 用例都使用真实临时 Git 工作区和 bare 远端；add、commit、tag、push 的故障注入验证恢复、已有提交判定、标签冲突与原子推送。`scripts/test/release-manifests.test.mjs` 注入文件读取、部分写入和恢复失败，验证完整回滚与失败报告；dry run 同样检查原始字节恢复。这些用例纳入 `pnpm test`，不会访问注册表、发布包或修改项目及共享远端的 Git 状态；真实打包显式禁止 Corepack 下载。
-
-三组发布夹具共用 `scripts/test/release-fixture.mjs` 异步等待子进程，统一执行截止时间和退出结果的处理；超时、信号或启动失败仍使测试失败，包括超时后信号处理器以 0 退出的情况。每次 CLI 执行通过 `--import` 加载普通夹具模块，由 `release-command-fixture.mjs` 适配同步命令结果；模拟命令不各自启动 Node 进程。该边界拒绝无效工作目录和缺失或矛盾的退出状态，并用真实子进程对照输出、信号与启动失败语义。模拟注册表的内容只由落盘包拥有：已接受但尚不可见的上传保存在 `pending`，可见时移动到 `published`；查询按完整包名与版本读取目录中的 Manifest。归档夹具打包完整存储目录，保留额外顶层条目供发布校验拒绝，不预先过滤为 `package` 子树；打包时关闭 macOS AppleDouble 元数据生成，避免夹具引入实际 npm 包中没有的宿主文件。初始已发布包集合只用于铺设目录，运行中不参与判断。命令日志只用于断言调用顺序，不参与发布决策，也不另存发布标记或版本副本。
-
-### 覆盖率地板
-
-`vitest.config.ts` 按包设置阈值，取值贴着实测地板（裕度 ≤ 1 个点）：
-
-| 包 | statements | branches | functions | lines |
+| Package | Statements | Branches | Functions | Lines |
 | --- | --- | --- | --- | --- |
-| core | 93 | 86 | 96 | 96 |
+| dougong | 93 | 86 | 96 | 96 |
 | platform | 97 | 92 | 100 | 99 |
 | reactive | 96 | 89 | 100 | 99 |
 
-一个包不能靠工作区里别处的高覆盖率掩盖自己的回归。阈值定得贴近实测是有意的：留出裕度就等于允许悄悄删测试。
-
-::: tip 这是地板，不是目标
-剩下的未覆盖行大多是**更早一层检查之后的纵深防御**：`GroupCoordinator` 已经拒绝过的 `GroupNode.assertAttached()`、`definePlugin` 已经拒绝过的自依赖 `SERVICE_CYCLE`。要执行到这些行必须绕过公共 API，所以继续拉高数字买到的是"对不可达状态的断言"，而不是行为保护。
-:::
-
-`check:api` 会从 `vitest.config.ts` 推导这张表并核对中英文页面；提高门槛却忘记更新文档不能通过。
-
-## 怎么加一条新守卫
-
-1. **先写门禁，在当前代码上跑，确认它失败。** 照着已完成的结果补写的规则是快照，不是测试。
-2. 修代码让它通过。
-3. **反向验证**：把被保护的行为撤掉，确认门禁变红，再还原。
-
-第 3 步是这个仓库对所有重要不变量的强制要求——[working rules](https://github.com/Tangerg/dougong/blob/main/AGENTS.md) 里写着"For important regressions, verify that the test fails when the protected behavior is removed"。
-
-## 相关
-
-- [整体架构](./architecture.md) —— 这些约束保护的分层与设计论证
-- [Core API 规范](./core-api.md) —— 被守护的公共语义
-- [错误码](./errors.md) —— 由源码派生、门禁核对的那张表
+行为测试覆盖原子发布、计划权限、恢复与隔离、生命周期义务、取消、跨副本信号与隔离的打包消费者。门禁变异测试证明非法依赖方向确实失败。API 守卫检查包含纯类型导出的发行声明面，要求中英文记录所有导出和错误码，并按真实 Markdown 文件校验导航。协议生成文件只有 `tooling/internal` 中一个源所有者，修改源后重新生成。

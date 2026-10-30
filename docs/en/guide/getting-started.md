@@ -1,167 +1,38 @@
 # Getting started
 
-This page takes about ten minutes: install Dougong, write your first capability composition, and understand what separates it from an ordinary DI container.
-
-## Requirements
-
-| Item | Requirement |
-| --- | --- |
-| Node.js | ≥ 22 |
-| JavaScript runtime | Must provide ES2024 standard capabilities, including `Promise.withResolvers()` |
-| TypeScript | ≥ 5.5 (if you use TypeScript) |
-
-::: warning Browser and WebView runtimes
-`Promise.withResolvers()` requires Safari 17.4+ (macOS 14.4+), Chrome 119+ or Firefox 121+.
-If you embed a system WebView through Electron, Tauri or Wails, check your minimum target OS first.
-
-Explicit `.dispose()` does not require Explicit Resource Management support from the runtime. `using` / `await using` additionally require `Symbol.dispose` / `Symbol.asyncDispose`; when they are not native, the application must install a polyfill before importing Dougong. Dougong does not mutate globals.
-:::
-
-## Install
+Dougong is a TypeScript kernel for plugin composition and resource lifetimes. Its main package provides contracts, plugins, explicit plans, Host and Lifetime.
 
 ```sh
-npm install dougong
+pnpm add dougong
 ```
-
-`dougong` is the facade package; it re-exports the three real packages. Install them individually if you only need part of the system:
-
-```sh
-npm install @dougongjs/core
-npm install @dougongjs/reactive
-npm install @dougongjs/platform
-```
-
-### TypeScript configuration
-
-Dougong's types use `Symbol.dispose` and `AbortSignal`, so your `tsconfig.json` must include the matching libs:
-
-```json
-{
-  "compilerOptions": {
-    "target": "ES2024",
-    "lib": ["ES2024", "DOM", "DOM.Iterable", "ESNext.Disposable"],
-    "moduleResolution": "Bundler",
-    "strict": true
-  }
-}
-```
-
-::: danger What happens without them
-Writing only `"lib": ["ES2024"]` produces a wall of errors pointing into `node_modules`, which looks like a broken library:
-
-```
-Property 'dispose' does not exist on type 'SymbolConstructor'
-Cannot find name 'AbortSignal'
-```
-
-Adding `DOM` and `ESNext.Disposable` fixes it.
-:::
-
-## Your first composition
-
-A complete, runnable example. The provider publishes a stable Service; the consumer declares its dependency through `requires`.
 
 ```ts
-import { createHost, definePlugin, service } from "dougong"
+import { createHost, definePlugin, service } from "dougong";
 
-interface Clock {
-  now(): Date
-}
-
-interface Greeter {
-  greet(name: string): string
-}
-
-const CLOCK = service<Clock>("example/clock")
-const GREETER = service<Greeter>("example/greeter")
-
-const clock = definePlugin({
-  name: "example.clock",
-  provides: { clock: CLOCK },
-  setup: () => ({ clock: { now: () => new Date() } }),
-})
-
+const GREETER = service<{ greet(name: string): string }>("app/greeter");
 const greeter = definePlugin({
-  name: "example.greeter",
-  requires: { clock: CLOCK },
+  name: "app.greeter",
   provides: { greeter: GREETER },
-  setup: (ctx) => ({
-    greeter: {
-      greet: (name) => `${ctx.clock.now().toISOString()} Hello, ${name}`,
-    },
-  }),
-})
-
-const host = createHost({ name: "hello" })
-host.install(greeter)
-host.install(clock)
-
-await host.start()
-console.log(host.get(GREETER).greet("Dougong"))
-await host.stop()
-```
-
-Output:
-
-```text
-2026-08-15T00:00:00.000Z Hello, Dougong
-```
-
-## What just happened
-
-### Install order is not start order
-
-`greeter` is installed first but depends on `clock`. During `host.start()`, Dougong builds a dependency graph from the `requires` / `provides` declarations, topologically sorts it, **starts each topological layer concurrently**, and stops in reverse dependency order.
-
-You never sort by hand, and there is no `dependsOn: ["example.clock"]` string array — the dependency is already in the types.
-
-### A plugin can only read what it declared
-
-```ts
-definePlugin({
-  name: "bad",
-  setup(ctx) {
-    ctx.clock.now()
+  setup() {
+    return { greeter: { greet: (name) => `Hello, ${name}` } };
   },
-})
+});
+
+const host = createHost({
+  name: "app",
+  installations: [{ id: "greeter", plugin: greeter }],
+});
+await host.start();
+const message = await host.use(GREETER, (service) => service.greet("Dougong"));
+await host[Symbol.asyncDispose]();
 ```
 
-TypeScript rejects this with `Property 'clock' does not exist on type 'PluginContext<{}>'` because no clock dependency was declared.
+A Service's string ID is its shared identity; its TypeScript parameter describes the value protocol. A Plugin is a reusable declaration, an Installation is a stable position in the application, and an Instance is one running generation. Application code borrows that generation through `host.use`; the borrow ends when the callback's result settles.
 
-The type of `ctx` is derived from `requires`. Undeclared means the property does not exist — a **compile-time** error, not an `undefined` discovered during execution.
+Runtime support starts at Node.js 22, Chrome 119, Edge 119, Firefox 121 and Safari 17.4. Packages are ESM and accept the standard `Symbol.dispose` and `Symbol.asyncDispose` resource protocols. Repository development requires Node.js 22.12+, 24 or 26+ and the pinned pnpm version.
 
-This is the most practical difference from most plugin frameworks. Where dependencies resolve through strings or an ambient context, a forgotten declaration usually shows up as "works sometimes, undefined other times", depending on load order.
+Add `@dougongjs/platform` for external plugin delivery. Add `@dougongjs/reactive` for signals, observation and cross-copy bridges. Import each capability from its own package.
 
-### `host.get()` is for application code, not for Plugins
+Continue with [core concepts](./concepts.md) and [writing plugins](./writing-plugins.md).
 
-```ts
-host.get(GREETER)
-```
-
-Plugins have no `ctx.get()` method.
-
-Plugins relate to each other through `requires` so that the dependency graph is complete. If a plugin could pull any capability from a service locator at will, the graph would stop reflecting real dependencies, and both topological ordering and transactional rollback would lose their meaning.
-
-`host.get()` only works while `status === "active"`; otherwise it throws `SERVICE_UNAVAILABLE`.
-
-## Run the repository examples
-
-To see fuller scenarios directly:
-
-```sh
-git clone https://github.com/Tangerg/dougong.git
-cd dougong
-pnpm install
-pnpm examples
-pnpm check
-pnpm docs:dev
-```
-
-Twelve chapters climb three stages — atoms, composition, complete applications — from a minimal Service through the Planet / Lynx scenarios to declarative plans and module-graph HMR, all in CI. See [runnable examples](../examples.md).
-
-## Next
-
-- **Understand the model** → [Core concepts](./concepts.md): what each atom solves, and why an ExtensionPoint is not a Service
-- **Start writing code** → [Writing plugins](./writing-plugins.md): config validation, optional dependencies, failure handling
-- **Worried about leaks** → [Lifetime and resources](./lifetime.md)
-- **Need exact semantics** → [Core API specification](../reference/core-api.md)
+TypeScript configuration requires the `ES2024`, `DOM` and `ESNext.Disposable` libraries. Published declarations support both Bundler and NodeNext module resolution.

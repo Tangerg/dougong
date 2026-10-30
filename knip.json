@@ -3,10 +3,13 @@
   "ignoreExportsUsedInFile": true,
   "workspaces": {
     ".": {
-      "entry": ["scripts/*.mjs"],
-      "project": ["scripts/*.mjs"]
+      "entry": ["tooling/**/*.mjs"],
+      "project": ["tooling/**/*.mjs"]
     },
     "packages/*": {
+      "project": ["src/**/*.ts"]
+    },
+    "examples": {
       "project": ["src/**/*.ts"]
     }
   }

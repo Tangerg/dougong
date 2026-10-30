@@ -1,204 +1,53 @@
 # Error codes
 
-Every structured error Dougong throws carries a stable `code` string. Application code should branch on `error.code` rather than matching message text — messages change, codes do not.
+Failures reject with structured errors. `DougongError` exposes `code`, immutable `details` and an optional original `cause`. `ConfigValidationError` additionally exposes captured Standard Schema issues. `PlatformError` uses `PlatformErrorCode`; `PermissionDeniedError` exposes manifestName and denied permissions.
 
-## The naming rule
+`details.outcome` distinguishes rejected, restored and quarantined execution. A resolved ApplyResult always means committed success. `RecordedFailure` and `ErrorSnapshot` are bounded diagnostic projections, while direct callers receive original failures. Argument and protocol misuse can throw TypeError. Cancellation follows the owning AbortSignal and is not a successful commit.
 
-A code names **which object's invariant was violated**, instead of vaguely saying "a plugin failed":
-
-| Prefix | The object whose invariant broke | Package |
-| --- | --- | --- |
-| `SERVICE_*` / `CONTRACT_*` / `CONFIG_*` | Contract identity, the dependency graph, a config declaration | Core |
-| `LIFETIME_*` | structured resource ownership | Core |
-| `INSTALLATION_*` | One existing installation | Core |
-| `GROUP_*` | One installation-ownership subtree | Core |
-| `ARTIFACT_*` | One external artifact that disagrees with itself | Platform |
-| `REGISTRATION_*` | Registration identity and the registration dependency graph declared by manifests | Platform |
-| `MANIFEST_*` / `MODULE_*` / `API_*` / `PERMISSION_*` / `PLATFORM_*` | The trust and loading boundaries | Platform |
-
-So `INSTALLATION_REMOVED` is a Core installation and `REGISTRATION_REMOVED` is a Platform registration — no need to open the implementation to learn which layer you are in.
-
-## Error types
-
-```ts
-class DougongError extends Error {
-  readonly code: string
-}
-
-class ConfigValidationError extends DougongError {
-  readonly issues: ReadonlyArray<StandardSchemaV1.Issue>
-}
-
-class PlatformError extends DougongError {}
-
-class PermissionDeniedError extends PlatformError {
-  readonly manifestName: string
-  readonly denied: ReadonlyArray<string>
-}
-```
-
-Several failures are aggregated into a standard `AggregateError`, with every cause preserved in `errors`.
-
-::: tip TypeError versus Error
-Beyond coded errors, Dougong uses two native types:
-
-- **`TypeError`** — the caller passed the wrong thing (not a function, not a Contract, a key conflict, or continued using an object whose local capability was revoked)
-- **`Error`** — an internal invariant broke; that is a framework bug you should never reach in normal use
-
-So you can branch by constructor: a `DougongError` is an expected operational failure, while a `TypeError` is a usage problem.
-:::
-
-## Core (`@dougongjs/core`)
-
-### Graph construction
-
-These are thrown **before any Instance starts**. The execution graph has not moved.
-
-| Code | Trigger |
+| Code | Meaning and response |
 | --- | --- |
-| `SERVICE_CYCLE` | A dependency cycle. The message carries the real path: `app.a:1 -> app.b:2 -> app.a:1`. A plugin requiring a Service it provides counts too |
-| `SERVICE_CONFLICT` | Two plugins provide the same Service |
-| `SERVICE_MISSING` | A required Service has no provider (an `optional()` declaration does not count) |
-| `CONTRACT_CONFLICT` | The same Contract ID is used as two different kinds |
-| `CONFIG_INVALID` | Config failed Standard Schema validation. `error.issues` lists the problems per field |
-
-::: warning Validation precedes shutdown
-Every affected Installation's Plugin config is validated in full before any running Instance is stopped. One misspelled field cannot leave the application halfway down.
-:::
-
-### Startup and active execution
-
-| Code | Trigger |
-| --- | --- |
-| `SERVICE_NOT_RETURNED` | `provides` declared a key that the `setup` return value does not contain |
-| `SERVICE_UNAVAILABLE` | `host.get()` was called outside `active`; or the depended-on Service's installation is not active |
-| `LIFETIME_DISPOSED` | A Lifetime has begun disposal and therefore rejects new listeners, contributions, tasks, child Lifetimes, cleanups or Event emission |
-| `INSTALLATION_UNAVAILABLE` | The installation is `failed`; or setup / a config validator threw a **non-Error** value (the original is in `cause`); or an operation ran on an uncommitted draft |
-| `INSTALLATION_REMOVED` | An operation on a removed Installation |
-| `INSTALLATION_IDENTITY` | `update()` tried to change the Plugin name. An update may swap implementation and config, never identity |
-
-### Group
-
-| Code | Trigger |
-| --- | --- |
-| `GROUP_REMOVED` | An operation on a removed Group, or continued use of a stale ChangeSet created before that Group was removed |
-| `GROUP_UNAVAILABLE` | The Group was never established; or a Group operation failed with a non-Error value |
-
-## Platform (`@dougongjs/platform`)
-
-### Trust boundary
-
-Thrown **before** any external module code is loaded.
-
-| Code | Trigger |
-| --- | --- |
-| `MANIFEST_INVALID` | The Manifest shape is illegal, or it declares duplicate activation events / permissions |
-| `API_INCOMPATIBLE` | The Manifest's required `apiVersion` does not satisfy the application version |
-| `PERMISSION_DENIED` | The Authorizer refused. `error.denied` lists the refused permissions |
-| `REGISTRATION_DUPLICATE` | Two artifacts' manifests map to the same registration identity |
-
-### Manifest dependency resolution
-
-These errors arise while resolving manifest declarations in the candidate Registration graph. Their codes name the object actually being validated, not a Plugin that may not have loaded yet.
-
-| Code | Trigger |
-| --- | --- |
-| `REGISTRATION_DEPENDENCY_MISSING` | A manifest dependency has no Registration |
-| `REGISTRATION_DEPENDENCY_INCOMPATIBLE` | The dependency Registration is outside the version range |
-| `REGISTRATION_DEPENDENCY_INACTIVE` | The dependency Registration exists but is not installed |
-| `REGISTRATION_CYCLE` | Manifest dependencies form a cycle in the candidate Registration graph; the message carries the real path |
-
-### Loading and activation
-
-| Code | Trigger |
-| --- | --- |
-| `MODULE_LOAD_FAILED` | The loader threw. The original error is in `cause` |
-| `MODULE_INVALID` | The module loaded but exports no valid Plugin |
-| `ARTIFACT_IDENTITY` | One artifact disagrees with itself: the manifest name differs from the placeholder's or the loaded Plugin's name |
-| `REGISTRATION_BUSY` | That Registration is changing, or a Platform structural change has closed admission for new root activations |
-| `REGISTRATION_UNAVAILABLE` | The Registration is unavailable; activation or admission threw a **non-Error** value (the original is in `cause`); or an operation ran on an uncommitted registration |
-| `REGISTRATION_REMOVED` | An operation on a removed Registration |
-| `REGISTRATION_IDENTITY` | An update's new artifact carries a different manifest name |
-| `PLATFORM_UNAVAILABLE` | The Platform is disposed, or in a state that forbids the operation |
-
-::: tip The three IDENTITY codes
-They describe identity invariants on three different objects:
-
-- **`INSTALLATION_IDENTITY`** — an existing Installation tried to change its Plugin name (Core)
-- **`REGISTRATION_IDENTITY`** — an existing Registration tried to change its manifest name (Platform)
-- **`ARTIFACT_IDENTITY`** — one artifact's manifest disagrees with the Plugin it loads (Platform, where a Registration may not exist yet)
-:::
-
-## Handling them
-
-### Branch on the code
-
-```ts
-try {
-  await installation.ready()
-} catch (error) {
-  if (!(error instanceof DougongError)) throw error
-
-  switch (error.code) {
-    case "CONFIG_INVALID":
-      showFieldErrors((error as ConfigValidationError).issues)
-      break
-    case "SERVICE_MISSING":
-      suggestInstallDependency(error.message)
-      break
-    case "INSTALLATION_UNAVAILABLE":
-      offerRetry()
-      break
-    default:
-      report(error)
-  }
-}
-```
-
-### Process aggregate failures
-
-```ts
-try {
-  await host.stop()
-} catch (error) {
-  if (error instanceof AggregateError) {
-    for (const cause of error.errors) report(cause)
-  }
-}
-```
-
-### Receive background errors
-
-Background task and diagnostic subscriber failures reach the Host's reporting channel without changing the command being observed. Event listener failures instead reject `emit()` with an aggregate error for the sender to handle:
-
-```ts
-const host = createHost({
-  name: "app",
-  onError: (error) => reportToSentry(error),
-  logger: myLogger,
-})
-```
-
-The channel is fail-safe: an `onError` that throws or rejects falls back to the logger; a logger that itself throws or rejects is observed and then falls silent as the terminal sink — **observing an error never changes the Host command being observed**.
-
-### Diagnostic failure records
-
-Core provides `isError(value)` as the shared recognition boundary for external rejection values. An unreadable prototype returns false rather than throwing a reflection error that replaces the original failure. Platform reuses this predicate before selecting its own error code and disposition. Only genuinely created and frozen internal declaration errors may pass through the Manifest check unchanged; an externally thrown PlatformError or matching code cannot bypass the MANIFEST_INVALID boundary.
-
-Installation and Registration diagnostic errors always use `RecordedFailure`; later calls to `ready()` on discarded handles reject with the same type. Its `name` is always `RecordedFailure`; its optional `code` and frozen `snapshot: ErrorSnapshot` describe the original failure. It does not claim `instanceof TypeError`, `DougongError` or `PermissionDeniedError`. The command that failed and recoverable live failures still deliver the original Error. After a SnapshotPublisher final read fails, its first dispose throws the original value, terminal get calls throw RecordedFailure, and neither the previous snapshot payload nor the failed reader remains retained.
-
-The snapshot preserves original name, message, code and stack text, plus bounded `cause` and `errors` trees. Permission failures retain `manifestName` and `denied`; config failures retain issue messages and paths. Arbitrary objects, callbacks and custom payloads are omitted. The read-only snapshot getter returns the record privately owned by RecordedFailure, without trusting external fields or prototype inheritance. Enumerate and serialize `error.snapshot` explicitly rather than relying on enumerable error-instance fields. Text is copied as strings. The recorder also replaces its native constructor trace when the source has no stack, so historical errors cannot retain the Host, Installer, Loader or Platform through their object graph.
-
-Recording expands at most 32 error nodes, descends at most four edges, and takes at most eight items per error list. Messages are capped at 4,096 characters, stack text at 16,384, and names, codes and permission fields at 256. Validation paths keep at most 16 segments. `truncated` marks bounded records and cut-off chains. These are diagnostic limits, not a serializer for application state.
-
-Reflection and field reads also cross the recording boundary: an inaccessible cause object becomes an omitted NonError record, while inaccessible array or path fields are omitted from the snapshot. Array length is captured once before reading a bounded number of entries. A revoked Proxy or throwing accessor cannot replace the original operation failure or prevent terminal resource release.
-
-`RecordedFailure` accepts unknown directly and checks each error node's prototype at most once without requiring prior Error recognition. Primitive rejection values use the NonError name and bounded text; unrecognizable objects retain only an omission record. Module-private sets own normalization and Manifest declaration failure provenance, with registration restricted to their responsible internal paths. The current activation's internal outcome owns its cleanup result. External errors, including rethrown genuine cleanup failures from another activation, remain error data and cannot advance that cleanup fact.
-
-Non-Error wrappers created by Core are frozen to preserve the original cause identity and code used by later classification. Objects referenced by cause and explicitly thrown application Errors remain under application ownership.
-
-## Related
-
-- [Core API specification · Error conventions](./core-api.md)
-- [Platform specification · Stable error codes](./platform.md)
-- [Transactions and change](../guide/transactions.md) — the three-level failure model
+| `ACTIVATION_FAILED` | Activation execution failed; inspect cause and the structured Core outcome. |
+| `ACTIVATION_STALE` | Core state changed during activation preparation; preview and activate again. |
+| `API_INCOMPATIBLE` | The Artifact requires an incompatible host API range. |
+| `ARTIFACT_DUPLICATE` | The name and revision already exist; use a genuinely new delivery identity. |
+| `ARTIFACT_IDENTITY` | Loaded Plugin identity differs from the Artifact Manifest. |
+| `ARTIFACT_UNAVAILABLE` | The Artifact is unavailable in this Catalog. |
+| `BUSY` | The resource owner has foreground borrows and cannot synchronously seal this operation. |
+| `CHANGE_CONFLICT` | A change contains conflicting declaration intent. |
+| `CHANGE_FOREIGN` | The ChangeSet belongs to another Host. |
+| `CONFIG_INVALID` | Standard Schema validation failed; inspect issues and correct the input. |
+| `CONTRACT_CONFLICT` | The same Contract ID was used for incompatible contract kinds. |
+| `CONTRIBUTION_UNAVAILABLE` | The contribution was withdrawn or its owner no longer accepts calls. |
+| `EVENT_BEFORE_COMMIT` | Candidate setup cannot emit externally before commit. |
+| `GROUP_CONFLICT` | Group identity or declarations conflict. |
+| `GROUP_CYCLE` | Group parent declarations contain a cycle. |
+| `GROUP_FOREIGN` | The Group handle belongs to another Host. |
+| `GROUP_MISSING` | A referenced parent or target Group does not exist. |
+| `GROUP_REMOVED` | The change attempts to use a removed Group. |
+| `HOST_BUSY` | Host is transitioning; wait for the current operation and plan again. |
+| `HOST_QUARANTINED` | Unresolved obligations prevent safe execution; inspect unresolved. |
+| `INSTALLATION_CONFLICT` | Installation identity or declarations conflict. |
+| `INSTALLATION_FOREIGN` | The Installation handle belongs to another Host. |
+| `INSTALLATION_REMOVED` | The change attempts to use a removed Installation. |
+| `LIFETIME_DISPOSED` | The owner is closed to new resources or work. |
+| `MANIFEST_INVALID` | The delivery declaration violates the Manifest protocol. |
+| `MODULE_INVALID` | The module does not expose a valid Plugin declaration. |
+| `MODULE_LOAD_FAILED` | Loader failed; inspect cause and the input Reference. |
+| `PERMISSION_DENIED` | Admission denied permissions; inspect denied and the current policy. |
+| `PLAN_CONSUMED` | The Plan has already been consumed; issue another Plan. |
+| `PLAN_FOREIGN` | The Plan was not issued by this Host. |
+| `PLAN_STALE` | The Plan baseline is stale; plan again. |
+| `PLATFORM_UNAVAILABLE` | Platform or its Catalog is closing or closed. |
+| `PROVIDES_INVALID` | The setup result does not match provides. |
+| `REGISTRATION_CYCLE` | Selected delivery dependencies contain a cycle. |
+| `REGISTRATION_DEPENDENCY_INACTIVE` | A required delivery dependency has no activatable selection. |
+| `REGISTRATION_DEPENDENCY_INCOMPATIBLE` | A selected dependency version does not satisfy its Manifest range. |
+| `REGISTRATION_DEPENDENCY_MISSING` | A Manifest delivery dependency is missing. |
+| `REGISTRATION_UNAVAILABLE` | The Registration is unavailable or belongs to another Platform. |
+| `SELECTION_SUPERSEDED` | Selection changed while awaiting work; old results cannot overwrite it. |
+| `SERVICE_CONFLICT` | The assembly contains conflicting providers for a Service. |
+| `SERVICE_CYCLE` | Required Service bindings form a cycle. |
+| `SERVICE_MISSING` | A required Service provider is missing. |
+| `SERVICE_UNAVAILABLE` | No committed Service generation is available for borrowing. |
+| `SHUTDOWN_TIMEOUT` | Shutdown waiting timed out; underlying obligations may still exist. |
+| `TRANSITION_FAILED` | A transition failed; inspect details.outcome and cause for the recovery result. |

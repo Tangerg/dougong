@@ -54,39 +54,33 @@ importers:
         specifier: 5.0.5
         version: 5.0.5(@types/node@22.20.5)(@vitest/coverage-v8@5.0.5)(vite@8.3.5(@types/node@22.20.5)(jiti@2.7.0)(yaml@2.9.1))
 
-  packages/core:
+  examples:
     dependencies:
+      '@dougongjs/platform':
+        specifier: workspace:*
+        version: link:../packages/platform
+      '@dougongjs/reactive':
+        specifier: workspace:*
+        version: link:../packages/reactive
+      dougong:
+        specifier: workspace:*
+        version: link:../packages/dougong
+    devDependencies:
       '@standard-schema/spec':
-        specifier: ^1.0.0
+        specifier: ^1.1.0
         version: 1.1.0
 
   packages/dougong:
     dependencies:
-      '@dougongjs/core':
-        specifier: workspace:*
-        version: link:../core
-      '@dougongjs/platform':
-        specifier: workspace:*
-        version: link:../platform
-      '@dougongjs/reactive':
-        specifier: workspace:*
-        version: link:../reactive
-
-  packages/examples:
-    dependencies:
-      dougong:
-        specifier: workspace:*
-        version: link:../dougong
-    devDependencies:
       '@standard-schema/spec':
         specifier: ^1.1.0
         version: 1.1.0
 
   packages/platform:
     dependencies:
-      '@dougongjs/core':
+      dougong:
         specifier: workspace:*
-        version: link:../core
+        version: link:../dougong
       semver:
         specifier: ^7.7.4
         version: 7.8.5

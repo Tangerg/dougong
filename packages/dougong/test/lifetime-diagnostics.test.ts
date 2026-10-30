@@ -1,0 +1,96 @@
+import { describe, expect, it, vi } from "vitest";
+import { Lifetime } from "../src/lifetime/lifetime";
+import { EventHub } from "../src/events/event-hub";
+import { createHost } from "../src/execution/host";
+import { definePlugin } from "../src/composition/plugin";
+
+const createLifetime = () => new Lifetime({ label: "diagnostic-owner", report: () => undefined });
+
+describe("Lifetime diagnostic projections", () => {
+  it("reads direct resource membership and keeps historical counts immutable", async () => {
+    const lifetime = createLifetime();
+    const events = new EventHub();
+    const first = events.stage("notice", () => undefined, lifetime);
+    events.stage("notice", () => undefined, lifetime);
+    lifetime.publish();
+    const before = lifetime.snapshot();
+    expect(before.publications).toBe(2);
+    first[Symbol.dispose]();
+    first[Symbol.dispose]();
+    expect(lifetime.snapshot().publications).toBe(1);
+    expect(before.publications).toBe(2);
+    expect(Object.isFrozen(before)).toBe(true);
+    expect(Object.isFrozen(before.children)).toBe(true);
+    expect(Object.isFrozen(before.unresolved)).toBe(true);
+    await lifetime.dispose();
+    expect(lifetime.snapshot()).toMatchObject({ phase: "disposed", publications: 0 });
+  });
+
+  it("projects each owned child even when descriptive labels are equal", async () => {
+    const lifetime = createLifetime();
+    const first = lifetime.child("session");
+    first.defer(() => undefined);
+    lifetime.child("session");
+    expect(lifetime.snapshot().children.map((child) => [child.label, child.cleanups])).toEqual([
+      ["session", 1],
+      ["session", 0],
+    ]);
+    await first[Symbol.asyncDispose]();
+    const snapshot = lifetime.snapshot();
+    await first[Symbol.asyncDispose]();
+    expect(lifetime.snapshot()).toEqual(snapshot);
+    expect(snapshot.children.map((child) => [child.label, child.cleanups])).toEqual([
+      ["session", 0],
+    ]);
+    await lifetime.dispose();
+    expect(lifetime.snapshot().children).toEqual([]);
+  });
+
+  it("projects real nested ownership and pending cleanup obligations", async () => {
+    const lifetime = createLifetime();
+    const first = lifetime.child("session");
+    const second = first.child("connection");
+    second.defer(() => {
+      throw new Error("connection not released");
+    });
+    const before = lifetime.snapshot();
+    await expect(lifetime.dispose()).rejects.toBeInstanceOf(AggregateError);
+    const after = lifetime.snapshot();
+    expect(before.children[0]?.children[0]?.phase).toBe("active");
+    expect(after.phase).toBe("quarantined");
+    expect(after.children[0]?.children[0]).toMatchObject({
+      phase: "quarantined",
+      unresolved: [{ kind: "cleanup", error: { message: "connection not released" } }],
+    });
+  });
+
+  it("publishes Host diagnostics from the authoritative runtime without invalidating saved values", async () => {
+    const failure = new Error("observer failed");
+    const report = vi.fn<(error: unknown) => void>();
+    const host = createHost({
+      onError: report,
+      installations: [
+        {
+          id: "owned",
+          plugin: definePlugin({
+            name: "diagnostic",
+            setup({ lifetime }) {
+              lifetime.defer(() => undefined);
+            },
+          }),
+        },
+      ],
+    });
+    await host.start();
+    const active = host.inspect();
+    const subscription = host.diagnostics.subscribe(() => {
+      if (host.status === "stopped") throw failure;
+    });
+    await host.stop();
+    expect(host.inspect().status).toBe("stopped");
+    expect(active.status).toBe("running");
+    expect(active.installations[0]?.lifetime?.phase).toBe("active");
+    expect(report).toHaveBeenCalledWith(failure);
+    subscription[Symbol.dispose]();
+  });
+});

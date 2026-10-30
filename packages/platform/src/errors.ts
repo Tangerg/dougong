@@ -1,21 +1,43 @@
-import { DougongError } from "@dougongjs/core";
+import { DougongError, type ErrorDetails } from "dougong";
 
-export class PlatformError extends DougongError {
-  override name = "PlatformError";
+export type PlatformErrorCode =
+  | "MANIFEST_INVALID"
+  | "API_INCOMPATIBLE"
+  | "ARTIFACT_DUPLICATE"
+  | "ARTIFACT_UNAVAILABLE"
+  | "ARTIFACT_IDENTITY"
+  | "MODULE_LOAD_FAILED"
+  | "MODULE_INVALID"
+  | "PERMISSION_DENIED"
+  | "PLATFORM_UNAVAILABLE"
+  | "REGISTRATION_UNAVAILABLE"
+  | "SELECTION_SUPERSEDED"
+  | "ACTIVATION_STALE"
+  | "ACTIVATION_FAILED"
+  | "REGISTRATION_DEPENDENCY_MISSING"
+  | "REGISTRATION_DEPENDENCY_INCOMPATIBLE"
+  | "REGISTRATION_DEPENDENCY_INACTIVE"
+  | "REGISTRATION_CYCLE";
+
+export class PlatformError extends DougongError<PlatformErrorCode> {
+  override readonly name: string = "PlatformError";
+
+  constructor(
+    code: PlatformErrorCode,
+    message: string,
+    options?: ErrorOptions & { readonly details?: ErrorDetails },
+  ) {
+    super(code, message, options);
+  }
 }
 
-// Permission errors can outlive the operation; own their denied-permission data to avoid mutable sharing.
 export class PermissionDeniedError extends PlatformError {
-  override name = "PermissionDeniedError";
+  override readonly name: string = "PermissionDeniedError";
   readonly manifestName: string;
   readonly denied: ReadonlyArray<string>;
 
   constructor(manifestName: string, denied: ReadonlyArray<string>) {
-    if (
-      typeof manifestName !== "string" ||
-      manifestName.trim() !== manifestName ||
-      manifestName.length === 0
-    ) {
+    if (typeof manifestName !== "string" || !manifestName || manifestName.trim() !== manifestName) {
       throw new TypeError("PermissionDeniedError manifestName must be a non-empty trimmed string");
     }
     if (!Array.isArray(denied)) {
@@ -23,11 +45,7 @@ export class PermissionDeniedError extends PlatformError {
     }
     const immutableDenied = Object.freeze(
       Array.from(denied, (permission, index) => {
-        if (
-          typeof permission !== "string" ||
-          permission.trim() !== permission ||
-          permission.length === 0
-        ) {
+        if (typeof permission !== "string" || !permission || permission.trim() !== permission) {
           throw new TypeError(
             `PermissionDeniedError denied permission at index ${index} must be a non-empty trimmed string`,
           );
@@ -38,6 +56,7 @@ export class PermissionDeniedError extends PlatformError {
     super(
       "PERMISSION_DENIED",
       `Manifest '${manifestName}' was denied permissions: ${immutableDenied.join(", ")}`,
+      { details: { outcome: "rejected", phase: "admission" } },
     );
     this.manifestName = manifestName;
     this.denied = immutableDenied;

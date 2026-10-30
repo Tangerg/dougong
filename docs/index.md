@@ -1,119 +1,18 @@
----
-layout: home
-title: Dougong
-titleTemplate: false
-description: 纯 JavaScript/TypeScript 的能力组合与结构化生命周期内核。
-hero:
-  name: Dougong
-  text: 组合出应用，而不是堆叠框架
-  tagline: 用少量正交的原子组织能力、依赖、变化与资源所有权。零隐藏魔法。
-  actions:
-    - theme: brand
-      text: 快速开始
-      link: /guide/getting-started
-    - theme: alt
-      text: 核心概念
-      link: /guide/concepts
-    - theme: alt
-      text: GitHub
-      link: https://github.com/Tangerg/dougong
-features:
-  - title: 显式优于隐式
-    details: 依赖写在 requires，身份写在 Contract，所有权写在 Lifetime。没有 Service Locator、环境作用域、原型链注入或 Proxy——ctx.foo 的来源永远在同一个文件里看得见。
-  - title: 一种语义，一条路径
-    details: 每个语义操作只有一个正式入口。高层便利 API 必须机械展开到它，不能拥有第二套状态机。
-  - title: 事务只暴露已提交状态
-    details: setup 期间的声明先暂存，整层校验通过才发布。失败回滚旧图，无法可靠回滚时 fail closed，不会留下半装好的 Instance 图。
-  - title: 结构化资源所有权
-    details: 监听、贡献、任务、子生命周期都归属于某个 Lifetime。终态资源自动从父级摘除，保留一个已释放的资源不会反向保活整个 Host。
-  - title: 类型即约束
-    details: 用未声明的依赖、把 ExtensionPoint 当 Service 取、声明了 provides 却不返回——全部是编译错误，不会拖到执行阶段才暴露。
-  - title: 不绑定运行环境
-    details: Core 不理解 Node、DOM、React、HTTP、文件系统或打包器。只用普通对象、函数、Promise、AbortSignal 和 Disposable。
----
+# Dougong
 
-## Dougong 是什么
+TypeScript 的显式能力组合、不可变计划与结构化资源所有权。每个公开操作复用同一套事实及其所有者。
 
-Dougong（斗拱）解决一个具体问题：**当一个应用的能力需要被拆成可独立装卸的单元时，如何让它们之间的依赖、生命周期和变更保持可推理。**
-
-它由两层组成：
-
-- **Core** —— 能力组合与结构化生命周期内核。六个原子：Service、ExtensionPoint、Event、Lifetime、Plugin、Host。
-- **Platform** —— 建立在 Core 之上的外部插件分发层。Manifest 校验、权限、模块加载、懒激活、热更新。
-
-外加一个**互不依赖**的 `reactive` 包，提供 Signal 值层和 `observe()` 组合器。
-
-```ts
-import { createHost, definePlugin, service } from "dougong"
-
-const CLOCK = service<Clock>("app/clock")
-
-const clock = definePlugin({
-  name: "app.clock",
-  provides: { clock: CLOCK },
-  setup: () => ({ clock: { now: () => new Date() } }),
-})
-
-const greeter = definePlugin({
-  name: "app.greeter",
-  requires: { clock: CLOCK },
-  setup(ctx) {
-    console.log(ctx.clock.now())
-  },
-})
-
-const host = createHost({ name: "hello" })
-host.install(greeter)
-host.install(clock)
-await host.start()
-```
-
-## 它适合什么
-
-| 适合 | 不适合 |
-| --- | --- |
-| 能力需要动态装卸、更新、回滚 | 只需要一个简单的 DI 容器 |
-| 插件之间有真实依赖关系 | 插件完全独立、互不通信 |
-| 半加载状态不可接受，需要事务一致性 | 长驻服务，一个模块坏了其他照跑更重要 |
-| 需要向应用代码暴露可观察的 Host 状态 | 不关心执行诊断 |
-| 桌面应用、编辑器内核、构建工具链 | 简单的 Web 页面 |
-
-最后一行值得展开：Dougong 的失败模型是**事务性**的——一个插件 setup 失败会让整笔变更回滚。如果你的场景更需要「一个插件挂了不影响其他」的隔离性，那么 [cordis](https://github.com/cordiverse/cordis) 这类设计更合适。这是产品取舍，不是优劣。
-
-## 学习路径
-
-文档分成三层，建议按顺序：
-
-<div class="vp-doc" style="margin-top: 1rem">
-
-**第一层 · 上手**
-
-1. [快速开始](./guide/getting-started.md) —— 装上、跑通第一个能力组合
-2. [核心概念](./guide/concepts.md) —— 六个原子各自解决什么问题，为什么不能互相替代
-
-**第二层 · 深入**
-
-3. [编写插件](./guide/writing-plugins.md) —— 依赖、提供、配置校验、失败处理
-4. [应用代码消费](./guide/application-code.md) —— 从依赖图外读取 Service、观察 ExtensionPoint、桥接 Event
-5. [生命周期与资源](./guide/lifetime.md) —— 谁拥有什么，什么时候释放
-6. [事务与变更](./guide/transactions.md) —— ChangeSet、Group、回滚与 fail closed
-7. [响应式与观察](./guide/reactive.md) —— Signal 为什么不是第五种能力
-8. [外部插件分发](./guide/platform.md) —— Manifest、权限、懒激活、HMR
-
-**第三层 · 规范**
-
-9. [Core API 规范](./reference/core-api.md) —— 每个 API 的精确语义与边界情形
-10. [整体架构](./reference/architecture.md) —— 分层、依赖方向与设计论证
-11. [Platform 规范](./reference/platform.md) —— 外部插件边界
-12. [错误码](./reference/errors.md) —— 稳定错误码及触发条件
-13. [机械守卫](./reference/guards.md) —— `pnpm check` 每项检查守护什么
-
-</div>
-
-如果你更喜欢读代码，[可执行示例](./examples.md)是十二章由浅入深的路径——从最小 Service 一路走到 Planet / Lynx / HMR，全部进 CI，而且「每章只增加一个新台阶」本身是一条测试。
-
-## 状态
-
-Dougong 处于早期 `0.x` 开发阶段，**当前不承诺向后兼容**。优先保证的是模型正确、API 一致和可执行证据完整。
-
-运行时基线：Node.js ≥ 22；浏览器 / WebView 为 Chrome / Edge 119、Firefox 121、Safari 17.4，并提供 `Promise.withResolvers()`。显式 `.dispose()` 在全部基线上可用；`using` / `await using` 还要求运行时提供对应的 well-known Symbol 或由应用显式 polyfill。
+- [快速开始](./guide/getting-started.md)
+- [核心概念](./guide/concepts.md)
+- [编写插件](./guide/writing-plugins.md)
+- [应用代码消费](./guide/application-code.md)
+- [生命周期与资源](./guide/lifetime.md)
+- [计划与执行](./guide/transactions.md)
+- [响应式与观察](./guide/reactive.md)
+- [外部插件交付](./guide/platform.md)
+- [Core API](./reference/core-api.md)
+- [整体架构](./reference/architecture.md)
+- [Platform API](./reference/platform.md)
+- [错误码](./reference/errors.md)
+- [机械守卫](./reference/guards.md)
+- [可执行示例](./examples.md)

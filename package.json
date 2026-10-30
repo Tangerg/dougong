@@ -13,40 +13,43 @@
     "Safari >= 17.4"
   ],
   "scripts": {
-    "build": "pnpm --filter @dougongjs/reactive build && pnpm --filter @dougongjs/core build && pnpm --filter @dougongjs/platform build && pnpm --filter dougong build && pnpm --filter @dougongjs/examples build",
-    "typecheck": "tsc --noEmit -p packages/reactive && tsc --noEmit -p packages/core && tsc --noEmit -p packages/platform && tsc --noEmit -p packages/dougong && tsc --noEmit -p packages/examples && tsc --noEmit -p tsconfig.test.json",
+    "build": "node tooling/build.mjs",
+    "typecheck": "tsc --noEmit -p packages/reactive && tsc --noEmit -p packages/dougong && tsc --noEmit -p packages/platform && tsc --noEmit -p examples && tsc --noEmit -p tsconfig.test.json",
     "test": "vitest run",
     "test:watch": "vitest --coverage.enabled=false",
-    "lint": "oxlint packages scripts --deny-warnings",
-    "lint:fix": "oxlint packages scripts --fix --deny-warnings",
+    "lint": "oxlint packages examples tooling --deny-warnings",
+    "lint:fix": "oxlint packages examples tooling --fix --deny-warnings",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "knip": "knip",
-    "check:circular": "node scripts/check-circular.mjs",
-    "check:layers": "node scripts/check-layers.mjs",
-    "check:api": "tsc --noEmit -p tsconfig.dist.json && node scripts/check-api-surface.mjs",
+    "check:circular": "node tooling/architecture/check-circular.mjs",
+    "check:layers": "node tooling/architecture/check-layers.mjs",
+    "check:api": "tsc --noEmit -p tsconfig.dist.json && node tooling/architecture/check-api-surface.mjs",
     "examples": "pnpm --filter @dougongjs/examples example",
     "examples:benchmark": "pnpm --filter @dougongjs/examples benchmark",
     "docs:dev": "vitepress dev docs",
     "docs:build": "vitepress build docs",
     "docs:preview": "vitepress preview docs",
     "docs:check": "pnpm docs:build",
-    "check": "pnpm check:generated && pnpm typecheck && pnpm lint && pnpm format:check && pnpm test && pnpm knip && pnpm check:circular && pnpm check:layers && pnpm build && pnpm check:api && pnpm docs:check",
-    "release": "node scripts/release.mjs",
+    "check": "pnpm check:generated && pnpm typecheck && pnpm lint && pnpm format:check && pnpm test && pnpm knip && pnpm check:circular && pnpm check:layers && pnpm build && pnpm check:api && pnpm check:consumer && pnpm docs:check",
+    "release": "node tooling/release/release.mjs",
     "prepare": "husky",
-    "generate:internal": "node scripts/generate-internal.mjs",
-    "check:generated": "node scripts/generate-internal.mjs --check"
+    "generate:internal": "node tooling/generate-internal.mjs",
+    "check:generated": "node tooling/generate-internal.mjs --check",
+    "check:consumer": "node tooling/consumer/check-consumer.mjs"
   },
   "lint-staged": {
-    "packages/*/{src,test}/**/*.ts": [
+    "{packages/*,examples}/{src,test}/**/*.ts": [
       "prettier --write",
       "oxlint --fix --deny-warnings"
     ],
-    "scripts/*.mjs": [
+    "tooling/**/*.mjs": [
       "prettier --write",
       "oxlint --fix --deny-warnings"
     ],
-    "*.{json,ts,mjs}": "prettier --write"
+    "*.{json,ts,mjs}": [
+      "prettier --write"
+    ]
   },
   "devDependencies": {
     "@types/node": "^22.20.4",

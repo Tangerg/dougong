@@ -1,285 +1,39 @@
 # 编写插件
 
-这一页从最简插件开始，逐步加上依赖、提供、配置校验、可选依赖和失败处理。
-
-## 最简形态
+`definePlugin` 接受 `name`、可选的 Standard Schema `config`、`requires`、`provides` 与 `setup`。setup 的返回值必须准确匹配提供声明。配置通过 `setup(ctx, config)` 的第二个参数传入。
 
 ```ts
-import { definePlugin } from "dougong"
+const COMMANDS = extensionPoint<{ title: string; run(): Promise<string> }>("editor/commands");
+const SAVED = event<{ file: string }>("editor/saved");
 
-const plugin = definePlugin({
-  name: "app.hello",
-  setup() {
-    console.log("started")
+const editor = definePlugin({
+  name: "editor.main",
+  requires: { storage: STORAGE, commands: COMMANDS },
+  setup({ deps, lifetime, events, contributions }) {
+    const session = lifetime.child("session");
+    session.defer(() => closeSession());
+    events.on(SAVED, ({ file }) => markSaved(file));
+    contributions.add(COMMANDS, "save", {
+      title: "Save",
+      run: () => deps.storage.save(),
+    });
   },
-})
+});
 ```
 
-`name` 是必填的稳定标识。它用于诊断和 Installation ID（`app.hello:1`），不参与依赖解析——依赖解析看的是 Contract。
+所有运行资源在获取时交给 Lifetime。标准资源交给 `lifetime.use(resource)`，释放函数交给 `lifetime.defer(fn)`；异步创建标准资源用 `lifetime.acquire(factory)`。声明一个依赖后通过 `ctx.deps.alias` 使用它，避免运行时动态查找隐藏依赖。
 
-`definePlugin` 保留声明的 Plugin 形状用于**类型推导**，同时在边界把它规范化为仅含 `name`、`config`、`requires`、`provides`、`setup` 的不可变普通数据 record。声明不能使用 Symbol、隐藏属性、accessor、类实例或未知字段；`requires` 与 `provides` 也只能是由可枚举字符串 own key 构成的普通数据 record。错误因此留在定义处，而不是拖到 Host 启动时。
+监听与贡献默认属于当前 Instance 的 Lifetime。传入 `{ lifetime: child }` 可将其归属子树。候选 Instance 可以登记监听和贡献，但直到整笔执行提交后才可被外部观察到。候选 setup 内调用 `events.emit` 会失败；将外部事件放在提交后发生的实际业务操作中。
 
-声明归一化会复制并冻结每个 Contract 身份，包括 `optional()` 内部的 Service。之后修改传入的结构化 token 不会改变已接纳的声明。内部 `requires` 与 `provides` 总是存在，缺省值统一为冻结的空映射；config 与 Service 值仍由应用代码拥有。
+Event 只接受同步监听器。异步后台工作显式使用 `lifetime.spawn`，由 Task 拥有错误报告。需要“先中断才能结束”的资源使用 `lifetime.interrupt`。不要用监听器返回 Promise 暗示一个不存在的等待协议。
 
-## 声明依赖
+配置是数据：普通对象、数组、字符串、有限数字、布尔值与 null。捕获时拒绝 getter、原型对象、循环、函数、symbol 和稀疏数组；validator 的输出也再次捕获。schema 只在 plan 阶段执行一次，apply 使用已经验证的计划结果。
+
+## 向文档与代理公开声明
 
 ```ts
-const DATABASE = service<Database>("app/database")
-const ROUTES = extensionPoint<Route>("http/routes")
-
-definePlugin({
-  name: "app.users",
-  requires: {
-    db: DATABASE,
-    routes: ROUTES,
-  },
-  setup(ctx) {
-    ctx.db.query("select 1")
-    ctx.routes.get()
-  },
-})
+const description = describePlugin(plugin);
+const serialized = JSON.stringify(description);
 ```
 
-`requires` 的 key 是**你自己起的别名**，Contract ID 不必和它一致。这让同一个插件可以要求两个同类型的不同 Service：
-
-```ts
-requires: {
-  primary: PRIMARY_DB,
-  replica: REPLICA_DB,
-}
-```
-
-一个 Plugin 中，一个 Contract ID 只能出现一次。若两个 alias 指向同一个 Contract，或同一个 Service 同时出现在 `requires` 和 `provides`，`definePlugin()` 会立即拒绝；请删除重复 alias，或为语义上不同的能力声明不同的 Contract ID。
-
-::: tip 保留字
-`ctx` 上有一组内置成员，别名不能和它们重名：`signal`、`meta`、`log`、`cleanup`、`lifetime`、`spawn`、`on`、`emit`、`contribute`。用了会在 `definePlugin` 时立刻报错。
-:::
-
-### 可选依赖
-
-```ts
-import { optional } from "dougong"
-
-definePlugin({
-  name: "app.telemetry",
-  requires: { tracer: optional(TRACER) },
-  setup(ctx) {
-    ctx.tracer?.startSpan("boot")
-  },
-})
-```
-
-没有提供者时 `ctx.tracer` 是 `undefined`，Installation 仍可正常激活。提供者后来出现或消失时，它的 Instance 会被**重建**——所以 `ctx.tracer` 在一次 Instance 生命周期内不会变。
-
-`optional()` 只接受 Service。ExtensionPoint 不需要它：空 Map 本身就是合法值。
-
-## 提供能力
-
-```ts
-const USERS = service<UserService>("app/users")
-
-definePlugin({
-  name: "app.users",
-  requires: { db: DATABASE },
-  provides: { users: USERS },
-  setup(ctx) {
-    return {
-      users: createUserService(ctx.db),
-    }
-  },
-})
-```
-
-`provides` 的每个 key 都必须出现在返回值里，少一个就是 `SERVICE_NOT_RETURNED`。这条是**编译期**就能发现的：
-
-```ts
-provides: { users: USERS },
-setup() {},
-```
-
-TypeScript 会拒绝 `() => void`，因为 `setup` 必须返回声明的 `ProvidedServices`。
-
-同一个 Contract 被两个 Plugin 的 `provides` 声明占用，会在构图时抛 `SERVICE_CONFLICT`——在任何 Instance 启动之前。
-
-输出别名 `then` 被保留，因为 `setup()` 支持 Promise 返回值；`app.then` 这样的 Service ID 仍然合法，只需使用 `thenService` 等输出别名。
-
-## 贡献到 ExtensionPoint
-
-```ts
-definePlugin({
-  name: "app.user-routes",
-  setup(ctx) {
-    ctx.contribute(ROUTES, "users.list", { path: "/users", run: listUsers })
-    ctx.contribute(ROUTES, "users.show", { path: "/users/:id", run: showUser })
-  },
-})
-```
-
-第二个参数是**局部 key**，只需要在当前 Instance 内唯一。Core 会组合成真实 key：
-
-```text
-<转义后的 Installation ID>/<转义后的局部 key>
-```
-
-其中 `%` 和 `/` 分别转义为 `%25` 和 `%2F`。所以不同 Installation 可复用相同局部 key，而且两组不同的「Installation ID + 局部 key」不可能产生同一个真实 key。
-
-返回的 `Contribution` 可以更新和提前撤回：
-
-```ts
-const c = ctx.contribute(ROUTES, "users.list", route)
-c.update(nextRoute)
-c.dispose()
-```
-
-不调用 `dispose()` 也没关系——Instance 停止时全部贡献自动撤回。
-
-## 配置与校验
-
-`config` 接受任何 [Standard Schema](https://github.com/standard-schema/standard-schema) 实现（Zod、Valibot、ArkType 等）：
-
-```ts
-import { z } from "zod"
-
-const schema = z.object({
-  hostname: z.string(),
-  port: z.number().default(5432),
-})
-
-const db = definePlugin({
-  name: "app.db",
-  config: schema,
-  provides: { db: DATABASE },
-  setup(ctx, config) {
-    return { db: connect(config.hostname, config.port) }
-  },
-})
-
-host.install(db, { hostname: "localhost" })
-```
-
-注意输入和输出是两个类型：`host.install()` 接受**输入**（`port` 可选），`setup` 收到**输出**（`port` 已填默认值）。
-
-校验失败抛 `ConfigValidationError`（code `CONFIG_INVALID`），它带一个 `issues` 数组：
-
-```ts
-try {
-  await installation.ready()
-} catch (e) {
-  if (e instanceof ConfigValidationError) {
-    e.issues.forEach((i) => console.error(i.path, i.message))
-  }
-}
-```
-
-**所有受影响 Installation 的 Plugin 配置会在停止任何活动 Instance 之前全部校验完毕。** 一个配置错误不会让你的应用停在半路。
-
-## 异步 setup
-
-```ts
-definePlugin({
-  name: "app.db",
-  provides: { db: DATABASE },
-  async setup(ctx) {
-    const client = await connect()
-    ctx.cleanup(() => client.close())
-    return { db: client }
-  },
-})
-```
-
-同一拓扑层的 Installation **并发**执行 setup。启动期间 `ctx.signal` 会在同层任何 setup 失败时 abort，可以用它取消慢操作：
-
-```ts
-async setup(ctx) {
-  const client = await connect({ signal: ctx.signal })
-  ...
-}
-```
-
-## 失败会发生什么
-
-setup 抛异常时：
-
-1. 该 Instance 已经获取的资源**全部尝试释放**（cleanup 逆序执行）
-2. 它暂存的监听、贡献、Contract kind **一个都不发布**
-3. 同一层其他 Instance 的 `ctx.signal` 被 abort
-4. 整笔变更**回滚**到变更前的执行图
-5. `installation.ready()` reject，`installation.status` 变成 `"failed"`
-6. `host.status` 回到变更前的状态，**不会**停在中间态
-
-```ts
-const installation = host.install(brokenPlugin)
-await expect(installation.ready()).rejects.toThrow("setup failed")
-expect(host.status).toBe("active")
-```
-
-抛出非 `Error` 的值（`throw "boom"`）会被分类为 `INSTALLATION_UNAVAILABLE` 的 `DougongError`，原值保留在 `cause` 里——`undefined` 永远不会同时表示「失败值」和「没有失败」。
-
-## 更新与移除
-
-```ts
-const installation = host.install(plugin, { hostname: "a" })
-
-await installation.update({ config: { hostname: "b" } })
-await installation.update({ plugin: nextVersion })
-await installation.remove()
-```
-
-更新保持 **Installation 身份**：ID、诊断位置和 Group 归属不变。活动 Instance 会被替换，且只有受影响的依赖闭包会重启；无关 Installation 不动。
-
-```ts
-installation.id
-installation.status
-installation.groupId
-await installation.ready()
-```
-
-`id` 是稳定身份（如 `app.db:1`），`groupId` 指向拥有它的 Group。状态为 `pending`、`active`、`stopping`、`failed` 或 `removed`。`ready()` 在已提交状态就绪后完成，失败则拒绝。
-
-## 一个完整的例子
-
-```ts
-import { createHost, definePlugin, extensionPoint, optional, service } from "dougong"
-import { z } from "zod"
-
-const DATABASE = service<Database>("app/database")
-const METRICS = service<Metrics>("app/metrics")
-const ROUTES = extensionPoint<Route>("http/routes")
-
-const database = definePlugin({
-  name: "app.database",
-  config: z.object({ url: z.string(), poolSize: z.number().default(10) }),
-  provides: { db: DATABASE },
-  async setup(ctx, config) {
-    const client = await createPool(config.url, config.poolSize)
-    ctx.cleanup(() => client.end())
-    ctx.log.info("database connected")
-    return { db: client }
-  },
-})
-
-const users = definePlugin({
-  name: "app.users",
-  requires: { db: DATABASE, metrics: optional(METRICS) },
-  setup(ctx) {
-    ctx.contribute(ROUTES, "list", {
-      path: "/users",
-      run: async () => {
-        ctx.metrics?.count("users.list")
-        return ctx.db.query("select * from users")
-      },
-    })
-  },
-})
-
-const host = createHost({ name: "api" })
-host.install(users)
-host.install(database, { url: process.env.DATABASE_URL! })
-await host.start()
-```
-
-## 接下来
-
-- [生命周期与资源](./lifetime.md) —— `cleanup` / `spawn` / `lifetime` 的完整规则
-- [事务与变更](./transactions.md) —— 一次原子地改多个插件
-- [Core API 规范](../reference/core-api.md) —— 每个 API 的边界情形
+`describePlugin` 从 requires/provides 直接提取别名和契约身份。示例 05 在第一次 setup 之前生成 JSON 描述，并明确显示只有 validate 的配置 schema 状态为 unavailable。支持 Standard JSON Schema 1.1 的 schema 可以给出 input/output JSON Schema；导出不会调用验证器或尝试运行插件。描述应在可信的本地声明或构建过程中生成，外部代码的 import 仍需经过 Platform 准入。

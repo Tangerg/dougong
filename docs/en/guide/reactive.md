@@ -1,238 +1,26 @@
-# Reactive and observation
+# Reactive state and observation
 
-`@dougongjs/reactive` is a **zero-dependency** value layer providing `signal` / `computed` / `batch` and one combinator, `observe`.
-
-It and Core are **mutually independent**. This page explains what that decision means and how to use the package.
-
-## Why a signal is not a fifth capability
-
-Core has three Contract kinds: Service, ExtensionPoint and Event. The natural question is why there is no fourth, `signal<T>()`.
-
-Because **a signal is a way of representing a value, not a way of organising a capability**.
-
-A Service can return a signal; an ExtensionPoint's values can be signals:
+`@dougongjs/reactive` has no external dependencies and does not depend on Host. `signal` creates a writable `Signal`, `computed` produces a lazy `ReadonlySignal`, and `batch` coalesces notifications. Read with `get()`; `subscribe(listener)` notifies changes without immediate replay. Subscriptions implement standard `Disposable`.
 
 ```ts
-const THEME = service<{ current: ReadonlySignal<Theme> }>("app/theme")
+import { bridge, computed, observe, signal } from "@dougongjs/reactive";
+
+const query = signal("");
+const readableFromAnotherBundle = obtainReadable();
+const local = bridge(lifetime, readableFromAnotherBundle);
+const title = computed(() => `${query.get()}: ${local.get()}`);
+
+observe(lifetime, title, (value, generation) => {
+  generation.spawn((signal) => render(value, signal));
+});
 ```
 
-If "signal" were also a Contract kind, then "should the theme capability be a Service or a Signal?" would be a question with no correct answer — both would work, both would appear in the same codebase, and their dependency, transaction and diagnostic semantics would all differ.
+A computed collector tracks nodes from its own module copy. For another bundle, another copy of the package or another implementation, use the `Readable<T>` protocol and explicitly enter the local graph with `bridge(owner, source)`. `BridgeOwner` only needs `defer`. The caller's Lifetime owns the subscription; no cross-copy global collector exists.
 
-**One semantic has one canonical entry point.** Capabilities are organised through Service / ExtensionPoint / Event; whether the value one returns happens to be reactive is the plugin's own implementation detail.
+Bridge rereads after subscribing to close the attachment window. On owner shutdown it unsubscribes, invalidates local dependants and clears the retained value. Terminal get and subscribe calls reject; do not retain a bridge beyond its owner's lifetime.
 
-For the same reason Core offers no implicit effects. Where a side effect belongs must be written on a Lifetime, never inferred from "who is currently reading me".
+`observe(owner, source, observer)` creates a child owner for each source value. Replacement fully disposes the previous child before creating another; changes arriving during a transition coalesce to the latest value. The returned `AsyncDisposable` supports early termination.
 
-## The value layer
+Public types: `Readable`, `Signal`, `ReadonlySignal`, `Disposable`, `AsyncDisposable`, `BridgeOwner`, `ObservationOwner`, `ObservationTask`, `Observer`. `ObservationOwner` describes `defer`, `child`, `spawn` and standard disposal structurally. Compatible owners need not inherit framework classes.
 
-```ts
-import { signal, computed, batch } from "dougong"
-
-const count = signal(0)
-const double = computed(() => count.get() * 2)
-
-count.get()
-double.get()
-
-count.set(21)
-double.get()
-```
-
-Both initial reads return `0`; after `count.set(21)`, `double.get()` returns `42`.
-
-`computed` is **lazy**: with no subscribers it does not recompute eagerly; it evaluates on demand at `get()` and caches. Dependencies are **tracked dynamically** — collected fresh on each evaluation, so a signal in a branch that was not taken does not become a dependency.
-
-Both values and thrown errors are cached until a dependency changes. A failed calculation still records the dependencies it read, so later changes can recover it, and an outer `computed` can handle its error with `try/catch`. Calculations must be read-only: calling `signal.set()` during calculation throws a `TypeError` before writing, preventing an old value from being cached against a new version.
-
-```ts
-const a = signal(1), b = signal(2), useA = signal(true)
-const value = computed(() => (useA.get() ? a.get() : b.get()))
-```
-
-While `useA` is true, changes to `b` do not invalidate `value` because the calculation did not read `b`.
-
-### batch
-
-```ts
-batch(() => {
-  first.set(1)
-  second.set(2)
-})
-```
-
-`batch` coalesces repeated notifications per subscription identity. Nested batches flush only when the outermost one ends.
-
-::: warning All three entry points reject async callbacks
-```ts
-batch(async () => { ... })
-computed(async () => { ... })
-observe(owner, source, async () => { ... })
-```
-
-Each call throws `TypeError`: `Reactive batches must be synchronous`, `Computed signal calculations must be synchronous`, or `Observers must be synchronous`, respectively.
-
-Synchronous tracking and batch boundaries cannot survive an `await` — once they do, dependency collection captures the wrong set and the batch flushes before the async work finishes. Rather than produce a silently wrong result, these throw immediately.
-
-Asynchronous work belongs in `lifetime.spawn()`.
-:::
-
-### Subscribing
-
-```ts
-const subscription = count.subscribe(() => console.log("changed"))
-subscription.dispose()
-```
-
-Every `subscribe()` call creates an independent subscription that can be disposed on its own, even when the same function is passed more than once. Disposal immediately withdraws a notification whose turn has not started. `batch()` coalesces repeated notices only per subscription identity; two subscriptions that share one function are still invoked once each.
-
-Subscribers must be synchronous. Hand asynchronous work explicitly to `ctx.spawn()` or to an application-owned task from inside the synchronous notice; passing an `async` function is rejected with a `TypeError`, while the already-created rejection is observed instead of leaking as an unhandled rejection.
-
-Both `Signal` and `ReadonlySignal` implement the structural `Readable<T>` protocol:
-
-```ts
-interface Readable<T> {
-  get(): T
-  subscribe(listener: () => void): Disposable
-}
-```
-
-Core's `ContributionView` and `diagnostics` use the **same protocol**, so any observation source can be consumed the same way — no adapters.
-
-A read-only `ReadonlySignal<T>` may safely widen through ordinary subtype relationships; a writable `Signal<T>` is strictly invariant. Otherwise annotating `Signal<Admin>` as `Signal<User>` would permit writing a User that is not an Admin. Expose `ReadonlySignal<T>` when narrowing write authority instead of hiding `set()` behind a wider generic annotation.
-
-Notifications capture subscription membership at publication time. Subscribing again inside a callback does not replay that same publication. Internal dependency invalidations settle before external subscribers run, including unequal diamond paths. Writes during notification enter the same drain queue and are delivered after the current callback returns; nested `batch()` calls cannot reenter it. Deduplication is per subscription, so one callback registered twice remains two subscriptions.
-
-## observe: compiling value change into resource rebuild
-
-`observe()` is the only part of this package that touches Lifetimes, and it is a **free function** over structural protocols:
-
-```ts
-import { observe } from "dougong"
-
-observe(owner, source, observer)
-```
-
-Three parameters:
-
-- `owner` — anything providing `cleanup` / `lifetime` / `spawn`; a plugin's `ctx` fits exactly
-- `source` — any `Readable<T>`: a signal, a `ContributionView`, `diagnostics`, or your own object
-- `observer` — receives the current value and a dedicated child Lifetime
-
-The third parameter's precise type is `Observer<T, Child>`. `observe()` returns an `AsyncDisposable`, so a caller may release it with `await dispose()` or `await using`; the synchronous `Disposable` returned by an ordinary `Readable.subscribe()` works with `using`.
-
-### A typical use
-
-```ts
-const CURRENT_TRACK = service<Readable<Track | undefined>>("player/current")
-
-definePlugin({
-  name: "player.audio",
-  requires: { current: CURRENT_TRACK },
-  setup(ctx) {
-    observe(ctx, ctx.current, (track, lifetime) => {
-      if (!track) return
-
-      const element = new Audio(track.url)
-      lifetime.cleanup(() => {
-        element.pause()
-        element.src = ""
-      })
-
-      lifetime.spawn(async (signal) => {
-        await waitForCanPlay(element, signal)
-        await element.play()
-      })
-    })
-  },
-})
-```
-
-Each time `current` changes, Dougong will:
-
-1. release the previous `lifetime` (pausing and clearing the old audio element, aborting the old task)
-2. create a new child Lifetime for the new value
-3. release both the last child and the observation itself when the Instance stops
-
-You never write "check whether there is a previous one, and if so clean it up first" — **release the old, build the new** is what `observe` means.
-
-### Why it is a free function
-
-`observe` does not live in Core, and Core does not know it exists. It relies on structural typing:
-
-```ts
-interface ObservationOwner<Child extends AsyncDisposable = AsyncDisposable> {
-  readonly cleanup: (fn) => AsyncDisposable
-  readonly lifetime: (label) => Child
-  readonly spawn: (fn) => ObservationTask
-}
-```
-
-A plugin's `ctx` happens to satisfy that shape, so `observe(ctx, source, ...)` works by **structural match**, not inheritance or registration.
-
-The result is a dependency direction that stays one-way: `reactive` does not depend on `core`, and `core` does not depend on `reactive`. You can use either alone.
-
-`ObservationOwner<Child>` only requires `Child extends AsyncDisposable`; `Observer` still receives the concrete child type, so a Core Lifetime retains all its capabilities in the callback. After asynchronous cleanup, `observe()` reads the source again and creates resources only for that latest value. Changes A → B → C while A is cleaning up produce A → C observations.
-
-When accepting the Task returned by `spawn()`, `observe()` reads `result` once and captures that result's `then` method. Only this completion can detach the Task; its disposal capability is retained until completion or explicit disposal.
-
-If a third-party source closes the observation before `subscribe()` returns, `observe()` immediately disposes that subscription and rejects construction. A failure of the subscription’s disposer also reaches the caller synchronously.
-
-A Readable subscription's dispose must withdraw it synchronously. Construction rollback, explicit disposal and failure stopping share this boundary: a returned thenable is observed and rejected with TypeError, and cannot delay the release of child Lifetimes or tasks. Other cleanup still runs, with failures aggregated alongside the original error.
-
-Initial observation subscribes first, creates the child Lifetime, then reads the source and invokes the observer. Replacement also reads after child creation, so changes triggered by diagnostics during resource creation are included. Every replacement failure uses one stop procedure that preserves the original error and any cleanup failures together.
-
-## Failure handling
-
-`observe` has explicit error semantics:
-
-- the initial observer throws → `observe()` releases resources created so far and rejects construction directly
-- a later observer throws → its child Lifetime is released, the failure is reported through the owner's task result, and the observation stops permanently
-- releasing the previous child Lifetime fails → the observation **stops permanently** and releases its subscription, because whether the old resources were released cannot be confirmed
-- a change arrives while the previous one is still being handled → coalesced into a single rebuild with the latest value
-
-A permanent stop after startup is a real terminal state: the observation immediately revokes its references to the source, observer and last value, then releases its own owner cleanup instead of accumulating as an inert shell until the Instance ends. A synchronous construction failure returned no handle, so its registered cleanup remains for owner rollback and can still propagate an asynchronous cleanup failure.
-
-## Two observation sources
-
-Core produces `Readable` in two places:
-
-```ts
-ctx.routes.get()
-ctx.routes.subscribe(() => ...)
-
-host.diagnostics.get()
-host.diagnostics.subscribe(() => ...)
-
-snapshot.installations.get(id)?.lifetime?.get()
-```
-
-Both feed straight into `observe()`:
-
-```ts
-observe(ctx, ctx.routes, (routes, lifetime) => {
-  const router = buildRouter(routes)
-  lifetime.cleanup(() => router.close())
-})
-```
-
-The router is rebuilt whenever the route set changes, and the old one closes automatically.
-
-## Relationship to UI frameworks
-
-Dougong binds to no UI framework. React, Vue and Solid all have mature reactivity, and `@dougongjs/reactive` does not try to replace them.
-
-It exists because **Core needs an observation protocol that does not depend on a UI framework**, to express facts like "the collection changed" or "diagnostics changed". If your application is a React app, bridge with `useSyncExternalStore`:
-
-```ts
-const routes = useSyncExternalStore(
-  (cb) => { const s = view.subscribe(cb); return () => s.dispose() },
-  () => view.get(),
-)
-```
-
-The `get` / `subscribe` protocol is exactly the shape `useSyncExternalStore` wants.
-
-## Next
-
-- [External plugin delivery](./platform.md) — manifests, permissions, lazy activation, HMR
-- [Core API specification](../reference/core-api.md) — the unified observation protocol in full
-- [Runnable example 04](../examples.md#stage-1) — signals, observe and explicit resource rebuild end to end
+Observers register resources synchronously. Use `generation.spawn` for asynchronous work. The observation task's owner reports failures; a failed old-generation exit never silently starts a replacement.

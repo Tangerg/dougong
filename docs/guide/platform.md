@@ -1,251 +1,50 @@
-# 外部插件分发
+# 外部插件交付
 
-到目前为止的插件都是**应用代码自己写的**——你 `import` 它，然后 `install`。
-
-`@dougongjs/platform` 处理另一种情况：插件来自**外部**——第三方目录、用户安装的扩展、动态下载的模块。这带来 Core 不该关心的四个问题：
-
-1. 这个模块**声明**了什么（Manifest）
-2. 从哪里、什么时候**加载**它（Loader）
-3. 允许它做什么（Permissions）
-4. 什么时候**激活**它（Activation）
-
-Platform 把这四件事编译成 Core 的操作。它**不复制** Core 的注册表、依赖图、事务、资源所有权、观察协议或错误语义。
-
-## 心智模型
-
-```text
-应用代码 → Platform → Artifact / Registration
-                        ↓ 编译变更到
-               Installer（Host 或 Group）→ Installation
-```
-
-Platform 消费一个 `Installer` 的 `change()` 能力（通常来自 Host 或 Group），把外部插件编译进 canonical Core ChangeSet。它的内部端口按消费侧收窄为 `Pick<Installer, "change">`，而完整 `Installer` 仍精确表示 `install/group/change`。
-
-## 最小例子
+Platform 组合 Dougong 的公开 API，负责发行事实、选择意图、加载、准入与激活。Catalog 拥有不可变 Artifact；Registration 拥有选择。实际执行来源直接读取 Core Installation 的 `origin`。
 
 ```ts
-import { createHost } from "dougong"
-import { createPlatform, ImportLoader, PermissionSet, defineManifest } from "dougong"
-
-const host = createHost({ name: "editor" })
-await host.start()
+import { createPlatform, MemoryLoader, PermissionSet } from "@dougongjs/platform";
 
 const platform = createPlatform({
-  installer: host,
+  id: "editor-plugins",
+  host,
   apiVersion: "1.0.0",
-  loader: new ImportLoader(),
-  authorizer: new PermissionSet(["fs:read"]),
-})
-
-await platform.register({
-  manifest: defineManifest({
-    name: "acme.markdown",
-    version: "1.2.0",
-    apiVersion: "^1.0.0",
-    activation: ["onLanguage:markdown"],
-    permissions: ["fs:read"],
-  }),
-  reference: "https://cdn.example.com/acme-markdown.js",
-})
-
-await platform.trigger("onLanguage:markdown")
-```
-
-## Manifest
-
-Manifest 是外部插件的**声明**，在信任边界上被校验和冻结：
-
-```ts
-interface Manifest {
-  readonly name: string
-  readonly version: string
-  readonly apiVersion: string
-  readonly activation: ReadonlyArray<string>
-  readonly permissions: ReadonlyArray<string>
-  readonly dependencies: Readonly<Record<string, string>>
-}
-```
-
-`defineManifest()` 会补齐可选字段、校验形状并冻结结果。非法 manifest 抛 `MANIFEST_INVALID`——**在加载任何模块代码之前**。
-
-`apiVersion` 不匹配抛 `API_INCOMPATIBLE`。这是应用代码和外部插件之间唯一的兼容性契约。
-
-## Loader 是执行边界
-
-```ts
-interface Loader<Reference> {
-  readonly load: (reference: Reference, signal: AbortSignal) => unknown
-}
-```
-
-`unknown` 已覆盖同步值、Promise 和 thenable，Platform 会在边界统一等待结果。`Reference` 是泛型——它可以是 URL、文件路径、模块 ID、blob，任何你的应用代码能解析的东西。Platform 不关心。
-
-内置两个实现：
-
-```ts
-new ImportLoader()
-new MemoryLoader(map)
-```
-
-`ImportLoader` 用动态 import 解析 `string | URL`；`MemoryLoader` 从提供的 Map 读取模块，适合确定性测试。
-
-Loader 是**唯一**执行外部代码的地方。加载失败抛 `MODULE_LOAD_FAILED`，模块没有导出合法 `Plugin` 时抛 `MODULE_INVALID`。
-
-`signal` 让加载可以被取消——移除一个正在加载的插件不会留下一个孤儿 import。
-
-## 权限是策略端口，不是沙箱
-
-```ts
-import { PermissionSet } from "dougong"
-
-const platform = createPlatform({
-  installer: host,
-  apiVersion: "1.0.0",
-  loader: new ImportLoader(),
-  authorizer: new PermissionSet(["fs:read", "net:fetch"]),
-})
-```
-
-也可以给一个自定义授权器（比如弹窗问用户）：
-
-```ts
-const authorizer = {
-  async authorize(manifest, signal) {
-    const granted = await askUser(manifest.name, manifest.permissions)
-    if (!granted) throw new PermissionDeniedError(manifest.name, manifest.permissions)
+  loader: new MemoryLoader(new Map([["formatter-module", { default: formatter }]])),
+  authorizer: new PermissionSet(["workspace:read"]),
+});
+const artifact = platform.catalog.add({
+  revision: "formatter-content-1",
+  manifest: {
+    name: formatter.name,
+    version: "1.0.0",
+    permissions: ["workspace:read"],
+    activation: ["command:format"],
   },
-}
+  reference: "formatter-module",
+});
+const registration = await platform.select(artifact);
+const preview = platform.preview([registration]);
+await platform.trigger("command:format");
+await platform[Symbol.asyncDispose]();
 ```
 
-::: danger 它不是沙箱
-权限检查发生在**执行模块之前**，它决定的是「要不要运行这段代码」，不是「这段代码能碰什么」。
+预览只检查声明数据，列出明确延后的准入、模块验证、配置验证和 Core 绑定检查。查看 Catalog、选择或预览不会执行插件代码。懒激活之前没有可执行 placeholder；应用根据 Manifest 展示可发现信息，触发激活后才借用真实能力。
 
-授权发生在 Artifact admission 与激活边界，不会拦截之后的每一次 `contribute()`。某个 ExtensionPoint 若需要逐项 capability 检查，应把权限标签放进领域 value，并由该点的领域组合器或受限 Service 执行策略；Platform 不复制 Core 的贡献注册表。
+授权有两个精确边界：模块求值之前的 `load`，以及依赖准备完成、紧邻 setup 的 `activate`。自定义 `Authorizer` 接收 Artifact 身份、操作与 AbortSignal。加载器必须协作取消；底层忽略取消的迟到结果不能提交过期选择。
 
-JavaScript 模块一旦被 `import` 就和应用代码在同一个 realm 里，能访问同样的全局对象。真正的隔离需要 Worker、iframe、进程或独立 Host——Platform 不假装提供它。
-
-授权会在模块执行**紧邻之前**重新检查一次，所以撤销权限对尚未激活的插件立即生效。
-:::
-
-## 注册、占位与懒激活
-
-外部插件通常不该在启动时全部加载。Platform 的模型是**注册 ≠ 激活**：
+更新先添加新 Artifact，再 select；选择意图可以领先于实际执行。通过 `selectedArtifact` 与 `activeOrigin` 显式表达这种差异，不复制“已激活 Manifest”。
 
 ```ts
-const registration = await platform.register({
-  manifest,
-  reference: "./heavy-plugin.js",
-  placeholder: lightweightStub,
-})
-
-registration.status
-await registration.activate()
-registration.status
+const selected = await platform.select(nextArtifact);
+await platform.activate([selected, another], { remove: [obsolete] });
 ```
 
-激活前状态为 `registered`，成功激活后为 `installed`。
+同次增、改、删编译成一笔 Core Plan。`remove` 也复用该执行路径。Catalog 删除只忘记发现记录，不隐式删除已经选择或运行的能力。
 
-`placeholder` 是一个**应用代码编写的 Plugin**，在加载所得 Plugin 激活之前占位。它让「命令已经在菜单里，但点击时才加载实现」这类体验成为可能——而且两者替换是**原子**的，走同一笔 Core ChangeSet。
+独立 Host 是装配边界；同一 realm 的 ImportLoader 不是权限沙箱。需要不可信代码执行时，另外设计进程、Worker 或 WASM 执行器及其权限、通信和终止协议。
 
-`placeholder` 接受 Core 的 `AnyPlugin`，因此组合根可以直接从 `readonly AnyPlugin[]` 这类异构清单中选择占位声明。Artifact 位于外部交付边界，不假装保留加载模块的作者期泛型；`config` 最终仍由实际 Plugin 的 schema 在 Core 边界验证。
+## 从动作声明派生激活
 
-激活也可以由事件触发：
+命令的 ID 与标题归应用的 `ActionDeclaration` 数据所有。示例 08 和 10 从同一声明生成可发现元数据、Contribution 的身份和 `actions.map(actionActivation)` 激活列表；实际 handler 只在 setup 中组合进入贡献。触发器也调用 `actionActivation(action)`，不再维护手写的重复事件字符串。
 
-```ts
-await platform.trigger("onLanguage:markdown")
-```
-
-`trigger()` 会激活所有声明了该事件的 Registration，**并发**执行；一次失败原样抛出，多次独立失败聚合成 `AggregateError`，而一个 Registration 的失败不取消其他 Registration。
-
-## Manifest 依赖
-
-外部插件之间可以声明依赖：
-
-```ts
-defineManifest({
-  name: "acme.theme-dark",
-  version: "1.0.0",
-  dependencies: { "acme.theme-base": "^2.0.0" },
-})
-```
-
-Platform 会在激活前按依赖顺序激活它们，并检查：
-
-| 错误码 | 条件 |
-| --- | --- |
-| `REGISTRATION_DEPENDENCY_MISSING` | 依赖没有对应 Registration |
-| `REGISTRATION_DEPENDENCY_INCOMPATIBLE` | 依赖 Registration 的版本范围不满足 |
-| `REGISTRATION_DEPENDENCY_INACTIVE` | 依赖 Registration 未激活 |
-| `REGISTRATION_CYCLE` | 候选 Registration 图中的 Manifest 依赖成环 |
-| `REGISTRATION_DUPLICATE` | 已存在同一 Manifest 名称的 Registration |
-
-::: tip 两张图，各管各的
-Manifest 依赖（外部插件之间的**分发**关系）和 Core 的 Service 依赖（能力之间的**运行**关系）是两张独立的图。
-
-Manifest 依赖决定「先加载谁」，Service 依赖决定「先启动谁」。Platform 不把前者塞进后者。
-:::
-
-## Platform ChangeSet
-
-和 Core 一样，多个外部插件的变更走一笔事务：
-
-```ts
-const changes = platform.change()
-changes.register(newPlugin)
-changes.update(existing, nextArtifact)
-changes.remove(deprecated)
-await changes.commit()
-```
-
-变更命令开始执行时先固定哪些更新保持 installed，然后依次：校验候选依赖图 → 授权全部 Manifest 并预加载所需模块 → 关闭新激活入口 → 取消明确目标并等待此前已进入的激活树 → 按同一计划复验稳定候选图 → **编译成一笔 Core ChangeSet** → 提交。
-
-预检失败不会取消任何在途激活；任何一步失败，Core 与 Platform 都不会呈现半提交状态。
-
-更新时会检查身份：新 Artifact 的 Manifest 名字必须与 Registration 一致，否则 `REGISTRATION_IDENTITY`。这保证「更新」不会偷偷变成「注册另一个 Plugin」。
-
-## 热更新
-
-`update()` 保持 Registration 与 Core Installation 身份，同时替换活动 Instance：
-
-```ts
-await registration.update({
-  manifest: nextManifest,
-  reference: "./plugin@1.3.0.js",
-})
-```
-
-底层走的是 Core 的 `installation.update({ plugin })`，所以只有受影响的依赖闭包会重启。应用代码想做真正的 HMR（监听文件变化、计算失效传播、批量重载），可以在这之上组合——[示例 12](../examples.md#stage-3) 演示了一个约 200 行的完整模块图 HMR。
-
-## 诊断
-
-```ts
-platform.diagnostics.get()
-
-platform.diagnostics.subscribe(() => render())
-```
-
-和 Core 用的是**同一个** `get` / `subscribe` 协议——Platform 的诊断内部就是编译到 Core 的 `SnapshotPublisher`，不是另一套实现。架构门禁会强制这一点。
-
-## 释放
-
-```ts
-await platform.dispose()
-```
-
-在代码块内创建 Platform 时，也可以用 `await using` 在退出时释放：
-
-```ts
-await using platform = createPlatform({ ... })
-```
-
-释放会取消在途激活、从 Core 移除全部 Installation、关闭诊断。之后任何 Platform 方法抛 `PLATFORM_UNAVAILABLE`。
-
-## 接下来
-
-- [Platform 规范](../reference/platform.md) —— 精确语义与边界情形
-- [错误码](../reference/errors.md) —— 稳定错误码及触发条件
-- [可执行示例 08 / 12](../examples.md) —— 懒激活与模块图 HMR 的完整场景
-
-### 同名替换
-
-Platform ChangeSet 按最终候选图校验。移除旧 Registration 并以相同 manifest 名称注册新项，是与 staging 顺序无关的原子操作；旧句柄只在提交成功后变成 removed。最终图仍有重复名称时拒绝；已安装消费者仍要求依赖已安装且版本兼容。
+固定的 startup 策略、权限请求和版本范围属于独立交付事实，仍需显式声明。不要从 TypeScript 接口猜测未知运行协议。

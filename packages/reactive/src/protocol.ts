@@ -3,16 +3,14 @@ export {
   resolveDisposalSymbol,
   asyncDisposeSymbol,
   disposeSymbol,
-} from "./disposal-runtime";
+} from "./disposal-runtime.js";
 
 export interface Disposable {
-  dispose(): void;
   [Symbol.dispose](): void;
 }
 
 export interface AsyncDisposable {
-  dispose(): Promise<void>;
-  [Symbol.asyncDispose](): Promise<void>;
+  [Symbol.asyncDispose](): PromiseLike<void>;
 }
 
 export interface Readable<T> {

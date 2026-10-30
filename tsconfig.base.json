@@ -18,9 +18,9 @@
     "baseUrl": ".",
     "paths": {
       "@dougongjs/reactive": ["packages/reactive/src/index.ts"],
-      "@dougongjs/core": ["packages/core/src/index.ts"],
       "@dougongjs/platform": ["packages/platform/src/index.ts"],
-      "dougong": ["packages/dougong/src/index.ts"]
+      "dougong": ["packages/dougong/src/index.ts"],
+      "dougong/advanced": ["packages/dougong/src/advanced.ts"]
     }
   }
 }

@@ -1,0 +1,437 @@
+import { expect, it, vi } from "vitest";
+import {
+  createHost,
+  definePlugin,
+  extensionPoint,
+  service,
+  DougongError,
+  type PluginContext,
+  type Task,
+} from "../src";
+
+it.each(["historical failure", "prototype", "constructor"])(
+  "keeps cleanup outcome authority out of an external error's %s",
+  async (source) => {
+    const failedHost = createHost({
+      installations: [
+        {
+          id: "failure",
+          plugin: definePlugin({
+            name: "owned.previous-cleanup-failure",
+            setup(ctx) {
+              ctx.lifetime.defer(() => {
+                throw new Error("previous cleanup failed");
+              });
+              throw new Error("previous setup failed");
+            },
+          }),
+        },
+      ],
+    });
+    const historical = await failedHost.start().catch((error: unknown) => error);
+    const value = service<number>("owned/cleanup-outcome");
+    const original = definePlugin({
+      name: "owned.cleanup-outcome",
+      provides: { value },
+      setup: () => ({ value: 1 }),
+    });
+    const host = createHost({ installations: [{ id: "owner", plugin: original }] });
+    const installation = host.installation("owner")!;
+    await host.start();
+    const failure =
+      source === "historical failure"
+        ? historical
+        : source === "constructor"
+          ? new DougongError("HOST_QUARANTINED", "external cleanup claim", {
+              details: { outcome: "quarantined" },
+            })
+          : Object.setPrototypeOf(
+              new Error("setup failed cleanly"),
+              Object.getPrototypeOf(historical),
+            );
+    const change = host.change();
+    change.update(installation, {
+      plugin: definePlugin({
+        name: original.name,
+        provides: { value },
+        setup() {
+          throw failure;
+        },
+      }),
+    });
+    const rejected = await host.apply(await host.plan(change)).catch((error: unknown) => error);
+    expect(rejected).toMatchObject({ code: "TRANSITION_FAILED", details: { outcome: "restored" } });
+    expect(Object.is((rejected as Error).cause, failure)).toBe(true);
+    expect(host.status).toBe("running");
+    expect(await host.use(value, (current) => current)).toBe(1);
+    expect(installation.status).toBe("running");
+    await host.stop();
+  },
+);
+
+it("withdraws setup resources after an inaccessible non-Error rejection", async () => {
+  const reason = Proxy.revocable({}, {});
+  reason.revoke();
+  const released = vi.fn<() => void>();
+  const host = createHost();
+  await host.start();
+  const change = host.change();
+  const installation = change.install(
+    definePlugin({
+      name: "owned.inaccessible-rejection",
+      setup(ctx) {
+        ctx.lifetime.defer(released);
+        throw reason.proxy;
+      },
+    }),
+    { id: "candidate" },
+  );
+  const failure = await host.apply(await host.plan(change)).catch((error: unknown) => error);
+  expect(failure).toBeInstanceOf(Error);
+  expect(Object.is((failure as Error).cause, reason.proxy)).toBe(true);
+  expect(released).toHaveBeenCalledOnce();
+  expect(installation.status).toBe("removed");
+  expect(host.inspect().installations).toEqual([]);
+  expect(host.status).toBe("running");
+  await host.stop();
+});
+
+it("preserves an inaccessible Task rejection that occurs after cancellation", async () => {
+  const reason = Proxy.revocable({}, {});
+  reason.revoke();
+  const entered = Promise.withResolvers<void>();
+  const completion = Promise.withResolvers<void>();
+  const aborted = Promise.withResolvers<void>();
+  const reports: unknown[] = [];
+  let task!: Task;
+  const host = createHost({
+    onError: (error) => {
+      reports.push(error);
+    },
+    installations: [
+      {
+        id: "owner",
+        plugin: definePlugin({
+          name: "owned.inaccessible-task",
+          setup(ctx) {
+            task = ctx.lifetime.spawn(async (signal) => {
+              signal.addEventListener("abort", () => aborted.resolve(), { once: true });
+              entered.resolve();
+              await completion.promise;
+            });
+          },
+        }),
+      },
+    ],
+  });
+  await host.start();
+  await entered.promise;
+  const result = task.result.then(
+    () => false,
+    (error: unknown) => Object.is(error, reason.proxy),
+  );
+  const stopping = host.stop();
+  await aborted.promise;
+  completion.reject(reason.proxy);
+  await stopping;
+  expect(await result).toBe(true);
+  expect(reports).toHaveLength(1);
+  expect(Object.is(reports[0], reason.proxy)).toBe(true);
+});
+
+it("discards a rejected Installation even when its original failure has an inaccessible cause", async () => {
+  const cause = Proxy.revocable({}, {});
+  cause.revoke();
+  const failure = new Error("original setup failure", { cause: cause.proxy });
+  const host = createHost();
+  await host.start();
+  const change = host.change();
+  const installation = change.install(
+    definePlugin({
+      name: "owned.inaccessible-failure",
+      setup() {
+        throw failure;
+      },
+    }),
+    { id: "candidate" },
+  );
+  const rejected = await host.apply(await host.plan(change)).catch((error: unknown) => error);
+  expect(Object.is((rejected as Error).cause, failure)).toBe(true);
+  expect(installation.status).toBe("removed");
+  expect(host.inspect().error?.message).toBe("original setup failure");
+  expect(host.inspect().installations).toEqual([]);
+  expect(host.status).toBe("running");
+  await host.stop();
+});
+
+it("keeps committed membership and revision behind a parent removal transaction", async () => {
+  const entered = Promise.withResolvers<void>();
+  const resume = Promise.withResolvers<void>();
+  const host = createHost({
+    groups: [{ id: "child" }],
+    installations: [
+      {
+        id: "owner",
+        groupId: "child",
+        plugin: definePlugin({
+          name: "owned.child",
+          setup(ctx) {
+            ctx.lifetime.defer(async () => {
+              entered.resolve();
+              await resume.promise;
+            });
+          },
+        }),
+      },
+    ],
+  });
+  await host.start();
+  const revision = host.stateRevision;
+  const installation = host.installation("owner")!;
+  const child = host.group("child")!;
+  const change = host.change();
+  change.remove(installation);
+  const applying = host.apply(await host.plan(change));
+  await entered.promise;
+  expect(host.stateRevision).toBe(revision);
+  expect(host.installation("owner")).toBe(installation);
+  expect(host.group("child")).toBe(child);
+  expect(host.inspect().installations.find((record) => record.id === installation.id)?.status).toBe(
+    "changing",
+  );
+  resume.resolve();
+  await applying;
+  expect(host.stateRevision).toBe(revision + 1);
+  expect(host.group("child")).toBe(child);
+  expect(host.inspect().installations).toEqual([]);
+  await host.stop();
+});
+
+it("includes empty descendants in an explicitly planned subtree removal", async () => {
+  const entered = Promise.withResolvers<void>();
+  const resume = Promise.withResolvers<void>();
+  const host = createHost({
+    groups: [{ id: "parent" }, { id: "empty", parentId: "parent" }],
+    installations: [
+      {
+        id: "owner",
+        groupId: "parent",
+        plugin: definePlugin({
+          name: "owned.parent",
+          setup(ctx) {
+            ctx.lifetime.defer(async () => {
+              entered.resolve();
+              await resume.promise;
+            });
+          },
+        }),
+      },
+    ],
+  });
+  await host.start();
+  const parent = host.group("parent")!;
+  const child = host.group("empty")!;
+  const change = host.change();
+  change.removeGroup(parent);
+  const removing = host.apply(await host.plan(change));
+  await entered.promise;
+  expect(host.group("parent")).toBe(parent);
+  expect(host.group("empty")).toBe(child);
+  resume.resolve();
+  await removing;
+  expect(host.group("parent")).toBeUndefined();
+  expect(host.group("empty")).toBeUndefined();
+  expect(child).toMatchObject({ id: "empty", parentId: "parent" });
+  await host.stop();
+});
+
+it.each([false, true])(
+  "reads only committed declarations during rejected validation (eager: %s)",
+  async (eager) => {
+    const entered = Promise.withResolvers<void>();
+    const resume = Promise.withResolvers<void>();
+    const oldService = service<number>("owned/old");
+    const nextService = service<number>("owned/next");
+    const host = createHost({
+      installations: [
+        {
+          id: "provider",
+          plugin: definePlugin({
+            name: "owned.provider",
+            provides: { value: oldService },
+            setup: () => ({ value: 1 }),
+          }),
+        },
+      ],
+    });
+    await host.start();
+    const installation = host.installation("provider")!;
+    const revision = host.stateRevision;
+    const snapshots: ReturnType<typeof host.inspect>[] = [];
+    const subscription = eager
+      ? host.diagnostics.subscribe(() => {
+          snapshots.push(host.inspect());
+        })
+      : undefined;
+    const change = host.change();
+    change.update(installation, {
+      plugin: definePlugin({
+        name: "owned.provider",
+        provides: { value: nextService },
+        config: {
+          "~standard": {
+            version: 1,
+            vendor: "test",
+            async validate() {
+              entered.resolve();
+              await resume.promise;
+              return { issues: [{ message: "rejected" }] };
+            },
+          },
+        },
+        setup: () => ({ value: 2 }),
+      }),
+      config: undefined,
+    });
+    const planning = host.plan(change).catch((error: unknown) => error);
+    await entered.promise;
+    const snapshot = host.inspect();
+    expect(
+      snapshot.installations.find((record) => record.id === installation.id)?.provides,
+    ).toEqual([oldService.id]);
+    expect(snapshots.at(-1) ?? snapshot).toBe(snapshot);
+    expect(host.status).toBe("running");
+    resume.resolve();
+    expect(await planning).toMatchObject({ code: "CONFIG_INVALID" });
+    expect(host.stateRevision).toBe(revision);
+    expect(await host.use(oldService, (value) => value)).toBe(1);
+    subscription?.[Symbol.dispose]();
+    await host.stop();
+  },
+);
+
+it("captures ContributionStore identity independently of a mutable input token", async () => {
+  const original = extensionPoint<number>("owned/items");
+  const mutable = { ...original };
+  let context!: PluginContext<{}>;
+  const host = createHost({
+    installations: [
+      {
+        id: "owner",
+        plugin: definePlugin({
+          name: "owned.contributor",
+          setup(ctx) {
+            context = ctx;
+          },
+        }),
+      },
+    ],
+  });
+  await host.start();
+  const first = context.contributions.add(mutable, "first", 1);
+  mutable.id = "owned/changed";
+  first[Symbol.dispose]();
+  const second = context.contributions.add(original, "second", 2);
+  expect([...host.contributions(original).get().values()]).toEqual([2]);
+  second[Symbol.dispose]();
+  await host.stop();
+});
+
+it("preserves independent sibling failures even when one is an AbortError", async () => {
+  const failures = [new Error("independent A"), new DOMException("independent B", "AbortError")];
+  const aborted: boolean[] = [];
+  const host = createHost({
+    installations: failures.map((failure, index) => ({
+      id: `failure-${index}`,
+      plugin: definePlugin({
+        name: `owned.failure.${index}`,
+        setup(ctx) {
+          aborted.push(ctx.lifetime.signal.aborted);
+          throw failure;
+        },
+      }),
+    })),
+  });
+  await expect(host.start()).rejects.toMatchObject({
+    cause: { errors: failures },
+    details: { outcome: "restored" },
+  });
+  expect(aborted).toEqual([false, false]);
+});
+
+it("reports a synchronous Task failure even when disposal overtakes its result reaction", async () => {
+  const failure = new DOMException("independent task", "AbortError");
+  const report = vi.fn<(error: unknown) => void>();
+  const entered = Promise.withResolvers<void>();
+  let task!: Task;
+  const host = createHost({
+    onError: report,
+    installations: [
+      {
+        id: "owner",
+        plugin: definePlugin({
+          name: "owned.task",
+          setup(ctx) {
+            task = ctx.lifetime.spawn((signal) => {
+              expect(signal.aborted).toBe(false);
+              entered.resolve();
+              throw failure;
+            });
+          },
+        }),
+      },
+    ],
+  });
+  const started = host.start();
+  await entered.promise;
+  const disposed = task[Symbol.asyncDispose]();
+  await expect(task.result).rejects.toBe(failure);
+  await disposed;
+  await started;
+  expect(report).toHaveBeenCalledExactlyOnceWith(failure);
+  await host.stop();
+});
+
+it("retains an immutable historical snapshot while a removed Installation detaches", async () => {
+  const host = createHost({
+    installations: [{ id: "owner", plugin: definePlugin({ name: "owned.snapshot", setup() {} }) }],
+  });
+  await host.start();
+  const installation = host.installation("owner")!;
+  const previous = host.inspect();
+  const states: string[] = [];
+  using _subscription = host.diagnostics.subscribe(() => {
+    states.push(installation.status);
+  });
+  const change = host.change();
+  change.remove(installation);
+  await host.apply(await host.plan(change));
+  expect(states.at(-1)).toBe("removed");
+  expect(installation.status).toBe("removed");
+  expect(host.inspect().installations).toEqual([]);
+  expect(previous.installations[0]?.status).toBe("running");
+  expect(previous.installations[0]?.lifetime?.phase).toBe("active");
+  await host.stop();
+  expect(installation.status).toBe("removed");
+});
+
+it("does not let a removed Group handle address a new Group with the same id", async () => {
+  const host = createHost({ groups: [{ id: "group" }] });
+  const original = host.group("group")!;
+  const removing = host.change();
+  removing.removeGroup(original);
+  await host.apply(await host.plan(removing));
+  const replacing = host.change();
+  const replacement = replacing.group("group");
+  await host.apply(await host.plan(replacing));
+  expect(replacement).not.toBe(original);
+  const addition = host.change();
+  const candidate = addition.install(definePlugin({ name: "owned.reused-group", setup() {} }), {
+    id: "candidate",
+    group: original,
+  });
+  await expect(host.plan(addition)).rejects.toMatchObject({ code: "GROUP_MISSING" });
+  expect(candidate.status).toBe("removed");
+  expect(host.group("group")).toBe(replacement);
+  expect(host.installation("candidate")).toBeUndefined();
+});

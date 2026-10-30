@@ -1,91 +1,25 @@
 # @dougongjs/reactive
 
-[简体中文](#简体中文) · [English](#english)
-
----
-
-## 简体中文
-
-**零依赖**的响应式原语：`signal` / `computed` / `batch` / `observe`。
-
-```sh
-npm install @dougongjs/reactive
-```
+Independent synchronous signals and structurally owned reactive generations. No external runtime dependencies.
 
 ```ts
-import { signal, computed, batch, observe } from "@dougongjs/reactive"
+import { batch, computed, signal } from "@dougongjs/reactive";
 
-const count = signal(0)
-const double = computed(() => count.get() * 2)
-
-batch(() => count.set(21))
-double.get()
+const first = signal("Dougong");
+const last = signal("Plugins");
+const title = computed(() => `${first.get()} ${last.get()}`);
+const subscription = title.subscribe(() => render(title.get()));
+batch(() => {
+  first.set("Typed");
+  last.set("Composition");
+});
+subscription[Symbol.dispose]();
 ```
 
-`double.get()` 返回 `42`。
+`Readable<T>` exposes `get()` and `subscribe()`. The subscription implements standard `Symbol.dispose`; callbacks notify changes without replay. `bridge(owner, readable)` adapts another module copy or implementation into the local dependency graph. Its subscription and terminal detachment belong to the supplied owner through `defer`.
 
-`computed` 是惰性的，依赖动态追踪。`batch` 按订阅身份合并回调内的重复通知。三者都拒绝异步回调——同步追踪和批次边界不能跨越 `await`，与其产生静默的错误结果，不如立刻抛错。
+`observe(owner, readable, observer)` disposes the previous child before building the next one. The structural owner supplies `child`, `defer`, `spawn` and standard `Symbol.asyncDispose`; no framework base class is required. Use `generation.spawn` for asynchronous observer work.
 
-### observe：把值的变化编译成资源的重建
+ESM; Node.js 22+, Chrome/Edge 119+, Firefox 121+, Safari 17.4+.
 
-```ts
-observe(owner, source, (value, lifetime) => {
-  const socket = new WebSocket(value)
-  lifetime.cleanup(() => socket.close())
-})
-```
-
-每次 `source` 变化：先释放上一个 `lifetime`，再用新值建一个新的。
-
-`observe()` 与 `@dougongjs/core` **互不依赖**——它是一个作用在结构化 `ObservationOwner`（提供 `cleanup` / `lifetime` / `spawn`）上的自由函数，所以能驱动 Core 的 Lifetime，而 Core 不需要知道它存在。插件的 `ctx` 恰好满足这个形状。
-
-`source` 只需满足结构化的 `Readable<T>`（`get()` + `subscribe()`）——Signal、Core 的 `ContributionView`、诊断视图，甚至你自己写的对象都可以。
-
----
-
-## English
-
-**Zero-dependency** reactive primitives: `signal` / `computed` / `batch` / `observe`.
-
-```sh
-npm install @dougongjs/reactive
-```
-
-```ts
-import { signal, computed, batch, observe } from "@dougongjs/reactive"
-
-const count = signal(0)
-const double = computed(() => count.get() * 2)
-
-batch(() => count.set(21))
-double.get()
-```
-
-`double.get()` returns `42`.
-
-`computed` is lazy with dynamic dependency tracking. `batch` coalesces repeated notifications per subscription identity. All three reject asynchronous callbacks — synchronous tracking and batch boundaries cannot survive an `await`, and throwing immediately beats producing a silently wrong result.
-
-### observe: compiling value change into resource rebuild
-
-```ts
-observe(owner, source, (value, lifetime) => {
-  const socket = new WebSocket(value)
-  lifetime.cleanup(() => socket.close())
-})
-```
-
-On each change to `source`: release the previous `lifetime`, then build a new one from the new value.
-
-`observe()` and `@dougongjs/core` are **mutually independent** — it is a free function over a structural `ObservationOwner` (anything providing `cleanup` / `lifetime` / `spawn`), so it can drive Core Lifetimes without Core knowing it exists. A plugin's `ctx` happens to satisfy that shape.
-
-`source` need only satisfy the structural `Readable<T>` (`get()` + `subscribe()`) — a signal, Core's `ContributionView`, a diagnostics view, or your own object.
-
----
-
-- 文档站 / Documentation: https://tangerg.github.io/dougong/
-- 仓库 / Repository: https://github.com/Tangerg/dougong
-
-> 早期 0.x 开发阶段，当前不承诺向后兼容。需要 Node.js ≥ 22，或 Chrome / Edge 119、Firefox 121、Safari 17.4 及以上浏览器 / WebView。
-> Early 0.x development; no backward-compatibility promises yet. Requires Node.js ≥ 22, or Chrome / Edge 119, Firefox 121 or Safari 17.4 and later.
-
-MIT
+[Guide](https://tangerg.github.io/dougong/en/guide/reactive)

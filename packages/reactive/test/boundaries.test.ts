@@ -6,12 +6,12 @@ it("does not visit subscriptions created during the same publication", () => {
   let calls = 0;
   let subscription = source.subscribe(listener);
   function listener() {
-    subscription.dispose();
+    subscription[Symbol.dispose]();
     if (++calls < 4) subscription = source.subscribe(listener);
   }
   source.set(1);
   expect(calls).toBe(1);
-  subscription.dispose();
+  subscription[Symbol.dispose]();
 });
 
 it.each([false, true])(

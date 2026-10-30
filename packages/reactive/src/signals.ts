@@ -1,5 +1,5 @@
-import { disposeSymbol, type Disposable, type Readable } from "./protocol";
-import { assertSynchronous } from "./sync-result";
+import { disposeSymbol, type Disposable, type Readable } from "./protocol.js";
+import { assertSynchronous } from "./sync-result.js";
 
 declare const dougongSignal: unique symbol;
 
@@ -44,14 +44,10 @@ class ReactiveSubscription implements Disposable {
     Object.freeze(this);
   }
 
-  dispose() {
+  [disposeSymbol]() {
     const dispose = this.#dispose;
     this.#dispose = undefined;
     dispose?.();
-  }
-
-  [disposeSymbol]() {
-    this.dispose();
   }
 }
 
@@ -283,7 +279,7 @@ class ComputedNode<T> implements ReactiveNode {
 
   #detachDependencies() {
     for (const dependency of this.#dependencies.values()) {
-      dependency.subscription?.dispose();
+      dependency.subscription?.[disposeSymbol]();
       dependency.subscription = undefined;
     }
   }
@@ -343,7 +339,7 @@ class ComputedNode<T> implements ReactiveNode {
     // Track dependencies on failure too so later source changes can recover the calculation.
     for (const [dependency, entry] of this.#dependencies) {
       if (sources.has(dependency)) continue;
-      entry.subscription?.dispose();
+      entry.subscription?.[disposeSymbol]();
       this.#dependencies.delete(dependency);
     }
 

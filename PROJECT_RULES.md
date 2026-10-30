@@ -2,19 +2,19 @@
 
 ## Domain vocabulary
 
-Every noun names exactly one lifecycle stage. Reading the name must be enough to
+Every domain noun names one responsibility or lifecycle stage. Reading the name must be enough to
 know which layer an object belongs to, who owns it, and what may be done to it —
 without opening the implementation.
 
 ```text
-Manifest + Reference → Artifact → Registration      (Platform: code from outside the build)
-                                        ↓ compiles to
-                                  Plugin → Installation  (Core: stable identity)
-                                               ↓ owns while active
-                                            Instance     (Core: internal execution)
+Manifest + Reference → Artifact → Catalog           (available immutable revisions)
+                            ↓ selected by
+                       Registration                 (Platform selection)
+                            ↓ compiles to one Plan
+Plugin → Installation → Instance                    (Core declaration → identity → execution)
 
-Host owns one Engine; the Engine coordinates the committed Installation graph
-and its active Instances.
+Host exposes commands. Its Engine alone commits declarations, bindings, and
+Instances. Installation origin records the Artifact revision actually committed.
 ```
 
 | Noun | Stage | Layer |
@@ -23,22 +23,23 @@ and its active Instances.
 | `Installation` | The stable identity of one installed Plugin. Its declaration may be replaced; its identity and position may not | Core |
 | `Instance` | One active execution of an Installation. Internal and replaced on restart | Core |
 | `Group` | An installation-ownership subtree. Nothing else | Core |
-| `Installer` | The capability to install into something — implemented by `Host` and `Group` | Core |
-| `Engine` | The internal owner of committed Contracts, Services, Events, Contributions, Instances and graph transitions | Core |
-| `Host` | The execution boundary Dougong owns: commands, transactions and orchestration | Core |
-| `Artifact` | A manifest plus a reference that can load a Plugin | Platform |
-| `Registration` | The stable identity of one Artifact admitted to a Platform | Platform |
+| `Engine` | The internal authority for committed declarations, bindings, Instances, revisions and graph transitions | Core |
+| `Host` | The public execution boundary: plan, apply, structured borrowing, inspection | Core |
+| `Plan` | An immutable preview with in-process execution authority bound to one Host and state revision | Core |
+| `Artifact` | An immutable, explicitly identified revision containing a manifest and a load reference | Platform |
+| `Catalog` | The available Artifact revisions | Platform |
+| `Registration` | The stable delivery identity owning the selected Artifact revision; active origin is a Core projection | Platform |
 | `Platform` | The delivery boundary: declaration, authorization, loading, activation | Platform |
 
 Three words that used to mean "host" are now distinct, and must stay distinct in
 code, comments, error messages and documentation:
 
 - **`Host`** — the Dougong execution boundary. A product may run several.
-- **application code** — the code that embeds Dougong and calls `host.get()`. Never called a host.
+- **application code** — the code that embeds Dougong and borrows Services through `host.use()`. Never called a host.
 - **runtime** — the JavaScript environment (Node, a browser, a WebView). Never called a host.
 - **`*Port`** — an internal collaborator protocol (`LifetimePort`, `ChangePort`). Never called a host either.
 
-Retired names must not return. `scripts/vocabulary.mjs` holds the banlist;
+Retired names must not return. `tooling/architecture/vocabulary.mjs` holds the banlist;
 `check-layers.mjs` checks source tokens, while `check-api-surface.mjs` checks
 built declarations and code-shaped Markdown, so neither an `export *` nor stale
 documentation can smuggle one back in.
@@ -64,10 +65,20 @@ documentation can smuggle one back in.
 - Keep the core atoms orthogonal: Service is stable capability, ExtensionPoint is an open contribution set, Event is a transient fact, and Lifetime is structured ownership. Do not make one atom secretly perform another atom's job.
 - Group expresses installation ownership only. It is not a capability scope, provider shadow tree, permission boundary, or security sandbox.
 - Stable Service dependencies are declared through `requires`; Core does not use a Service Locator, ambient scope, prototype-chain injection, or live Service proxy.
-- Static multi-instance capabilities use explicit Contract families. Execution-time tenant or workspace selection uses explicit Service parameters. Security isolation uses a Host, Worker, iframe, process, or another real isolation boundary.
+- Static multi-instance capabilities use explicit Contract families. Execution-time tenant or workspace selection uses explicit Service parameters. A Host is an execution and ownership boundary, never a security sandbox. Untrusted code requires an actual isolation boundary such as a Worker with a constrained protocol, a sandboxed iframe, a process, or a Wasm runtime.
 - Resource ownership is structural and terminal resources detach from their owners. A retained handle must not keep a Host, Store, callback, payload, or completed task alive without a documented reason.
 - Transactions expose only committed states. Setup declarations remain staged until their commit boundary, and failed changes roll back or fail closed rather than presenting mixed execution state as healthy.
-- Package and module dependencies point in one direction. Core and reactive remain independent foundations; Platform compiles external plugin concerns into Core operations; the facade remains a pure re-export layer.
+- Package and module dependencies point in one direction. `dougong` contains the actual Core; there is no second Core package or facade. `@dougongjs/reactive` is independent. `@dougongjs/platform` compiles delivery concerns into Core's public APIs. Reusable advanced primitives are exposed through `dougong/advanced`.
+- Physical source directories follow logical ownership. Core responsibilities are contracts, composition, execution, lifetime, events, contributions, observation, and inspection. Platform responsibilities are artifacts, catalog, admission, loaders, and activation. Examples live under `examples/`; repository tooling lives under `tooling/`. The architecture guard enforces allowed dependencies between these responsibilities.
+- Engine is the sole authority for committed declarations, bindings, active Instances, revisions, and quarantine. Installation and Group handles are read-only identities. ChangeSet stages intent; Plan captures and validates it; only Host.apply commits it. Lifecycle commands compile to that same transition mechanism.
+- Configuration is immutable data: finite numbers, strings, booleans, null, dense arrays, and plain data records. Capture accepted input and validated output once; rollback reuses the validated committed output. Resource-bearing objects, functions, accessors, and Promises are not config.
+- A Plan is Host-bound, revision-bound, and single-use. Foreign, stale, and consumed Plans fail before effects. Busy rejects without consuming the Plan. A JSON report is inspection data, never executable authority.
+- Prepare every dependency layer before publishing any candidate listener or contribution. Foreground Service borrows, listener invocations, and contribution borrows prevent destructive changes to their owners. Preparation must not emit public Events.
+- Lifetime alone owns task, acquisition, child, and resource release obligations. Shutdown seals ingress, cancels work, interrupts blocking I/O, joins it, and releases resources in ownership order. A failed child or consumer release cannot authorize releasing its parent or provider. Timeouts retain unresolved ownership and quarantine execution; they never prove that resources were released or authorize automatic retries.
+- Consume standard `Symbol.dispose` and `Symbol.asyncDispose` protocols. Public resource handles do not require a second named disposal method. High-level adapters compose Lifetime operations instead of owning parallel teardown registries.
+- Rollback reconstructs the previous declarations and reuses their validated configuration; it does not resurrect old objects or reverse external I/O. If cleanup or restoration cannot establish a healthy state, remain quarantined and report retained obligations.
+- Platform owns available and selected delivery revisions. Core owns the active implementation and its immutable origin as one commit. Admission precedes loading. A loaded candidate must still match its captured selection revision at commit; dependency closure and removals compile into one Core Plan.
+- Snapshot views are projections of their owners. Stable identity lasts until relevant state changes; observing task progress does not advance the committed graph revision. A projection may invalidate or render, but may not originate a competing lifecycle transition.
 
 ## Simplicity and performance
 

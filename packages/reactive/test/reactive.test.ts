@@ -6,7 +6,13 @@ const { batch, computed, signal } = reactive;
 
 describe("public API surface", () => {
   it("keeps the reactive value-export budget explicit", () => {
-    expect(Object.keys(reactive).sort()).toEqual(["batch", "computed", "observe", "signal"]);
+    expect(Object.keys(reactive).sort()).toEqual([
+      "batch",
+      "bridge",
+      "computed",
+      "observe",
+      "signal",
+    ]);
   });
 
   it("fails explicitly when Promise.withResolvers is unavailable", () => {
@@ -37,7 +43,7 @@ describe("signal", () => {
     expect(doubled.get()).toBe(2);
     expect(values).toEqual([2]);
 
-    subscription.dispose();
+    subscription[Symbol.dispose]();
     set(2);
     expect(get()).toBe(2);
     expect(doubled.get()).toBe(4);
@@ -77,11 +83,11 @@ describe("signal", () => {
     count.set(1);
     expect(listener).toHaveBeenCalledTimes(2);
 
-    first.dispose();
+    first[Symbol.dispose]();
     count.set(2);
     expect(listener).toHaveBeenCalledTimes(3);
 
-    second.dispose();
+    second[Symbol.dispose]();
     count.set(3);
     expect(listener).toHaveBeenCalledTimes(3);
   });
@@ -111,7 +117,7 @@ describe("signal", () => {
 
     batch(() => {
       count.set(1);
-      subscription.dispose();
+      subscription[Symbol.dispose]();
     });
 
     expect(listener).not.toHaveBeenCalled();
@@ -121,8 +127,8 @@ describe("signal", () => {
     const immediate = signal(0);
     const immediateListener = vi.fn<() => void>();
     let immediateSubscription = immediate.subscribe(immediateListener);
-    immediate.subscribe(() => immediateSubscription.dispose());
-    immediateSubscription.dispose();
+    immediate.subscribe(() => immediateSubscription[Symbol.dispose]());
+    immediateSubscription[Symbol.dispose]();
     immediateSubscription = immediate.subscribe(immediateListener);
 
     immediate.set(1);
@@ -130,8 +136,8 @@ describe("signal", () => {
     const deferred = signal(0);
     const deferredListener = vi.fn<() => void>();
     let deferredSubscription = deferred.subscribe(deferredListener);
-    deferred.subscribe(() => deferredSubscription.dispose());
-    deferredSubscription.dispose();
+    deferred.subscribe(() => deferredSubscription[Symbol.dispose]());
+    deferredSubscription[Symbol.dispose]();
     deferredSubscription = deferred.subscribe(deferredListener);
 
     batch(() => deferred.set(1));
@@ -262,7 +268,7 @@ describe("computed", () => {
     expect(listener).toHaveBeenCalledTimes(1);
     expect(selected.get()).toBe(5);
 
-    subscription.dispose();
+    subscription[Symbol.dispose]();
   });
 
   it("keeps repeated listener functions independently disposable", () => {
@@ -276,12 +282,12 @@ describe("computed", () => {
     expect(listener).toHaveBeenCalledTimes(2);
     expect(derived.get()).toBe(1);
 
-    first.dispose();
+    first[Symbol.dispose]();
     source.set(2);
     expect(listener).toHaveBeenCalledTimes(3);
     expect(derived.get()).toBe(2);
 
-    second.dispose();
+    second[Symbol.dispose]();
   });
 
   it("is lazy and cached while it has no subscribers", () => {
@@ -353,7 +359,7 @@ describe("computed", () => {
     value.set(2);
     expect(listener).toHaveBeenCalledOnce();
 
-    subscription.dispose();
+    subscription[Symbol.dispose]();
     value.set(3);
     expect(listener).toHaveBeenCalledOnce();
     expect(doubled.get()).toBe(6);

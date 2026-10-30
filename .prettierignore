@@ -1,9 +1,7 @@
 /coverage
 /node_modules
 packages/*/dist
+examples/dist
 packages/*/node_modules
 pnpm-lock.yaml
 *.md
-
-# Archify output: delivered with an integrity receipt; reformatting would invalidate it
-diagrams/*.html

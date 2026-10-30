@@ -1,6 +1,6 @@
 import { defineConfig } from "vite";
 import dts from "unplugin-dts/vite";
-import { runtimeBaseline } from "../../scripts/runtime-baseline.mjs";
+import { runtimeBaseline } from "../../tooling/runtime-baseline.mjs";
 
 export default defineConfig({
   plugins: [
@@ -14,12 +14,9 @@ export default defineConfig({
   build: {
     target: runtimeBaseline.buildTargets,
     lib: {
-      entry: "src/index.ts",
+      entry: { index: "src/index.ts", advanced: "src/advanced.ts" },
       formats: ["es"],
-      fileName: "index",
-    },
-    rollupOptions: {
-      external: ["@dougongjs/core", "@dougongjs/platform", "@dougongjs/reactive"],
+      fileName: (_format, entryName) => `${entryName}.js`,
     },
   },
 });

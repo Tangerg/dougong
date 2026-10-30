@@ -1,238 +1,29 @@
-# Transactions and change
+# Planning and execution
 
-A running application needs to install plugins, remove them and swap configuration. Dougong's guarantee is:
-
-> **Transactions expose only committed state.** A change either takes effect entirely, or the execution graph returns to what it was — never a half-built set of Instances.
-
-## A single change
+All installation changes follow `ChangeSet → Plan → apply`. `start` and `stop` compile into the same Engine transition instead of maintaining separate execution paths.
 
 ```ts
-const installation = host.install(plugin, config)
-await installation.ready()
-
-await installation.update({ config: nextConfig })
-await installation.remove()
+const change = host.change();
+change.update(installation, { plugin: nextPlugin, config: nextConfig });
+const plan = await host.plan(change);
+inspectBeforeApplying(plan.report);
+const result = await host.apply(plan);
+// result.outcome === "committed"
 ```
 
-Before `host.start()`, `install()` only records a declaration. After it, the call runs a Host transaction.
+Planning captures configuration, runs schemas, validates contracts and groups, resolves bindings, computes affected closure and produces a read-only `PlanReport`. It does not run setup, acquire resources or publish listeners. The report contains the baseline revision, operations, before/after bindings, origin changes, impact reasons, preparation order, stop order, publication order and atomic-publication guarantee.
 
-## Atomic multi-Installation change: ChangeSet
+A Plan is issued by one Host and can be consumed once. Before execution effects, apply checks authority, consumption and `stateRevision`. Another commit or a failure that changes running state invalidates old Plans. Task counts and notification counts do not.
 
-When several operations must **succeed or fail together**, use `change()`:
+Execution prepares candidates in dependency order. Candidate listeners, contributions and services become visible together. Affected old generations reject new work, join existing uses and release resources. Candidate failure cleans candidates and attempts to restore the original declarations. If resource safety cannot be established, the Host becomes quarantined.
 
-```ts
-const changes = host.change()
-changes.install(newProvider)
-changes.update(current, { plugin: nextVersion })
-changes.remove(deprecated)
-await changes.commit()
-```
-
-This is the **canonical** entry point for multi-Installation change. `install()` / `update()` / `remove()` are its single-item degenerate forms — they run the same path internally and own no second state machine.
-
-Properties:
-
-- **One-shot** — no modification after `commit()`; calling it again returns the same promise
-- **One operation per installation** — the same installation cannot be both updated and removed in one ChangeSet
-- **Nothing before commit** — an abandoned draft never touches committed execution state
-
-## What failure does
-
-Dougong has three levels of failure handling, in increasing severity.
-
-### 1. Rollback
-
-The new graph cannot start → restore the previous graph; `host.status` returns to `active`.
-
-```ts
-const changes = host.change()
-changes.install(brokenPlugin)
-await expect(changes.commit()).rejects.toThrow("setup failed")
-
-expect(host.status).toBe("active")
-```
-
-### 2. Fail closed
-
-The old graph **also** cannot be restored (say an Instance's cleanup threw, so whether its resources were released is unknown) → do not pretend to be healthy. Stop the Host at `idle` and throw an error aggregating every cause.
-
-Better for application code to see "I stopped, and here is why" than to be handed execution state that may be damaged.
-
-### 3. Aggregated reporting
-
-Multiple failures during shutdown aggregate into an `AggregateError` with every cause retained. No error is ever silently swallowed.
-
-### Validation precedes shutdown
-
-**Every affected Installation's Plugin config is validated before any running Instance is stopped.**
-
-```ts
-const changes = host.change()
-changes.update(a, { config: validConfig })
-changes.update(b, { config: invalidConfig })
-await expect(changes.commit()).rejects.toMatchObject({ code: "CONFIG_INVALID" })
-```
-
-A misspelled config field never leaves your application halfway down.
-
-### Contribution sets are atomic too
-
-Within one transaction, stopping Instances withdraw their contributions and
-starting ones add theirs. Both halves are **published as a single step**:
-
-```ts
-const observer = definePlugin({
-  name: "app.observer",
-  requires: { views: VIEWS },
-  setup(ctx) {
-    ctx.views.subscribe(() => snapshots.push([...ctx.views.get().keys()]))
-  },
-})
-
-const changes = host.change()
-changes.update(outline, { plugin: outlineV2 })
-changes.update(search, { plugin: searchV2 })
-await changes.commit()
-
-snapshots.length
-```
-
-This change produces one snapshot notification. Observers never see an intermediate empty set.
-
-Without that batch boundary an observer would watch the set briefly empty in the
-middle of a *successful* change, then refill one entry at a time. This is the
-difference between HMR and two sequential updates, and it is exactly the count
-[example 12](../examples.md#stage-3) asserts.
-
-## Incremental restart
-
-A change does not restart the whole application. Dougong computes the **affected closure**: the changed installations plus their transitive dependents, unioned over **both the old and the new** graph.
-
-```text
-A ← B ← C        update B
-D ← E            E is unrelated to B
-
-Affected: B, C     Untouched: A, D, E
-```
-
-Instances of unrelated Installations are never stopped; their Service values, Lifetimes and background tasks survive intact.
-
-## The startup model
-
-`host.start()` has four steps:
-
-1. **Build the graph** — derive dependencies from `requires` / `provides`, detect cycles and duplicate providers
-2. **Validate** — every config through its Standard Schema
-3. **Start layers concurrently** — Installations in the same topological layer run setup in parallel
-4. **Commit the layer** — only after every Service output in that layer validates are Services registered and staged listeners and contributions published
-
-Step 4 is what "transactions expose only committed state" means at startup: listeners and contributions registered during setup are **staged**, and if any plugin in the layer fails, not one of them is published.
-
-```text
-Observable result of a failed prepare, for that layer:
-
-Published Services         0
-Published contributions    0
-Published listeners        0
-Registered Contract kinds  0
-Acquired resources         all release attempted
-```
-
-### Graph-time errors
-
-These are thrown **before any Instance starts**:
-
-| Code | Condition |
+| Outcome | Caller observes |
 | --- | --- |
-| `SERVICE_CYCLE` | dependency cycle; the message carries the real path |
-| `SERVICE_CONFLICT` | two plugins provide the same Service |
-| `SERVICE_MISSING` | a required Service has no provider |
-| `CONTRACT_CONFLICT` | one ID used as two kinds |
+| Committed | Resolve with `{ outcome: "committed", stateRevision, affectedInstallations }` |
+| Preflight rejection | Reject with `DougongError.details.outcome === "rejected"` |
+| Original declarations restored | Reject with `details.outcome === "restored"` |
+| Safe restoration impossible | Reject with `details.outcome === "quarantined"` |
 
-Cycle detection reports the actual path, not "everything that failed to sort":
+Atomic visibility applies to framework publications. Network requests, filesystem writes and effects in external systems do not automatically roll back. `plan.report.execution.externalEffectsRollback` is explicitly false.
 
-```text
-Installation dependency cycle: app.a:1 -> app.b:2 -> app.a:1
-```
-
-## Group: an installation ownership tree
-
-A Group manages a set of plugins as one unit:
-
-```ts
-const feature = host.group("editor", (group) => {
-  group.install(syntax)
-  group.install(formatter)
-
-  group.group("lsp", (nested) => {
-    nested.install(languageServer)
-  })
-})
-
-await feature.ready()
-feature.status
-await feature.remove()
-```
-
-The `configure` callback **must be synchronous** (returning a promise throws), because the entire Group's content is committed as one ChangeSet.
-Nested Groups share that commit, but an Installation created by `nested.install()` still belongs to the inner Group; calling `nested.remove()` removes only that inner subtree.
-
-A Group can also run its own transaction:
-
-```ts
-const changes = feature.change()
-changes.install(extra)
-await changes.commit()
-```
-
-### A Group changes no visibility
-
-::: warning The most common misreading
-A Group expresses **installation ownership only**. It is not a capability scope, not a provider shadow tree, not a permission boundary and not a security sandbox.
-
-Service resolution and ExtensionPoint/Event visibility are always **Host-wide**. Putting a Plugin inside a Group does not make it "see only" what is in that Group.
-:::
-
-So how do you get those things:
-
-| Need | The right tool |
-| --- | --- |
-| Several statically selected variants of one capability (a store per workspace) | An explicit Contract family: ``service<Store>(`app/ws/${id}/store`)`` |
-| Request-time tenant selection | An ordinary method parameter: `store.forTenant(id)` |
-| Security isolation | A separate Host, Worker, iframe or process — a real boundary |
-
-### An established Group is not poisoned by failure
-
-```ts
-const group = host.group("stable", (p) => p.install(good))
-await group.ready()
-
-const changes = group.change()
-changes.install(broken)
-await expect(changes.commit()).rejects.toThrow()
-
-expect(group.status).toBe("active")
-await expect(group.ready()).resolves.toBeUndefined()
-```
-
-A Group that has been established at least once keeps presenting its last committed state after a change that rolled back completely. A Group that never established (its first commit failed) stays `failed`.
-
-## Observing state
-
-```ts
-host.status
-
-host.diagnostics.get()
-
-host.diagnostics.subscribe(() => render())
-```
-
-`host.status` is `idle`, `starting`, `active`, `changing` or `stopping`. Diagnostics expose the Host name, status, Installation snapshots and Group snapshots.
-
-The `changing` status exists for a reason: while a Host transaction is in flight the application-code read window is closed — `host.get()` throws `SERVICE_UNAVAILABLE` rather than handing you an intermediate state that is being replaced.
-
-## Next
-
-- [Reactive and observation](./reactive.md) — driving Lifetime rebuilds from a signal
-- [External plugin delivery](./platform.md) — manifests, permissions, lazy activation
-- [Core API specification](../reference/core-api.md) — exact semantics and edge cases
+A busy Host rejects reentrant mutations. Wait for the current operation and plan again. Do not await a change that removes a borrowed service from inside that service's own borrowed callback.

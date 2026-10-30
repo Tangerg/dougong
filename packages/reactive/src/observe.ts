@@ -4,8 +4,8 @@ import {
   type AsyncDisposable,
   type Disposable,
   type Readable,
-} from "./protocol";
-import { assertSynchronous, captureThenable } from "./sync-result";
+} from "./protocol.js";
+import { assertSynchronous, captureThenable } from "./sync-result.js";
 
 // Serialize replacement so the previous resource owner finishes before the next observer begins.
 
@@ -14,8 +14,8 @@ export interface ObservationTask<T = void> extends AsyncDisposable {
 }
 
 export interface ObservationOwner<Child extends AsyncDisposable = AsyncDisposable> {
-  readonly cleanup: (dispose: () => unknown) => AsyncDisposable;
-  readonly lifetime: (label: string) => Child;
+  readonly defer: (dispose: () => unknown) => AsyncDisposable;
+  readonly child: (label: string) => Child;
   readonly spawn: <T>(task: (signal: AbortSignal) => T | PromiseLike<T>) => ObservationTask<T>;
 }
 
@@ -143,7 +143,7 @@ class Observation<T, Child extends AsyncDisposable> {
     if (this.#observed.present && Object.is(beforeCleanup, this.#observed.value)) return;
 
     const previous = this.#takeCurrent();
-    if (previous) await previous.dispose();
+    if (previous) await previous[asyncDisposeSymbol]();
     this.#observed = { present: false };
     if (this.#state.phase !== "active" || signal.aborted) return;
 
@@ -152,8 +152,8 @@ class Observation<T, Child extends AsyncDisposable> {
 
   #createCurrent() {
     const { owner, source } = this.#requireBinding();
-    const current = owner.lifetime("observation");
-    assertAsyncDisposable(current, "ObservationOwner.lifetime()");
+    const current = owner.child("observation");
+    assertAsyncDisposable(current, "ObservationOwner.child()");
     this.#current = current;
     // Creating a child can synchronously change the source, so subscribe before ownership and read afterward.
     const value = source.get();
@@ -238,15 +238,15 @@ export function observe<T, Child extends AsyncDisposable>(
   if (typeof observer !== "function") throw new TypeError("Observer must be a function");
   if (
     !owner ||
-    typeof owner.cleanup !== "function" ||
-    typeof owner.lifetime !== "function" ||
+    typeof owner.defer !== "function" ||
+    typeof owner.child !== "function" ||
     typeof owner.spawn !== "function"
   ) {
     throw new TypeError("observe() expects an observation owner");
   }
   const observation = new Observation(owner, source, observer);
-  const handle = owner.cleanup(() => observation.dispose());
-  assertAsyncDisposable(handle, "ObservationOwner.cleanup()");
+  const handle = owner.defer(() => observation.dispose());
+  assertAsyncDisposable(handle, "ObservationOwner.defer()");
   observation.attachOwnerCleanup(handle);
   try {
     observation.start();
@@ -259,30 +259,20 @@ export function observe<T, Child extends AsyncDisposable>(
 }
 
 function assertDisposable(value: unknown, source: string): asserts value is Disposable {
-  if (
-    !value ||
-    typeof (value as Disposable).dispose !== "function" ||
-    typeof (value as Disposable)[disposeSymbol] !== "function"
-  ) {
+  if (!value || typeof (value as Disposable)[disposeSymbol] !== "function") {
     throw new TypeError(`${source} must return a Disposable`);
   }
 }
 
 function assertAsyncDisposable(value: unknown, source: string): asserts value is AsyncDisposable {
-  if (
-    !value ||
-    typeof (value as AsyncDisposable).dispose !== "function" ||
-    typeof (value as AsyncDisposable)[asyncDisposeSymbol] !== "function"
-  ) {
+  if (!value || typeof (value as AsyncDisposable)[asyncDisposeSymbol] !== "function") {
     throw new TypeError(`${source} must return an AsyncDisposable`);
   }
 }
 
 function captureObservationTaskResult(value: unknown): Promise<unknown> {
   const result =
-    value &&
-    typeof (value as ObservationTask).dispose === "function" &&
-    typeof (value as ObservationTask)[asyncDisposeSymbol] === "function"
+    value && typeof (value as ObservationTask)[asyncDisposeSymbol] === "function"
       ? captureThenable((value as ObservationTask).result)
       : undefined;
   if (!result) {
@@ -292,13 +282,16 @@ function captureObservationTaskResult(value: unknown): Promise<unknown> {
 }
 
 function disposeSubscription(subscription: Disposable) {
-  assertSynchronous(subscription.dispose(), "Readable subscriptions must dispose synchronously");
+  assertSynchronous(
+    subscription[disposeSymbol](),
+    "Readable subscriptions must dispose synchronously",
+  );
 }
 
 async function collect(resource: AsyncDisposable | undefined, errors: unknown[]) {
   if (!resource) return;
   try {
-    await resource.dispose();
+    await resource[asyncDisposeSymbol]();
   } catch (error) {
     errors.push(error);
   }

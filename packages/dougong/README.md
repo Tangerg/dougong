@@ -1,111 +1,32 @@
 # dougong
 
-[简体中文](#简体中文) · [English](#english)
-
----
-
-## 简体中文
-
-**能力组合与结构化生命周期内核**，纯 JavaScript/TypeScript。
-
-这是门面包，聚合 [`@dougongjs/core`](https://www.npmjs.com/package/@dougongjs/core)、[`@dougongjs/reactive`](https://www.npmjs.com/package/@dougongjs/reactive) 与 [`@dougongjs/platform`](https://www.npmjs.com/package/@dougongjs/platform)。它只做 re-export，不包含任何逻辑——架构门禁会强制这一点。
-
-```sh
-npm install dougong
-```
+The TypeScript plugin composition kernel. This package owns contracts, declarations, immutable plans, execution, resource lifetimes and diagnostic projections.
 
 ```ts
-import { createHost, definePlugin, service } from "dougong"
+import { createHost, definePlugin, service } from "dougong";
 
-const CLOCK = service<Clock>("app/clock")
-
-const clock = definePlugin({
-  name: "app.clock",
-  provides: { clock: CLOCK },
-  setup: () => ({ clock: { now: () => new Date() } }),
-})
-
+const GREETER = service<{ greet(name: string): string }>("app/greeter");
 const greeter = definePlugin({
   name: "app.greeter",
-  requires: { clock: CLOCK },
-  setup(ctx) {
-    console.log(ctx.clock.now())
+  provides: { greeter: GREETER },
+  setup() {
+    return { greeter: { greet: (name) => `Hello, ${name}` } };
   },
-})
+});
 
-const host = createHost({ name: "hello" })
-host.install(greeter)
-host.install(clock)
-await host.start()
+const host = createHost({
+  name: "app",
+  installations: [{ id: "greeter", plugin: greeter }],
+});
+await host.start();
+const message = await host.use(GREETER, (service) => service.greet("Dougong"));
+await host[Symbol.asyncDispose]();
 ```
 
-六个原子：**Service**（稳定的一对一能力）、**ExtensionPoint**（开放贡献集合）、**Event**（瞬时事实）、**Lifetime**（结构化所有权）、**Plugin**、**Host**。
+Use `host.change()`, `host.plan(change)` and `host.apply(plan)` for changes. Services and executable contributions are borrowed with `host.use` and `ContributionView.use`. Standard resources belong to `ctx.lifetime`; context dependencies live under `ctx.deps`.
 
-三条核心保证：依赖与所有权**显式**写在声明里；每个语义只有**一条**正式路径；事务只暴露**已提交**状态。
+The formal `dougong/advanced` subpath exports stable snapshot publishing, immutable map snapshots, serial queues and record normalization for downstream composition. Optional delivery and reactivity live in `@dougongjs/platform` and `@dougongjs/reactive`.
 
-### 环境要求
+ESM; Node.js 22+, Chrome/Edge 119+, Firefox 121+, Safari 17.4+.
 
-Node.js ≥ 22；浏览器 / WebView 基线为 Chrome / Edge 119、Firefox 121、Safari 17.4，并提供 `Promise.withResolvers()`。显式 `.dispose()` 在全部基线上可用；`using` / `await using` 还要求运行时原生提供或应用预先 polyfill `Symbol.dispose` / `Symbol.asyncDispose`。Dougong 不修改全局对象。TypeScript 消费者需要：
-
-```json
-"lib": ["ES2024", "DOM", "DOM.Iterable", "ESNext.Disposable"]
-```
-
----
-
-## English
-
-A **capability composition and structured lifetime kernel** in pure JavaScript/TypeScript.
-
-This is the facade package aggregating [`@dougongjs/core`](https://www.npmjs.com/package/@dougongjs/core), [`@dougongjs/reactive`](https://www.npmjs.com/package/@dougongjs/reactive) and [`@dougongjs/platform`](https://www.npmjs.com/package/@dougongjs/platform). It only re-exports and contains no logic — an architecture gate enforces that.
-
-```sh
-npm install dougong
-```
-
-```ts
-import { createHost, definePlugin, service } from "dougong"
-
-const CLOCK = service<Clock>("app/clock")
-
-const clock = definePlugin({
-  name: "app.clock",
-  provides: { clock: CLOCK },
-  setup: () => ({ clock: { now: () => new Date() } }),
-})
-
-const greeter = definePlugin({
-  name: "app.greeter",
-  requires: { clock: CLOCK },
-  setup(ctx) {
-    console.log(ctx.clock.now())
-  },
-})
-
-const host = createHost({ name: "hello" })
-host.install(greeter)
-host.install(clock)
-await host.start()
-```
-
-Six atoms: **Service** (a stable one-to-one capability), **ExtensionPoint** (an open contribution set), **Event** (a transient fact), **Lifetime** (structured ownership), **Plugin**, **Host**.
-
-Three core guarantees: dependencies and ownership are written **explicitly** in declarations; every semantic has exactly **one** canonical path; transactions expose only **committed** state.
-
-### Requirements
-
-Node.js ≥ 22; Chrome / Edge 119, Firefox 121 or Safari 17.4 for browsers and WebViews, with `Promise.withResolvers()`. Explicit `.dispose()` works throughout; `using` / `await using` additionally require native or application-polyfilled `Symbol.dispose` / `Symbol.asyncDispose`. Dougong does not mutate globals. TypeScript consumers need:
-
-```json
-"lib": ["ES2024", "DOM", "DOM.Iterable", "ESNext.Disposable"]
-```
-
----
-
-- 文档站 / Documentation: https://tangerg.github.io/dougong/
-- 仓库 / Repository: https://github.com/Tangerg/dougong
-
-> 早期 0.x 开发阶段，当前不承诺向后兼容。
-> Early 0.x development; no backward-compatibility promises yet.
-
-MIT
+[API documentation](https://tangerg.github.io/dougong/en/reference/core-api) · [Architecture](https://tangerg.github.io/dougong/en/reference/architecture)

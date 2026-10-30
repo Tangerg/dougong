@@ -31,6 +31,6 @@ it.each(["batch", "computed", "subscriber"] as const)(
     expect(observe).toHaveBeenCalledOnce();
     expect(observe.mock.contexts[0]).toBe(result);
     expect(reads).toBe(1);
-    subscription?.dispose();
+    subscription?.[Symbol.dispose]();
   },
 );

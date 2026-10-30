@@ -1,4 +1,4 @@
-// Generated from scripts/internal/sync-result.ts. Run pnpm generate:internal.
+// Generated from tooling/internal/sync-result.ts. Run pnpm generate:internal.
 export function assertSynchronous(value: unknown, message: string): void {
   const pending = captureThenable(value);
   if (!pending) return;

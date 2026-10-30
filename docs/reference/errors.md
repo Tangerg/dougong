@@ -1,204 +1,53 @@
 # 错误码
 
-Dougong 的所有结构化错误都带一个稳定的 `code` 字符串。应用代码应该 `switch (error.code)` 分流，而不是匹配消息文本——消息会变，`code` 不会。
+失败通过结构化错误拒绝。`DougongError` 提供 `code`、不可变 `details` 和可选原始 `cause`；`ConfigValidationError` 额外提供捕获后的 Standard Schema issues。`PlatformError` 使用 `PlatformErrorCode`，`PermissionDeniedError` 提供 manifestName 与 denied。
 
-## 命名规则
+`details.outcome` 区分 rejected、restored、quarantined。成功 resolve 的 ApplyResult 只表示 committed。`RecordedFailure` 与 `ErrorSnapshot` 是有界诊断投影，直接调用者仍获得原始失败。参数与协议误用可能抛 TypeError；取消服从所属 AbortSignal，并不等于成功提交。
 
-错误码指向**哪个对象的不变量被违反**，而不是笼统地说「插件出错了」：
-
-| 前缀 | 违反不变量的对象 | 属于 |
-| --- | --- | --- |
-| `SERVICE_*` / `CONTRACT_*` / `CONFIG_*` | Contract 身份、依赖图、配置声明 | Core |
-| `LIFETIME_*` | 结构化资源所有权 | Core |
-| `INSTALLATION_*` | 一次已存在的安装 | Core |
-| `GROUP_*` | 一棵安装所有权子树 | Core |
-| `ARTIFACT_*` | 一份外部制品内部不自洽 | Platform |
-| `REGISTRATION_*` | 注册身份与 Manifest 声明的注册依赖图 | Platform |
-| `MANIFEST_*` / `MODULE_*` / `API_*` / `PERMISSION_*` / `PLATFORM_*` | 信任边界与加载边界 | Platform |
-
-所以看到 `INSTALLATION_REMOVED` 就知道是 Core 的一次安装，看到 `REGISTRATION_REMOVED` 就知道是 Platform 的一条注册——不用点进实现确认层级。
-
-## 错误类型
-
-```ts
-class DougongError extends Error {
-  readonly code: string
-}
-
-class ConfigValidationError extends DougongError {
-  readonly issues: ReadonlyArray<StandardSchemaV1.Issue>
-}
-
-class PlatformError extends DougongError {}
-
-class PermissionDeniedError extends PlatformError {
-  readonly manifestName: string
-  readonly denied: ReadonlyArray<string>
-}
-```
-
-多个失败会被聚合成标准的 `AggregateError`，每一条原因都保留在 `errors` 数组里。
-
-::: tip TypeError 与 Error 的分工
-除了带 `code` 的错误，Dougong 还用两种原生类型：
-
-- **`TypeError`** —— 调用者传错了东西（不是函数、不是 Contract、key 冲突，或继续使用已经撤销其局部能力的对象）
-- **`Error`** —— 内部不变量被违反，属于框架 bug，正常使用碰不到
-
-所以你可以按构造函数分流：`DougongError` 是可预期的操作失败，`TypeError` 是你的用法问题。
-:::
-
-## Core（`@dougongjs/core`）
-
-### 构图期
-
-这些错误在**任何 Instance 启动之前**抛出。执行图一动没动。
-
-| Code | 触发条件 |
+| 错误码 | 含义与处理 |
 | --- | --- |
-| `SERVICE_CYCLE` | 依赖成环。消息带真实环路径：`app.a:1 -> app.b:2 -> app.a:1`。插件 `requires` 自己 `provides` 的 Service 也算 |
-| `SERVICE_CONFLICT` | 两个插件提供同一个 Service |
-| `SERVICE_MISSING` | 必需 Service 没有提供者（`optional()` 声明的不算） |
-| `CONTRACT_CONFLICT` | 同一个 Contract ID 被当作两种 kind 使用 |
-| `CONFIG_INVALID` | 配置未通过 Standard Schema。`error.issues` 是逐字段的问题列表 |
-
-::: warning 校验先于停机
-所有受影响 Installation 的 Plugin 配置会在停止任何活动 Instance 之前全部校验完毕。一个拼错的字段不会让应用停在半路。
-:::
-
-### 启动与活动执行
-
-| Code | 触发条件 |
-| --- | --- |
-| `SERVICE_NOT_RETURNED` | `provides` 声明了某个 key，但 `setup` 的返回值里没有 |
-| `SERVICE_UNAVAILABLE` | `host.get()` 在非 `active` 状态调用；或依赖的 Service 所属安装未处于活动状态 |
-| `LIFETIME_DISPOSED` | Lifetime 已开始释放，因而拒绝新的监听、贡献、任务、子 Lifetime、cleanup 或 Event 发送 |
-| `INSTALLATION_UNAVAILABLE` | 安装处于 `failed` 状态；或 setup / 配置校验器抛出了**非 Error** 的值（原值在 `cause` 里）；或在未提交的 draft 上操作 |
-| `INSTALLATION_REMOVED` | 在已移除的 Installation 上操作 |
-| `INSTALLATION_IDENTITY` | `update()` 试图更换 Plugin 名称。更新可以换实现和配置，不能换身份 |
-
-### Group
-
-| Code | 触发条件 |
-| --- | --- |
-| `GROUP_REMOVED` | 在已移除的 Group 上操作，或继续使用该 Group 删除前创建的旧 ChangeSet |
-| `GROUP_UNAVAILABLE` | Group 尚未成功建立；或 Group 操作失败时抛出的是非 Error 值 |
-
-## Platform（`@dougongjs/platform`）
-
-### 信任边界
-
-在加载任何外部模块代码**之前**抛出。
-
-| Code | 触发条件 |
-| --- | --- |
-| `MANIFEST_INVALID` | Manifest 形状非法，或声明了重复的激活事件 / 权限 |
-| `API_INCOMPATIBLE` | Manifest 要求的 `apiVersion` 不满足应用版本 |
-| `PERMISSION_DENIED` | Authorizer 拒绝。`error.denied` 是被拒的权限列表 |
-| `REGISTRATION_DUPLICATE` | 两份 Artifact 的 Manifest 名称落入同一个注册身份 |
-
-### Manifest 依赖解析
-
-这些错误来自 Manifest 声明在候选 Registration 图中的解析结果；错误码指向实际被验证的对象，而不是尚未加载的 Plugin。
-
-| Code | 触发条件 |
-| --- | --- |
-| `REGISTRATION_DEPENDENCY_MISSING` | Manifest 依赖没有对应 Registration |
-| `REGISTRATION_DEPENDENCY_INCOMPATIBLE` | 依赖 Registration 的版本不满足范围 |
-| `REGISTRATION_DEPENDENCY_INACTIVE` | 依赖 Registration 存在但未激活 |
-| `REGISTRATION_CYCLE` | 候选 Registration 图中的 Manifest 依赖成环；消息带真实环路径 |
-
-### 加载与激活
-
-| Code | 触发条件 |
-| --- | --- |
-| `MODULE_LOAD_FAILED` | Loader 抛异常。原始错误在 `cause` 里 |
-| `MODULE_INVALID` | 模块加载成功但没有导出合法的 Plugin |
-| `ARTIFACT_IDENTITY` | 同一份 Artifact 内部不自洽：Manifest 名称与 placeholder 或加载出的 Plugin 名称不一致 |
-| `REGISTRATION_BUSY` | 该 Registration 正在变更，或 Platform 结构变更已关闭新的根激活入口 |
-| `REGISTRATION_UNAVAILABLE` | Registration 不可用；激活或 admission 抛出了**非 Error** 的值（原值在 `cause` 里）；或在未提交的注册上操作 |
-| `REGISTRATION_REMOVED` | 在已移除的 Registration 上操作 |
-| `REGISTRATION_IDENTITY` | 更新 Registration 时，新 Artifact 的 Manifest 名称与原名称不同 |
-| `PLATFORM_UNAVAILABLE` | Platform 已释放，或处于不允许该操作的状态 |
-
-::: tip 三种 IDENTITY 的区别
-它们描述的是三个不同对象的身份不变量：
-
-- **`INSTALLATION_IDENTITY`** —— 已存在的 Installation 想换 Plugin 名称（Core）
-- **`REGISTRATION_IDENTITY`** —— 已存在的 Registration 想换 Manifest 名称（Platform）
-- **`ARTIFACT_IDENTITY`** —— 一份 Artifact 自身的 Manifest 和它加载出的 Plugin 名字对不上（Platform，此时可能还不存在 Registration）
-:::
-
-## 怎么处理
-
-### 按 code 分流
-
-```ts
-try {
-  await installation.ready()
-} catch (error) {
-  if (!(error instanceof DougongError)) throw error
-
-  switch (error.code) {
-    case "CONFIG_INVALID":
-      showFieldErrors((error as ConfigValidationError).issues)
-      break
-    case "SERVICE_MISSING":
-      suggestInstallDependency(error.message)
-      break
-    case "INSTALLATION_UNAVAILABLE":
-      offerRetry()
-      break
-    default:
-      report(error)
-  }
-}
-```
-
-### 处理聚合错误
-
-```ts
-try {
-  await host.stop()
-} catch (error) {
-  if (error instanceof AggregateError) {
-    for (const cause of error.errors) report(cause)
-  }
-}
-```
-
-### 接收后台错误
-
-后台任务和诊断订阅者的异常通过 Host 的上报通道送出，不改变它们正在观察的命令。Event 监听器失败则由 `emit()` 聚合并拒绝，交给发送方处理：
-
-```ts
-const host = createHost({
-  name: "app",
-  onError: (error) => reportToSentry(error),
-  logger: myLogger,
-})
-```
-
-上报通道本身是 fail-safe 的：`onError` 抛出或异步拒绝都会退到 logger，logger 自己抛出或拒绝则作为终端 sink 被观察后静默——**错误观察永远不会改变它正在观察的 Host 命令**。
-
-### 诊断失败记录
-
-Core 提供 `isError(value)` 作为外部拒绝值的统一识别边界。不可读取的原型返回 false，不抛出替代原始失败的反射异常。Platform 复用此判定，再选择自己的错误码与处置。Manifest 声明检查的原样传播权限只属于内部真实创建且冻结的错误；外部抛出的 PlatformError 或同名 code 不能绕过 MANIFEST_INVALID 边界。
-
-Installation 与 Registration 的诊断错误始终使用 `RecordedFailure`，被丢弃句柄的后续 `ready()` 也会拒绝为该类型。它的 `name` 固定为 `RecordedFailure`，可选 `code` 与冻结的 `snapshot: ErrorSnapshot` 描述原始失败；它不声称自己是 `TypeError`、`DougongError` 或 `PermissionDeniedError` 子类。失败命令本身和仍可恢复的活动失败继续交付原始 Error。SnapshotPublisher 最终读取失败后，首次 dispose 抛原始值，终态 get 抛 RecordedFailure，且不再保留旧快照载荷或失败 reader。
-
-快照保留原始名称、消息、错误码和栈文本，以及有界的 `cause` 与 `errors` 树。权限失败保留 `manifestName` 和 `denied`；配置失败保留 issue 消息与路径。任意对象、回调和自定义载荷会被省略。只读 snapshot getter 返回 RecordedFailure 私有拥有的记录，不信任外部同名字段或原型继承；枚举和序列化记录应显式使用 `error.snapshot`，而非错误实例的可枚举字段。栈文本复制为字符串；原始错误缺少 stack 时也清除记录构造器的原生栈，历史错误不会通过原错误对象图保活 Host、Installer、Loader 或 Platform。
-
-记录最多展开 32 个错误节点，递归最多四条边，每个错误列表最多八项。消息上限为 4,096 字符，栈文本为 16,384，名称、错误码与权限字段为 256；校验路径最多 16 段。`truncated` 标记发生截断的记录与错误链。这是诊断记录协议，不是应用状态序列化器。
-
-异常字段的反射与读取也经过记录边界：不可访问的 cause 对象记录为省略的 NonError，不可访问的数组或 path 字段不进入快照。数组长度只捕获一次，随后按有界长度读取条目；撤销的 Proxy 或抛错的访问器不能替换原始操作失败，也不能阻止终态资源释放。
-
-`RecordedFailure` 的构造参数为 unknown；它直接记录任意拒绝值，每个错误节点最多检查一次原型，不再要求提前识别 Error。基本类型拒绝值使用 NonError 名称和有界文本，无法识别的对象只保存省略信息。错误归类与 Manifest 声明失败的来源由各自的模块私有集合拥有，只能由对应内部路径登记。清理结果由本次激活的内部结果拥有；外部错误，包括重抛另一次激活的真实清理失败，只作为错误数据，不能推进本次清理事实。
-
-Core 创建的非 Error 包装错误冻结自身，保住用于后续归类的原始 cause 身份与 code；不冻结 cause 引用的应用对象，也不冻结应用显式抛出的 Error。
-
-## 相关
-
-- [Core API 规范 · 错误约定](./core-api.md)
-- [Platform 规范 · 稳定错误码](./platform.md)
-- [事务与变更](../guide/transactions.md) —— 三级失败模型
+| `ACTIVATION_FAILED` | 激活执行失败；检查 cause 与 Core 的结构化执行结果。 |
+| `ACTIVATION_STALE` | 激活准备期间 Core 状态改变；重新预览与激活。 |
+| `API_INCOMPATIBLE` | Artifact 要求的宿主 API 范围不匹配。 |
+| `ARTIFACT_DUPLICATE` | 相同名称与 revision 已存在；使用真正的新发行身份。 |
+| `ARTIFACT_IDENTITY` | 加载的 Plugin 身份与 Artifact Manifest 不一致。 |
+| `ARTIFACT_UNAVAILABLE` | Artifact 不属于可用 Catalog 或已被移除。 |
+| `BUSY` | 该资源所有者仍有前台借用，不能同步封闭此操作。 |
+| `CHANGE_CONFLICT` | 同一变更声明包含冲突意图。 |
+| `CHANGE_FOREIGN` | ChangeSet 不属于该 Host。 |
+| `CONFIG_INVALID` | Standard Schema 验证失败，读取 issues 修正输入。 |
+| `CONTRACT_CONFLICT` | 同一 Contract ID 被赋予不同契约类别。 |
+| `CONTRIBUTION_UNAVAILABLE` | 贡献已经撤销或其所有者不再接受调用。 |
+| `EVENT_BEFORE_COMMIT` | 候选 setup 尚未提交，不能向外广播事件。 |
+| `GROUP_CONFLICT` | 分组 ID 或声明重复冲突。 |
+| `GROUP_CYCLE` | 分组父子声明形成环。 |
+| `GROUP_FOREIGN` | Group 句柄不属于该 Host。 |
+| `GROUP_MISSING` | 引用的父分组或目标分组不存在。 |
+| `GROUP_REMOVED` | 变更试图使用已经移除的 Group。 |
+| `HOST_BUSY` | Host 正在转换；等待当前操作完成再重新规划。 |
+| `HOST_QUARANTINED` | 仍有无法证明安全清理的义务；读取 unresolved。 |
+| `INSTALLATION_CONFLICT` | 安装 ID 或声明重复冲突。 |
+| `INSTALLATION_FOREIGN` | Installation 句柄不属于该 Host。 |
+| `INSTALLATION_REMOVED` | 变更试图使用已经移除的 Installation。 |
+| `LIFETIME_DISPOSED` | 资源所有者已封闭，不能接收新的资源或任务。 |
+| `MANIFEST_INVALID` | 发行声明不符合 Manifest 协议。 |
+| `MODULE_INVALID` | 模块没有提供有效的 Plugin 声明。 |
+| `MODULE_LOAD_FAILED` | Loader 失败；检查 cause 和输入 Reference。 |
+| `PERMISSION_DENIED` | 准入策略拒绝权限；检查 denied 与当前策略。 |
+| `PLAN_CONSUMED` | Plan 已经使用过，必须生成新计划。 |
+| `PLAN_FOREIGN` | Plan 没有由此 Host 签发。 |
+| `PLAN_STALE` | 计划的基线版本已过期；重新规划。 |
+| `PLATFORM_UNAVAILABLE` | Platform 或其 Catalog 正在关闭或已经关闭。 |
+| `PROVIDES_INVALID` | setup 的返回值与 provides 声明不一致。 |
+| `REGISTRATION_CYCLE` | 选择的发行依赖图包含循环。 |
+| `REGISTRATION_DEPENDENCY_INACTIVE` | 所需发行依赖没有可激活的选择。 |
+| `REGISTRATION_DEPENDENCY_INCOMPATIBLE` | 依赖选择的版本不满足 Manifest 范围。 |
+| `REGISTRATION_DEPENDENCY_MISSING` | 缺少 Manifest 声明的发行依赖。 |
+| `REGISTRATION_UNAVAILABLE` | Registration 不可用或不属于此 Platform。 |
+| `SELECTION_SUPERSEDED` | 等待期间用户选择已更新；旧结果不能覆盖它。 |
+| `SERVICE_CONFLICT` | 同一装配域存在重复 Service 提供者。 |
+| `SERVICE_CYCLE` | 必需 Service 绑定形成循环。 |
+| `SERVICE_MISSING` | 缺少必需 Service 的提供者。 |
+| `SERVICE_UNAVAILABLE` | 当前没有可借用的已提交 Service 代次。 |
+| `SHUTDOWN_TIMEOUT` | 退出等待超时，底层义务仍可继续存在。 |
+| `TRANSITION_FAILED` | 执行转换失败；通过 details.outcome 和 cause 判断恢复结果。 |

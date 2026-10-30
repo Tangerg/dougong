@@ -1,6 +1,6 @@
 import { defineConfig } from "vite";
 import dts from "unplugin-dts/vite";
-import { runtimeBaseline } from "../../scripts/runtime-baseline.mjs";
+import { runtimeBaseline } from "../../tooling/runtime-baseline.mjs";
 
 export default defineConfig({
   plugins: [
@@ -19,7 +19,7 @@ export default defineConfig({
       fileName: "index",
     },
     rollupOptions: {
-      external: ["@dougongjs/core", "semver", "zod"],
+      external: ["dougong", "dougong/advanced", "semver", "zod"],
     },
   },
 });

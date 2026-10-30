@@ -1,4 +1,4 @@
-// Generated from scripts/internal/disposal-runtime.ts. Run pnpm generate:internal.
+// Generated from tooling/internal/disposal-runtime.ts. Run pnpm generate:internal.
 export function assertPromiseRuntime(
   withResolvers: unknown,
 ): asserts withResolvers is typeof Promise.withResolvers {

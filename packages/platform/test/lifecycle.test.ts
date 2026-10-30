@@ -1,0 +1,353 @@
+import { describe, expect, it, vi } from "vitest";
+import { createHost, definePlugin } from "dougong";
+import { createPlatform, MemoryLoader } from "../src";
+import { add, deferred, emptyPlugin, fixture, nextTurn, select } from "./fixtures";
+
+describe("Platform lifecycle", () => {
+  it("disposes through the standard resource protocol and detaches its views", async () => {
+    const { host, platform } = fixture(new Map([["sample", emptyPlugin("sample")]]));
+    const registration = await select(platform, "sample", "sample");
+    const view = platform.diagnostics;
+    await host.start();
+    await platform.activate([registration]);
+    await platform[Symbol.asyncDispose]();
+    expect(view.get().status).toBe("disposed");
+    expect(view.get().registrations.size).toBe(0);
+    expect(registration.name).toBe("sample");
+    expect(registration.status).toBe("removed");
+    expect(registration.activeOrigin).toBeUndefined();
+    expect(() => registration.selectedArtifact).toThrow(
+      expect.objectContaining({ code: "REGISTRATION_UNAVAILABLE" }),
+    );
+    expect(() =>
+      platform.catalog.add({
+        revision: "late",
+        manifest: { name: "late", version: "1.0.0" },
+        reference: "late",
+      }),
+    ).toThrow(expect.objectContaining({ code: "PLATFORM_UNAVAILABLE" }));
+    expect(() => platform.preview([])).toThrow(
+      expect.objectContaining({ code: "PLATFORM_UNAVAILABLE" }),
+    );
+    await expect(platform.activate([])).rejects.toMatchObject({ code: "PLATFORM_UNAVAILABLE" });
+    await platform[Symbol.asyncDispose]();
+    await host.stop();
+  });
+
+  it("joins disposal while a setup is already committing", async () => {
+    const entered = deferred();
+    const release = deferred();
+    const cleanup = vi.fn<() => void>();
+    const plugin = definePlugin({
+      name: "sample",
+      async setup({ lifetime }) {
+        lifetime.defer(cleanup);
+        entered.resolve();
+        await release.promise;
+      },
+    });
+    const { host, platform } = fixture(new Map([["one", plugin]]));
+    const registration = await select(platform, "sample", "one");
+    await host.start();
+    const activation = platform.activate([registration]);
+    await entered.promise;
+    const first = platform[Symbol.asyncDispose]();
+    const second = platform[Symbol.asyncDispose]();
+    expect(first).toBe(second);
+    expect(platform.status).toBe("disposing");
+    expect(() => platform.select(registration.selectedArtifact)).toThrow(
+      expect.objectContaining({ code: "PLATFORM_UNAVAILABLE" }),
+    );
+    release.resolve();
+    await activation;
+    await first;
+    expect(cleanup).toHaveBeenCalledTimes(1);
+    expect(platform.status).toBe("disposed");
+    await host.stop();
+  });
+
+  it("reports removal while Core is still releasing the committed installation", async () => {
+    const entered = deferred();
+    const release = deferred();
+    const plugin = definePlugin({
+      name: "sample",
+      setup({ lifetime }) {
+        lifetime.defer(async () => {
+          entered.resolve();
+          await release.promise;
+        });
+      },
+    });
+    const { host, platform } = fixture(new Map([["one", plugin]]));
+    const registration = await select(platform, "sample", "one");
+    await host.start();
+    await platform.activate([registration]);
+    const removing = platform.remove(registration);
+    await entered.promise;
+    expect(registration.status).toBe("removing");
+    expect(platform.diagnostics.get().registrations.get("sample")?.status).toBe("removing");
+    release.resolve();
+    await removing;
+    expect(registration.status).toBe("removed");
+    expect(registration.name).toBe("sample");
+    expect(registration.error).toBeUndefined();
+    await platform[Symbol.asyncDispose]();
+    await host.stop();
+  });
+
+  it("abandons a cancelled Loader result without executing its Plugin", async () => {
+    const entered = deferred();
+    const release = deferred();
+    const setup = vi.fn<() => void>();
+    const host = createHost();
+    const platform = createPlatform({
+      id: "late",
+      host,
+      apiVersion: "1.0.0",
+      loader: {
+        async load() {
+          entered.resolve();
+          await release.promise;
+          return { default: definePlugin({ name: "sample", setup }) };
+        },
+      },
+    });
+    const registration = await select(platform, "sample", "one");
+    const result = platform.activate([registration]).catch((error: unknown) => error);
+    await entered.promise;
+    await platform[Symbol.asyncDispose]();
+    expect(await result).toBeInstanceOf(Error);
+    release.resolve();
+    await nextTurn();
+    expect(setup).not.toHaveBeenCalled();
+    expect(host.installation(registration.id)).toBeUndefined();
+  });
+
+  it("retains ownership when Core rejects removal", async () => {
+    const SERVICE = definePlugin({
+      name: "sample",
+      setup({ lifetime }) {
+        lifetime.defer(() => {
+          throw new Error("release failed");
+        });
+      },
+    });
+    const { host, platform } = fixture(new Map([["one", SERVICE]]));
+    const registration = await select(platform, "sample", "one");
+    await host.start();
+    await platform.activate([registration]);
+    await expect(platform[Symbol.asyncDispose]()).rejects.toMatchObject({
+      code: "HOST_QUARANTINED",
+    });
+    expect(platform.status).toBe("active");
+    expect(host.status).toBe("quarantined");
+    expect(registration.status).toBe("quarantined");
+    expect(registration.selectedArtifact.manifest.name).toBe("sample");
+  });
+
+  it("refuses to remove a dependency that an installed artifact still requires", async () => {
+    const { platform } = fixture(
+      new Map([
+        ["dep", emptyPlugin("dep")],
+        ["root", emptyPlugin("root")],
+      ]),
+    );
+    const dep = await select(platform, "dep", "dep");
+    const root = await select(platform, "root", "root", { dependencies: { dep: "*" } });
+    await platform.activate([root]);
+    await expect(platform.remove(dep)).rejects.toMatchObject({
+      code: "REGISTRATION_DEPENDENCY_INACTIVE",
+    });
+    expect(dep.status).toBe("installed");
+    await platform.remove(dep, root);
+    expect(dep.status).toBe("removed");
+    expect(root.status).toBe("removed");
+    await platform[Symbol.asyncDispose]();
+  });
+
+  it("places installations in an explicit Group and checks ownership before loading", async () => {
+    const host = createHost({ groups: [{ id: "extensions" }] });
+    const group = host.group("extensions")!;
+    const load = vi.fn<() => { default: ReturnType<typeof emptyPlugin> }>(() => ({
+      default: emptyPlugin("sample"),
+    }));
+    const platform = createPlatform({
+      id: "group",
+      host,
+      group,
+      apiVersion: "1.0.0",
+      loader: { load },
+    });
+    const registration = await select(platform, "sample", "one");
+    await platform.activate([registration]);
+    expect(registration.installation?.groupId).toBe("extensions");
+    const change = host.change();
+    change.removeGroup(group);
+    await host.apply(await host.plan(change));
+    const calls = load.mock.calls.length;
+    await expect(platform.activate([registration])).rejects.toMatchObject({
+      code: "REGISTRATION_UNAVAILABLE",
+    });
+    expect(load).toHaveBeenCalledTimes(calls);
+    await platform.remove(registration);
+    await platform[Symbol.asyncDispose]();
+  });
+
+  it("rejects an uncommitted or foreign Group at construction", () => {
+    const host = createHost();
+    const group = host.change().group("pending");
+    expect(() =>
+      createPlatform({
+        id: "group",
+        host,
+        group,
+        apiVersion: "1.0.0",
+        loader: new MemoryLoader(new Map()),
+      }),
+    ).toThrow("committed");
+  });
+
+  it("reports observer failures without changing committed results", async () => {
+    const logger = {
+      debug: vi.fn<() => void>(),
+      info: vi.fn<() => void>(),
+      warn: vi.fn<() => void>(),
+      error: vi.fn<() => void>(),
+    };
+    const host = createHost();
+    const platform = createPlatform({
+      id: "observer",
+      host,
+      apiVersion: "1.0.0",
+      loader: new MemoryLoader(new Map([["one", { default: emptyPlugin("sample") }]])),
+      logger,
+    });
+    const registration = await select(platform, "sample", "one");
+    platform.diagnostics.subscribe(() => {
+      throw new Error("observer failed");
+    });
+    expect(await platform.activate([registration])).toMatchObject({ outcome: "committed" });
+    expect(registration.status).toBe("installed");
+    expect(logger.error).toHaveBeenCalled();
+    await platform[Symbol.asyncDispose]();
+  });
+
+  it("observes rejection from the terminal logger", async () => {
+    const logger = {
+      debug() {},
+      info() {},
+      warn() {},
+      error: vi.fn<() => Promise<never>>(() => Promise.reject(new Error("sink failed"))),
+    };
+    const platform = createPlatform({
+      id: "sink",
+      host: createHost(),
+      apiVersion: "1.0.0",
+      loader: new MemoryLoader(new Map()),
+      logger,
+    });
+    platform.diagnostics.subscribe(() => {
+      throw new Error("observer failed");
+    });
+    await platform[Symbol.asyncDispose]();
+    await nextTurn();
+    expect(logger.error).toHaveBeenCalled();
+  });
+
+  it("captures options instead of following later replacement of the caller's record", async () => {
+    const first = createHost();
+    const second = createHost();
+    const options = {
+      id: "capture",
+      host: first,
+      apiVersion: "1.0.0",
+      loader: new MemoryLoader(new Map([["one", { default: emptyPlugin("sample") }]])),
+    };
+    const platform = createPlatform(options);
+    options.host = second;
+    const registration = await select(platform, "sample", "one");
+    await platform.activate([registration]);
+    expect(first.installation(registration.id)).toBeDefined();
+    expect(second.installation(registration.id)).toBeUndefined();
+    await platform[Symbol.asyncDispose]();
+  });
+
+  it.each(["", " event", "event ", null])(
+    "validates activation event %j before dispatch",
+    (event) => {
+      const { platform } = fixture();
+      expect(() => platform.trigger(event as never)).toThrow(TypeError);
+    },
+  );
+
+  it("activates every matching root in one batch", async () => {
+    const { host, platform } = fixture(
+      new Map([
+        ["one", emptyPlugin("one")],
+        ["two", emptyPlugin("two")],
+        ["other", emptyPlugin("other")],
+      ]),
+    );
+    const one = await select(platform, "one", "one");
+    const two = await select(platform, "two", "two");
+    const other = await select(platform, "other", "other", { activation: ["other"] });
+    const before = host.stateRevision;
+    await platform.trigger("startup");
+    expect(host.stateRevision).toBe(before + 1);
+    expect(one.status).toBe("installed");
+    expect(two.status).toBe("installed");
+    expect(other.status).toBe("selected");
+    expect(await platform.trigger("missing")).toBeUndefined();
+    await platform[Symbol.asyncDispose]();
+  });
+
+  it("rejects foreign registration handles and malformed options", async () => {
+    const one = fixture().platform;
+    const two = fixture().platform;
+    const registration = await select(one, "sample", "one");
+    await expect(two.activate([registration])).rejects.toThrow("different Platform");
+    await expect(one.activate([registration], { signal: {} } as never)).rejects.toThrow(
+      "AbortSignal",
+    );
+    await expect(one.activate(null as never)).rejects.toThrow("array");
+    expect(() => one.preview(null as never)).toThrow("array");
+    expect(() => one.preview([registration], { remove: {} } as never)).toThrow("array");
+    const controller = new AbortController();
+    controller.abort();
+    await expect(one.activate([registration], { signal: controller.signal })).rejects.toBe(
+      controller.signal.reason,
+    );
+    await one[Symbol.asyncDispose]();
+    await two[Symbol.asyncDispose]();
+  });
+
+  it.each([
+    null,
+    { unknown: true },
+    { id: "" },
+    { host: {} },
+    { loader: {} },
+    { authorizer: {} },
+    { logger: {} },
+  ])("validates Platform constructor capabilities", (override) => {
+    const options = {
+      id: "validation",
+      host: createHost(),
+      apiVersion: "1.0.0",
+      loader: new MemoryLoader(new Map()),
+    };
+    expect(() =>
+      createPlatform(override === null ? (null as never) : ({ ...options, ...override } as never)),
+    ).toThrow(TypeError);
+  });
+
+  it("does not preserve ambiguous legacy registration properties", async () => {
+    const { platform } = fixture();
+    const registration = await platform.select(add(platform, "sample", "one"));
+    expect("manifest" in registration).toBe(false);
+    expect("update" in registration).toBe(false);
+    expect("activate" in registration).toBe(false);
+    expect(Object.isFrozen(registration)).toBe(true);
+    await platform[Symbol.asyncDispose]();
+  });
+});

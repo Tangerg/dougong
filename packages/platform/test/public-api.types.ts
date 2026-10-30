@@ -1,93 +1,65 @@
+import { createHost, definePlugin } from "dougong";
 import {
-  type AnyPlugin,
-  type Awaitable,
-  type RecordedFailure,
-  definePlugin,
-  service,
-} from "@dougongjs/core";
-import { ImportLoader, PermissionSet } from "@dougongjs/platform";
-import { expectTypeOf } from "vitest";
-import type * as platform from "@dougongjs/platform";
+  createPlatform,
+  MemoryLoader,
+  type Artifact,
+  type Platform,
+  type Registration,
+} from "../src";
 
-expectTypeOf<platform.RegistrationSnapshot["error"]>().toEqualTypeOf<RecordedFailure | undefined>();
-expectTypeOf<ReturnType<platform.PlatformChangeSet<unknown>["update"]>>().toEqualTypeOf<void>();
-expectTypeOf<ReturnType<platform.PlatformChangeSet<unknown>["remove"]>>().toEqualTypeOf<void>();
-// @ts-expect-error Artifact carries only the external Reference type.
-expectTypeOf<platform.Artifact<string, unknown>>();
-
-type NarrowLoader = {
-  load(reference: "known", signal: AbortSignal): unknown;
-};
-type BroadLoader = {
-  load(reference: unknown, signal: AbortSignal): unknown;
-};
-type NarrowAuthorizer = {
-  authorize(manifest: platform.Manifest & { readonly name: "known" }, signal: AbortSignal): void;
-};
-type ThenableAuthorizer = {
-  authorize(manifest: platform.Manifest, signal: AbortSignal): PromiseLike<void>;
-};
-
-expectTypeOf<NarrowLoader extends platform.Loader<string> ? true : false>().toEqualTypeOf<false>();
-expectTypeOf<BroadLoader extends platform.Loader<string> ? true : false>().toEqualTypeOf<true>();
-expectTypeOf<NarrowAuthorizer extends platform.Authorizer ? true : false>().toEqualTypeOf<false>();
-expectTypeOf<ThenableAuthorizer extends platform.Authorizer ? true : false>().toEqualTypeOf<true>();
-expectTypeOf<ReturnType<platform.Loader<string>["load"]>>().toEqualTypeOf<unknown>();
-expectTypeOf<ReturnType<platform.Authorizer["authorize"]>>().toEqualTypeOf<Awaitable<void>>();
-
-class NarrowImportLoader extends ImportLoader {
-  // @ts-expect-error Concrete Loader adapters preserve the same strict reference boundary.
-  override readonly load = async (reference: string, _signal: AbortSignal) => reference;
-}
-
-class NarrowPermissionSet extends PermissionSet {
-  // @ts-expect-error Concrete Authorizer adapters cannot narrow the Manifest they accept.
-  override readonly authorize = (
-    _manifest: platform.Manifest & { readonly name: "known" },
-    _signal: AbortSignal,
-  ) => undefined;
-}
-
-void NarrowImportLoader;
-void NarrowPermissionSet;
-expectTypeOf<
-  platform.MemoryLoader<"known"> extends platform.MemoryLoader<string> ? true : false
->().toEqualTypeOf<false>();
-expectTypeOf<
-  platform.MemoryLoader<string> extends platform.MemoryLoader<"known"> ? true : false
->().toEqualTypeOf<true>();
-expectTypeOf<
-  platform.Registration<"known"> extends platform.Registration<string> ? true : false
->().toEqualTypeOf<false>();
-expectTypeOf<
-  platform.Registration<string> extends platform.Registration<"known"> ? true : false
->().toEqualTypeOf<true>();
-expectTypeOf<
-  platform.PlatformChangeSet<"known"> extends platform.PlatformChangeSet<string> ? true : false
->().toEqualTypeOf<false>();
-expectTypeOf<
-  platform.PlatformChangeSet<string> extends platform.PlatformChangeSet<"known"> ? true : false
->().toEqualTypeOf<false>();
-expectTypeOf<
-  platform.Platform<"known"> extends platform.Platform<string> ? true : false
->().toEqualTypeOf<false>();
-expectTypeOf<
-  platform.Platform<string> extends platform.Platform<"known"> ? true : false
->().toEqualTypeOf<false>();
-
-const CLOCK = service<() => number>("test/platform-placeholder-clock");
-const placeholder = definePlugin({
-  name: "typed.placeholder",
-  requires: { clock: CLOCK },
-  setup(ctx) {
-    ctx.clock();
-  },
+const plugin = definePlugin({ name: "types", setup() {} });
+const platform = createPlatform({
+  id: "types",
+  host: createHost(),
+  apiVersion: "1.0.0",
+  loader: new MemoryLoader(new Map([["module", { default: plugin }]])),
 });
-const plugins: readonly AnyPlugin[] = [placeholder];
-const artifact: platform.Artifact<string> = {
-  manifest: { name: "typed.placeholder", version: "1.0.0" },
-  reference: "typed-placeholder",
-  placeholder: plugins[0]!,
-};
 
-expectTypeOf(artifact.placeholder).toEqualTypeOf<AnyPlugin | undefined>();
+const artifact: Artifact<string> = platform.catalog.add({
+  revision: "release-1",
+  manifest: { name: plugin.name, version: "1.0.0" },
+  reference: "module",
+});
+
+const registration: Promise<Registration<string>> = platform.select(artifact);
+void registration;
+
+// @ts-expect-error A string Loader cannot accept arbitrary reference values.
+const unsafePlatform: Platform<unknown> = platform;
+void unsafePlatform;
+
+platform.catalog.add({
+  revision: "bad",
+  manifest: { name: "types", version: "1.0.0" },
+  // @ts-expect-error Catalog references must match the selected Loader.
+  reference: 42,
+});
+
+// @ts-expect-error Artifact revisions are immutable and required.
+platform.catalog.add({ manifest: { name: "types", version: "1.0.0" }, reference: "module" });
+
+// @ts-expect-error Selection is distinct from activation; ambiguous updates no longer exist.
+platform.register(artifact);
+
+// @ts-expect-error The standard asynchronous release protocol is the only disposal entry.
+platform.dispose();
+
+async function usePlatform() {
+  await using owned = createPlatform({
+    id: "scope",
+    host: createHost(),
+    apiVersion: "1.0.0",
+    loader: new MemoryLoader(new Map<string, unknown>()),
+  });
+  const selected = await owned.select(
+    owned.catalog.add({
+      revision: "r1",
+      manifest: { name: "scope", version: "1.0.0" },
+      reference: "module",
+    }),
+  );
+  owned.preview([selected], { remove: [] });
+  await owned.activate([selected], { signal: new AbortController().signal, remove: [] });
+}
+
+void usePlatform;

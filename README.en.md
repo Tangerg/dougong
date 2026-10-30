@@ -1,160 +1,52 @@
-<div align="center">
-
 # Dougong
 
-**A capability composition and structured lifetime kernel** · pure JavaScript/TypeScript
+[简体中文](./README.md) · English
 
-[![npm](https://img.shields.io/npm/v/dougong?color=9f3f2f)](https://www.npmjs.com/package/dougong)
-[![license](https://img.shields.io/npm/l/dougong?color=9f3f2f)](./LICENSE)
-[![node](https://img.shields.io/node/v/dougong?color=9f3f2f)](https://nodejs.org)
-
-[Documentation](https://tangerg.github.io/dougong/en/) ·
-[Getting started](https://tangerg.github.io/dougong/en/guide/getting-started) ·
-[Core concepts](https://tangerg.github.io/dougong/en/guide/concepts) ·
-[API specification](https://tangerg.github.io/dougong/en/reference/core-api) ·
-[简体中文](./README.md) · **English**
-
-</div>
-
----
-
-Dougong (斗拱, the interlocking bracket set of Chinese timber architecture) solves one problem: **when an application's capabilities must be split into independently installable units, how do their dependencies, lifetimes and changes remain easy to reason about?**
-
-```sh
-npm install dougong
-```
+A TypeScript plugin composition kernel with immutable plans, atomic publication, owned resource lifetimes and structured inspection.
 
 ```ts
-import { createHost, definePlugin, service } from "dougong"
+import { createHost, definePlugin, service } from "dougong";
 
-const CLOCK = service<Clock>("app/clock")
-
-const clock = definePlugin({
-  name: "app.clock",
-  provides: { clock: CLOCK },
-  setup: () => ({ clock: { now: () => new Date() } }),
-})
-
+const GREETER = service<{ greet(name: string): string }>("app/greeter");
 const greeter = definePlugin({
   name: "app.greeter",
-  requires: { clock: CLOCK },        // the dependency lives here
-  setup(ctx) {
-    console.log(ctx.clock.now())     // only declared dependencies exist, or it fails to compile
+  provides: { greeter: GREETER },
+  setup() {
+    return { greeter: { greet: (name) => `Hello, ${name}` } };
   },
-})
+});
 
-const host = createHost({ name: "hello" })
-host.install(greeter)                 // install order does not decide start order
-host.install(clock)
-await host.start()                    // topology derived from declarations, layers start concurrently
+const host = createHost({
+  name: "app",
+  installations: [{ id: "greeter", plugin: greeter }],
+});
+await host.start();
+const message = await host.use(GREETER, (service) => service.greet("Dougong"));
+await host[Symbol.asyncDispose]();
 ```
-
-## Why it looks like this
-
-**Explicit over implicit.** Dependencies live in `requires`, identity lives in Contracts, ownership lives in Lifetimes, and call-time choices live in ordinary parameters. No service locator, ambient scope, prototype-chain injection or proxy — where `ctx.foo` comes from is always visible in the same file.
-
-**One semantic, one path.** Every semantic operation has exactly one canonical entry point, and higher-level convenience must expand mechanically onto it rather than owning a second state machine.
-
-| Semantic | Entry point | | Semantic | Entry point |
-| --- | --- | --- | --- | --- |
-| Install a plugin | `install()` | | Listen / emit an Event | `on()` / `emit()` |
-| Atomic plan change | `change()` | | Register a resource | `cleanup()` |
-| Publish a Service | `provides` + `setup` return | | Child lifetime / task | `lifetime(label)` / `spawn()` |
-| Contribute to an ExtensionPoint | `contribute()` | | Read / subscribe to a live value | `get()` / `subscribe()` |
-| Update / remove an installation | `update()` / `remove()` | | Release a resource early | `dispose()` |
-
-**Transactions expose only committed state.** Contract kinds, listeners and contributions made during setup stay staged until the whole layer validates. A failed change rolls back, and fails closed when it cannot roll back reliably — never a half-built execution graph.
-
-**Types are the constraint.** Using an undeclared dependency, reading an ExtensionPoint as a Service, declaring `provides` without returning it — all compile errors.
-
-## Six atoms
-
-```text
-Service          a stable one-to-one capability, fixed for an Instance;
-                 a provider change rebuilds consumers
-ExtensionPoint   an open contribution set that adds and removes live,
-                 notifying subscribers
-Event            a transient fact retaining no state, with one dispatch semantic
-Lifetime         structured ownership of listeners, contributions, tasks and
-                 resources; terminal items detach automatically
-Plugin           one setup producing a set of capabilities
-Host             dependency graph, transactions and Instance orchestration
-```
-
-A signal is not a fifth capability. `@dougongjs/reactive` provides `signal()` / `computed()` / `batch()` and an `observe()` built on the public Lifetime protocol; Core neither depends on it nor offers implicit effects.
 
 ## Packages
 
-| Package | Role | Package dependencies |
-| --- | --- | --- |
-| [`dougong`](./packages/dougong) | Facade re-exporting the three below | the three internal packages |
-| [`@dougongjs/core`](./packages/core) | The six atoms, dependency graph, transactions, Groups, diagnostics | `@standard-schema/spec` |
-| [`@dougongjs/reactive`](./packages/reactive) | Signal value layer and `observe()` | **none** |
-| [`@dougongjs/platform`](./packages/platform) | Manifests, loaders, permissions, lazy activation, HMR | core, zod, semver |
-
-`core` and `reactive` are mutually independent foundations; `platform` depends only on `core`; `dougong` is just the composition entry point. That direction is enforced by an architecture gate in CI.
-
-## When it fits
-
-| Fits | Does not fit |
+| Package | Responsibility |
 | --- | --- |
-| Capabilities install, update and roll back after startup | You just need a small DI container |
-| Plugins have real dependencies on each other | Plugins are fully independent |
-| A half-loaded state is unacceptable | A long-running service where partial degradation beats consistency |
-| Desktop apps, editor kernels, build toolchains | A simple web page |
+| `dougong` | Contracts, Plugin, Plan, Host and Lifetime |
+| `dougong/advanced` | Public composition primitives for downstream adapters |
+| `@dougongjs/platform` | Artifact catalog, selection, admission and activation |
+| `@dougongjs/reactive` | Independent signals, Readable bridge and owned observation |
 
-Dougong's failure model is **transactional** — a plugin whose setup fails rolls the whole change back. If you value isolation ("one plugin dying must not affect the others") more, something like [cordis](https://github.com/cordiverse/cordis) fits better. A product trade-off, not a quality ranking.
-
-## Documentation
-
-Three layers, from first run to specification:
-
-**Get running** — [Getting started](https://tangerg.github.io/dougong/en/guide/getting-started) · [Core concepts](https://tangerg.github.io/dougong/en/guide/concepts)
-
-**Go deeper** — [Writing plugins](https://tangerg.github.io/dougong/en/guide/writing-plugins) · [Lifetime and resources](https://tangerg.github.io/dougong/en/guide/lifetime) · [Transactions and change](https://tangerg.github.io/dougong/en/guide/transactions) · [Reactive and observation](https://tangerg.github.io/dougong/en/guide/reactive) · [External plugin delivery](https://tangerg.github.io/dougong/en/guide/platform)
-
-**Specification** — [Core API](https://tangerg.github.io/dougong/en/reference/core-api) · [Architecture](https://tangerg.github.io/dougong/en/reference/architecture) · [Platform](https://tangerg.github.io/dougong/en/reference/platform) · [Error codes](https://tangerg.github.io/dougong/en/reference/errors)
-
-## Examples
-
-[Twelve runnable chapters](./packages/examples) climb three stages — atoms, composition, complete applications — from a minimal Service to the Planet / Lynx scenarios, declarative plans and module-graph HMR, all in CI:
-
-```sh
-pnpm examples
-```
-
-"Each chapter adds exactly one rung" is a test rather than a claim: all twelve declare the concepts they are first to use, and the test concatenates those declarations and compares them to the syllabus for exact equality — a repeat, an inverted order or a chapter that stands still turns CI red.
-
-Chapters 11 and 12 are roughly 200 lines each and implement, using only the public API, what mature frameworks spend thousands of lines on: a declarative config loader and a hot-reload engine. That is a test of whether Core's abstractions are genuinely expandable.
-
-## Requirements
-
-Node.js ≥ 22. The browser / WebView baseline is Chrome / Edge 119, Firefox 121 and Safari 17.4, with native `Promise.withResolvers()`. Dougong selects stable symbol keys for its disposal protocols instead of silently defining a method named `"undefined"` when `Symbol.dispose` is absent; explicit `.dispose()` works throughout the stated baseline.
-
-`using` / `await using` additionally require the runtime to provide, or the application to polyfill, `Symbol.dispose` / `Symbol.asyncDispose`; Dougong does not mutate globals. Published code does not require the runtime to parse `using` directly, because TypeScript 5.2+ or an equivalent compiler can lower the syntax.
-
-TypeScript consumers need this in `tsconfig.json`:
-
-```json
-"lib": ["ES2024", "DOM", "DOM.Iterable", "ESNext.Disposable"]
-```
+The kernel has one mutation path: `host.change()` → `host.plan(change)` → `host.apply(plan)`. Start and stop use the same execution model. Services and executable contributions are borrowed for the duration of calls. Standard disposable resources belong to a Lifetime. Failed cleanup retains unresolved obligations and quarantines execution.
 
 ## Development
 
 ```sh
 pnpm install
-pnpm check      # the full verification gate
-pnpm docs:dev   # the documentation site locally
+pnpm check
+pnpm examples
+pnpm docs:dev
 ```
 
-The `check` script in `package.json` is the verification entry point for generated sources, types, static checks, behavioural tests, builds and documentation.
+Runtime: Node.js 22+, Chrome/Edge 119+, Firefox 121+, Safari 17.4+. Development: Node.js 22.12+, 24 or 26+; use the pinned pnpm version. Published packages are ESM.
 
-Architectural constraints do not live only in prose. Package dependency direction, module ranks, fixed Contract ID uniqueness, retired vocabulary and a set of **inverted rules** (such as "Platform command serialization must use Core's `SerialQueue`" — an absence means somebody started a second state machine) all become CI failures. The full list is in [Mechanical guards](https://tangerg.github.io/dougong/en/reference/guards).
+[Documentation](https://tangerg.github.io/dougong/en/) · [Architecture](./docs/en/reference/architecture.md) · [Examples](./docs/en/examples.md) · [Contributing rules](./AGENTS.md)
 
-## Status
-
-Early `0.x` development with **no backward-compatibility promises yet**. The priority is a correct model, a consistent API and complete executable evidence.
-
-## License
-
-[MIT](./LICENSE)
+MIT License.

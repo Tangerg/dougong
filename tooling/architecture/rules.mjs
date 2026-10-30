@@ -1,0 +1,20 @@
+// Stable rule identities bind executable checks to their human-facing explanations.
+export const architectureRules = new Set([
+  "ownership.package",
+  "ownership.module",
+  "direction.package",
+  "direction.module",
+  "types.suppressions",
+  "types.precise",
+  "callbacks.readonly",
+  "tests.types",
+  "runtime.portable",
+  "exports.public",
+  "modules.esm",
+  "reactive.independent",
+  "vocabulary.current",
+  "logging.port",
+  "policy.explicit",
+  "lifetime.owner",
+  "contracts.owner",
+]);

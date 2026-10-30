@@ -1,101 +1,155 @@
 # @dougongjs/platform
 
-[简体中文](#简体中文) · [English](#english)
+External artifact selection, admission and lazy activation compiled into Dougong plans.
 
----
+Platform owns available artifacts and the user's selected targets. Dougong owns committed
+installations, their source information, running generations and resources. Platform uses
+only the public `dougong` and `dougong/advanced` protocols.
 
-## 简体中文
-
-外部插件分发层：Manifest 校验、权限授权、模块加载、懒激活与热更新。
-
-```sh
-npm install @dougongjs/platform
-```
+## A complete lifecycle
 
 ```ts
-import { createHost } from "@dougongjs/core"
-import { createPlatform, ImportLoader, PermissionSet, defineManifest } from "@dougongjs/platform"
+import { createHost, definePlugin, service } from "dougong";
+import { createPlatform, MemoryLoader } from "@dougongjs/platform";
 
-const host = createHost({ name: "editor" })
-await host.start()
+const COUNTER = service<{ value: number }>("example/counter");
+const counter = definePlugin({
+  name: "example.counter",
+  provides: { counter: COUNTER },
+  setup() {
+    return { counter: { value: 1 } };
+  },
+});
 
-const platform = createPlatform({
-  installer: host,
+await using host = createHost();
+await host.start();
+
+await using platform = createPlatform({
+  id: "extensions",
+  host,
   apiVersion: "1.0.0",
-  loader: new ImportLoader(),
-  authorizer: new PermissionSet(["fs:read"]),
-})
+  loader: new MemoryLoader(new Map([["counter-v1", { default: counter }]])),
+});
 
-await platform.register({
-  manifest: defineManifest({
-    name: "acme.markdown",
-    version: "1.2.0",
-    apiVersion: "^1.0.0",
-    activation: ["onLanguage:markdown"],
-    permissions: ["fs:read"],
-  }),
-  reference: "https://cdn.example.com/acme-markdown.js",
-})
+const artifact = platform.catalog.add({
+  revision: "counter-build-1",
+  manifest: { name: counter.name, version: "1.0.0" },
+  reference: "counter-v1",
+});
+const registration = await platform.select(artifact);
 
-await platform.trigger("onLanguage:markdown")
+const preview = platform.preview([registration]);
+if (preview.blockers.length === 0) {
+  await platform.activate([registration]);
+}
+
+console.log(await host.use(COUNTER, counter => counter.value));
 ```
 
-它把这四个外部关注点——**声明**（Manifest）、**加载**（Loader）、**授权**（Permissions）、**激活**（Activation）——**编译成一份** canonical Core `ChangeSet`，不复制注册表、依赖图、事务、资源所有权、观察协议或错误语义。
+`select` records a target without loading or running code. `activate` loads the complete
+selected dependency closure and submits one Core plan. `trigger("startup")` activates all
+matching roots in the same way. Module loading and configuration validation remain explicit
+deferred checks in the metadata-only preview.
 
-**注册 ≠ 激活。** `register()` 只让 Artifact 进入 Platform，`activate()` 才加载外部 Plugin。可选的 `placeholder`（应用代码编写的 Plugin）让「命令已在菜单里，点击时才加载」成为可能，且两者替换是原子的。
+The scope disposes Platform before Host. For an explicit release, await
+`platform[Symbol.asyncDispose]()`. There is no parallel `dispose()` API.
 
-> ⚠️ 权限是**策略端口，不是沙箱**。它决定「要不要运行这段代码」，不决定「这段代码能碰什么」。真正的隔离需要 Worker、iframe、进程或独立 Host。
+## Availability, selection and committed source
 
----
+| Fact | Owner | Public projection |
+| --- | --- | --- |
+| Available artifact revisions | Catalog | `catalog.get(name, revision)` and `catalog.list()` |
+| Selected target | Registration | `selectedArtifact`, `selectionRevision` |
+| Committed implementation source | Core Installation | `activeOrigin` |
+| Execution generation | Core Engine | `installation.status` and Host inspection |
+| Last activation failure | Registration | `error`, captured without resource references |
 
-## English
+An artifact revision cannot be reused within its Catalog, even after removal. Removing an
+available artifact does not remove selected or committed source data. A URL or loader
+reference is a location, not a verified content digest. The selected Loader owns reference
+resolution and any integrity guarantees it advertises.
 
-The external plugin delivery layer: manifest validation, permission authorization, module loading, lazy activation and hot reload.
+Config uses Dougong's captured data protocol. Mutating the caller's input after `catalog.add`
+cannot change a later activation. Functions and resource instances belong in Service
+contracts, not config.
 
-```sh
-npm install @dougongjs/platform
-```
+To update, add a new revision, select it, then activate the stable Registration. If setup
+fails and Core restores the previous graph, `selectedArtifact` remains the new target while
+`activeOrigin` remains the old committed source. The failed target is not silently discarded.
+A stopped Host can contain committed installations; `activeOrigin` does not imply that their
+Instances are currently running.
+
+Registration keeps the Installation handle it created. It projects that handle only while
+Core still recognizes the same committed identity. A matching ID or copied origin data cannot
+make it adopt another installation. Platforms that collide on an installation ID receive
+Core's normal conflict error; removing either Registration cannot remove the other's identity.
+
+## Atomic deployment changes
 
 ```ts
-import { createHost } from "@dougongjs/core"
-import { createPlatform, ImportLoader, PermissionSet, defineManifest } from "@dougongjs/platform"
+const preview = platform.preview([nextProvider, nextConsumer], {
+  remove: [obsoleteProvider],
+});
 
-const host = createHost({ name: "editor" })
-await host.start()
-
-const platform = createPlatform({
-  installer: host,
-  apiVersion: "1.0.0",
-  loader: new ImportLoader(),
-  authorizer: new PermissionSet(["fs:read"]),
-})
-
-await platform.register({
-  manifest: defineManifest({
-    name: "acme.markdown",
-    version: "1.2.0",
-    apiVersion: "^1.0.0",
-    activation: ["onLanguage:markdown"],
-    permissions: ["fs:read"],
-  }),
-  reference: "https://cdn.example.com/acme-markdown.js",
-})
-
-await platform.trigger("onLanguage:markdown")
+await platform.activate([nextProvider, nextConsumer], {
+  remove: [obsoleteProvider],
+  signal: controller.signal,
+});
 ```
 
-It compiles four external concerns — **declaration** (manifest), **loading** (loader), **authorization** (permissions) and **activation** — into one canonical Core `ChangeSet`, duplicating none of Core's registries, dependency graph, transactions, resource ownership, observation protocol or error semantics.
+The final artifact dependency graph is validated before loading. Core receives removals,
+updates and additions in one ChangeSet, so a provider can be replaced by a different
+installation without an intermediate duplicate or missing binding. `platform.remove(...items)`
+uses the same compilation path with no activation roots.
 
-**Registration ≠ activation.** `register()` only admits the artifact; `activate()` loads the external implementation. An optional application-authored `placeholder` makes "the command is already in the menu but loads on click" possible, and the swap from placeholder to real implementation is atomic.
+Concurrent activations share module loading but do not share a caller's cancellation.
+Cancelling one waiter cannot cancel a load another waiter still needs. Every operation
+captures each involved Registration's selection revision. A late result from an older
+selection cannot install itself. Selection commands and the final activation commit are
+serialized; long module loading runs outside that boundary.
 
-> ⚠️ Permissions are a **policy port, not a sandbox**. They decide whether to run the code, not what the code may touch. Real isolation needs a Worker, iframe, process or separate Host.
+Cancellation before the Core handoff prevents that handoff. Once Core execution has started,
+Platform awaits and reports its actual outcome rather than calling a committed operation
+cancelled. Dynamic import side effects are outside Core rollback.
 
----
+## Admission
 
-- 文档站 / Documentation: https://tangerg.github.io/dougong/
-- 仓库 / Repository: https://github.com/Tangerg/dougong
+```ts
+const authorizer = {
+  authorize({ artifact, operation }, signal) {
+    signal.throwIfAborted();
+    policy.check({
+      name: artifact.manifest.name,
+      revision: artifact.revision,
+      permissions: artifact.manifest.permissions,
+      operation,
+    });
+  },
+};
+```
 
-> 早期 0.x 开发阶段，当前不承诺向后兼容。需要 Node.js ≥ 22，或 Chrome / Edge 119、Firefox 121、Safari 17.4 及以上浏览器 / WebView。
-> Early 0.x development; no backward-compatibility promises yet. Requires Node.js ≥ 22, or Chrome / Edge 119, Firefox 121 or Safari 17.4 and later.
+Admission receives the concrete artifact descriptor and either `load` or `activate`.
+`PermissionSet` implements a fixed allow-list of manifest permission names; the default
+policy grants none. Loading checks happen after dependency waits and immediately before the
+Loader is entered. New generations are checked again after Core planning and before apply.
+Cached code is not imported again merely to perform another policy check.
 
-MIT
+Admission authorizes an attempt. It does not sandbox admitted code or revoke already-started
+same-realm JavaScript. `ImportLoader` preserves native import caching and does not claim
+transitive HMR or cancellation of module evaluation. Use a Loader backed by a real execution
+boundary when stronger execution controls are required.
+
+## Placement and diagnostics
+
+`PlatformOptions.group` can place installations in a committed Group owned by `host`.
+Group remains an installation-ownership boundary. A removed Group is rejected before loading;
+removing the now-unavailable Registrations or disposing Platform remains possible.
+
+`platform.diagnostics` follows the Core snapshot protocol. Its reads synchronize against the
+current Host snapshot, so an earlier Host observer also sees the current committed source.
+Observer failures go to the logger without changing an already committed result. Terminal
+Registration handles and diagnostic views detach from live Host and Loader capabilities.
+
+A failed Core cleanup keeps the Platform's installation ownership and exposes the quarantined
+execution state. Retrying or recreating a Platform cannot establish that external resources
+have been released.
