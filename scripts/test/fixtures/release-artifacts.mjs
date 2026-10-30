@@ -69,7 +69,7 @@ installCommandFixture((name, args, options, nativeSpawn) => {
       if (args.length !== 3 || args[1] !== "--pack-destination") process.exit(99);
       writeFileSync(join(workspace, "release-stage"), stage);
       if (process.env.DOUGONG_RELEASE_REAL_PNPM) {
-        return nativeSpawn(process.execPath, [process.env.DOUGONG_RELEASE_REAL_PNPM, ...args], {
+        return nativeSpawn(process.env.DOUGONG_RELEASE_REAL_PNPM, args, {
           ...options,
           stdio: "pipe",
           env: { ...process.env, ...options.env, COREPACK_ENABLE_NETWORK: "0" },

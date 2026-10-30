@@ -1,5 +1,6 @@
 import { execFileSync } from "node:child_process";
 import {
+  constants,
   existsSync,
   linkSync,
   mkdirSync,
@@ -29,6 +30,15 @@ const packages = ["reactive", "core", "platform", "dougong"];
 
 const preload = fileURLToPath(new URL("./fixtures/release-artifacts.mjs", import.meta.url));
 
+function requireExecutable(name) {
+  const executable = (process.env.PATH ?? "")
+    .split(delimiter)
+    .map((directory) => join(directory, name))
+    .find((path) => existsSync(path));
+  if (!executable) throw new Error(`Release fixture requires ${name}`);
+  return executable;
+}
+
 async function runRelease(
   mutate,
   {
@@ -54,12 +64,14 @@ async function runRelease(
     const bin = join(workspace, "bin");
     mkdirSync(bin);
     for (const name of ["tar", "gzip"]) {
-      const executable = (process.env.PATH ?? "")
-        .split(delimiter)
-        .map((directory) => join(directory, name))
-        .find((path) => existsSync(path));
-      if (!executable) throw new Error(`Release fixture requires ${name}`);
-      symlinkSync(executable, join(bin, name));
+      symlinkSync(requireExecutable(name), join(bin, name));
+    }
+    if (realPack) {
+      // Package-manager launchers need their own runtime without gaining the caller's whole PATH.
+      symlinkSync(process.execPath, join(bin, "node"));
+      for (const name of ["dirname", "readlink", "sed", "uname"]) {
+        symlinkSync(requireExecutable(name), join(bin, name));
+      }
     }
 
     writeFileSync(
@@ -113,12 +125,7 @@ async function runRelease(
         return [path, readFileSync(path, "utf8")];
       }),
     );
-    const realGit = !dryRun
-      ? (process.env.PATH ?? "")
-          .split(delimiter)
-          .map((directory) => join(directory, "git"))
-          .find((path) => existsSync(path))
-      : undefined;
+    const realGit = dryRun ? undefined : requireExecutable("git");
     const git = (args, cwd = workspace) =>
       execFileSync(realGit, args, {
         cwd,
@@ -128,7 +135,6 @@ async function runRelease(
       }).trim();
     let initialHead;
     if (!dryRun) {
-      if (!realGit) throw new Error("Release recording fixture requires git");
       git(["init", "--bare", join(workspace, "remote.git")]);
       git(["init", "-b", "main"]);
       git(["config", "user.name", "Release fixture"]);
@@ -155,13 +161,7 @@ async function runRelease(
         ].join("\n"),
       );
     }
-    const pnpm = realPack
-      ? (process.env.PATH ?? "")
-          .split(delimiter)
-          .map((directory) => join(directory, "pnpm"))
-          .find((path) => existsSync(path))
-      : undefined;
-    if (realPack && !pnpm) throw new Error("Release packaging fixture requires pnpm");
+    const pnpm = realPack ? requireExecutable("pnpm") : undefined;
     const execute = async (interruption, publicationFailure) => {
       try {
         return await executeRelease(
@@ -481,6 +481,31 @@ it.each(["complete", "excluded dist", "directory README.md"])(
     );
   },
 );
+
+it("packs through a shell executable without restoring the caller's command path", async () => {
+  const pnpm = requireExecutable("pnpm");
+  const directory = mkdtempSync(join(tmpdir(), "dougong pnpm launcher-"));
+  try {
+    writeFileSync(
+      join(directory, "pnpm"),
+      `#!/bin/sh
+if command -v npm >/dev/null 2>&1; then
+  echo "The real npm command escaped fixture isolation" >&2
+  exit 1
+fi
+exec '${pnpm.replaceAll("'", "'\"'\"'")}' "$@"
+`,
+      { mode: constants.S_IRUSR | constants.S_IWUSR | constants.S_IXUSR },
+    );
+    vi.stubEnv("PATH", [directory, process.env.PATH].join(delimiter));
+    const result = await runRelease(() => undefined, { realPack: true });
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("Dry run complete");
+  } finally {
+    vi.unstubAllEnvs();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
 
 it.each(["dist/index.js", "dist/index.d.ts", "README.md", "LICENSE"])(
   "rejects a candidate missing %s",
