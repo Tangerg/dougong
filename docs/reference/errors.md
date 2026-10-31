@@ -2,7 +2,7 @@
 
 失败通过结构化错误拒绝。`DougongError` 提供 `code`、不可变 `details` 和可选原始 `cause`；`ConfigValidationError` 额外提供捕获后的 Standard Schema issues。`PlatformError` 使用 `PlatformErrorCode`，`PermissionDeniedError` 提供 manifestName 与 denied。
 
-`details.outcome` 区分 rejected、restored、quarantined。成功 resolve 的 ApplyResult 只表示 committed。`RecordedFailure` 与 `ErrorSnapshot` 是有界诊断投影，直接调用者仍获得原始失败。参数与协议误用可能抛 TypeError；取消服从所属 AbortSignal，并不等于成功提交。
+`details.outcome` 区分 rejected、restored、quarantined。Promise 正常完成即成功，`ApplyResult` 只返回状态修订与影响安装；无须用固定字段再次判断成功。`RecordedFailure` 与 `ErrorSnapshot` 是有界诊断投影，直接调用者仍获得原始失败。参数与协议误用可能抛 TypeError；取消服从所属 AbortSignal，并不等于成功提交。
 
 | 错误码 | 含义与处理 |
 | --- | --- |
@@ -24,8 +24,8 @@
 | `GROUP_FOREIGN` | Group 句柄不属于该 Host。 |
 | `GROUP_MISSING` | 引用的父分组或目标分组不存在。 |
 | `GROUP_REMOVED` | 变更试图使用已经移除的 Group。 |
-| `HOST_BUSY` | Host 正在转换；等待当前操作完成再重新规划。 |
-| `HOST_QUARANTINED` | 仍有无法证明安全清理的义务；读取 unresolved。 |
+| `HOST_BUSY` | 正在转换或受影响代次仍有前台借用；等待工作完成，基线未变时可重用尚未消费的 Plan。 |
+| `HOST_QUARANTINED` | 整个 Host 已终止可用性；检查 status、error 与 unresolved，按[隔离处置流程](../guide/transactions.md#quarantine) 处理。 |
 | `INSTALLATION_CONFLICT` | 安装 ID 或声明重复冲突。 |
 | `INSTALLATION_FOREIGN` | Installation 句柄不属于该 Host。 |
 | `INSTALLATION_REMOVED` | 变更试图使用已经移除的 Installation。 |

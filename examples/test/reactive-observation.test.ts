@@ -318,8 +318,8 @@ describe("observe composition", () => {
     await host.apply(await host.plan(change));
     await host.start();
     const subscription = host.diagnostics.subscribe(() => {
-      const lifetime = host
-        .inspect()
+      const lifetime = host.diagnostics
+        .get()
         .installations.find((item) => item.id === installation.id)?.lifetime;
       if (lifetime?.children.length) source.set(1);
     });

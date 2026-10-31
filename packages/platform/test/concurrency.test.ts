@@ -217,7 +217,10 @@ describe("selection and activation races", () => {
     await entered.promise;
     controller.abort();
     release.resolve();
-    expect(await activation).toMatchObject({ outcome: "committed" });
+    expect(await activation).toEqual({
+      stateRevision: host.stateRevision,
+      affectedInstallations: [registration.installation!.id],
+    });
     expect(registration.status).toBe("installed");
     await platform[Symbol.asyncDispose]();
     await host.stop();

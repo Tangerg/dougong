@@ -21,7 +21,9 @@ lifetime.interrupt(() => connection.interruptRead());
 lifetime.spawn((signal) => connection.readUntilClosed(signal));
 ```
 
-清理失败不能宣称已经干净退出。失败释放、无法结束的任务或获取保留在 `unresolved` 中，Host 进入隔离失败状态，禁止恢复到可服务状态。超时结束等待不代表底层工作已经终止。AbortSignal 无法强杀同一 JavaScript 线程；硬隔离需要单独设计的执行器。
+清理失败不能宣称已经干净退出。Lifetime 保留失败释放和未完成工作；Host 的 `unresolved` 投影仍被保留的运行代次。子树没有成功退出时，不能释放它仍可使用的父资源；同理，未退出消费者的传递提供者必须保留，独立分支则继续安全清理。正在使用的前台借用也不能被强制销毁。
+
+超时只结束等待，不证明底层工作已停止；已经启动的退出可能随后完成，但清理失败不会自动重试。隔离是整个 Host 的终止状态，迟到完成只更新诊断，不恢复服务。AbortSignal 无法强杀任意 JavaScript；硬终止需要实际执行隔离。应用的处置和替换前提见[隔离后的应用处理](./transactions.md#quarantine)。
 
 Task 自己拥有后台异常报告。前台 `host.use` 和贡献 `use` 的失败传播给调用者；不要把同一个错误再次作为后台失败抛出。Lifetime 快照中的任务数、借用数和未完成义务是资源事实的只读投影。
 

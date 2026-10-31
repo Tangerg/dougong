@@ -91,7 +91,7 @@ it("withdraws setup resources after an inaccessible non-Error rejection", async 
   expect(Object.is((failure as Error).cause, reason.proxy)).toBe(true);
   expect(released).toHaveBeenCalledOnce();
   expect(installation.status).toBe("removed");
-  expect(host.inspect().installations).toEqual([]);
+  expect(host.diagnostics.get().installations).toEqual([]);
   expect(host.status).toBe("running");
   await host.stop();
 });
@@ -158,8 +158,8 @@ it("discards a rejected Installation even when its original failure has an inacc
   const rejected = await host.apply(await host.plan(change)).catch((error: unknown) => error);
   expect(Object.is((rejected as Error).cause, failure)).toBe(true);
   expect(installation.status).toBe("removed");
-  expect(host.inspect().error?.message).toBe("original setup failure");
-  expect(host.inspect().installations).toEqual([]);
+  expect(host.diagnostics.get().error?.message).toBe("original setup failure");
+  expect(host.diagnostics.get().installations).toEqual([]);
   expect(host.status).toBe("running");
   await host.stop();
 });
@@ -196,14 +196,14 @@ it("keeps committed membership and revision behind a parent removal transaction"
   expect(host.stateRevision).toBe(revision);
   expect(host.installation("owner")).toBe(installation);
   expect(host.group("child")).toBe(child);
-  expect(host.inspect().installations.find((record) => record.id === installation.id)?.status).toBe(
-    "changing",
-  );
+  expect(
+    host.diagnostics.get().installations.find((record) => record.id === installation.id)?.status,
+  ).toBe("changing");
   resume.resolve();
   await applying;
   expect(host.stateRevision).toBe(revision + 1);
   expect(host.group("child")).toBe(child);
-  expect(host.inspect().installations).toEqual([]);
+  expect(host.diagnostics.get().installations).toEqual([]);
   await host.stop();
 });
 
@@ -267,10 +267,10 @@ it.each([false, true])(
     await host.start();
     const installation = host.installation("provider")!;
     const revision = host.stateRevision;
-    const snapshots: ReturnType<typeof host.inspect>[] = [];
+    const snapshots: ReturnType<typeof host.diagnostics.get>[] = [];
     const subscription = eager
       ? host.diagnostics.subscribe(() => {
-          snapshots.push(host.inspect());
+          snapshots.push(host.diagnostics.get());
         })
       : undefined;
     const change = host.change();
@@ -295,7 +295,7 @@ it.each([false, true])(
     });
     const planning = host.plan(change).catch((error: unknown) => error);
     await entered.promise;
-    const snapshot = host.inspect();
+    const snapshot = host.diagnostics.get();
     expect(
       snapshot.installations.find((record) => record.id === installation.id)?.provides,
     ).toEqual([oldService.id]);
@@ -398,7 +398,7 @@ it("retains an immutable historical snapshot while a removed Installation detach
   });
   await host.start();
   const installation = host.installation("owner")!;
-  const previous = host.inspect();
+  const previous = host.diagnostics.get();
   const states: string[] = [];
   using _subscription = host.diagnostics.subscribe(() => {
     states.push(installation.status);
@@ -408,7 +408,7 @@ it("retains an immutable historical snapshot while a removed Installation detach
   await host.apply(await host.plan(change));
   expect(states.at(-1)).toBe("removed");
   expect(installation.status).toBe("removed");
-  expect(host.inspect().installations).toEqual([]);
+  expect(host.diagnostics.get().installations).toEqual([]);
   expect(previous.installations[0]?.status).toBe("running");
   expect(previous.installations[0]?.lifetime?.phase).toBe("active");
   await host.stop();

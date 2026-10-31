@@ -173,6 +173,13 @@ expectTypeOf<ReturnType<core.ChangeSet["remove"]>>().toEqualTypeOf<void>();
 expectTypeOf<core.Group["status"]>();
 // @ts-expect-error Live service references must be borrowed.
 expectTypeOf<core.Host["get"]>();
+// @ts-expect-error Snapshot reads and subscriptions share one diagnostics view.
+expectTypeOf<core.Host["inspect"]>();
+expectTypeOf<ReturnType<core.Host["diagnostics"]["get"]>>().toEqualTypeOf<core.HostSnapshot>();
+expectTypeOf<core.ApplyResult>().toEqualTypeOf<{
+  readonly stateRevision: number;
+  readonly affectedInstallations: ReadonlyArray<string>;
+}>();
 expectTypeOf<core.Plan["report"]["baseStateRevision"]>().toEqualTypeOf<number>();
 expectTypeOf<core.Disposable>().toMatchTypeOf<Disposable>();
 expectTypeOf<Disposable>().toMatchTypeOf<core.Disposable>();

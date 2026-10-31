@@ -240,11 +240,11 @@ it("reports validation failure without changing the running generation", async (
     ],
   });
   await host.start();
-  const before = host.inspect();
+  const before = host.diagnostics.get();
   const change = host.change();
   change.install(provider(2), { id: "conflict" });
   await expect(host.plan(change)).rejects.toMatchObject({ code: "SERVICE_CONFLICT" });
-  expect(host.inspect()).toBe(before);
+  expect(host.diagnostics.get()).toBe(before);
   expect(stop).not.toHaveBeenCalled();
   await host.stop();
 });

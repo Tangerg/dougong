@@ -21,7 +21,9 @@ lifetime.interrupt(() => connection.interruptRead());
 lifetime.spawn((signal) => connection.readUntilClosed(signal));
 ```
 
-Cleanup failure cannot claim a clean exit. Failed releases and unfinished tasks or acquisitions remain in `unresolved`; Host becomes quarantined and cannot resume serving. A timeout ends waiting but cannot prove underlying work stopped. AbortSignal cannot terminate arbitrary JavaScript in the same thread; hard isolation requires a separately designed executor.
+Cleanup failure cannot claim a clean exit. Lifetime retains failed releases and unfinished work, and Host `unresolved` projects retained execution generations. A child that has not exited prevents release of parent resources it may still use. Likewise, an unfinished consumer retains its transitive providers while independent branches continue safe cleanup. A foreground borrow also cannot be forcibly destroyed.
+
+A timeout ends waiting without proving the underlying work stopped. Shutdown already started may finish later, but failed cleanup is not automatically retried. Quarantine is terminal for the whole Host; late completion updates diagnostics without resuming service. AbortSignal cannot forcibly terminate arbitrary JavaScript; that requires a real execution boundary. See [Application handling after quarantine](./transactions.md#quarantine) for incident handling and replacement preconditions.
 
 Tasks own background error reporting. Failures of `host.use` and contribution `use` propagate to their caller; do not rethrow the same outcome as another background failure. Lifetime task counts, foreground counts and unresolved obligations are read-only projections of resource facts.
 

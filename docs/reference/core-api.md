@@ -1,6 +1,6 @@
-# Core API 规范
+# Core API 参考
 
-主包 `dougong` 是实际内核；默认导出面只有一个明确的运行模型。
+主包 `dougong` 是实际内核；默认导出面只有一个明确的运行模型。本页记录公开协议；边界、取舍与禁止事项的理由见[架构与设计理由](./architecture.md)，执行与故障处置见[计划与执行](../guide/transactions.md)。
 
 ## 公开导出
 
@@ -38,15 +38,19 @@ await host.stop();
 
 `installation(id)` 与 `group(id)` 只查询已提交声明。Installation 公开只读的 `id`、`groupId`、`status` 与 `origin`；Group 公开 `id` 与 `parentId`。所有变更由 ChangeSet 表达。`InstallationUpdate` 更新配置，或替换 Plugin 并携带配置与来源。
 
-`host.use(token, callback)` 借用当前已提交 Service。`host.contributions(token)` 提供贡献视图。`inspect()`、`diagnostics.get()` 与 `explain(id)` 从同一已提交状态生成稳定投影。标准 `[Symbol.asyncDispose]` 加入 stop。
+`host.use(token, callback)` 借用当前已提交 Service。`host.contributions(token)` 提供贡献视图。`host.diagnostics.get()` 读取稳定的 Host 快照，`host.diagnostics.subscribe()` 观察其失效通知；`explain(id)` 查询指定安装的服务绑定。标准 `[Symbol.asyncDispose]` 加入 stop。
 
 ## 执行与诊断
 
-Host 状态为 `stopped`、`starting`、`running`、`changing`、`stopping`、`quarantined`。`Plan.report` 可序列化，不包含模块、函数、真实配置载荷或可变运行对象。`HostSnapshot` 中 Lifetime 也是普通数据快照。
+Host 状态为 `stopped`、`starting`、`running`、`changing`、`stopping`、`quarantined`。隔离是整个 Host 的终止状态，不提供原地恢复；操作边界与替换前提见[隔离后的应用处理](../guide/transactions.md#quarantine)。`Plan.report` 可序列化，不包含模块、函数、真实配置载荷或可变运行对象。`HostSnapshot` 中 Lifetime 也是普通数据快照。
 
-订阅统一 `get/subscribe`，不重放，使用标准 Disposable 取消。`ContributionView.use(id, fn)` 借用贡献所有者；`get()` 仅给出集合快照。`EventOperations.on/emit` 的监听同步执行，`ContributionOperations.add` 登记带 owner 的贡献。
+订阅统一 `get/subscribe`，不重放，使用标准 Disposable 取消。`ContributionView.use(id, fn)` 借用贡献所有者；`get()` 仅给出集合快照。`EventOperations.on/emit` 支持同步或异步监听，emit 等待所有监听结果并汇总失败；每次监听调用借用其所有者。`ContributionOperations.add` 登记带 owner 的贡献。
 
 `ErrorDetails` 给出 outcome、phase、stateRevision 和可选的安装、契约、依赖路径与影响范围。`RecordedFailure` 是有界脱离资源图的诊断投影；原始拒绝的 cause 仍由直接调用者接收。
+
+`apply`、`start`、`stop` 成功时 resolve 不可变 `ApplyResult`，只含 `stateRevision` 与 `affectedInstallations`；失败 reject。无变更时保留原修订并返回空的影响列表，不附加固定成功标记。
+
+从上一版 API 更新时，将已删除的 Host inspect 方法替换为 `host.diagnostics.get()`。删除对旧 ApplyResult outcome 字段的判断；await 正常完成后处理成功，catch 中处理失败及结构化 details。不提供别名或兼容适配器。
 
 ## 高级组合原语
 

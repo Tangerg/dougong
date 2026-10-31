@@ -1,6 +1,6 @@
-# Core API specification
+# Core API reference
 
-The main `dougong` package is the actual kernel. Its default surface exposes one explicit execution model.
+The main `dougong` package is the actual kernel. Its default surface exposes one explicit execution model. This page records public protocols; [Architecture and design rationale](./architecture.md) explains boundaries and trade-offs, and [Planning and execution](../guide/transactions.md) covers calling and incident handling.
 
 ## Public exports
 
@@ -38,15 +38,19 @@ await host.stop();
 
 `installation(id)` and `group(id)` query committed declarations. Installation exposes read-only `id`, `groupId`, `status` and `origin`; Group exposes `id` and `parentId`. ChangeSet expresses every mutation. `InstallationUpdate` either updates configuration or replaces a Plugin with configuration and origin.
 
-`host.use(token, callback)` borrows a currently committed Service. `host.contributions(token)` exposes a contribution view. `inspect()`, `diagnostics.get()` and `explain(id)` project the same committed state. Standard `[Symbol.asyncDispose]` joins stop.
+`host.use(token, callback)` borrows a currently committed Service. `host.contributions(token)` exposes a contribution view. `host.diagnostics.get()` reads a stable Host snapshot and `host.diagnostics.subscribe()` observes invalidation; `explain(id)` queries one installation's Service bindings. Standard `[Symbol.asyncDispose]` joins stop.
 
 ## Execution and diagnostics
 
-Host states are `stopped`, `starting`, `running`, `changing`, `stopping` and `quarantined`. `Plan.report` is serializable and contains no modules, functions, real configuration payloads or mutable runtime objects. Lifetimes inside `HostSnapshot` are plain data snapshots too.
+Host states are `stopped`, `starting`, `running`, `changing`, `stopping` and `quarantined`. Quarantine is terminal for the entire Host, with no in-place recovery. See [Application handling after quarantine](../guide/transactions.md#quarantine) for operation boundaries and replacement preconditions. `Plan.report` is serializable and contains no modules, functions, real configuration payloads or mutable runtime objects. Lifetimes inside `HostSnapshot` are plain data snapshots too.
 
-Subscriptions share `get/subscribe`, do not replay and use standard Disposable cancellation. `ContributionView.use(id, fn)` borrows the contribution owner; `get()` provides a collection snapshot. `EventOperations.on/emit` invokes synchronous listeners, while `ContributionOperations.add` registers owned contributions.
+Subscriptions share `get/subscribe`, do not replay and use standard Disposable cancellation. `ContributionView.use(id, fn)` borrows the contribution owner; `get()` provides a collection snapshot. `EventOperations.on/emit` supports synchronous or asynchronous listeners; emit awaits all results and aggregates failures, borrowing each listener's owner until completion. `ContributionOperations.add` registers owned contributions.
 
 `ErrorDetails` carries outcome, phase, stateRevision and optional installation, contract, dependency path and impact. `RecordedFailure` is a bounded diagnostic projection detached from resource graphs; direct callers still receive the cause of the original rejection.
+
+`apply`, `start` and `stop` resolve with an immutable `ApplyResult` containing `stateRevision` and `affectedInstallations`; failure rejects. A no-op preserves the revision and returns an empty affected list. The result contains no constant success discriminator.
+
+For callers updating from the previous API, replace the removed Host inspect method with `host.diagnostics.get()`. Remove checks of the former ApplyResult outcome field; code after a successful await handles success, while catch handles failures and their structured details. No alias or compatibility adapter is provided.
 
 ## Advanced composition primitives
 

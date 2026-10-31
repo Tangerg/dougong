@@ -25,7 +25,7 @@ Register ownership as resources are acquired. Pass standard resources to `lifeti
 
 Listeners and contributions belong to the current Instance's Lifetime by default. Pass `{ lifetime: child }` to assign a child owner. Candidate Instances can register both, but neither becomes externally visible until the entire execution commits. Calling `events.emit` during candidate setup fails; emit from business operations that run after publication.
 
-Events accept synchronous listeners. Use `lifetime.spawn` for asynchronous background work; the resulting Task owns error reporting. Register prerequisites for shutting down with `lifetime.interrupt`. A listener returning a Promise does not create an implicit waiting protocol.
+Event listeners can return synchronously or return a Promise. `events.emit` waits for every listener result and rejects with aggregated failures. Each invocation borrows the listener's Lifetime until completion, so asynchronous handling stays owned. Use `lifetime.spawn` for work that should continue independently of this broadcast; its Task owns background error reporting. Register interruptions required for shutdown with `lifetime.interrupt`.
 
 Configuration is data: ordinary records, arrays, strings, finite numbers, booleans and null. Capture rejects accessors, unusual prototypes, cycles, functions, symbols and sparse arrays. Validator output is captured again. A schema executes once during planning; applying consumes the validated result already in the Plan.
 

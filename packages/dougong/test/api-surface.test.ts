@@ -399,6 +399,7 @@ describe("public API surface", () => {
     expect(Object.keys(installation).sort()).toEqual(["groupId", "id", "origin", "status"]);
     expect(Object.keys(group).sort()).toEqual(["id", "parentId"]);
     expect(Object.keys(host.diagnostics).sort()).toEqual(["get", "subscribe"]);
+    expect("inspect" in host).toBe(false);
     expect(Object.isFrozen(host)).toBe(true);
     expect("cancel" in change).toBe(false);
     expect("attach" in installation).toBe(false);

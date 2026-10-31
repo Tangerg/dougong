@@ -151,5 +151,7 @@ Observer failures go to the logger without changing an already committed result.
 Registration handles and diagnostic views detach from live Host and Loader capabilities.
 
 A failed Core cleanup keeps the Platform's installation ownership and exposes the quarantined
-execution state. Retrying or recreating a Platform cannot establish that external resources
-have been released.
+execution state. Core quarantine is terminal for the whole Host. Retrying activation or
+recreating Platform cannot restore it, and creating a new Host does not release old resources.
+Follow the [Core quarantine procedure](https://tangerg.github.io/dougong/en/guide/transactions#quarantine)
+to handle the old execution boundary before a replacement takes over.

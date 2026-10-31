@@ -34,7 +34,7 @@ it.each(["install", "update"])(
     const plan = await planning!;
     expect(plan.report.operations).toEqual([]);
     await host.apply(plan);
-    expect(host.inspect().installations).toHaveLength(1);
+    expect(host.diagnostics.get().installations).toHaveLength(1);
     expect(installation.status).toBe("running");
     await expect(host.plan(change)).rejects.toMatchObject({ code: "CHANGE_FOREIGN" });
     await host.stop();
@@ -133,7 +133,7 @@ it("rejects a candidate closed by provided-service reflection before committing 
   });
   await closing;
   expect(host.status).toBe("stopped");
-  expect(host.inspect().unresolved).toEqual([]);
+  expect(host.diagnostics.get().unresolved).toEqual([]);
   expect(host.installation("provider")?.status).toBe("stopped");
   await expect(host.use(value, (current) => current)).rejects.toMatchObject({
     code: "SERVICE_UNAVAILABLE",

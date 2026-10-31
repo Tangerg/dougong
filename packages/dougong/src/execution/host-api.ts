@@ -23,7 +23,6 @@ export interface HostOptions {
 }
 
 export interface ApplyResult {
-  readonly outcome: "committed";
   readonly stateRevision: number;
   readonly affectedInstallations: ReadonlyArray<string>;
 }
@@ -46,7 +45,6 @@ export interface Host {
   contributions<T>(point: ExtensionPoint<T>): ContributionView<T>;
   installation(id: string): Installation | undefined;
   group(id: string): Group | undefined;
-  inspect(): HostSnapshot;
   explain(installationId: string): ReadonlyArray<BindingReport>;
   [Symbol.asyncDispose](): Promise<void>;
 }

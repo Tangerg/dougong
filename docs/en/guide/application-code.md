@@ -1,6 +1,6 @@
 # Application code
 
-Application and agent callers consume the current generation through stable contracts. `host.use` acquires a borrow synchronously and releases it after the callback's complete result settles. Transitions reject new borrows and join work that already started.
+Application and agent callers consume the current generation through stable contracts. `host.use` acquires a borrow synchronously and releases it after the callback's complete result settles. A change that would destroy that generation rejects with `HOST_BUSY`. Once an admitted transition seals entry, affected generations reject new borrows; unaffected generations can continue serving.
 
 ```ts
 const answer = await host.use(SEARCH, async (search) => {
@@ -22,6 +22,6 @@ if (id !== undefined) {
 
 `get()` returns an immutable collection snapshot for enumeration and rendering. `use` is the execution boundary; reading a snapshot does not grant indefinite execution authority.
 
-`host.inspect()` and `host.diagnostics.get()` project the same facts. Subscriptions do not replay immediately; notifications carry no payload, so read through `get()` in the callback. Unsubscribe with `subscription[Symbol.dispose]()`. Bounded `RecordedFailure` diagnostics avoid retaining arbitrary plugin resource graphs through exceptions.
+`host.diagnostics.get()` is the sole entrypoint for reading a stable Host snapshot. Subscriptions do not replay immediately; notifications carry no payload, so read through `get()` in the callback. Unsubscribe with `subscription[Symbol.dispose]()`. Bounded `RecordedFailure` diagnostics avoid retaining arbitrary plugin resource graphs through exceptions.
 
 CLI, UI and agent callers share `change → plan → apply`. Present the Plan's bindings, impact, order and execution guarantees before applying that exact Plan. If state changed, plan again.

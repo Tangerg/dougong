@@ -62,7 +62,9 @@ it.each([false, true])(
     expect(starts).toHaveBeenCalledTimes(unclean ? 1 : 2);
     const stopped = await host.stop().catch((error: unknown) => error);
     expect(stopped).toMatchObject(
-      unclean ? { code: "HOST_QUARANTINED" } : { outcome: "committed" },
+      unclean
+        ? { code: "HOST_QUARANTINED" }
+        : { stateRevision: host.stateRevision, affectedInstallations: ["a", "b"] },
     );
   },
 );
@@ -188,7 +190,9 @@ it.each(["cleanup", "restore", "stop"] as const)(
     });
     expect(host.status).toBe("quarantined");
     expect(
-      host.inspect().installations.every((installation) => installation.status === "quarantined"),
+      host.diagnostics
+        .get()
+        .installations.every((installation) => installation.status === "quarantined"),
     ).toBe(true);
     await expect(host.use(value, (current) => current)).rejects.toMatchObject({
       code: "HOST_QUARANTINED",
@@ -375,7 +379,7 @@ it("retains a provider when its timed out consumer can still use its resources",
   await host.start();
   await expect(host.stop()).rejects.toMatchObject({ code: "HOST_QUARANTINED" });
   expect(release).not.toHaveBeenCalled();
-  expect(host.inspect().unresolved.map((record) => record.installation)).toEqual(
+  expect(host.diagnostics.get().unresolved.map((record) => record.installation)).toEqual(
     expect.arrayContaining(["provider", "consumer"]),
   );
   resume.resolve();
@@ -419,14 +423,14 @@ it("reports late setup failure and refreshes unresolved ownership after the dead
     ],
   });
   await expect(host.start()).rejects.toMatchObject({ code: "HOST_QUARANTINED" });
-  const before = host.inspect();
+  const before = host.diagnostics.get();
   expect(before.unresolved.find((record) => record.installation === "late")?.lifetime.tasks).toBe(
     1,
   );
   resume.resolve();
   await finished.promise;
   await new Promise((resolve) => setTimeout(resolve, 0));
-  const after = host.inspect();
+  const after = host.diagnostics.get();
   expect(report).toHaveBeenCalledExactlyOnceWith(lateFailure);
   expect(after).not.toBe(before);
   expect(after.stateRevision).toBe(before.stateRevision);
@@ -464,7 +468,10 @@ it("rejects lifecycle reentry from startup validation and releases execution own
   expect(host.stateRevision).toBe(0);
   expect(setup).not.toHaveBeenCalled();
   tolerateBusy = true;
-  await expect(host.start()).resolves.toMatchObject({ outcome: "committed" });
+  await expect(host.start()).resolves.toEqual({
+    stateRevision: 1,
+    affectedInstallations: ["owner"],
+  });
   expect(failures).toEqual([
     expect.objectContaining({ code: "HOST_BUSY" }),
     expect.objectContaining({ code: "HOST_BUSY" }),

@@ -311,7 +311,7 @@ async function historicalSnapshot(fail: boolean) {
   await host.start().catch((error) => {
     if (!fail) throw error;
   });
-  const snapshot = host.inspect();
+  const snapshot = host.diagnostics.get();
   await host.stop();
   return { snapshot, reference: new WeakRef(host) };
 }

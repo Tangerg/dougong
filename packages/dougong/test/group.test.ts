@@ -34,8 +34,8 @@ it("groups installation ownership without creating another capability namespace"
   remove.removeGroup(parent);
   remove.removeGroup(other);
   await host.apply(await host.plan(remove));
-  expect(host.inspect().groups).toEqual([]);
-  expect(host.inspect().installations).toEqual([]);
+  expect(host.diagnostics.get().groups).toEqual([]);
+  expect(host.diagnostics.get().installations).toEqual([]);
   expect(host.group("child")).toBeUndefined();
   await host.stop();
 });
@@ -67,7 +67,7 @@ it("removes descendants in one plan and preserves unrelated Instances", async ()
   await host.apply(plan);
   expect(stopped).toHaveBeenCalledOnce();
   expect(otherStarted).toHaveBeenCalledOnce();
-  expect(host.inspect().groups).toEqual([]);
+  expect(host.diagnostics.get().groups).toEqual([]);
   await host.stop();
 });
 

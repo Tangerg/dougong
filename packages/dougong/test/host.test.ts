@@ -74,7 +74,7 @@ describe("Host execution", () => {
     await host.stop();
     expect(steps).toEqual(["a", "b", "-b", "-a"]);
     expect(host.installation("a")?.status).toBe("stopped");
-    expect(host.inspect().installations).toHaveLength(2);
+    expect(host.diagnostics.get().installations).toHaveLength(2);
     const revision = host.stateRevision;
     await host.stop();
     expect(host.stateRevision).toBe(revision);
@@ -397,7 +397,7 @@ describe("Host execution", () => {
       code: "HOST_QUARANTINED",
     });
     expect(host.status).toBe("quarantined");
-    expect(host.inspect().unresolved).toHaveLength(1);
+    expect(host.diagnostics.get().unresolved).toHaveLength(1);
     await expect(host.start()).rejects.toMatchObject({ code: "HOST_QUARANTINED" });
     await expect(host.stop()).rejects.toMatchObject({ code: "HOST_QUARANTINED" });
     expect(() => host.change()).toThrowError(expect.objectContaining({ code: "HOST_QUARANTINED" }));
@@ -424,7 +424,7 @@ describe("Host execution", () => {
     expect(host.installation("a")).toBe(handle);
     expect(handle.origin).toEqual({ version: "1" });
     expect(await read(host, value)).toBe(1);
-    expect(host.inspect().error?.message).toContain("new failed");
+    expect(host.diagnostics.get().error?.message).toContain("new failed");
     await replace(host, "a", provider(3));
     expect(handle.origin).toBeUndefined();
     expect(await read(host, value)).toBe(3);
@@ -474,7 +474,7 @@ describe("Host execution", () => {
       ],
     });
     await expect(host.start()).rejects.toMatchObject({ details: { outcome: "quarantined" } });
-    expect(host.inspect().unresolved[0]?.lifetime.unresolved.length).toBeGreaterThan(0);
+    expect(host.diagnostics.get().unresolved[0]?.lifetime.unresolved.length).toBeGreaterThan(0);
   });
 
   it("keeps contributions dynamic without rebuilding their consumer", async () => {
@@ -516,7 +516,7 @@ describe("Host execution", () => {
     const subscription = host.diagnostics.subscribe(() => {
       throw new Error("observer");
     });
-    expect((await host.start()).outcome).toBe("committed");
+    await expect(host.start()).resolves.toEqual({ stateRevision: 1, affectedInstallations: ["a"] });
     expect(await read(host, value)).toBe(1);
     expect(report).toHaveBeenCalled();
     subscription[Symbol.dispose]();

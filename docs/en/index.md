@@ -11,7 +11,7 @@ Explicit capability composition, immutable plans and structured resource ownersh
 - [Reactive state and observation](./guide/reactive.md)
 - [External plugin delivery](./guide/platform.md)
 - [Core API](./reference/core-api.md)
-- [Architecture](./reference/architecture.md)
+- [Architecture and rationale](./reference/architecture.md)
 - [Platform API](./reference/platform.md)
 - [Error codes](./reference/errors.md)
 - [Mechanical guards](./reference/guards.md)

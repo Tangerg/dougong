@@ -25,7 +25,6 @@ export function createHost(options?: HostOptions): Host {
     contributions: engine.contributions.bind(engine),
     installation: engine.installation.bind(engine),
     group: engine.group.bind(engine),
-    inspect: () => engine.inspect(),
     explain: engine.explain.bind(engine),
     [Symbol.asyncDispose]: async () => {
       await engine.stop();

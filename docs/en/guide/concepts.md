@@ -6,13 +6,13 @@ Each fact has one owner. Other objects hold references or expose read-only proje
 | --- | --- |
 | Service | One capability protocol under a stable identity |
 | ExtensionPoint | The protocol of an open collection of contributions |
-| Event | The payload protocol of a synchronous broadcast |
+| Event | The payload protocol of a transient broadcast; emit awaits listener completion |
 | Plugin | Configuration schema, requirements, provisions and setup |
-| Installation | Stable installation ID, group, committed configuration and origin |
+| Installation | Stable installation identity with read-only status and origin projected from Engine |
 | Instance | Services and Lifetime from one setup execution |
 | ChangeSet | Declaration intent awaiting planning |
 | Plan | An immutable execution plan for one stateRevision |
-| Engine | Execution phase, committed state, generations and transitions |
+| Engine | Committed declarations, configuration, origin, bindings, generations, execution phase and transitions |
 | Lifetime | Resources, children, tasks, acquisitions and active obligations |
 | Catalog | Known immutable Artifacts |
 | Registration | The selected Artifact and selection revision |

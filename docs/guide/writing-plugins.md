@@ -25,7 +25,7 @@ const editor = definePlugin({
 
 监听与贡献默认属于当前 Instance 的 Lifetime。传入 `{ lifetime: child }` 可将其归属子树。候选 Instance 可以登记监听和贡献，但直到整笔执行提交后才可被外部观察到。候选 setup 内调用 `events.emit` 会失败；将外部事件放在提交后发生的实际业务操作中。
 
-Event 只接受同步监听器。异步后台工作显式使用 `lifetime.spawn`，由 Task 拥有错误报告。需要“先中断才能结束”的资源使用 `lifetime.interrupt`。不要用监听器返回 Promise 暗示一个不存在的等待协议。
+Event 监听器可以同步返回，也可以返回 Promise。`events.emit` 等待本次所有监听结果，汇总失败后拒绝；每个调用在完成前借用监听器的 Lifetime，因此异步处理不会脱离所有权。需要独立于本次广播持续运行的后台工作时，显式使用 `lifetime.spawn`，由 Task 拥有错误报告。需要先中断才能结束的资源使用 `lifetime.interrupt`。
 
 配置是数据：普通对象、数组、字符串、有限数字、布尔值与 null。捕获时拒绝 getter、原型对象、循环、函数、symbol 和稀疏数组；validator 的输出也再次捕获。schema 只在 plan 阶段执行一次，apply 使用已经验证的计划结果。
 

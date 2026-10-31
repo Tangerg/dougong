@@ -1,6 +1,6 @@
 # 应用代码消费
 
-应用与代理通过稳定契约使用当前运行代次。`host.use` 在同步边界取得一个借用，等待回调的完整结果后释放。切换开始后拒绝新的借用，已经开始的工作会加入退出等待。
+应用与代理通过稳定契约使用当前运行代次。`host.use` 在同步边界取得一个借用，等待回调的完整结果后释放。会破坏借用代次的变更返回 `HOST_BUSY`；获准切换并封闭入口后，受影响代次拒绝新借用。未受影响的代次可以继续服务。
 
 ```ts
 const answer = await host.use(SEARCH, async (search) => {
@@ -22,6 +22,6 @@ if (id !== undefined) {
 
 `get()` 返回不可变集合快照，适合枚举与渲染；`use` 是执行边界。不要将读取快照当作无限期运行权限。
 
-`host.inspect()` 与 `host.diagnostics.get()` 返回同一事实的稳定投影。订阅不会立即重放，通知没有载荷，回调中调用 `get()` 读取。取消订阅使用 `subscription[Symbol.dispose]()`。错误诊断使用有界的 `RecordedFailure`，不保留插件异常里的任意资源图。
+`host.diagnostics.get()` 是读取 Host 稳定快照的唯一入口。订阅不会立即重放，通知没有载荷，回调中调用 `get()` 读取。取消订阅使用 `subscription[Symbol.dispose]()`。错误诊断使用有界的 `RecordedFailure`，不保留插件异常里的任意资源图。
 
 CLI、UI 和代理复用 `change → plan → apply`。先展示 `plan.report` 的绑定、影响范围、顺序和执行承诺，再执行该 Plan；若状态已变，重新规划。

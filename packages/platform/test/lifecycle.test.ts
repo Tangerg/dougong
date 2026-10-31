@@ -226,7 +226,10 @@ describe("Platform lifecycle", () => {
     platform.diagnostics.subscribe(() => {
       throw new Error("observer failed");
     });
-    expect(await platform.activate([registration])).toMatchObject({ outcome: "committed" });
+    expect(await platform.activate([registration])).toEqual({
+      stateRevision: host.stateRevision,
+      affectedInstallations: [registration.installation!.id],
+    });
     expect(registration.status).toBe("installed");
     expect(logger.error).toHaveBeenCalled();
     await platform[Symbol.asyncDispose]();

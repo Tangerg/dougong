@@ -50,19 +50,21 @@ export async function diagnostics(): Promise<ExampleResult> {
   });
   const revisions: number[] = [];
   const subscription = host.diagnostics.subscribe(() =>
-    revisions.push(host.inspect().stateRevision),
+    revisions.push(host.diagnostics.get().stateRevision),
   );
   await host.start();
-  const snapshot = host.inspect();
+  const snapshot = host.diagnostics.get();
   const busy = snapshot.installations.find((item) => item.id === "workbench")?.lifetime;
   if (!busy) throw new Error("Diagnostics did not report the running Instance");
   gate.resolve();
   await indexing.result;
-  const settled = host.inspect().installations.find((item) => item.id === "workbench")?.lifetime;
+  const settled = host.diagnostics
+    .get()
+    .installations.find((item) => item.id === "workbench")?.lifetime;
   if (!settled) throw new Error("Running Instance disappeared after its task finished");
   subscription[Symbol.dispose]();
   await host.stop();
-  const stopped = host.inspect();
+  const stopped = host.diagnostics.get();
   return exampleResult({
     id: "07",
     stage: "composition",

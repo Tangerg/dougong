@@ -2,7 +2,7 @@
 
 Failures reject with structured errors. `DougongError` exposes `code`, immutable `details` and an optional original `cause`. `ConfigValidationError` additionally exposes captured Standard Schema issues. `PlatformError` uses `PlatformErrorCode`; `PermissionDeniedError` exposes manifestName and denied permissions.
 
-`details.outcome` distinguishes rejected, restored and quarantined execution. A resolved ApplyResult always means committed success. `RecordedFailure` and `ErrorSnapshot` are bounded diagnostic projections, while direct callers receive original failures. Argument and protocol misuse can throw TypeError. Cancellation follows the owning AbortSignal and is not a successful commit.
+`details.outcome` distinguishes rejected, restored and quarantined execution. Promise resolution communicates success; `ApplyResult` returns only the state revision and affected installations, without a constant success field. `RecordedFailure` and `ErrorSnapshot` are bounded diagnostic projections, while direct callers receive original failures. Argument and protocol misuse can throw TypeError. Cancellation follows the owning AbortSignal and is not a successful commit.
 
 | Code | Meaning and response |
 | --- | --- |
@@ -24,8 +24,8 @@ Failures reject with structured errors. `DougongError` exposes `code`, immutable
 | `GROUP_FOREIGN` | The Group handle belongs to another Host. |
 | `GROUP_MISSING` | A referenced parent or target Group does not exist. |
 | `GROUP_REMOVED` | The change attempts to use a removed Group. |
-| `HOST_BUSY` | Host is transitioning; wait for the current operation and plan again. |
-| `HOST_QUARANTINED` | Unresolved obligations prevent safe execution; inspect unresolved. |
+| `HOST_BUSY` | A transition or affected foreground borrow is active; wait, then reuse an unconsumed Plan only if its baseline still matches. |
+| `HOST_QUARANTINED` | The entire Host is permanently unavailable; inspect status, error and unresolved, then follow the [quarantine procedure](../guide/transactions.md#quarantine). |
 | `INSTALLATION_CONFLICT` | Installation identity or declarations conflict. |
 | `INSTALLATION_FOREIGN` | The Installation handle belongs to another Host. |
 | `INSTALLATION_REMOVED` | The change attempts to use a removed Installation. |

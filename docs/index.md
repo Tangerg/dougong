@@ -11,7 +11,7 @@ TypeScript 的显式能力组合、不可变计划与结构化资源所有权。
 - [响应式与观察](./guide/reactive.md)
 - [外部插件交付](./guide/platform.md)
 - [Core API](./reference/core-api.md)
-- [整体架构](./reference/architecture.md)
+- [架构与设计理由](./reference/architecture.md)
 - [Platform API](./reference/platform.md)
 - [错误码](./reference/errors.md)
 - [机械守卫](./reference/guards.md)

@@ -42,8 +42,8 @@ function sidebarZh(): DefaultTheme.SidebarItem[] {
       text: "参考",
       collapsed: false,
       items: [
-        { text: "Core API 规范", link: "/reference/core-api" },
-        { text: "整体架构", link: "/reference/architecture" },
+        { text: "Core API 参考", link: "/reference/core-api" },
+        { text: "架构与设计理由", link: "/reference/architecture" },
         { text: "Platform 规范", link: "/reference/platform" },
         { text: "错误码", link: "/reference/errors" },
         { text: "机械守卫", link: "/reference/guards" },
@@ -82,8 +82,8 @@ function sidebarEn(): DefaultTheme.SidebarItem[] {
       text: "Reference",
       collapsed: false,
       items: [
-        { text: "Core API specification", link: "/en/reference/core-api" },
-        { text: "Architecture", link: "/en/reference/architecture" },
+        { text: "Core API reference", link: "/en/reference/core-api" },
+        { text: "Architecture and rationale", link: "/en/reference/architecture" },
         { text: "Platform specification", link: "/en/reference/platform" },
         { text: "Error codes", link: "/en/reference/errors" },
         { text: "Mechanical guards", link: "/en/reference/guards" },

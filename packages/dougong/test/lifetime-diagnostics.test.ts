@@ -82,12 +82,12 @@ describe("Lifetime diagnostic projections", () => {
       ],
     });
     await host.start();
-    const active = host.inspect();
+    const active = host.diagnostics.get();
     const subscription = host.diagnostics.subscribe(() => {
       if (host.status === "stopped") throw failure;
     });
     await host.stop();
-    expect(host.inspect().status).toBe("stopped");
+    expect(host.diagnostics.get().status).toBe("stopped");
     expect(active.status).toBe("running");
     expect(active.installations[0]?.lifetime?.phase).toBe("active");
     expect(report).toHaveBeenCalledWith(failure);

@@ -34,7 +34,7 @@ await host[Symbol.asyncDispose]();
 | `@dougongjs/platform` | Artifact catalog, selection, admission and activation |
 | `@dougongjs/reactive` | Independent signals, Readable bridge and owned observation |
 
-The kernel has one mutation path: `host.change()` → `host.plan(change)` → `host.apply(plan)`. Start and stop use the same execution model. Services and executable contributions are borrowed for the duration of calls. Standard disposable resources belong to a Lifetime. Failed cleanup retains unresolved obligations and quarantines execution.
+The kernel has one mutation path: `host.change()` → `host.plan(change)` → `host.apply(plan)`. Start and stop use the same execution model. Services and executable contributions are borrowed for the duration of calls. Standard disposable resources belong to a Lifetime. Failed cleanup retains consumers and their dependencies, releases independent branches, and makes the whole Host permanently unavailable. Quarantine has no in-place recovery; replacement requires handling the old execution boundary and external resources. See [Application handling after quarantine](./docs/en/guide/transactions.md#quarantine).
 
 ## Development
 

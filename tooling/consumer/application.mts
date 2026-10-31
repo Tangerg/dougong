@@ -101,7 +101,7 @@ const probe = definePlugin({ name: "consumer.probe", setup() {} });
 change.install(probe, { id: "probe", origin: { kind: "fixture", revision: "probe-1" } });
 const plan = await host.plan(change);
 const report: PlanReport = plan.report;
-assert(report.baseStateRevision === host.inspect().stateRevision, "Plan baseline differs");
+assert(report.baseStateRevision === host.diagnostics.get().stateRevision, "Plan baseline differs");
 assert(
   report.bindings.before.length === report.bindings.after.length,
   "Unchanged bindings were not projected before and after",
@@ -122,14 +122,19 @@ assert(
   JSON.parse(JSON.stringify(report)).execution.atomicPublication === true,
   "Plan report is not serializable",
 );
-await host.apply(plan);
+const applied = await host.apply(plan);
+assert(
+  applied.stateRevision === host.stateRevision && applied.affectedInstallations.includes("probe"),
+  "Packed apply result omitted committed revision or affected installations",
+);
+assert(!("outcome" in applied), "Constant success tag escaped the packed API");
 assert((await new SerialQueue().run(() => 7)) === 7, "Advanced entrypoint is not executable");
 assert(new ReadonlyMapSnapshot([["one", 1]]).get("one") === 1, "Advanced map export differs");
 await platform[Symbol.asyncDispose]();
 await host[Symbol.asyncDispose]();
 assert(released === 1, "Packed resource protocol failed to release exactly once");
 assert(
-  !("install" in host) && !("get" in host) && !("dispose" in host),
+  !("install" in host) && !("get" in host) && !("dispose" in host) && !("inspect" in host),
   "Retired Host mutation or disposal aliases escaped",
 );
 console.log(

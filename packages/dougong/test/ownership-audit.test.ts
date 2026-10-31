@@ -57,9 +57,9 @@ it.each(["startup", "change"] as const)(
       installations: [{ id: "owner", plugin: operation === "startup" ? broken : original }],
     });
     if (operation === "change") await host.start();
-    const snapshots: ReturnType<typeof host.inspect>[] = [];
+    const snapshots: ReturnType<typeof host.diagnostics.get>[] = [];
     using _subscription = host.diagnostics.subscribe(() => {
-      const snapshot = host.inspect();
+      const snapshot = host.diagnostics.get();
       if (snapshot.status === "quarantined") snapshots.push(snapshot);
     });
     let command: Promise<unknown>;
@@ -101,7 +101,7 @@ it("projects sealed descendants before resource withdrawal can notify observers"
   await host.start();
   const phases: string[] = [];
   using _subscription = host.diagnostics.subscribe(() => {
-    const snapshot = host.inspect();
+    const snapshot = host.diagnostics.get();
     if (snapshot.status !== "stopping") return;
     for (const installation of snapshot.installations) {
       const lifetime = installation.lifetime;
@@ -111,7 +111,7 @@ it("projects sealed descendants before resource withdrawal can notify observers"
   await host.stop();
   expect(phases.length).toBeGreaterThan(0);
   expect(phases).not.toContain("active");
-  expect(host.inspect().installations[0]?.lifetime).toBeUndefined();
+  expect(host.diagnostics.get().installations[0]?.lifetime).toBeUndefined();
 });
 
 it("projects Installation status from the same committed owner as Host diagnostics", async () => {
@@ -123,12 +123,12 @@ it("projects Installation status from the same committed owner as Host diagnosti
   const installation = host.installation("owner")!;
   const observed: Array<readonly [string, string | undefined]> = [];
   using _eager = host.diagnostics.subscribe(() => {
-    host.inspect();
+    host.diagnostics.get();
   });
   using _subscription = host.diagnostics.subscribe(() => {
     observed.push([
       installation.status,
-      host.inspect().installations.find((record) => record.id === installation.id)?.status,
+      host.diagnostics.get().installations.find((record) => record.id === installation.id)?.status,
     ]);
   });
   await host.start();
@@ -160,7 +160,7 @@ it("keeps dependency and group membership committed while a Plan validates", asy
   });
   await host.start();
   const revision = host.stateRevision;
-  const before = host.inspect();
+  const before = host.diagnostics.get();
   const change = host.change();
   change.update(host.installation("provider")!, {
     plugin: definePlugin({
@@ -182,7 +182,7 @@ it("keeps dependency and group membership committed while a Plan validates", asy
   await entered.promise;
   expect(host.status).toBe("running");
   expect(host.stateRevision).toBe(revision);
-  expect(host.inspect()).toBe(before);
+  expect(host.diagnostics.get()).toBe(before);
   expect(await host.use(capability, (value) => value)).toBe(1);
   expect(host.group("empty")?.parentId).toBe("consumers");
   resume.resolve();
@@ -213,7 +213,8 @@ it("reports committed removal observer failures without changing the transition 
   const change = host.change();
   change.remove(installation);
   await expect(host.apply(await host.plan(change))).resolves.toMatchObject({
-    outcome: "committed",
+    stateRevision: 2,
+    affectedInstallations: ["owner"],
   });
   expect(report).toHaveBeenCalledExactlyOnceWith(failure);
   await host.stop();

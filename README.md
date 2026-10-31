@@ -34,7 +34,7 @@ await host[Symbol.asyncDispose]();
 | `@dougongjs/platform` | Artifact catalog, selection, admission and activation |
 | `@dougongjs/reactive` | Independent signals, Readable bridge and owned observation |
 
-内核只有一条变更路径：`host.change()` → `host.plan(change)` → `host.apply(plan)`；start、stop 复用相同执行模型。服务和可执行贡献在调用期间借用，标准资源归 Lifetime 所有。清理失败保留未完成义务并隔离执行。
+内核只有一条变更路径：`host.change()` → `host.plan(change)` → `host.apply(plan)`；start、stop 复用相同执行模型。服务和可执行贡献在调用期间借用，标准资源归 Lifetime 所有。清理失败保留消费者及其依赖，继续释放独立分支，并使整个 Host 终止可用性。隔离没有原地恢复入口；替换 Host 之前必须处理旧执行边界和外部资源，见[隔离后的应用处理](./docs/guide/transactions.md#quarantine)。
 
 ## 开发
 

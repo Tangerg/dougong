@@ -50,6 +50,11 @@ interface Transition {
   readonly affected: ReadonlySet<InstallationRecord>;
 }
 
+interface ExecutionScope {
+  readonly graph: InstallationGraph;
+  readonly instances: ReadonlyMap<InstallationRecord, Instance>;
+}
+
 class PreparationFailures {
   #pending: unknown[] | undefined = [];
   readonly #report: (error: unknown) => void;
@@ -213,10 +218,6 @@ export class Engine {
   }
   get diagnostics() {
     return this.#publisher.view;
-  }
-
-  inspect() {
-    return this.#publisher.view.get();
   }
 
   installation(id: string): Installation | undefined {
@@ -394,10 +395,13 @@ export class Engine {
         this.#commit(prepared, new Map(), "stopped");
         return this.#result(prepared.report.affectedInstallations);
       }
-      const stopErrors = await this.#dispose(affectedInstances.toReversed());
-      if (stopErrors.length) {
+      const stopErrors = await this.#dispose([previous], new Set(affectedInstances));
+      if (
+        stopErrors.length ||
+        affectedInstances.some((instance) => instance.lifetime.phase !== "disposed")
+      ) {
         writer.discard();
-        throw await this.#quarantine(previous, affectedInstances, stopErrors, prepared, "stop");
+        throw await this.#quarantine(previous, [], stopErrors, prepared, "stop");
       }
       if (prepared.intent === "stop") {
         writer.commit();
@@ -414,12 +418,19 @@ export class Engine {
         failures.seal();
       } catch (error) {
         writer.discard();
-        const cleanupErrors = await this.#dispose([...candidates.values()].toReversed());
+        const scope: ExecutionScope = {
+          graph: prepared.graph,
+          instances: new Map([...retained, ...candidates]),
+        };
+        const cleanupErrors = await this.#dispose([scope], new Set(candidates.values()));
         const failure = failures.seal(error);
-        if (cleanupErrors.length)
+        if (
+          cleanupErrors.length ||
+          [...candidates.values()].some((instance) => instance.lifetime.phase !== "disposed")
+        )
           throw await this.#quarantine(
             previous,
-            [...candidates.values(), ...affectedInstances],
+            [scope],
             [failure, ...cleanupErrors],
             prepared,
             "prepare",
@@ -454,9 +465,10 @@ export class Engine {
         writer.commit();
         this.#commit(prepared, retained, "running", candidates);
       } catch (error) {
+        writer.discard();
         throw await this.#quarantine(
           this.#state,
-          [...retained.values()],
+          [{ graph: prepared.graph, instances: new Map(retained) }],
           [error],
           prepared,
           "publish",
@@ -576,10 +588,14 @@ export class Engine {
       for (const instance of candidates.values()) instance.publish();
     } catch (restoreError) {
       writer.discard();
-      const cleanupErrors = await this.#dispose([...candidates.values()].toReversed());
+      const scope: ExecutionScope = {
+        graph: previous.graph,
+        instances: new Map([...retained, ...candidates]),
+      };
+      const cleanupErrors = await this.#dispose([scope], new Set(candidates.values()));
       throw await this.#quarantine(
         previous,
-        [...candidates.values()],
+        [scope],
         [error, failures.seal(restoreError), ...cleanupErrors],
         failed,
         "restore",
@@ -614,16 +630,30 @@ export class Engine {
 
   async #quarantine(
     previous: CommittedState,
-    candidates: ReadonlyArray<Instance>,
+    scopes: ReadonlyArray<ExecutionScope>,
     errors: ReadonlyArray<unknown>,
     prepared: PreparedTransition,
     phase: string,
   ) {
-    const owned = new Set([...previous.instances.values(), ...candidates]);
+    const execution = [previous, ...scopes];
+    const owned = new Set(execution.flatMap((scope) => [...scope.instances.values()]));
     const remaining = [...owned].filter((instance) => instance.lifetime.phase !== "disposed");
     for (const instance of remaining) instance.lifetime.block();
+    if (this.#transition) {
+      this.#transition = {
+        ...this.#transition,
+        affected: new Set([
+          ...this.#transition.affected,
+          ...remaining.map((instance) => instance.installation),
+        ]),
+      };
+    }
+    const cleanupErrors = await this.#dispose(execution, new Set(remaining));
     const unresolved = remaining.filter((instance) => instance.lifetime.phase !== "disposed");
-    const cause = new AggregateError(errors, "Execution has unresolved release obligations");
+    const cause = new AggregateError(
+      [...errors, ...cleanupErrors],
+      "Execution could not establish a healthy state",
+    );
     this.#state = Object.freeze({
       ...previous,
       revision: this.#state.revision + 1,
@@ -634,7 +664,7 @@ export class Engine {
     });
     return this.#transitionError(
       "HOST_QUARANTINED",
-      "Host is quarantined; resources are not confirmed released",
+      "Host is quarantined after execution could not establish a healthy state",
       cause,
       "quarantined",
       prepared,
@@ -642,17 +672,46 @@ export class Engine {
     );
   }
 
-  async #dispose(instances: ReadonlyArray<Instance>) {
+  async #dispose(scopes: ReadonlyArray<ExecutionScope>, targets: ReadonlySet<Instance>) {
+    const dependents = new Map<Instance, Set<Instance>>();
+    for (const { graph, instances } of scopes) {
+      for (const [provider, consumers] of graph.dependents) {
+        const instance = instances.get(provider);
+        if (!instance) continue;
+        const bound = dependents.get(instance) ?? new Set<Instance>();
+        for (const consumer of consumers) {
+          const dependent = instances.get(consumer);
+          if (dependent) bound.add(dependent);
+        }
+        dependents.set(instance, bound);
+      }
+    }
+
     const errors: unknown[] = [];
-    for (const instance of instances) {
+    const visited = new Set<Instance>();
+    const dispose = async (instance: Instance): Promise<void> => {
+      if (visited.has(instance)) return;
+      visited.add(instance);
+      const consumers = dependents.get(instance) ?? [];
+      for (const consumer of consumers) {
+        if (targets.has(consumer)) await dispose(consumer);
+      }
+      // Bindings belong to each execution generation, not the latest installation declaration.
+      // A failed or busy consumer only retains the providers it can still reach.
+      if (
+        [...consumers].some((consumer) => consumer.lifetime.phase !== "disposed") ||
+        instance.lifetime.busy ||
+        instance.lifetime.phase === "disposed" ||
+        instance.lifetime.phase === "quarantined"
+      )
+        return;
       try {
         await instance.dispose();
       } catch (error) {
         errors.push(error);
-        // A consumer's deadline or failed cleanup cannot authorize releasing its providers.
-        break;
       }
-    }
+    };
+    for (const instance of [...targets].reverse()) await dispose(instance);
     return errors;
   }
 
@@ -677,7 +736,6 @@ export class Engine {
 
   #result(affectedInstallations: ReadonlyArray<string>): ApplyResult {
     return Object.freeze({
-      outcome: "committed",
       stateRevision: this.#state.revision,
       affectedInstallations: Object.freeze([...affectedInstallations]),
     });
@@ -685,7 +743,7 @@ export class Engine {
 
   #assertHealthy() {
     if (this.#state.phase === "quarantined")
-      throw new DougongError("HOST_QUARANTINED", "Host has unresolved release obligations", {
+      throw new DougongError("HOST_QUARANTINED", "Host execution is permanently quarantined", {
         details: { outcome: "quarantined", stateRevision: this.#state.revision },
       });
   }

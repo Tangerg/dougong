@@ -6,13 +6,13 @@
 | --- | --- |
 | Service | 一个稳定身份下的单一能力协议 |
 | ExtensionPoint | 开放集合的贡献协议 |
-| Event | 一次同步广播的载荷协议 |
+| Event | 一次瞬时广播的载荷协议；emit 等待监听完成 |
 | Plugin | 配置 schema、依赖声明、提供声明与 setup |
-| Installation | 稳定安装 ID、分组、已提交配置与来源 |
+| Installation | 稳定安装身份；状态与来源从 Engine 投影，只读 |
 | Instance | 一次 setup 运行产生的服务与 Lifetime |
 | ChangeSet | 一笔尚未规划的声明意图 |
 | Plan | 基于特定 stateRevision 的不可变执行计划 |
-| Engine | 执行阶段、已提交状态、代次与切换 |
+| Engine | 已提交声明、配置、来源、绑定、代次、执行阶段与切换 |
 | Lifetime | 资源、子树、任务、获取和使用中的义务 |
 | Catalog | 已知的不可变 Artifact |
 | Registration | 用户选择的 Artifact 与选择修订 |

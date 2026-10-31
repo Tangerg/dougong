@@ -16,18 +16,18 @@ it("caches immutable projections while resource changes do not advance stateRevi
       },
     ],
   });
-  expect(host.inspect()).toBe(host.inspect());
+  expect(host.diagnostics.get()).toBe(host.diagnostics.get());
   await host.start();
-  const before = host.inspect(),
+  const before = host.diagnostics.get(),
     revision = host.stateRevision;
   const cleanup = scope.defer(() => undefined);
-  const after = host.inspect();
+  const after = host.diagnostics.get();
   expect(after).not.toBe(before);
   expect(after.stateRevision).toBe(revision);
   expect(Object.isFrozen(after.installations)).toBe(true);
-  expect(host.inspect()).toBe(after);
+  expect(host.diagnostics.get()).toBe(after);
   await cleanup[Symbol.asyncDispose]();
-  expect(host.inspect()).not.toBe(after);
+  expect(host.diagnostics.get()).not.toBe(after);
   await host.stop();
-  expect(host.inspect().installations[0]?.lifetime).toBeUndefined();
+  expect(host.diagnostics.get().installations[0]?.lifetime).toBeUndefined();
 });
