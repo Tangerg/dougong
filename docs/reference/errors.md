@@ -37,6 +37,7 @@
 | `PLAN_CONSUMED` | Plan 已经使用过，必须生成新计划。 |
 | `PLAN_FOREIGN` | Plan 没有由此 Host 签发。 |
 | `PLAN_STALE` | 计划的基线版本已过期；重新规划。 |
+| `PLATFORM_BUSY` | 最终激活转换或释放正在执行；待返回后再发起新的 Platform 变更。 |
 | `PLATFORM_UNAVAILABLE` | Platform 或其 Catalog 正在关闭或已经关闭。 |
 | `PROVIDES_INVALID` | setup 的返回值与 provides 声明不一致。 |
 | `REGISTRATION_CYCLE` | 选择的发行依赖图包含循环。 |

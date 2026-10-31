@@ -1,8 +1,11 @@
 #!/usr/bin/env node
 
 import { readFileSync } from "node:fs";
+import { isBuiltin } from "node:module";
+import { relative, sep } from "node:path";
 import ts from "typescript";
-import { analyzeDependencies } from "./analyze-dependencies.mjs";
+import { packageEntrypoints, publishedDirectories } from "../packages.mjs";
+import { analyzeDependencies, compilerOptions } from "./analyze-dependencies.mjs";
 import { architectureRules } from "./rules.mjs";
 import { retiredVocabulary } from "./vocabulary.mjs";
 
@@ -45,6 +48,7 @@ const moduleDependencies = {
       "observation",
     ],
   },
+  reactive: {},
   platform: {
     public: ["artifacts", "loaders", "admission", "catalog", "activation", "errors"],
     errors: [],
@@ -53,15 +57,52 @@ const moduleDependencies = {
     admission: ["artifacts", "errors"],
     catalog: ["artifacts", "errors"],
     activation: ["artifacts", "admission", "loaders", "catalog", "errors"],
-    inspection: ["artifacts", "catalog", "errors"],
   },
 };
 
 const retired = new Set(retiredVocabulary);
-const factories = new Set(["service", "event", "extensionPoint"]);
+const publicImports = new Set(
+  publishedDirectories.flatMap((directory) =>
+    packageEntrypoints(JSON.parse(readFileSync(`${directory}/package.json`, "utf8"))).map(
+      (entry) => entry.specifier,
+    ),
+  ),
+);
 const definitions = new Map();
 const failures = [];
-const graph = (await analyzeDependencies()).obj();
+const options = compilerOptions();
+const graph = (await analyzeDependencies(options)).obj();
+const program = ts.createProgram(Object.keys(graph), options);
+const checker = program.getTypeChecker();
+const resolution = ts.createModuleResolutionCache(
+  process.cwd(),
+  ts.sys.useCaseSensitiveFileNames ? (file) => file : (file) => file.toLowerCase(),
+  options,
+);
+const contractSource = program.getSourceFile("packages/dougong/src/contracts/contracts.ts");
+const factories = new Set(
+  checker
+    .getExportsOfModule(checker.getSymbolAtLocation(contractSource))
+    .filter((symbol) => ["service", "event", "extensionPoint"].includes(symbol.name)),
+);
+
+function moduleSpecifier(node) {
+  if (ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) return node.moduleSpecifier;
+  if (ts.isImportTypeNode(node) && ts.isLiteralTypeNode(node.argument))
+    return node.argument.literal;
+  if (ts.isCallExpression(node) && node.expression.kind === ts.SyntaxKind.ImportKeyword)
+    return node.arguments[0];
+}
+
+function isContractFactory(expression) {
+  const symbol = checker.getSymbolAtLocation(
+    ts.isPropertyAccessExpression(expression) ? expression.name : expression,
+  );
+  return (
+    symbol &&
+    factories.has(symbol.flags & ts.SymbolFlags.Alias ? checker.getAliasedSymbol(symbol) : symbol)
+  );
+}
 
 function location(path) {
   if (path.startsWith("examples/")) return { package: "examples", module: undefined };
@@ -90,8 +131,8 @@ function violation(file, rule, message, node, source) {
 
 for (const [file, dependencies] of Object.entries(graph)) {
   if (!file.endsWith(".ts")) continue;
-  const text = readFileSync(file, "utf8");
-  const source = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+  const source = program.getSourceFile(file);
+  const text = source.text;
   const owner = location(file);
   const test = /\/test\//.test(file);
   const typedAssertions = file.endsWith("/public-api.types.ts");
@@ -148,61 +189,11 @@ for (const [file, dependencies] of Object.entries(graph)) {
     }
   }
 
-  const localFactories = new Set();
-  const namespaces = new Set();
-  for (const statement of source.statements) {
-    if (!ts.isImportDeclaration(statement) || !ts.isStringLiteral(statement.moduleSpecifier))
-      continue;
-    const specifier = statement.moduleSpecifier.text;
-    if (owner && owner.package !== "examples") {
-      if (specifier.startsWith("node:"))
-        violation(
-          file,
-          "runtime.portable",
-          "runtime libraries cannot import Node built-ins",
-          statement,
-          source,
-        );
-      if (
-        (specifier !== "dougong/advanced" &&
-          /^(?:dougong|@dougongjs\/(?:reactive|platform))\//.test(specifier)) ||
-        /^\.\.\/\.\.\/(?:dougong|reactive|platform)\//.test(specifier)
-      )
-        violation(
-          file,
-          "exports.public",
-          "package internals cannot be deep-imported",
-          statement,
-          source,
-        );
-      if (owner.package === "reactive" && !specifier.startsWith("."))
-        violation(
-          file,
-          "reactive.independent",
-          "reactive must have zero external imports",
-          statement,
-          source,
-        );
-    }
-    if (specifier !== "dougong" && !specifier.endsWith("/contracts")) continue;
-    const bindings = statement.importClause?.namedBindings;
-    if (bindings && ts.isNamespaceImport(bindings)) namespaces.add(bindings.name.text);
-    if (bindings && ts.isNamedImports(bindings)) {
-      for (const element of bindings.elements)
-        if (factories.has(element.propertyName?.text ?? element.name.text))
-          localFactories.add(element.name.text);
-    }
-  }
-
   const visit = (node) => {
-    if (owner && !test && (ts.isImportDeclaration(node) || ts.isExportDeclaration(node))) {
-      const specifier = node.moduleSpecifier;
-      if (
-        specifier &&
-        ts.isStringLiteral(specifier) &&
-        specifier.text.startsWith(".") &&
-        !/\.(?:js|mjs|cjs|json)$/.test(specifier.text)
-      ) {
+    const literal = moduleSpecifier(node);
+    if (owner && !test && literal && ts.isStringLiteralLike(literal)) {
+      const specifier = literal.text;
+      if (specifier.startsWith(".") && !/\.(?:js|mjs|cjs|json)$/.test(specifier)) {
         violation(
           file,
           "modules.esm",
@@ -210,6 +201,46 @@ for (const [file, dependencies] of Object.entries(graph)) {
           node,
           source,
         );
+      }
+      if (owner.package !== "examples" && (isBuiltin(specifier) || specifier.startsWith("node:"))) {
+        violation(
+          file,
+          "runtime.portable",
+          "runtime libraries cannot import Node built-ins",
+          node,
+          source,
+        );
+      }
+      if (owner.package === "reactive" && !specifier.startsWith(".")) {
+        violation(
+          file,
+          "reactive.independent",
+          "reactive must have zero external imports",
+          node,
+          source,
+        );
+      }
+      const target = ts.resolveModuleName(
+        specifier,
+        source.fileName,
+        options,
+        ts.sys,
+        resolution,
+      ).resolvedModule;
+      if (target) {
+        const targetFile = relative(process.cwd(), target.resolvedFileName).split(sep).join("/");
+        const targetPackage = targetFile.startsWith("examples/")
+          ? "examples"
+          : /^packages\/([^/]+)\//.exec(targetFile)?.[1];
+        if (targetPackage && owner.package !== targetPackage && !publicImports.has(specifier)) {
+          violation(
+            file,
+            "exports.public",
+            "cross-package references must use a formal public entrypoint",
+            node,
+            source,
+          );
+        }
       }
     }
     if (node.kind === ts.SyntaxKind.AnyKeyword)
@@ -280,15 +311,8 @@ for (const [file, dependencies] of Object.entries(graph)) {
           source,
         );
       if (ts.isCallExpression(node)) {
-        const expression = node.expression;
-        const factory =
-          (ts.isIdentifier(expression) && localFactories.has(expression.text)) ||
-          (ts.isPropertyAccessExpression(expression) &&
-            ts.isIdentifier(expression.expression) &&
-            namespaces.has(expression.expression.text) &&
-            factories.has(expression.name.text));
         const id = node.arguments[0];
-        if (factory && id && ts.isStringLiteralLike(id)) {
+        if (id && ts.isStringLiteralLike(id) && isContractFactory(node.expression)) {
           const previous = definitions.get(id.text);
           if (previous)
             violation(

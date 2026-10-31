@@ -1,9 +1,9 @@
-import { createHost, definePlugin, type LifetimeContext } from "dougong";
+import { asyncDisposeSymbol, createHost, definePlugin, type ChildLifetime } from "dougong";
 import { exampleResult, whenAborted, type ExampleResult } from "./example.js";
 
 export async function lifetimeOwnership(): Promise<ExampleResult> {
   const trace: string[] = [];
-  let session!: LifetimeContext;
+  let session!: ChildLifetime;
 
   const editorPlugin = definePlugin({
     name: "examples.lifetime.editor",
@@ -36,7 +36,7 @@ export async function lifetimeOwnership(): Promise<ExampleResult> {
   await host.start();
   const acquired = [...trace];
 
-  await session[Symbol.asyncDispose]();
+  await session[asyncDisposeSymbol]();
   const afterSession = trace.slice(acquired.length);
 
   await host.stop();
@@ -44,9 +44,7 @@ export async function lifetimeOwnership(): Promise<ExampleResult> {
 
   return exampleResult({
     id: "03",
-    stage: "atoms",
     title: "Structured ownership: cleanups, child Lifetimes and tasks",
-    introduces: ["defer", "child-lifetime", "spawn", "abort-signal"],
     facts: [
       `Setup acquired ${acquired.join(" → ")}.`,
       `Disposing the child released only its own subtree: ${afterSession.join(" → ")}.`,

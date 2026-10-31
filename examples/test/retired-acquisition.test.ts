@@ -5,6 +5,7 @@ import {
   createHost,
   definePlugin,
   type HostOptions,
+  type ChildLifetime,
   type LifetimeContext,
   type Logger,
 } from "dougong";
@@ -47,7 +48,6 @@ function withDefer(lifetime: LifetimeContext, defer: LifetimeContext["defer"]): 
     spawn: lifetime.spawn.bind(lifetime),
     acquire: lifetime.acquire.bind(lifetime),
     interrupt: lifetime.interrupt.bind(lifetime),
-    [Symbol.asyncDispose]: lifetime[Symbol.asyncDispose].bind(lifetime),
   };
 }
 
@@ -447,7 +447,7 @@ describe("acquisition failure ownership", () => {
   );
 
   it("keeps a failure reported once when retirement interrupts its delivery", async () => {
-    let generation!: LifetimeContext;
+    let generation!: ChildLifetime;
     let retirement: Promise<void> | undefined;
     const report = vi.fn<(error: unknown) => void>(() => {
       retirement = generation[Symbol.asyncDispose]();

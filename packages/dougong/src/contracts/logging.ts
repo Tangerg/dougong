@@ -20,25 +20,18 @@ export function isLogger(value: unknown): value is Logger {
   }
 }
 
-export class ScopedLogger implements Logger, Disposable {
+export class ScopedLogger implements Disposable {
+  readonly handle: Logger = Object.freeze<Logger>({
+    debug: (message, ...details) => this.#write("debug", message, details),
+    info: (message, ...details) => this.#write("info", message, details),
+    warn: (message, ...details) => this.#write("warn", message, details),
+    error: (message, ...details) => this.#write("error", message, details),
+  });
   #binding:
     { readonly logger: Logger; readonly meta: Readonly<Record<string, unknown>> } | undefined;
 
   constructor(logger: Logger, meta: Readonly<Record<string, unknown>>) {
     this.#binding = { logger, meta };
-  }
-
-  debug(message: unknown, ...details: unknown[]) {
-    this.#write("debug", message, details);
-  }
-  info(message: unknown, ...details: unknown[]) {
-    this.#write("info", message, details);
-  }
-  warn(message: unknown, ...details: unknown[]) {
-    this.#write("warn", message, details);
-  }
-  error(message: unknown, ...details: unknown[]) {
-    this.#write("error", message, details);
   }
 
   [disposeSymbol]() {

@@ -88,7 +88,7 @@ export class Engine {
   readonly #contributions: ContributionRegistry;
   readonly #commands = new SerialQueue();
   readonly #plans = new PlanAuthority();
-  readonly #drafts = new WeakSet<ChangeSetDraft>();
+  readonly #drafts = new WeakMap<ChangeSet, ChangeSetDraft>();
   readonly #installations = new WeakMap<object, InstallationRecord>();
   readonly #groups = new WeakMap<object, GroupNode>();
   readonly #publisher: SnapshotPublisher<HostSnapshot>;
@@ -108,8 +108,9 @@ export class Engine {
         "shutdownTimeoutMs",
       ]),
     });
-    assertId(input.name ?? "host", "Host name");
-    this.name = (input.name ?? "host") as string;
+    const name = input.name === undefined ? "host" : input.name;
+    assertId(name, "Host name");
+    this.name = name;
     if (input.logger !== undefined && !isLogger(input.logger))
       throw new TypeError("Host logger is invalid");
     if (input.onError !== undefined && typeof input.onError !== "function")
@@ -130,8 +131,8 @@ export class Engine {
     this.#contributions = new ContributionRegistry((error) => this.#report(error));
     const declarations = new Map<InstallationRecord, InstallationDeclaration>();
     const groups = new Map<string, GroupNode>();
-    const initialGroups = input.groups ?? [];
-    const initialInstallations = input.installations ?? [];
+    const initialGroups = input.groups === undefined ? [] : input.groups;
+    const initialInstallations = input.installations === undefined ? [] : input.installations;
     if (!Array.isArray(initialGroups) || !Array.isArray(initialInstallations))
       throw new TypeError("Initial declarations must be arrays");
     const groupParents = new Map<string, string | undefined>();
@@ -207,6 +208,7 @@ export class Engine {
       (error) => this.#report(error),
     );
     this.#contracts.commit(this.#state.graph.contractKinds);
+    for (const record of declarations.keys()) this.#attachInstallation(record);
     Object.freeze(this);
   }
 
@@ -246,16 +248,16 @@ export class Engine {
         return group;
       },
     });
-    this.#drafts.add(draft);
-    return draft;
+    this.#drafts.set(draft.handle, draft);
+    return draft.handle;
   }
 
   async plan(change: ChangeSet): Promise<Plan> {
     this.#assertHealthy();
-    if (!(change instanceof ChangeSetDraft) || !this.#drafts.has(change))
-      throw new DougongError("CHANGE_FOREIGN", "ChangeSet belongs to another Host");
+    const draft = this.#drafts.get(change);
+    if (!draft) throw new DougongError("CHANGE_FOREIGN", "ChangeSet belongs to another Host");
     this.#drafts.delete(change);
-    const operations = change.take();
+    const operations = draft.take();
     try {
       return this.#plans.issue(
         await compileTransition(this.#state, operations, "change", this.#contracts.kinds),
@@ -344,10 +346,7 @@ export class Engine {
     const prepared = this.#plans.read(plan);
     if (prepared.baseStateRevision !== this.#state.revision) {
       this.#plans.consume(plan);
-      for (const record of prepared.declarations.keys()) {
-        if (!this.#state.declarations.has(record))
-          record.detach({ status: "removed", origin: undefined });
-      }
+      this.#detachUncommitted(prepared);
       throw new DougongError("PLAN_STALE", "Host state changed after planning", {
         details: {
           outcome: "rejected",
@@ -375,9 +374,15 @@ export class Engine {
         });
       }
     }
-    const writer = this.#contracts.writer(prepared.graph.contractKinds);
-    for (const instance of affectedInstances) instance.lifetime.seal();
     this.#plans.consume(plan);
+    let writer: ReturnType<ContractRegistry["writer"]>;
+    try {
+      writer = this.#contracts.writer(prepared.graph.contractKinds);
+    } catch (error) {
+      this.#detachUncommitted(prepared);
+      throw error;
+    }
+    for (const instance of affectedInstances) instance.lifetime.seal();
     this.#transition = {
       phase:
         prepared.intent === "start"
@@ -477,10 +482,7 @@ export class Engine {
       return this.#result(prepared.report.affectedInstallations);
     } finally {
       this.#transition = undefined;
-      for (const record of prepared.declarations.keys()) {
-        if (!this.#state.declarations.has(record))
-          record.detach({ status: "removed", origin: undefined });
-      }
+      this.#detachUncommitted(prepared);
       batchSnapshotNotifications(() => {
         this.#contributions.endBatch();
         this.#notify();
@@ -621,6 +623,9 @@ export class Engine {
       unresolved: Object.freeze([]),
       error: undefined,
     });
+    for (const record of prepared.declarations.keys()) {
+      if (!previous.declarations.has(record)) this.#attachInstallation(record);
+    }
     for (const record of previous.declarations.keys()) {
       if (!prepared.declarations.has(record))
         record.detach({ status: "removed", origin: undefined });
@@ -757,11 +762,21 @@ export class Engine {
   #createInstallation(id: string, group: GroupNode | undefined) {
     const record = new InstallationRecord(id, ++this.#sequence, group);
     this.#installations.set(record.facade, record);
+    return record;
+  }
+
+  #attachInstallation(record: InstallationRecord) {
     record.attach(() => ({
       status: this.#installationStatus(record),
       origin: this.#state.declarations.get(record)?.origin,
     }));
-    return record;
+  }
+
+  #detachUncommitted(prepared: PreparedTransition) {
+    for (const record of prepared.declarations.keys()) {
+      if (!this.#state.declarations.has(record))
+        record.detach({ status: "removed", origin: undefined });
+    }
   }
 
   #createGroup(id: string, parent: GroupNode | undefined) {

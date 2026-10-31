@@ -4,7 +4,7 @@ import { existsSync } from "node:fs";
 
 export const sourceDirectory = ".";
 
-export async function analyzeDependencies() {
+export function compilerOptions() {
   const source = ts.readJsonConfigFile("tsconfig.base.json", ts.sys.readFile);
   const config = ts.parseJsonSourceFileConfigFileContent(source, ts.sys, process.cwd());
   if (config.errors.length) {
@@ -14,11 +14,15 @@ export async function analyzeDependencies() {
         .join("\n"),
     );
   }
+  return config.options;
+}
+
+export async function analyzeDependencies(options = compilerOptions()) {
   const analysis = await madge(["packages", "examples"].filter(existsSync), {
     baseDir: process.cwd(),
     fileExtensions: ["ts"],
     // Madge reparses numeric compiler options as JSON and loses Bundler resolution.
-    tsConfig: { options: config.options },
+    tsConfig: { options },
     excludeRegExp: ["(^|/)dist/"],
   });
   const { skipped } = analysis.warnings();

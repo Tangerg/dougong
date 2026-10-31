@@ -40,6 +40,7 @@ async function runRelease(
     dryRun = true,
     realPack = false,
     publishFailure,
+    concurrentEdit,
     visibility = "immediate",
     otp,
     interruptAt,
@@ -74,15 +75,29 @@ async function runRelease(
     writeFileSync(join(workspace, "pnpm-workspace.yaml"), 'packages:\n  - "packages/*"\n');
     for (const name of packages) {
       const packageName = name === "dougong" ? name : `@dougongjs/${name}`;
-      const manifest =
-        `${JSON.stringify({ name: packageName, version: "0.7.1", ...(name === "dougong" ? { dependencies: declaredDependencies } : {}) }, null, 2)}\n`.replace(
-          packageName,
-          escapedNames ? packageName.replace("d", "\\u0064") : packageName,
-        );
+      const manifest = `${JSON.stringify(
+        {
+          name: packageName,
+          type: "module",
+          version: "0.7.1",
+          exports: {
+            ".": { types: "./dist/index.d.ts", import: "./dist/index.js" },
+            ...(name === "dougong"
+              ? { "./advanced": { types: "./dist/advanced.d.ts", import: "./dist/advanced.js" } }
+              : {}),
+          },
+          ...(name === "dougong" ? { dependencies: declaredDependencies } : {}),
+        },
+        null,
+        2,
+      )}\n`.replace(packageName, escapedNames ? packageName.replace("d", "\\u0064") : packageName);
       const path = join(workspace, "packages", name, "package.json");
       mkdirSync(join(workspace, "packages", name), { recursive: true });
       writeFileSync(path, manifest);
       const files = {
+        ...(name === "dougong"
+          ? { "dist/advanced.d.ts": "export {};\n", "dist/advanced.js": "export {};\n" }
+          : {}),
         "dist/index.js": "export const signal = value => value;\n",
         "dist/index.d.ts": 'export { signal } from "./signals";\n',
         "dist/signals.d.ts": "export declare function signal(value: number): number;\n",
@@ -182,6 +197,7 @@ async function runRelease(
               DOUGONG_RELEASE_REAL_GIT: realGit ?? "",
               DOUGONG_RELEASE_REAL_PNPM: pnpm ?? "",
               DOUGONG_RELEASE_PUBLISH_FAILURE: publicationFailure ?? "",
+              DOUGONG_RELEASE_CONCURRENT_EDIT: concurrentEdit ?? "",
               DOUGONG_RELEASE_VISIBILITY: visibility,
               DOUGONG_RELEASE_PUBLISHED_ARCHIVE_PREFIX: publishedArchivePrefix,
               DOUGONG_RELEASE_INTERRUPT: interruption ?? "",
@@ -219,9 +235,19 @@ async function runRelease(
     const result = resume ? await execute(undefined) : interrupted;
     const head = realGit ? git(["rev-parse", "HEAD"]) : undefined;
     for (const [path, contents] of originals) {
+      const edited =
+        concurrentEdit === "manifest" && path === join(workspace, "packages/dougong/package.json");
       const expected =
-        realGit && head !== initialHead
-          ? `${JSON.stringify({ ...JSON.parse(contents), version }, null, 2)}\n`
+        edited || (realGit && head !== initialHead)
+          ? JSON.stringify(
+              {
+                ...JSON.parse(contents),
+                version,
+                ...(edited ? { description: "Concurrent manifest edit" } : {}),
+              },
+              null,
+              2,
+            ) + "\n"
           : contents;
       expect(readFileSync(path, "utf8")).toBe(expected);
     }
@@ -240,6 +266,10 @@ async function runRelease(
       published: publishedManifests(),
       calls,
       recorded: calls.filter(({ command }) => command === "git").map(({ args }) => args[0]),
+      stagedFiles: realGit ? git(["diff", "--cached", "--name-only"]) : undefined,
+      committedFiles: realGit ? git(["diff", "--name-only", initialHead, "HEAD"]) : undefined,
+      parent: realGit && head !== initialHead ? git(["rev-parse", "HEAD^"]) : undefined,
+      initialHead,
       remoteRefs: realGit
         ? git(["ls-remote", "origin", "refs/heads/main", `refs/tags/v${version}^{}`])
         : undefined,
@@ -400,13 +430,8 @@ it.each([undefined, "123456"])(
       expect(args.slice(2)).toEqual(["--access", "public", ...(otp ? [`--otp=${otp}`] : [])]);
       expect(args[1]).toMatch(/\.tgz$/);
     }
-    expect(result.calls.slice(-4).map(({ command }) => command)).toEqual([
-      "git",
-      "git",
-      "git",
-      "git",
-    ]);
-    expect(result.recorded).toEqual(["add", "commit", "tag", "push"]);
+    expect(result.calls.slice(-3).map(({ command }) => command)).toEqual(["git", "git", "git"]);
+    expect(result.recorded).toEqual(["commit", "tag", "push"]);
     expect(result.remoteRefs.split("\n")).toEqual([
       `${result.head}\trefs/heads/main`,
       `${result.head}\trefs/tags/v${version}^{}`,
@@ -431,7 +456,7 @@ it.each(["immediate", "delayed"])(
     expect(uploads.map(({ args }) => args[1].split("/").at(-1))).toEqual(
       packages.map((name) => `${name}.tgz`),
     );
-    expect(result.recorded).toEqual(["add", "commit", "tag", "push"]);
+    expect(result.recorded).toEqual(["commit", "tag", "push"]);
     expect(result.remoteRefs.split("\n")).toEqual([
       `${result.head}\trefs/heads/main`,
       `${result.head}\trefs/tags/v${version}^{}`,
@@ -596,7 +621,7 @@ it.each([false, true])(
       resume ? ["dougong.tgz", "platform.tgz", "platform.tgz"] : ["dougong.tgz", "platform.tgz"],
     );
     expect(result.status).toBe(resume ? 0 : 1);
-    expect(result.recorded).toEqual(resume ? ["add", "commit", "tag", "push"] : []);
+    expect(result.recorded).toEqual(resume ? ["commit", "tag", "push"] : []);
     expect(Object.keys(result.published)).toEqual(resume ? packages : ["reactive", "dougong"]);
   },
 );
@@ -614,7 +639,7 @@ it("waits for registry visibility before publishing dependents", async () => {
       .slice(packages.length)
       .map(({ command, args }) => (command === "sleep" ? command : args[0])),
   ).toEqual(packages.slice(1).flatMap(() => ["publish", "view", "sleep", "view"]));
-  expect(result.recorded).toEqual(["add", "commit", "tag", "push"]);
+  expect(result.recorded).toEqual(["commit", "tag", "push"]);
 });
 
 it.each(["never", "unreadable"])(
@@ -639,13 +664,13 @@ it.each(["never", "unreadable"])(
 it("finishes release recording after every upload already completed", async () => {
   const result = await runRelease(() => undefined, { publishedPackages: packages, dryRun: false });
   expect(result.status).toBe(0);
-  expect(result.recorded).toEqual(["add", "commit", "tag", "push"]);
+  expect(result.recorded).toEqual(["commit", "tag", "push"]);
   expect(result.stdout.match(/already published, contents match/g)).toHaveLength(packages.length);
   expect(result.stdout).toContain("released");
 });
 
 it.each([
-  { command: "add", after: true, committed: false },
+  { command: "diff", after: false, committed: false },
   { command: "commit", after: false, committed: false },
   { command: "commit", after: true, committed: true },
   { command: "tag", after: false, committed: true },
@@ -708,6 +733,7 @@ it("restores manifest bytes without publishing or recording a successful dry run
 
 it.each([
   { field: "name", value: "@fixture/unexpected" },
+  { field: "type", value: "commonjs" },
   { field: "version", value: "0.7.3" },
 ])("rejects a tarball carrying another $field before publication", async ({ field, value }) => {
   const result = await runRelease(() => undefined, { packedOverrides: { [field]: value } });
@@ -748,4 +774,105 @@ it.each([
   expect(result.status).toBe(1);
   expect(result.stderr).toContain(message);
   expect(result.stdout).not.toContain("Dry run complete");
+});
+
+it("rejects an archive missing a declared secondary entrypoint before publishing anything", async () => {
+  const result = await runRelease(
+    (_root, workspace) => {
+      rmSync(join(workspace, "packages/dougong/dist/advanced.d.ts"));
+    },
+    { dryRun: false, publishedPackages: [] },
+  );
+  expect(result.status).toBe(1);
+  expect(result.stderr).toContain("tarball is missing dist/advanced.d.ts");
+  expect(result.calls.some(({ command, args }) => command === "npm" && args[0] === "publish")).toBe(
+    false,
+  );
+});
+
+it("keeps independently staged files out of the release and preserves their staging", async () => {
+  const result = await runRelease(() => undefined, { dryRun: false, concurrentEdit: "stage" });
+  expect(result.status).toBe(0);
+  expect(result.stagedFiles).toBe("other.txt");
+  expect(result.committedFiles.split("\n").sort()).toEqual(
+    packages.map((name) => `packages/${name}/package.json`).sort(),
+  );
+});
+
+it("refuses a different source commit after uploads without tagging or pushing it", async () => {
+  const result = await runRelease(() => undefined, { dryRun: false, concurrentEdit: "head" });
+  expect(result.status).toBe(1);
+  expect(result.stderr).toContain("release source changed during publication");
+  expect(
+    result.calls.filter(({ command, args }) => command === "npm" && args[0] === "publish"),
+  ).toHaveLength(1);
+  expect(result.remoteRefs).toBe(`${result.initialHead}\trefs/heads/main`);
+  expect(result.remoteTags).toBe("");
+});
+
+it.each(["tag-head", "push-refs"])(
+  "records only the pinned release objects if local refs move during %s",
+  async (concurrentEdit) => {
+    const result = await runRelease(() => undefined, { dryRun: false, concurrentEdit });
+    expect(result.status).toBe(0);
+    expect(result.head).not.toBe(result.parent);
+    expect(result.remoteRefs.split("\n")).toEqual([
+      `${result.parent}\trefs/heads/main`,
+      `${result.parent}\trefs/tags/v${version}^{}`,
+    ]);
+  },
+);
+
+it.each([true, false])(
+  "preserves concurrent manifest edits on rollback (upload failed: %s)",
+  async (failed) => {
+    const result = await runRelease(() => undefined, {
+      dryRun: false,
+      concurrentEdit: "manifest",
+      publishFailure: failed ? "dougong" : undefined,
+    });
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("preserving external edits");
+    expect(result.recorded).toEqual([]);
+    expect(result.remoteTags).toBe("");
+  },
+);
+
+it("does not upload when the verified checkout moves during packing", async () => {
+  const result = await runRelease(() => undefined, {
+    dryRun: false,
+    concurrentEdit: "before-publish",
+  });
+  expect(result.status).toBe(1);
+  expect(result.stderr).toContain("release source changed during publication");
+  expect(
+    result.calls.filter(({ command, args }) => command === "npm" && args[0] === "publish"),
+  ).toEqual([]);
+  expect(result.remoteRefs).toBe(`${result.initialHead}\trefs/heads/main`);
+});
+
+it("lets Git recognize an unchanged resumed release after worktree line-ending conversion", async () => {
+  const result = await runRelease(() => undefined, {
+    dryRun: false,
+    publishedPackages: packages,
+    interruptAt: "push",
+    interruptAfter: true,
+    resume: true,
+    beforeResume(git, workspace) {
+      writeFileSync(
+        join(workspace, ".git/info/attributes"),
+        "packages/*/package.json text eol=crlf\n",
+      );
+      const files = packages.map((dir) => `packages/${dir}/package.json`);
+      for (const file of files) rmSync(join(workspace, file));
+      git(["checkout-index", "--force", "--", ...files]);
+      git(["add", "--renormalize", "--", ...files]);
+      expect(readFileSync(join(workspace, "packages/dougong/package.json"), "utf8")).toContain(
+        "\r\n",
+      );
+      expect(git(["status", "--porcelain"])).toBe("");
+    },
+  });
+  expect(result.status).toBe(0);
+  expect(result.recorded.filter((action) => action === "commit")).toHaveLength(1);
 });

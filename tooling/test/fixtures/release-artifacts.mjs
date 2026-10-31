@@ -28,7 +28,52 @@ function packageAt(state, reference) {
     });
 }
 
+let injected = false;
 installCommandFixture((name, args, options, nativeSpawn) => {
+  const race = process.env.DOUGONG_RELEASE_CONCURRENT_EDIT;
+  const git = process.env.DOUGONG_RELEASE_REAL_GIT;
+  if (race && git && !injected) {
+    const runGit = (...args) => {
+      const result = nativeSpawn(git, args, { cwd: workspace, stdio: "pipe" });
+      if (result.status !== 0) throw new Error("Concurrent Git fixture failed: " + result.stderr);
+    };
+    if (name === "npm" && args[0] === "publish") {
+      if (race === "stage") {
+        writeFileSync(join(workspace, "other.txt"), "owned by another operation\n");
+        runGit("add", "other.txt");
+        injected = true;
+      } else if (race === "manifest") {
+        const path = join(workspace, "packages/dougong/package.json");
+        const contents = JSON.parse(readFileSync(path));
+        contents.description = "Concurrent manifest edit";
+        writeFileSync(path, JSON.stringify(contents, null, 2) + "\n");
+        injected = true;
+      } else if (race === "head") {
+        runGit("commit", "--allow-empty", "-m", "Concurrent source commit");
+        injected = true;
+      }
+    }
+    if (
+      race === "before-publish" &&
+      name === "pnpm" &&
+      args[0] === "pack" &&
+      basename(options.cwd) === "platform"
+    ) {
+      runGit("commit", "--allow-empty", "-m", "Concurrent commit during packing");
+      injected = true;
+    }
+    if (race === "tag-head" && name === "git" && args[0] === "tag" && args.includes("-a")) {
+      runGit("commit", "--allow-empty", "-m", "Concurrent commit before tag");
+      injected = true;
+    }
+    if (race === "push-refs" && name === "git" && args[0] === "push") {
+      const tag =
+        "v" + JSON.parse(readFileSync(join(workspace, "packages/dougong/package.json"))).version;
+      runGit("commit", "--allow-empty", "-m", "Concurrent commit before push");
+      runGit("tag", "-f", "-a", tag, "-m", "Unrelated local tag");
+      injected = true;
+    }
+  }
   const recording =
     name === "git" &&
     (["add", "commit", "push"].includes(args[0]) || (args[0] === "tag" && args.includes("-a")));
@@ -40,7 +85,9 @@ installCommandFixture((name, args, options, nativeSpawn) => {
   }
   if (name === "git") {
     if (process.env.DOUGONG_RELEASE_REAL_GIT) {
-      const interrupt = recording && args[0] === process.env.DOUGONG_RELEASE_INTERRUPT;
+      const interrupt =
+        (recording || (args[0] === "diff" && args.includes("--cached"))) &&
+        args[0] === process.env.DOUGONG_RELEASE_INTERRUPT;
       if (interrupt && process.env.DOUGONG_RELEASE_INTERRUPT_AFTER !== "true") {
         return { status: 1 };
       }

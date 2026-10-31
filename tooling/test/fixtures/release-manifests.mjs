@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { installCommandFixture } from "../release-command-fixture.mjs";
 
 const workspace = process.cwd();
@@ -23,7 +23,12 @@ fs.readFileSync = (path, ...args) => {
   return read(path, ...args);
 };
 fs.writeFileSync = (path, contents, ...args) => {
-  if (path === target && gateFinished) {
+  if (
+    gateFinished &&
+    basename(path) === "package.json" &&
+    dirname(dirname(path)) === dirname(target) &&
+    basename(dirname(path)).startsWith(".release-manifest-")
+  ) {
     writes++;
     if (failure === "write" && writes === 1) {
       write(path, "partial write", ...args);

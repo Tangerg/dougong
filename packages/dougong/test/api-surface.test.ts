@@ -1,3 +1,4 @@
+import budget from "../../../tooling/architecture/public-api.json" with { type: "json" };
 import { describe, expect, it } from "vitest";
 import * as core from "../src/index";
 import { normalizeFailure } from "../src/contracts/errors";
@@ -95,24 +96,7 @@ describe("public API surface", () => {
   });
 
   it("keeps the Core value-export budget explicit", () => {
-    expect(Object.keys(core).sort()).toEqual([
-      "ConfigValidationError",
-      "DougongError",
-      "RecordedFailure",
-      "asyncDisposeSymbol",
-      "captureConfig",
-      "createHost",
-      "definePlugin",
-      "describePlugin",
-      "disposeSymbol",
-      "event",
-      "extensionPoint",
-      "isCancellationReason",
-      "isError",
-      "isLogger",
-      "optional",
-      "service",
-    ]);
+    expect(Object.keys(core).sort()).toEqual([...budget["dougong"].values].sort());
   });
 
   it("records terminal diagnostics without claiming the original error class", () => {

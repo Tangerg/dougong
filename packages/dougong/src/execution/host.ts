@@ -1,3 +1,4 @@
+import { asyncDisposeSymbol } from "../contracts/resource.js";
 import { Engine } from "./engine.js";
 import type { Host, HostOptions } from "./host-api.js";
 
@@ -26,7 +27,7 @@ export function createHost(options?: HostOptions): Host {
     installation: engine.installation.bind(engine),
     group: engine.group.bind(engine),
     explain: engine.explain.bind(engine),
-    [Symbol.asyncDispose]: async () => {
+    [asyncDisposeSymbol]: async () => {
       await engine.stop();
     },
   }) as Host;

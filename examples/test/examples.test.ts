@@ -35,6 +35,7 @@ describe("the learning path", () => {
     ]);
 
     expect(results.flatMap((result) => result.introduces)).toEqual([...concepts]);
+    expect(new Set(concepts).size).toBe(concepts.length);
 
     for (const result of results) {
       expect(result.introduces.length, `${result.id} must add something new`).toBeGreaterThan(0);
@@ -74,8 +75,10 @@ describe("the learning path", () => {
     );
 
     expect(facts.get("09")).toContain(
-      "Replacing playback aborted 1 in-flight resolve through its child Lifetime",
+      "Replacing playback aborted 1 late playback completion before it could publish a track",
     );
+
+    expect(facts.get("09")).not.toContain("remote:superseded");
 
     expect(facts.get("11")).toContain("invalid plan was rejected = true");
     expect(facts.get("11")).toContain("running service remained 'hello-v1'");

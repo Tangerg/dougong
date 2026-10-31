@@ -25,3 +25,5 @@ if (id !== undefined) {
 `host.diagnostics.get()` 是读取 Host 稳定快照的唯一入口。订阅不会立即重放，通知没有载荷，回调中调用 `get()` 读取。取消订阅使用 `subscription[Symbol.dispose]()`。错误诊断使用有界的 `RecordedFailure`，不保留插件异常里的任意资源图。
 
 CLI、UI 和代理复用 `change → plan → apply`。先展示 `plan.report` 的绑定、影响范围、顺序和执行承诺，再执行该 Plan；若状态已变，重新规划。
+
+`host.change()` 返回只能登记意图的冻结对象。应用不能提取其底层操作列表、安装记录或提交权限。尚未提交的 Installation 也不持有 Host；只有提交后的句柄才投影 Engine 状态。

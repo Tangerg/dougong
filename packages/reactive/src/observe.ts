@@ -1,8 +1,8 @@
 import {
   asyncDisposeSymbol,
-  disposeSymbol,
+  captureReadable,
+  captureUnsubscribe,
   type AsyncDisposable,
-  type Disposable,
   type Readable,
 } from "./protocol.js";
 import { assertSynchronous, captureThenable } from "./sync-result.js";
@@ -38,8 +38,10 @@ type ObservationState<T, Child extends AsyncDisposable> =
 
 class Observation<T, Child extends AsyncDisposable> {
   #state: ObservationState<T, Child>;
-  #subscription: Disposable | undefined;
+  #unsubscribe: (() => void) | undefined;
   #current: Child | undefined;
+  #currentRelease: Promise<void> | undefined;
+  #starting = false;
   #observed: ObservedValue<T> = { present: false };
   #dirty = false;
   #drainTask: ObservationTask | undefined;
@@ -52,14 +54,17 @@ class Observation<T, Child extends AsyncDisposable> {
   }
 
   start() {
-    const { owner, source } = this.#requireBinding();
-    const subscription = source.subscribe(() => this.#invalidate());
-    assertDisposable(subscription, "Readable.subscribe()");
-    if (this.#state.phase !== "active") {
-      disposeSubscription(subscription);
-      throw new Error("Observation is not active");
+    this.#starting = true;
+    try {
+      this.#attach();
+    } finally {
+      this.#starting = false;
     }
-    this.#subscription = subscription;
+  }
+
+  #attach() {
+    const { owner, source } = this.#requireBinding();
+    this.#unsubscribe = captureUnsubscribe(source.subscribe(() => this.#invalidate()));
 
     this.#createCurrent();
 
@@ -83,16 +88,28 @@ class Observation<T, Child extends AsyncDisposable> {
     this.#ownerCleanup = undefined;
     this.#releaseBinding("disposed");
     this.#wakeDrain?.();
-    void this.#disposeResources().then(completion.resolve, completion.reject);
+    // A reentrant close must also join resources the active factory has not returned yet.
+    const work = this.#starting
+      ? Promise.resolve().then(() => this.#disposeResources())
+      : this.#disposeResources();
+    void work.then(completion.resolve, completion.reject);
     return completion.promise;
   }
 
   async #disposeResources() {
     const errors: unknown[] = [];
-    // Reentrant disposal can precede factory return; yield until returned resources enter ownership.
-    await this.#disposeSubscription(errors);
+    try {
+      this.#unsubscribe?.();
+      this.#unsubscribe = undefined;
+    } catch (error) {
+      errors.push(error);
+    }
     await collect(this.#takeDrainTask(), errors);
-    await collect(this.#takeCurrent(), errors);
+    try {
+      await this.#releaseCurrent();
+    } catch (error) {
+      errors.push(error);
+    }
     if (errors.length === 1) throw errors[0];
     if (errors.length > 1) throw new AggregateError(errors, "Observation cleanup failed");
   }
@@ -115,7 +132,15 @@ class Observation<T, Child extends AsyncDisposable> {
       }
     } catch (error) {
       if (this.#state.phase !== "active") throw error;
-      await this.#stop(error);
+      try {
+        await this.#stop();
+      } catch (cleanupError) {
+        throw new AggregateError(
+          [error, cleanupError],
+          "Observation stopped after a replacement failed",
+        );
+      }
+      throw error;
     }
   }
 
@@ -142,8 +167,13 @@ class Observation<T, Child extends AsyncDisposable> {
     // Notifications can preserve the value; compare again before tearing down its live resources.
     if (this.#observed.present && Object.is(beforeCleanup, this.#observed.value)) return;
 
-    const previous = this.#takeCurrent();
-    if (previous) await previous[asyncDisposeSymbol]();
+    try {
+      await this.#releaseCurrent();
+    } catch (error) {
+      // Disposal joins this exact release; its rejection already includes the failed child.
+      if (this.#state.phase === "active") await this.#stop();
+      throw error;
+    }
     this.#observed = { present: false };
     if (this.#state.phase !== "active" || signal.aborted) return;
 
@@ -151,12 +181,12 @@ class Observation<T, Child extends AsyncDisposable> {
   }
 
   #createCurrent() {
-    const { owner, source } = this.#requireBinding();
+    const { owner } = this.#requireBinding();
     const current = owner.child("observation");
     assertAsyncDisposable(current, "ObservationOwner.child()");
     this.#current = current;
     // Creating a child can synchronously change the source, so subscribe before ownership and read afterward.
-    const value = source.get();
+    const value = this.#requireBinding().source.get();
     this.#invokeObserver(value, current);
 
     if (this.#state.phase !== "active") return;
@@ -168,21 +198,16 @@ class Observation<T, Child extends AsyncDisposable> {
     assertSynchronous(result, "Observers must be synchronous; use owner.spawn() for async work");
   }
 
-  async #disposeSubscription(errors: unknown[]) {
-    const subscription = this.#subscription;
-    this.#subscription = undefined;
-    if (!subscription) return;
-    try {
-      disposeSubscription(subscription);
-    } catch (error) {
-      errors.push(error);
-    }
-  }
-
-  #takeCurrent() {
+  #releaseCurrent() {
     const current = this.#current;
-    this.#current = undefined;
-    return current;
+    if (!current) return;
+    // Replacement and terminal shutdown share the same attempt, including its rejection.
+    return (this.#currentRelease ??= Promise.resolve()
+      .then(() => current[asyncDisposeSymbol]())
+      .then(() => {
+        this.#current = undefined;
+        this.#currentRelease = undefined;
+      }));
   }
 
   #takeDrainTask() {
@@ -191,27 +216,17 @@ class Observation<T, Child extends AsyncDisposable> {
     return runner;
   }
 
-  #takeOwnerCleanup() {
-    const cleanup = this.#ownerCleanup;
-    this.#ownerCleanup = undefined;
-    return cleanup;
-  }
-
   #releaseDrainTask(runner: ObservationTask) {
     if (this.#drainTask === runner) this.#drainTask = undefined;
   }
 
-  async #stop(error: unknown): Promise<never> {
-    const errors = [error];
+  async #stop() {
     this.#releaseBinding("stopped");
-    this.#wakeDrain?.();
-    await this.#disposeSubscription(errors);
-    await collect(this.#takeCurrent(), errors);
-    // Detach the current drain task before cleanup so disposal cannot await itself.
+    // The drain is the caller here; joining it from the owner's cleanup would wait on itself.
     this.#drainTask = undefined;
-    await collect(this.#takeOwnerCleanup(), errors);
-    if (errors.length === 1) throw errors[0];
-    throw new AggregateError(errors, "Observation stopped after a replacement failed");
+    const cleanup = this.#ownerCleanup;
+    if (cleanup) await cleanup[asyncDisposeSymbol]();
+    else await this.dispose();
   }
 
   #requireBinding() {
@@ -232,35 +247,30 @@ export function observe<T, Child extends AsyncDisposable>(
   source: Readable<T>,
   observer: Observer<T, Child>,
 ): AsyncDisposable {
-  if (!source || typeof source.get !== "function" || typeof source.subscribe !== "function") {
-    throw new TypeError("observe() expects a readable source");
-  }
+  const readable = captureReadable(source, "observe()");
   if (typeof observer !== "function") throw new TypeError("Observer must be a function");
-  if (
-    !owner ||
-    typeof owner.defer !== "function" ||
-    typeof owner.child !== "function" ||
-    typeof owner.spawn !== "function"
-  ) {
+  const defer = owner?.defer;
+  const child = owner?.child;
+  const spawn = owner?.spawn;
+  if (typeof defer !== "function" || typeof child !== "function" || typeof spawn !== "function") {
     throw new TypeError("observe() expects an observation owner");
   }
-  const observation = new Observation(owner, source, observer);
-  const handle = owner.defer(() => observation.dispose());
+  const binding = { defer: defer.bind(owner), child: child.bind(owner), spawn: spawn.bind(owner) };
+  const observation = new Observation(binding, readable, observer);
+  const handle = binding.defer(() => observation.dispose());
   assertAsyncDisposable(handle, "ObservationOwner.defer()");
   observation.attachOwnerCleanup(handle);
   try {
     observation.start();
     return handle;
   } catch (error) {
-    // Owner rollback still owns async cleanup failure when construction never returned a handle.
-    void observation.dispose().catch(() => undefined);
+    // Roll back the owner's registration as well as the subscription; failed cleanup stays owned.
+    try {
+      void Promise.resolve(handle[asyncDisposeSymbol]()).catch(() => undefined);
+    } catch (cleanupError) {
+      throw new AggregateError([error, cleanupError], "Observation construction failed");
+    }
     throw error;
-  }
-}
-
-function assertDisposable(value: unknown, source: string): asserts value is Disposable {
-  if (!value || typeof (value as Disposable)[disposeSymbol] !== "function") {
-    throw new TypeError(`${source} must return a Disposable`);
   }
 }
 
@@ -279,13 +289,6 @@ function captureObservationTaskResult(value: unknown): Promise<unknown> {
     throw new TypeError("ObservationOwner.spawn() must return an ObservationTask");
   }
   return result;
-}
-
-function disposeSubscription(subscription: Disposable) {
-  assertSynchronous(
-    subscription[disposeSymbol](),
-    "Readable subscriptions must dispose synchronously",
-  );
 }
 
 async function collect(resource: AsyncDisposable | undefined, errors: unknown[]) {

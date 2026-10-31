@@ -542,3 +542,11 @@ function captureError(operation: () => void) {
   }
   throw new Error("Expected operation to fail");
 }
+
+it("rejects an asynchronous notification batch without losing its rejection", () => {
+  expect(() =>
+    batchSnapshotNotifications(async () => {
+      throw new Error("late failure");
+    }),
+  ).toThrow("batches must be synchronous");
+});

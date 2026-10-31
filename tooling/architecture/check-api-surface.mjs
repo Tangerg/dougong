@@ -1,167 +1,18 @@
 #!/usr/bin/env node
 // Inspect emitted declarations because runtime export checks cannot see type-only exports or inferred any.
 
+import PACKAGES from "./public-api.json" with { type: "json" };
+import { pathToFileURL } from "node:url";
 import { createRequire } from "node:module";
 import { existsSync, globSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { retiredVocabulary } from "./vocabulary.mjs";
-import { publishedDirectories } from "../packages.mjs";
+import { packageEntrypoints, publishedDirectories } from "../packages.mjs";
 import { architectureRules } from "./rules.mjs";
 import { developmentEngines, runtimeBaseline } from "../runtime-baseline.mjs";
 
 const ts = createRequire(import.meta.url)("typescript");
 const retiredIdentifiers = new Set(retiredVocabulary);
-
-const PACKAGES = {
-  "@dougongjs/reactive": {
-    dist: "packages/reactive/dist/index.d.ts",
-    values: ["batch", "bridge", "computed", "observe", "signal"],
-    types: [
-      "AsyncDisposable",
-      "Disposable",
-      "BridgeOwner",
-      "ObservationOwner",
-      "ObservationTask",
-      "Observer",
-      "Readable",
-      "ReadonlySignal",
-      "Signal",
-    ],
-  },
-  dougong: {
-    dist: "packages/dougong/dist/index.d.ts",
-    values: [
-      "ConfigValidationError",
-      "DougongError",
-      "RecordedFailure",
-      "asyncDisposeSymbol",
-      "captureConfig",
-      "createHost",
-      "definePlugin",
-      "describePlugin",
-      "disposeSymbol",
-      "event",
-      "extensionPoint",
-      "isCancellationReason",
-      "isError",
-      "isLogger",
-      "optional",
-      "service",
-    ],
-    types: [
-      "ContractKind",
-      "ContractValue",
-      "Event",
-      "ExtensionPoint",
-      "OptionalService",
-      "Requirement",
-      "Service",
-      "AnyPlugin",
-      "Awaitable",
-      "Plugin",
-      "PluginContext",
-      "PluginDescriptor",
-      "PluginConfigDescriptor",
-      "PluginDescriptionOptions",
-      "InstanceMeta",
-      "ProvidedServices",
-      "Provisions",
-      "Requirements",
-      "ResolvedRequirement",
-      "ResolvedRequirements",
-      "ApplyResult",
-      "ChangeSet",
-      "Group",
-      "GroupSnapshot",
-      "Host",
-      "HostOptions",
-      "HostSnapshot",
-      "HostStatus",
-      "InitialInstallation",
-      "Installation",
-      "InstallationOptions",
-      "InstallationOrigin",
-      "InstallationSnapshot",
-      "InstallationState",
-      "InstallationUpdate",
-      "ConfigValue",
-      "Plan",
-      "PlanReport",
-      "BindingReport",
-      "ImpactReason",
-      "PlanOperation",
-      "DeclarationSnapshot",
-      "AsyncDisposable",
-      "BackgroundTask",
-      "Cleanup",
-      "Disposable",
-      "LifetimeContext",
-      "LifetimeOwnership",
-      "LifetimePhase",
-      "LifetimeSnapshot",
-      "Task",
-      "UnresolvedObligation",
-      "Resource",
-      "Contribution",
-      "ContributionView",
-      "ContributionOperations",
-      "EventListener",
-      "EventArguments",
-      "EventOperations",
-      "Logger",
-      "SnapshotView",
-      "ErrorSnapshot",
-      "ErrorDetails",
-    ],
-  },
-  "dougong/advanced": {
-    dist: "packages/dougong/dist/advanced.d.ts",
-    values: [
-      "SnapshotPublisher",
-      "ReadonlyMapSnapshot",
-      "SerialQueue",
-      "normalizePlainRecord",
-      "batchSnapshotNotifications",
-    ],
-    types: [],
-  },
-  "@dougongjs/platform": {
-    dist: "packages/platform/dist/index.d.ts",
-    values: [
-      "ImportLoader",
-      "MemoryLoader",
-      "PermissionDeniedError",
-      "PermissionSet",
-      "PlatformError",
-      "createPlatform",
-      "defineManifest",
-    ],
-    types: [
-      "Artifact",
-      "ArtifactInput",
-      "ArtifactDescriptor",
-      "ArtifactOrigin",
-      "Catalog",
-      "Authorizer",
-      "AdmissionRequest",
-      "Loader",
-      "Manifest",
-      "ManifestInput",
-      "Platform",
-      "PlatformOptions",
-      "PlatformSnapshot",
-      "PlatformStatus",
-      "PlatformErrorCode",
-      "Registration",
-      "RegistrationSnapshot",
-      "RegistrationStatus",
-      "ActivationOptions",
-      "ActivationPreviewOptions",
-      "ActivationPreview",
-      "ActivationBlocker",
-    ],
-  },
-};
 
 function surfaceOf(distPath) {
   const file = resolve(distPath);
@@ -239,24 +90,27 @@ for (const directory of [...publishedDirectories, "examples"]) {
     failures.push(`${configPath}: emitted syntax does not use the shared runtime baseline`);
   }
 }
-for (const manifestPath of publishedManifestPaths) {
-  const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
-  const expected = manifest.name === "dougong" ? [".", "./advanced"] : ["."];
-  const { added, missing } = difference(Object.keys(manifest.exports), expected);
-  for (const key of added) failures.push(`${manifestPath}: undeclared package subpath '${key}'`);
-  for (const key of missing) failures.push(`${manifestPath}: missing package subpath '${key}'`);
-  for (const [key, entry] of Object.entries(manifest.exports)) {
-    if (!entry.types?.endsWith(".d.ts") || !entry.import?.endsWith(".js"))
-      failures.push(`${manifestPath}: '${key}' requires types and ESM import targets`);
+for (const directory of publishedDirectories) {
+  const manifest = JSON.parse(readFileSync(`${directory}/package.json`, "utf8"));
+  for (const { specifier, types, module } of packageEntrypoints(manifest)) {
+    if (!Object.hasOwn(PACKAGES, specifier))
+      failures.push(`${specifier}: undeclared public entrypoint`);
+    for (const target of [types, module]) {
+      if (!existsSync(resolve(directory, target)))
+        failures.push(`${specifier}: missing exported file ${target}`);
+    }
+    if (Object.hasOwn(PACKAGES, specifier) && existsSync(resolve(directory, module))) {
+      const exports = await import(pathToFileURL(resolve(directory, module)).href);
+      const { added, missing } = difference(Object.keys(exports), PACKAGES[specifier].values);
+      for (const name of added) failures.push(`${specifier}: undeclared runtime export '${name}'`);
+      for (const name of missing) failures.push(`${specifier}: missing runtime export '${name}'`);
+    }
+    if (existsSync(resolve(directory, types)))
+      surfaces.set(specifier, surfaceOf(resolve(directory, types)));
   }
 }
-
-for (const [name, spec] of Object.entries(PACKAGES)) {
-  if (!existsSync(resolve(spec.dist))) {
-    failures.push(`${name}: ${spec.dist} is missing — run \`pnpm build\` first`);
-    continue;
-  }
-  surfaces.set(name, surfaceOf(spec.dist));
+for (const name of Object.keys(PACKAGES)) {
+  if (!surfaces.has(name)) failures.push(`${name}: missing public entrypoint or declaration`);
 }
 
 for (const file of publishedDirectories.flatMap((directory) =>
@@ -357,6 +211,7 @@ const REFERENCE_TABLES = ["docs/reference/errors.md", "docs/en/reference/errors.
 const MARKDOWN_FILES = [
   ...globSync("docs/**/*.md"),
   ...globSync("packages/*/README.md"),
+  "examples/README.md",
   "README.md",
   "README.en.md",
 ];

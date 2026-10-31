@@ -36,3 +36,5 @@ Add `@dougongjs/platform` for external plugin delivery. Add `@dougongjs/reactive
 Continue with [core concepts](./concepts.md) and [writing plugins](./writing-plugins.md).
 
 TypeScript configuration requires the `ES2024`, `DOM` and `ESNext.Disposable` libraries. Published declarations support both Bundler and NodeNext module resolution.
+
+For explicit disposal on a runtime without native disposal symbols, import `disposeSymbol` or `asyncDisposeSymbol` from `dougong`, for example `await host[asyncDisposeSymbol]()`. Packages and adapters use these same keys without modifying the global Symbol.

@@ -57,8 +57,8 @@ export class ContractRegistryWriter {
     }
 
     state.registry.assertCompatible(contract);
-    if (state.registry.kinds.has(contract.id)) return;
-    rememberContractKind(state.pending, contract);
+    if (state.registry.kinds.has(contract.id)) assertCompatibleKind(state.pending, contract);
+    else rememberContractKind(state.pending, contract);
   }
 
   commit() {

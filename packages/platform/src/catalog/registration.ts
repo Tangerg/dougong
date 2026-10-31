@@ -1,5 +1,6 @@
 import { RecordedFailure, type Installation } from "dougong";
 import {
+  describeArtifact,
   readArtifactOrigin,
   type Artifact,
   type ArtifactDescriptor,
@@ -57,7 +58,6 @@ type RegistrationState<Reference> =
     }
   | {
       readonly phase: "removed";
-      readonly descriptor: ArtifactDescriptor;
       readonly revision: number;
     };
 
@@ -144,7 +144,12 @@ export class RegistrationRecord<Reference> {
   }
 
   get activeOrigin() {
-    return readArtifactOrigin(this.installation?.origin, this.#platformId);
+    return readArtifactOrigin(this.installation?.origin, this.#platformId, this.name);
+  }
+
+  actionFor(artifact: Artifact<Reference>): "install" | "update" | "reuse" {
+    if (this.activeOrigin?.revision === artifact.revision) return "reuse";
+    return this.installation ? "update" : "install";
   }
 
   get error() {
@@ -159,7 +164,7 @@ export class RegistrationRecord<Reference> {
     const operation = state.port.operation(this, state.revision);
     if (operation) return operation;
     if (state.error) return "failed";
-    return this.activeOrigin?.revision === state.artifact.revision ? "installed" : "selected";
+    return this.actionFor(state.artifact) === "reuse" ? "installed" : "selected";
   }
 
   select(artifact: Artifact<Reference>) {
@@ -213,32 +218,35 @@ export class RegistrationRecord<Reference> {
     if (state.phase === "removed") return;
     this.#state = {
       phase: "removed",
-      descriptor: Object.freeze({
-        revision: state.artifact.revision,
-        manifest: state.artifact.manifest,
-      }),
       revision: state.revision,
     };
   }
 
-  snapshot(): RegistrationSnapshot {
-    const state = this.#state;
-    const selectedArtifact =
-      state.phase === "removed"
-        ? state.descriptor
-        : Object.freeze({
-            revision: state.artifact.revision,
-            manifest: state.artifact.manifest,
-          });
+  snapshot(previous?: RegistrationSnapshot): RegistrationSnapshot {
+    const state = this.#requireSelected();
+    const selectedArtifact = describeArtifact(state.artifact);
+    const activeOrigin = this.activeOrigin;
+    const status = this.status;
+    const execution = this.installation?.status;
+    if (
+      previous &&
+      previous.selectedArtifact === selectedArtifact &&
+      previous.selectionRevision === state.revision &&
+      previous.activeOrigin === activeOrigin &&
+      previous.status === status &&
+      previous.execution === execution &&
+      previous.error === state.error
+    )
+      return previous;
     return Object.freeze({
       id: this.id,
       name: this.name,
       selectedArtifact,
       selectionRevision: state.revision,
-      activeOrigin: this.activeOrigin,
-      status: this.status,
-      execution: this.installation?.status,
-      error: this.error,
+      activeOrigin,
+      status,
+      execution,
+      error: state.error,
     });
   }
 

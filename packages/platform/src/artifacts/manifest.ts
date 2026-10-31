@@ -2,6 +2,7 @@
 
 import { valid, validRange } from "semver";
 import { z } from "zod";
+import { captureConfig } from "dougong";
 import { normalizePlainRecord } from "dougong/advanced";
 import { PlatformError } from "../errors.js";
 
@@ -97,6 +98,10 @@ function snapshotManifestDeclaration(input: unknown) {
   const declaration = normalizePlainRecord(input, "Manifest declaration", {
     createError: manifestDeclarationError,
   });
+  const collections = {
+    activation: captureConfig(declaration.activation),
+    permissions: captureConfig(declaration.permissions),
+  };
   if (declaration.dependencies !== undefined) {
     const dependencies = normalizePlainRecord(declaration.dependencies, "Manifest dependencies", {
       createError: manifestDeclarationError,
@@ -104,9 +109,9 @@ function snapshotManifestDeclaration(input: unknown) {
     if (Object.hasOwn(dependencies, "__proto__")) {
       throw manifestDeclarationError("Manifest dependency '__proto__' is not supported");
     }
-    return { ...declaration, dependencies };
+    return { ...declaration, ...collections, dependencies };
   }
-  return declaration;
+  return { ...declaration, ...collections };
 }
 
 function assertUnique(values: ReadonlyArray<string>, label: string, manifestName: string) {

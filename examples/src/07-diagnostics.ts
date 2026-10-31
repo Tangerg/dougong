@@ -1,4 +1,5 @@
 import {
+  disposeSymbol,
   createHost,
   definePlugin,
   extensionPoint,
@@ -62,19 +63,12 @@ export async function diagnostics(): Promise<ExampleResult> {
     .get()
     .installations.find((item) => item.id === "workbench")?.lifetime;
   if (!settled) throw new Error("Running Instance disappeared after its task finished");
-  subscription[Symbol.dispose]();
+  subscription[disposeSymbol]();
   await host.stop();
   const stopped = host.diagnostics.get();
   return exampleResult({
     id: "07",
-    stage: "composition",
     title: "Reading the running system without being able to steer it",
-    introduces: [
-      "diagnostics-view",
-      "lifetime-snapshot",
-      "terminal-detachment",
-      "view-finalization",
-    ],
     facts: [
       `The snapshot reported ${snapshot.installations.length} Installations at '${snapshot.status}', state revision ${snapshot.stateRevision}.`,
       `Ownership is a labeled tree: ${describe(busy)}.`,

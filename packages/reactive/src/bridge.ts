@@ -1,19 +1,21 @@
 import {
   asyncDisposeSymbol,
+  captureReadable,
+  captureUnsubscribe,
   disposeSymbol,
   type AsyncDisposable,
   type Disposable,
   type Readable,
 } from "./protocol.js";
 import { signal, type ReadonlySignal, type Signal } from "./signals.js";
-import { assertSynchronous } from "./sync-result.js";
 
 export interface BridgeOwner {
   readonly defer: (dispose: () => unknown) => AsyncDisposable;
 }
 
 type BridgeValue<T> =
-  { readonly phase: "active"; readonly value: T } | { readonly phase: "disposed" };
+  | { readonly phase: "active"; readonly source: Readable<T>; readonly value: T }
+  | { readonly phase: "disposed" };
 
 class BridgeSubscription implements Disposable {
   #release: (() => void) | undefined;
@@ -33,14 +35,13 @@ class BridgeSubscription implements Disposable {
 class ReadableBridge<T> implements Disposable {
   readonly #value: Signal<BridgeValue<T>>;
   readonly #subscriptions = new Set<Disposable>();
-  #source: Readable<T> | undefined;
   #release: (() => void) | undefined;
+  #reading: symbol | undefined;
   #failure: { readonly value: unknown } | undefined;
   readonly view: ReadonlySignal<T>;
 
   constructor(source: Readable<T>) {
-    this.#source = source;
-    this.#value = signal<BridgeValue<T>>({ phase: "active", value: source.get() });
+    this.#value = signal<BridgeValue<T>>({ phase: "active", source, value: source.get() });
     this.view = Object.freeze({
       get: () => {
         const state = this.#value.get();
@@ -52,42 +53,71 @@ class ReadableBridge<T> implements Disposable {
   }
 
   start(owner: BridgeOwner) {
-    const cleanup = owner.defer(() => this[disposeSymbol]());
-    if (!cleanup || typeof cleanup[asyncDisposeSymbol] !== "function") {
-      throw new TypeError("BridgeOwner.defer() must return an AsyncDisposable");
+    let attaching = true;
+    let releaseRegistration: (() => PromiseLike<void>) | undefined;
+    try {
+      const cleanup = owner.defer(() => {
+        this[disposeSymbol]();
+        // A synchronously revoked attachment may still return a subscription whose release fails.
+        return attaching ? Promise.resolve().then(() => this.#checkRelease()) : undefined;
+      });
+      const close = cleanup?.[asyncDisposeSymbol];
+      if (typeof close !== "function") {
+        throw new TypeError("BridgeOwner.defer() must return an AsyncDisposable");
+      }
+      releaseRegistration = close.bind(cleanup);
+      const state = this.#value.get();
+      if (state.phase === "disposed") throw new Error("Readable bridge has been disposed");
+      const release = captureUnsubscribe(state.source.subscribe(() => this.#refresh()));
+      this.#release = release;
+      if (this.#value.get().phase === "disposed") {
+        try {
+          release();
+          this.#release = undefined;
+        } catch (error) {
+          this.#failure = { value: error };
+        }
+        throw new Error("Readable bridge has been disposed");
+      }
+      // Re-read after subscription so a source change during attachment cannot be lost.
+      this.#refresh();
+      if (this.#value.get().phase === "disposed")
+        throw new Error("Readable bridge has been disposed");
+    } catch (error) {
+      // The synchronous factory unwinds the bridge; the owner's registration joins that same outcome.
+      if (releaseRegistration)
+        void Promise.resolve()
+          .then(releaseRegistration)
+          .catch(() => undefined);
+      throw error;
+    } finally {
+      attaching = false;
     }
-    const source = this.#source;
-    if (!source) throw new Error("Readable bridge has been disposed");
-    const subscription = source.subscribe(() => this.#refresh());
-    const dispose = subscription?.[disposeSymbol];
-    if (typeof dispose !== "function") {
-      throw new TypeError("Readable.subscribe() must return a Disposable");
-    }
-    const release = () =>
-      assertSynchronous(
-        dispose.call(subscription),
-        "Readable subscriptions must dispose synchronously",
-      );
-    if (!this.#source) {
-      release();
-      throw new Error("Readable bridge has been disposed");
-    }
-    this.#release = release;
-    // Re-read after subscription so a source change during attachment cannot be lost.
-    this.#refresh();
+  }
+
+  #checkRelease() {
+    if (this.#failure) throw this.#failure.value;
   }
 
   #refresh() {
-    const source = this.#source;
-    if (!source) return;
-    const value = source.get();
-    const previous = this.#value.get();
-    if (previous.phase === "active" && Object.is(previous.value, value)) return;
-    this.#value.set({ phase: "active", value });
+    const before = this.#value.get();
+    if (before.phase === "disposed") return;
+    // A foreign getter may deliver another notification before returning an obsolete value.
+    const read = Symbol();
+    this.#reading = read;
+    try {
+      const value = before.source.get();
+      if (this.#reading !== read || this.#value.get() !== before || Object.is(before.value, value))
+        return;
+      this.#value.set({ ...before, value });
+    } finally {
+      this.#reading = undefined;
+    }
   }
 
   #subscribe(listener: () => void): Disposable {
-    if (!this.#source) throw new Error("Readable bridge has been disposed");
+    if (this.#value.get().phase === "disposed")
+      throw new Error("Readable bridge has been disposed");
     const inner = this.#value.subscribe(listener);
     const subscription = new BridgeSubscription(() => {
       this.#subscriptions.delete(subscription);
@@ -98,22 +128,18 @@ class ReadableBridge<T> implements Disposable {
   }
 
   [disposeSymbol]() {
-    if (!this.#source) {
-      if (this.#failure) throw this.#failure.value;
-      return;
-    }
-    this.#source = undefined;
-    const release = this.#release;
+    if (this.#value.get().phase === "disposed") return this.#checkRelease();
     const errors: unknown[] = [];
     try {
-      release?.();
-      this.#release = undefined;
+      this.#value.set({ phase: "disposed" });
     } catch (error) {
-      // Failed unsubscription remains owned; later owner shutdown must not report it clean.
+      // A pure calculation may reject a write before it happens; ownership has not changed in that case.
+      if (this.#value.get().phase !== "disposed") throw error;
       errors.push(error);
     }
     try {
-      this.#value.set({ phase: "disposed" });
+      this.#release?.();
+      this.#release = undefined;
     } catch (error) {
       errors.push(error);
     } finally {
@@ -136,12 +162,7 @@ export function bridge<T>(owner: BridgeOwner, source: Readable<T>): ReadonlySign
   if (typeof defer !== "function") {
     throw new TypeError("bridge() expects a resource owner");
   }
-  const get = source?.get;
-  const subscribe = source?.subscribe;
-  if (typeof get !== "function" || typeof subscribe !== "function") {
-    throw new TypeError("bridge() expects a readable source");
-  }
-  const captured = Object.freeze({ get: get.bind(source), subscribe: subscribe.bind(source) });
+  const captured = captureReadable(source, "bridge()");
   const capturedOwner: BridgeOwner = { defer: (dispose) => defer.call(owner, dispose) };
   const instance = new ReadableBridge(captured);
   try {

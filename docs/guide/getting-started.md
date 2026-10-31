@@ -36,3 +36,5 @@ Service 的字符串 ID 是共享身份；其 TypeScript 类型描述值协议�
 下一步阅读[核心概念](./concepts.md)和[编写插件](./writing-plugins.md)。
 
 TypeScript 配置需要 `ES2024`、`DOM` 与 `ESNext.Disposable` 的 lib 定义；发行类型同时支持 Bundler 与 NodeNext 模块解析。
+
+需要显式释放且运行时没有内建释放符号时，从 `dougong` 导入 `disposeSymbol` 或 `asyncDisposeSymbol` 作为键，例如 `await host[asyncDisposeSymbol]()`。包与适配器使用同一套键，不会修改全局 Symbol。

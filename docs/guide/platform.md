@@ -30,7 +30,7 @@ await platform[Symbol.asyncDispose]();
 
 预览只检查声明数据，列出明确延后的准入、模块验证、配置验证和 Core 绑定检查。查看 Catalog、选择或预览不会执行插件代码。懒激活之前没有可执行 placeholder；应用根据 Manifest 展示可发现信息，触发激活后才借用真实能力。
 
-授权有两个精确边界：模块求值之前的 `load`，以及依赖准备完成、紧邻 setup 的 `activate`。自定义 `Authorizer` 接收 Artifact 身份、操作与 AbortSignal。加载器必须协作取消；底层忽略取消的迟到结果不能提交过期选择。
+授权有两个精确边界：模块求值之前的 `load`，以及Core 规划完成、向 Core 提交计划之前的 `activate`。自定义 `Authorizer` 接收 Artifact 身份、操作与 AbortSignal。加载器必须协作取消；底层忽略取消的迟到结果不能提交过期选择。
 
 更新先添加新 Artifact，再 select；选择意图可以领先于实际执行。通过 `selectedArtifact` 与 `activeOrigin` 显式表达这种差异，不复制“已激活 Manifest”。
 
@@ -38,6 +38,8 @@ await platform[Symbol.asyncDispose]();
 const selected = await platform.select(nextArtifact);
 await platform.activate([selected, another], { remove: [obsolete] });
 ```
+
+应用可以通过 `platform.registrations()` 核对当前选择，不需要自行维护另一份“名称 → 句柄”注册表。诊断用于渲染状态，当前句柄列表用于明确命令目标。
 
 同次增、改、删编译成一笔 Core Plan。`remove` 也复用该执行路径。Catalog 删除只忘记发现记录，不隐式删除已经选择或运行的能力。
 

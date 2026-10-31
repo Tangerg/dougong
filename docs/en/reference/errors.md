@@ -37,6 +37,7 @@ Failures reject with structured errors. `DougongError` exposes `code`, immutable
 | `PLAN_CONSUMED` | The Plan has already been consumed; issue another Plan. |
 | `PLAN_FOREIGN` | The Plan was not issued by this Host. |
 | `PLAN_STALE` | The Plan baseline is stale; plan again. |
+| `PLATFORM_BUSY` | A final activation or release is executing; request a new Platform mutation after it returns. |
 | `PLATFORM_UNAVAILABLE` | Platform or its Catalog is closing or closed. |
 | `PROVIDES_INVALID` | The setup result does not match provides. |
 | `REGISTRATION_CYCLE` | Selected delivery dependencies contain a cycle. |

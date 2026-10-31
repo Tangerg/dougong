@@ -1,4 +1,5 @@
 import {
+  disposeSymbol,
   createHost,
   definePlugin,
   event,
@@ -58,21 +59,13 @@ export async function extensionAndEvent(): Promise<ExampleResult> {
   if (!commandId) throw new TypeError("The command contribution was not published");
   await commands.use(commandId, (command) => command.run());
 
-  contribution[Symbol.dispose]();
+  contribution[disposeSymbol]();
   const remaining = commands.get().size;
   await host.stop();
 
   return exampleResult({
     id: "02",
-    stage: "atoms",
     title: "An open contribution set and a transient fact",
-    introduces: [
-      "extension-point",
-      "contribute",
-      "contribution-view",
-      "event",
-      "contribution-dispose",
-    ],
     facts: [
       `The shell read a live, immutable Map holding ${published} contribution.`,
       `The Event delivered ${executed.join(", ")} and then kept nothing — it is not a query API.`,

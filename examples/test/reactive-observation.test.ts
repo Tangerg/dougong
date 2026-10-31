@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { createHost, definePlugin, type Logger } from "dougong";
 import {
   observe,
+  bridge,
   signal,
   type ObservationOwner,
   type Readable,
@@ -256,10 +257,9 @@ describe("observe composition", () => {
           return disposable(release);
         },
       };
-      expect(() => observe(owner, source, observer)).toThrow(
-        failure ?? "Observation is not active",
-      );
-      await disposal;
+      expect(() => observe(owner, source, observer)).toThrow("Observation is not active");
+      const result = await Promise.resolve(disposal).catch((error: unknown) => error);
+      expect(result).toBe(failure);
       expect(release).toHaveBeenCalledOnce();
       expect(observer).not.toHaveBeenCalled();
     },
@@ -896,4 +896,191 @@ it("observes only the latest value after asynchronous cleanup completes", async 
   await tick();
   expect(seen).toEqual(["A", "C"]);
   await host.stop();
+});
+
+it("keeps failed unsubscription owned after a source read stops the drain", async () => {
+  let notify!: () => void;
+  let broken = false;
+  const releaseError = new Error("subscription still active");
+  const release = vi.fn<() => never>(() => {
+    throw releaseError;
+  });
+  const reported = Promise.withResolvers<unknown>();
+  const source: Readable<number> = {
+    get() {
+      if (broken) throw new Error("read failed");
+      return 1;
+    },
+    subscribe(listener) {
+      notify = listener;
+      return disposable(release);
+    },
+  };
+  const host = createHost({
+    onError: reported.resolve,
+    installations: [
+      {
+        id: "observer",
+        plugin: definePlugin({
+          name: "observer",
+          setup({ lifetime }) {
+            observe(lifetime, source, () => undefined);
+          },
+        }),
+      },
+    ],
+  });
+  await host.start();
+  broken = true;
+  notify();
+  expect(errorTree(await reported.promise)).toContain(releaseError);
+  const failure = await host.stop().catch((error: unknown) => error);
+  expect(failure).toMatchObject({ code: "HOST_QUARANTINED" });
+  expect(errorTree(failure)).toContain(releaseError);
+  expect(release).toHaveBeenCalledOnce();
+});
+
+it("binds a single Readable subscription and read protocol to its release", async () => {
+  const owner = manualOwner(manualLifetime(() => undefined));
+  const seen: number[] = [];
+  let notify!: () => void;
+  let value = 1;
+  let reads = 0;
+  let subscribes = 0;
+  let disposers = 0;
+  const released = vi.fn<() => void>();
+  const readable: Readable<number> = {
+    get get() {
+      if (++reads !== 1) throw new Error("read protocol changed");
+      return () => value;
+    },
+    get subscribe() {
+      if (++subscribes !== 1) throw new Error("subscribe protocol changed");
+      return (listener: () => void) => {
+        notify = listener;
+        return {
+          get [Symbol.dispose]() {
+            if (++disposers !== 1) throw new Error("release protocol changed");
+            return released;
+          },
+        };
+      };
+    },
+  };
+  const observation = observe(owner, readable, (next) => seen.push(next));
+  value = 2;
+  notify();
+  await tick();
+  await observation[Symbol.asyncDispose]();
+  expect(seen).toEqual([1, 2]);
+  expect(released).toHaveBeenCalledOnce();
+});
+
+it.each(["bridge", "observe"] as const)(
+  "releases the owner registration after clean %s construction failure",
+  async (adapter) => {
+    let attach!: () => void;
+    const failed = new Error("post-attachment read failed");
+    let subscribed = false;
+    const source: Readable<number> = {
+      get() {
+        if (subscribed) throw failed;
+        return 0;
+      },
+      subscribe() {
+        subscribed = true;
+        return disposable(() => {
+          subscribed = false;
+        });
+      },
+    };
+    const host = createHost({
+      installations: [
+        {
+          id: "owner",
+          plugin: definePlugin({
+            name: "owner",
+            setup({ lifetime }) {
+              attach = () => {
+                if (adapter === "bridge") bridge(lifetime, source);
+                else observe(lifetime, source, () => undefined);
+              };
+            },
+          }),
+        },
+      ],
+    });
+    await host.start();
+    const before = host.diagnostics.get().installations[0]!.lifetime!;
+    expect(attach).toThrow(failed);
+    await tick();
+    expect(subscribed).toBe(false);
+    expect(host.diagnostics.get().installations[0]?.lifetime).toEqual(before);
+    await host.stop();
+  },
+);
+
+it("joins an ongoing failed child release when the caller closes during replacement", async () => {
+  const failure = new Error("child release failed");
+  const entered = Promise.withResolvers<void>();
+  const resume = Promise.withResolvers<void>();
+  const release = vi.fn<() => Promise<void>>(async () => {
+    entered.resolve();
+    await resume.promise;
+    throw failure;
+  });
+  const source = new ControlledReadable(1);
+  const observer = vi.fn<(value: number) => void>();
+  const handle = observe(manualOwner(manualLifetime(release)), source, observer);
+  source.value = 2;
+  source.notify();
+  await entered.promise;
+  const closing = handle[Symbol.asyncDispose]();
+  resume.resolve();
+  await expect(closing).rejects.toBe(failure);
+  expect(release).toHaveBeenCalledOnce();
+  expect(source.subscriptionsDisposed).toBe(1);
+  expect(observer.mock.calls).toEqual([[1, expect.anything()]]);
+});
+
+it("still releases the child after its drain task fails to close", async () => {
+  const failure = new Error("drain teardown failed");
+  const released = vi.fn<() => void>();
+  const base = manualOwner(manualLifetime(released));
+  const owner: ObservationOwner = {
+    ...base,
+    spawn(task) {
+      const runner = base.spawn(task);
+      return {
+        result: runner.result,
+        async [Symbol.asyncDispose]() {
+          await runner[Symbol.asyncDispose]();
+          throw failure;
+        },
+      };
+    },
+  };
+  const source = new ControlledReadable(1);
+  const handle = observe(owner, source, () => undefined);
+  await expect(handle[Symbol.asyncDispose]()).rejects.toBe(failure);
+  expect(source.subscriptionsDisposed).toBe(1);
+  expect(released).toHaveBeenCalledOnce();
+});
+
+it("reports both registration and synchronous rollback failures on observation construction", () => {
+  const sourceFailure = new Error("subscribe failed");
+  const cleanupFailure = new Error("owner release failed");
+  const source = new ControlledReadable(1);
+  source.subscribeError = sourceFailure;
+  const owner: ObservationOwner = {
+    ...manualOwner(manualLifetime(() => undefined)),
+    defer: () => ({
+      [Symbol.asyncDispose]() {
+        throw cleanupFailure;
+      },
+    }),
+  };
+  expect(() => observe(owner, source, () => undefined)).toThrow(
+    expect.objectContaining({ errors: [sourceFailure, cleanupFailure] }),
+  );
 });

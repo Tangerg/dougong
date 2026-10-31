@@ -283,3 +283,131 @@ describe("Readable bridge", () => {
     await Promise.resolve();
   });
 });
+
+it("cannot revive the last bridge value if a foreign read revokes its owner", () => {
+  let close!: () => unknown;
+  let notify!: () => void;
+  let revoking = false;
+  const released = vi.fn<() => void>();
+  const local = bridge(
+    {
+      defer(callback) {
+        close = callback;
+        return {
+          async [Symbol.asyncDispose]() {
+            await callback();
+          },
+        };
+      },
+    },
+    {
+      get() {
+        if (revoking) close();
+        return 5;
+      },
+      subscribe(listener) {
+        notify = listener;
+        return { [Symbol.dispose]: released };
+      },
+    },
+  );
+  revoking = true;
+  notify();
+  expect(() => local.get()).toThrow("disposed");
+  expect(released).toHaveBeenCalledOnce();
+});
+
+it("keeps a failed late subscription release in the owner completion during reentrant attachment", async () => {
+  const error = new Error("late unsubscribe failed");
+  let stop!: () => unknown;
+  let finishing!: Promise<unknown>;
+  const release = vi.fn<() => never>(() => {
+    throw error;
+  });
+  const owner: BridgeOwner = {
+    defer(callback) {
+      stop = callback;
+      return {
+        async [Symbol.asyncDispose]() {
+          await callback();
+        },
+      };
+    },
+  };
+  expect(() =>
+    bridge(owner, {
+      get: () => 1,
+      subscribe() {
+        finishing = Promise.resolve(stop());
+        return { [Symbol.dispose]: release };
+      },
+    }),
+  ).toThrow(AggregateError);
+  await expect(finishing).rejects.toBe(error);
+  expect(release).toHaveBeenCalledOnce();
+});
+
+it("refuses to return an already revoked bridge when the post-attachment read closes its owner", async () => {
+  let revoke!: () => unknown;
+  let closing!: Promise<unknown>;
+  let attached = false;
+  const released = vi.fn<() => void>();
+  const owner: BridgeOwner = {
+    defer(callback) {
+      revoke = callback;
+      return {
+        async [Symbol.asyncDispose]() {
+          await callback();
+        },
+      };
+    },
+  };
+  expect(() =>
+    bridge(owner, {
+      get() {
+        if (attached) closing = Promise.resolve(revoke());
+        return 1;
+      },
+      subscribe() {
+        attached = true;
+        return { [Symbol.dispose]: released };
+      },
+    }),
+  ).toThrow("Readable bridge has been disposed");
+  await closing;
+  expect(released).toHaveBeenCalledOnce();
+});
+
+it.each([0, 2])(
+  "does not let a superseded foreign read overwrite a nested value of %s",
+  async (latest) => {
+    const owner = new Owner();
+    let value = 0;
+    let notify!: () => void;
+    let nested = false;
+    const local = bridge(owner, {
+      get() {
+        const captured = value;
+        if (nested) {
+          nested = false;
+          value = latest;
+          notify();
+        }
+        return captured;
+      },
+      subscribe(listener) {
+        notify = listener;
+        return { [Symbol.dispose]() {} };
+      },
+    });
+    const observed: number[] = [];
+    const subscription = local.subscribe(() => observed.push(local.get()));
+    value = 1;
+    nested = true;
+    notify();
+    expect(local.get()).toBe(latest);
+    expect(observed).toEqual(latest === 0 ? [] : [2]);
+    subscription[Symbol.dispose]();
+    await owner[Symbol.asyncDispose]();
+  },
+);

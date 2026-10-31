@@ -1,5 +1,5 @@
 import { satisfies } from "semver";
-import type { ArtifactDescriptor } from "../artifacts/artifact.js";
+import { describeArtifact, type ArtifactDescriptor } from "../artifacts/artifact.js";
 import type { Registration, RegistrationRecord, Selection } from "../catalog/registration.js";
 import { PlatformError, type PlatformErrorCode } from "../errors.js";
 
@@ -50,34 +50,19 @@ export class ActivationPlan<Reference> {
   ) {
     const selections: Selection<Reference>[] = [];
     const blockers: ActivationBlocker[] = [];
-    const visited = new Set<string>();
-    const visiting = new Set<string>();
     const removed = new Set(removing);
     const selectedPaths = new Map<string, ReadonlyArray<string>>();
 
     const visit = (registration: RegistrationRecord<Reference>, path: ReadonlyArray<string>) => {
       const name = registration.name;
       if (removed.has(registration)) return;
-      if (visiting.has(name)) {
-        blockers.push(
-          blocker(
-            "REGISTRATION_CYCLE",
-            `Registration dependency cycle: ${[...path, name].join(" -> ")}`,
-            [...path, name],
-          ),
-        );
-        return;
-      }
-      if (visited.has(name)) return;
-      visiting.add(name);
+      if (selectedPaths.has(name)) return;
       selectedPaths.set(name, [...path, name]);
       const selection = registration.capture();
       for (const dependencyName of Object.keys(selection.artifact.manifest.dependencies)) {
         const dependency = registrations.get(dependencyName);
         if (dependency) visit(dependency, [...path, name]);
       }
-      visiting.delete(name);
-      visited.add(name);
       selections.push(selection);
     };
 
@@ -117,16 +102,8 @@ export class ActivationPlan<Reference> {
           Object.freeze({
             registrationId: selection.registration.id,
             selectionRevision: selection.revision,
-            artifact: Object.freeze({
-              revision: selection.artifact.revision,
-              manifest: selection.artifact.manifest,
-            }),
-            action:
-              selection.registration.activeOrigin?.revision === selection.artifact.revision
-                ? ("reuse" as const)
-                : selection.registration.installation
-                  ? ("update" as const)
-                  : ("install" as const),
+            artifact: describeArtifact(selection.artifact),
+            action: selection.registration.actionFor(selection.artifact),
           }),
         ),
       ),
@@ -166,7 +143,23 @@ function validateArtifacts(
   selectedPaths: ReadonlyMap<string, ReadonlyArray<string>>,
 ) {
   const blockers: ActivationBlocker[] = [];
-  for (const [name, artifact] of candidate) {
+  const visited = new Set<string>();
+  const visiting = new Set<string>();
+  const visit = (name: string, path: ReadonlyArray<string>) => {
+    if (visiting.has(name)) {
+      const cycle = [...path, name];
+      blockers.push(
+        blocker(
+          "REGISTRATION_CYCLE",
+          `Registration dependency cycle: ${cycle.join(" -> ")}`,
+          cycle,
+        ),
+      );
+      return;
+    }
+    if (visited.has(name)) return;
+    visiting.add(name);
+    const artifact = candidate.get(name)!;
     for (const [dependencyName, range] of Object.entries(artifact.manifest.dependencies)) {
       const dependency = candidate.get(dependencyName);
       const selectedPath = selectedPaths.get(name);
@@ -188,8 +181,12 @@ function validateArtifacts(
           ),
         );
       }
+      if (dependency) visit(dependencyName, [...path, name]);
     }
-  }
+    visiting.delete(name);
+    visited.add(name);
+  };
+  for (const name of candidate.keys()) visit(name, []);
   return blockers;
 }
 

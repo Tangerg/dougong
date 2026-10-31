@@ -15,6 +15,8 @@ console.log(result.stateRevision, result.affectedInstallations);
 
 Plan 只能由签发它的 Host 使用一次。apply 在任何执行副作用之前核对归属、是否已消费和 `stateRevision`。另一个提交或改变运行状态的失败会使旧 Plan 失效。任务计数和通知次数不会使 Plan 失效。
 
+Core 只签发可执行的 Plan：声明不成立时，`host.plan()` 直接拒绝，报告不包含永远为空的 blockers 列表。签发后的执行预检如果遇到不可恢复的契约种类冲突，该 Plan 被消费；应修正声明后重新规划。Platform 的数据预览仍可以列出真实阻碍。
+
 ## 执行和结果
 
 执行前先检查受影响代次的前台借用。有借用时返回 `HOST_BUSY`，不产生执行副作用，也不消费 Plan。获准执行后，先封闭受影响旧代次的入口，等待其后台工作退出并释放资源，再按依赖顺序准备候选 Instance；所有候选准备成功后，监听、贡献、服务与来源共同发布。

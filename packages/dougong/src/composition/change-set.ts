@@ -1,5 +1,5 @@
-import { captureConfig } from "./configuration.js";
-import { normalizePlugin, type AnyPlugin } from "./plugin.js";
+import { captureConfig, type ConfigValue } from "./configuration.js";
+import { normalizePlugin, type AnyPlugin, type NormalizedPlugin } from "./plugin.js";
 import { normalizePlainRecord } from "../internal/record.js";
 import type {
   ChangeSet,
@@ -22,8 +22,8 @@ export type ChangeOperation =
       readonly kind: "update";
       readonly installation: InstallationRecord;
       readonly update: Readonly<{
-        plugin?: AnyPlugin;
-        config?: unknown;
+        plugin?: NormalizedPlugin;
+        config?: ConfigValue | undefined;
         origin?: InstallationOrigin | undefined;
       }>;
     }
@@ -53,7 +53,14 @@ export function captureOrigin(value: unknown): InstallationOrigin | undefined {
   return captured as InstallationOrigin;
 }
 
-export class ChangeSetDraft implements ChangeSet {
+export class ChangeSetDraft {
+  readonly handle: ChangeSet = Object.freeze({
+    install: this.install.bind(this),
+    update: this.update.bind(this),
+    remove: this.remove.bind(this),
+    group: this.group.bind(this),
+    removeGroup: this.removeGroup.bind(this),
+  });
   #port: ChangePort | undefined;
   readonly #operations: ChangeOperation[] = [];
   readonly #targets = new Set<object>();
@@ -95,7 +102,7 @@ export class ChangeSetDraft implements ChangeSet {
     const replacement = {
       ...(hasPlugin
         ? {
-            plugin: normalizePlugin(input.plugin as AnyPlugin) as unknown as AnyPlugin,
+            plugin: normalizePlugin(input.plugin as AnyPlugin),
             origin: captureOrigin(input.origin),
           }
         : {}),

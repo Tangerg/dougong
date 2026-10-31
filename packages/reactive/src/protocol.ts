@@ -1,3 +1,6 @@
+import { disposeSymbol } from "./disposal-runtime.js";
+import { assertSynchronous } from "./sync-result.js";
+
 export {
   assertPromiseRuntime,
   resolveDisposalSymbol,
@@ -16,4 +19,23 @@ export interface AsyncDisposable {
 export interface Readable<T> {
   get(): T;
   subscribe(listener: () => void): Disposable;
+}
+
+export function captureReadable<T>(source: Readable<T>, operation: string): Readable<T> {
+  const get = source?.get;
+  const subscribe = source?.subscribe;
+  if (typeof get !== "function" || typeof subscribe !== "function")
+    throw new TypeError(`${operation} expects a readable source`);
+  return Object.freeze({ get: get.bind(source), subscribe: subscribe.bind(source) });
+}
+
+export function captureUnsubscribe(subscription: Disposable): () => void {
+  const release = subscription?.[disposeSymbol];
+  if (typeof release !== "function")
+    throw new TypeError("Readable.subscribe() must return a Disposable");
+  return () =>
+    assertSynchronous(
+      Reflect.apply(release, subscription, []),
+      "Readable subscriptions must dispose synchronously",
+    );
 }

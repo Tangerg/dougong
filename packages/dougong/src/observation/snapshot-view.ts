@@ -30,7 +30,7 @@ export function batchSnapshotNotifications(operation: () => void) {
   batchDepth++;
   const errors: unknown[] = [];
   try {
-    operation();
+    assertSynchronous(operation(), "Snapshot notification batches must be synchronous");
   } catch (error) {
     errors.push(error);
   } finally {

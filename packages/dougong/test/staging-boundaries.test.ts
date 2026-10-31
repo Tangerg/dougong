@@ -6,8 +6,11 @@ import {
   extensionPoint,
   service,
   type Plan,
-  type PluginContext,
+  type ChildLifetime,
 } from "../src";
+import { EventHub } from "../src/events/event-hub";
+import { Lifetime } from "../src/lifetime/lifetime";
+import { ContributionRegistry } from "../src/contributions/contribution-store";
 
 it.each(["install", "update"])(
   "refuses %s staging when input normalization has already consumed the draft",
@@ -47,95 +50,69 @@ it.each(["listener", "contribution", "emission"])(
     const notice = event<void>("staging/notice");
     const items = extensionPoint<number>("staging/items");
     const notified = vi.fn<() => void>();
-    let context!: PluginContext<{}>;
-    let observer!: PluginContext<{}>;
-    const host = createHost({
-      installations: [
-        {
-          id: "owner",
-          plugin: definePlugin({
-            name: "staging.resources",
-            setup(ctx) {
-              context = ctx;
-              ctx.events.on(notice, notified);
-              ctx.lifetime.child("closing");
-            },
-          }),
-        },
-        {
-          id: "observer",
-          plugin: definePlugin({
-            name: "staging.observer",
-            setup(ctx) {
-              observer = ctx;
-              ctx.events.on(notice, notified);
-            },
-          }),
-        },
-      ],
-    });
-    await host.start();
-    const contributions = host.contributions(items);
+    const owner = new Lifetime({ label: "owner", report() {} });
+    const observer = new Lifetime({ label: "observer", report() {} });
+    const hub = new EventHub();
+    const registry = new ContributionRegistry(() => undefined);
+    const events = hub.scope(owner, () => undefined);
+    const otherEvents = hub.scope(observer, () => undefined);
+    const contributions = registry.scope(owner, "owner", () => undefined);
+    const view = registry.view(items);
+    events.on(notice, notified);
+    otherEvents.on(notice, notified);
+    owner.publish();
+    observer.publish();
     let closing: PromiseLike<void> | undefined;
     const reflect = <T extends object>(token: T): T =>
       new Proxy(token, {
         getOwnPropertyDescriptor(target, key) {
-          closing ??= context.lifetime[Symbol.asyncDispose]();
+          closing ??= owner.dispose();
           return Reflect.getOwnPropertyDescriptor(target, key);
         },
       });
     let failure: unknown;
     try {
-      if (operation === "emission") await context.events.emit(reflect(notice));
-      else if (operation === "listener") context.events.on(reflect(notice), notified);
-      else context.contributions.add(reflect(items), "late", 1);
+      if (operation === "emission") await events.emit(reflect(notice));
+      else if (operation === "listener") events.on(reflect(notice), notified);
+      else contributions.add(reflect(items), "late", 1);
     } catch (error) {
       failure = error;
     }
     expect(failure).toMatchObject({ code: "LIFETIME_DISPOSED" });
     await closing;
-    expect(contributions.get().size).toBe(0);
+    expect(view.get().size).toBe(0);
     expect(notified).not.toHaveBeenCalled();
-    await observer.events.emit(notice);
+    await otherEvents.emit(notice);
     expect(notified).toHaveBeenCalledOnce();
-    await host.stop();
+    await observer.dispose();
   },
 );
 
-it("rejects a candidate closed by provided-service reflection before committing its generation", async () => {
-  const value = service<number>("staging/reflected-service");
-  let closing: Promise<void> | undefined;
+it("keeps Instance lifetime termination in the Engine while a plugin can retire its child", async () => {
+  const value = service<number>("staging/owned-service");
+  const release = vi.fn<() => void>();
+  let child!: ChildLifetime;
   const host = createHost({
     installations: [
       {
         id: "provider",
         plugin: definePlugin({
-          name: "staging.reflected-provider",
+          name: "provider",
           provides: { value },
-          setup(ctx) {
-            return new Proxy(
-              { value: 1 },
-              {
-                getPrototypeOf(target) {
-                  closing ??= ctx.lifetime[Symbol.asyncDispose]();
-                  return Reflect.getPrototypeOf(target);
-                },
-              },
-            );
+          setup({ lifetime }) {
+            expect(Symbol.asyncDispose in lifetime).toBe(false);
+            lifetime.defer(release);
+            child = lifetime.child("request");
+            return { value: 1 };
           },
         }),
       },
     ],
   });
-  await expect(host.start()).rejects.toMatchObject({
-    code: "TRANSITION_FAILED",
-    details: { outcome: "restored", phase: "prepare" },
-  });
-  await closing;
-  expect(host.status).toBe("stopped");
-  expect(host.diagnostics.get().unresolved).toEqual([]);
-  expect(host.installation("provider")?.status).toBe("stopped");
-  await expect(host.use(value, (current) => current)).rejects.toMatchObject({
-    code: "SERVICE_UNAVAILABLE",
-  });
+  await host.start();
+  await child[Symbol.asyncDispose]();
+  expect(release).not.toHaveBeenCalled();
+  expect(await host.use(value, (current) => current)).toBe(1);
+  await host.stop();
+  expect(release).toHaveBeenCalledOnce();
 });

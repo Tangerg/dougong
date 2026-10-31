@@ -21,7 +21,6 @@ interface ListenerBinding<T> {
 class ListenerRegistration<T> implements Publication {
   readonly #eventId: string;
   #binding: ListenerBinding<T> | undefined;
-  #published = false;
   readonly handle: Disposable;
 
   constructor(
@@ -38,8 +37,7 @@ class ListenerRegistration<T> implements Publication {
 
   publish() {
     const binding = this.#binding;
-    if (!binding || this.#published) return;
-    this.#published = true;
+    if (!binding) return;
     binding.hub.add(this.#eventId, this);
   }
 

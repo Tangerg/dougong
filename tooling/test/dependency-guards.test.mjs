@@ -123,3 +123,38 @@ it("requires new implementation directories to declare a responsibility", () => 
   expect(result.status).toBe(1);
   expect(result.output).toContain("no declared responsibility");
 });
+
+it("follows actual Contract factory symbols, including ESM aliases, without treating a shadow as a declaration", () => {
+  const result = runGuard("check-layers.mjs", (workspace) => {
+    writeFileSync(
+      join(workspace, "packages/dougong/src/composition/ownership-probe.ts"),
+      [
+        'import { service as declare } from "../contracts/contracts.js";',
+        'import * as contract from "../contracts/contracts.js";',
+        'export const first = declare("probe/duplicate");',
+        'export const second = contract.event("probe/duplicate");',
+        'export function unrelated(declare: (id: string) => string) { return declare("probe/shadow"); }',
+        'export const actual = declare("probe/shadow");',
+      ].join("\n"),
+    );
+  });
+  expect(result.status).toBe(1);
+  expect(result.output).toContain("fixed Contract ID 'probe/duplicate'");
+  expect(result.output).not.toContain("fixed Contract ID 'probe/shadow'");
+});
+
+it("checks import types, re-exports and dynamic imports against the same package boundaries", () => {
+  const result = runGuard("check-layers.mjs", (workspace) => {
+    writeFileSync(
+      join(workspace, "packages/platform/src/activation/access-probe.ts"),
+      [
+        'export type Hidden = import("../../../dougong/src/execution/engine.js").Engine;',
+        'export { Engine } from "../../../dougong/src/execution/engine.js";',
+        'export const load = () => import("fs");',
+      ].join("\n"),
+    );
+  });
+  expect(result.status).toBe(1);
+  expect(result.output.match(/\[exports.public\]/g)).toHaveLength(2);
+  expect(result.output).toContain("[runtime.portable]");
+});

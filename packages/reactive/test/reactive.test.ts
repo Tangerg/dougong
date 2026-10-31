@@ -1,3 +1,4 @@
+import budget from "../../../tooling/architecture/public-api.json" with { type: "json" };
 import { describe, expect, it, vi } from "vitest";
 import * as reactive from "../src/index";
 import { assertPromiseRuntime, resolveDisposalSymbol } from "../src/protocol";
@@ -6,13 +7,7 @@ const { batch, computed, signal } = reactive;
 
 describe("public API surface", () => {
   it("keeps the reactive value-export budget explicit", () => {
-    expect(Object.keys(reactive).sort()).toEqual([
-      "batch",
-      "bridge",
-      "computed",
-      "observe",
-      "signal",
-    ]);
+    expect(Object.keys(reactive).sort()).toEqual([...budget["@dougongjs/reactive"].values].sort());
   });
 
   it("fails explicitly when Promise.withResolvers is unavailable", () => {

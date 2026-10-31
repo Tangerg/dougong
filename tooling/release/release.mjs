@@ -2,21 +2,26 @@
 
 import { execFileSync, spawnSync } from "node:child_process";
 import {
+  chmodSync,
   existsSync,
   globSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  realpathSync,
+  renameSync,
+  statSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
 import { createInterface } from "node:readline/promises";
 import { tmpdir } from "node:os";
-import { basename, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { valid } from "semver";
 import { readPackageFiles } from "./release-archive.mjs";
-import { publishedDirectories } from "../packages.mjs";
+import { packageEntrypoints, publishedDirectories } from "../packages.mjs";
 
 function fail(message) {
   console.error(`\n✗ ${message}\n`);
@@ -40,15 +45,39 @@ function capture(command, commandArgs, options = {}) {
 }
 
 function manifestPath(dir) {
-  return resolve(dir, "package.json");
+  if (!lstatSync(dir).isDirectory() || realpathSync(dir) !== join(realpathSync("."), dir)) {
+    throw new Error(`Package root must be a directory inside this workspace: ${dir}`);
+  }
+  const file = resolve(dir, "package.json");
+  if (!lstatSync(file).isFile())
+    throw new Error(`Release manifest must be a regular file: ${file}`);
+  return file;
 }
 
 function readManifest(dir) {
   return JSON.parse(readFileSync(manifestPath(dir), "utf8"));
 }
 
-function writeManifest(dir, manifest) {
-  writeFileSync(manifestPath(dir), `${JSON.stringify(manifest, null, 2)}\n`);
+function versionedManifest(contents) {
+  const manifest = JSON.parse(contents);
+  manifest.version = version;
+  return Buffer.from(`${JSON.stringify(manifest, null, 2)}\n`);
+}
+
+function replaceManifest(dir, expected, replacement) {
+  const path = manifestPath(dir);
+  const temporary = mkdtempSync(join(dirname(path), ".release-manifest-"));
+  try {
+    const file = join(temporary, "package.json");
+    writeFileSync(file, replacement);
+    chmodSync(file, statSync(path).mode);
+    if (!readFileSync(manifestPath(dir)).equals(expected)) {
+      throw new Error(`${dir}/package.json changed during release; preserving external edits`);
+    }
+    renameSync(file, path);
+  } finally {
+    rmSync(temporary, { recursive: true, force: true });
+  }
 }
 
 let input;
@@ -115,33 +144,33 @@ const behind = capture("git", ["rev-list", "--count", "HEAD..origin/main"]);
 if (behind !== "0") fail(`local main is ${behind} commit(s) behind origin/main`);
 
 // Git owns the release record; a separate recovery marker could disagree with the actual commit.
-function isPendingReleaseCommit() {
-  if (ahead !== "1") return false;
-  if (capture("git", ["show", "-s", "--format=%B", "HEAD"]) !== `chore: release ${version}`) {
+function isReleaseCommit(commit, parent) {
+  if (capture("git", ["show", "-s", "--format=%B", commit]) !== `chore: release ${version}`) {
     return false;
   }
-  const parents = capture("git", ["rev-list", "--parents", "-n", "1", "HEAD"]).split(" ");
-  if (parents.length !== 2 || parents[1] !== capture("git", ["rev-parse", "origin/main"])) {
+  if (capture("git", ["rev-list", "--parents", "-n", "1", commit]) !== `${commit} ${parent}`) {
     return false;
   }
-  const changed = capture("git", ["diff", "--name-only", "origin/main", "HEAD"]).split("\n");
+  if (capture("git", ["diff", "--summary", parent, commit])) return false;
+  const changed = capture("git", ["diff", "--name-only", parent, commit]).split("\n");
   if (changed.some((file) => !PACKAGES.some(({ dir }) => file === `${dir}/package.json`))) {
     return false;
   }
   return PACKAGES.every(({ dir }) => {
-    const previous = JSON.parse(capture("git", ["show", `origin/main:${dir}/package.json`]));
-    previous.version = version;
-    return readFileSync(manifestPath(dir), "utf8") === `${JSON.stringify(previous, null, 2)}\n`;
+    const before = execFileSync("git", ["show", `${parent}:${dir}/package.json`]);
+    const after = execFileSync("git", ["show", `${commit}:${dir}/package.json`]);
+    return after.equals(versionedManifest(before));
   });
 }
 
-const pendingReleaseCommit = isPendingReleaseCommit();
+const head = capture("git", ["rev-parse", "HEAD"]);
+const pendingReleaseCommit =
+  ahead === "1" && isReleaseCommit(head, capture("git", ["rev-parse", "origin/main"]));
 if (ahead !== "0" && !pendingReleaseCommit) {
   fail(`local main is ${ahead} commit(s) ahead of origin/main; push first`);
 }
 
 const tag = `v${version}`;
-const head = capture("git", ["rev-parse", "HEAD"]);
 const hasTag = Boolean(capture("git", ["tag", "--list", tag]));
 if (
   hasTag &&
@@ -206,37 +235,37 @@ if (alreadyPublished.size) {
 step("Running the full gate (pnpm check)");
 run("pnpm", ["check"]);
 
+function atReleaseSource() {
+  return (
+    capture("git", ["rev-parse", "--abbrev-ref", "HEAD"]) === branch &&
+    capture("git", ["rev-parse", "HEAD"]) === head
+  );
+}
+
+if (!atReleaseSource() || capture("git", ["status", "--porcelain", "--untracked-files=all"])) {
+  fail("release source changed while checking; refusing to bump manifests");
+}
+
 step("Bumping versions");
 
 // Capture all originals before writing so a partial write can restore every manifest.
 const originalManifests = new Map(
   PACKAGES.map(({ dir }) => [dir, readFileSync(manifestPath(dir))]),
 );
-let recordingIndex = false;
 
 function restoreManifests() {
-  if (recordingIndex) {
-    // A failed process can still commit; rollback must follow the Git fact rather than its exit code.
-    if (capture("git", ["rev-parse", "HEAD"]) !== head) {
-      originalManifests.clear();
-      return false;
-    }
-  }
   const originals = [...originalManifests];
   originalManifests.clear();
+  if (!atReleaseSource()) return false;
+
   const errors = [];
   for (const [dir, contents] of originals) {
     try {
-      writeFileSync(manifestPath(dir), contents);
+      if (!readFileSync(manifestPath(dir)).equals(contents)) {
+        replaceManifest(dir, versionedManifest(contents), contents);
+      }
     } catch (cause) {
       errors.push(new Error(`Could not restore ${dir}/package.json`, { cause }));
-    }
-  }
-  if (recordingIndex) {
-    try {
-      capture("git", ["restore", "--staged", "--", ...manifestFiles]);
-    } catch (cause) {
-      errors.push(new Error("Could not restore the staged release manifests", { cause }));
     }
   }
   if (errors.length) throw new AggregateError(errors, "Release manifest restoration failed");
@@ -246,7 +275,8 @@ function restoreManifests() {
 process.on("exit", (code) => {
   if (code !== 0 && originalManifests.size) {
     try {
-      restoreManifests();
+      if (!restoreManifests())
+        console.error("Checkout moved; leaving manifests untouched. Inspect Git before resuming.");
     } catch (error) {
       console.error(error);
     }
@@ -262,7 +292,7 @@ for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) {
         console.error(
           restored
             ? "\n  interrupted — package.json versions restored"
-            : `\n  interrupted — release commit preserved; re-run pnpm release ${version}`,
+            : `\n  interrupted — checkout moved; manifests left untouched, inspect Git before resuming`,
         );
       } catch (error) {
         console.error(error);
@@ -273,9 +303,8 @@ for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) {
 }
 
 for (const { dir, name } of PACKAGES) {
-  const manifest = JSON.parse(originalManifests.get(dir).toString("utf8"));
-  manifest.version = version;
-  writeManifest(dir, manifest);
+  const original = originalManifests.get(dir);
+  replaceManifest(dir, original, versionedManifest(original));
   console.log(`  ${name} → ${version}`);
 }
 
@@ -293,13 +322,7 @@ for (const { dir, name } of PACKAGES) {
   tarballs.set(name, tarball);
 
   const candidateFiles = readPackageFiles(tarball);
-  for (const required of [
-    "package.json",
-    "dist/index.js",
-    "dist/index.d.ts",
-    "README.md",
-    "LICENSE",
-  ]) {
+  for (const required of ["package.json", "README.md", "LICENSE"]) {
     if (!candidateFiles.has(required)) fail(`${name}: tarball is missing ${required}`);
   }
 
@@ -310,7 +333,13 @@ for (const { dir, name } of PACKAGES) {
   if (packedManifest.version !== version) {
     fail(`${name}: tarball declares version ${packedManifest.version}`);
   }
-  const declaredDependencies = JSON.parse(originalManifests.get(dir)).dependencies ?? {};
+  const declared = JSON.parse(originalManifests.get(dir));
+  if (packedManifest.type !== declared.type)
+    fail(`${name}: tarball declares type ${packedManifest.type}, expected ${declared.type}`);
+  // Conditional export order participates in module resolution, so compare it as published.
+  if (JSON.stringify(packedManifest.exports) !== JSON.stringify(declared.exports))
+    fail(`${name}: tarball exports differ from the declared package entrypoints`);
+  const declaredDependencies = declared.dependencies ?? {};
   const expectedDependencies = new Map(
     Object.entries(declaredDependencies).map(([dependency, range]) => [
       dependency,
@@ -333,16 +362,16 @@ for (const { dir, name } of PACKAGES) {
       );
     }
   }
-  const bundle = candidateFiles.get("dist/index.js").toString("utf8");
-  const declaration = candidateFiles.get("dist/index.d.ts").toString("utf8");
-  for (const [label, contents] of [
-    ["dist/index.js", bundle],
-    ["dist/index.d.ts", declaration],
-  ]) {
+  for (const { types, module } of packageEntrypoints(declared)) {
+    for (const target of [module, types]) {
+      if (!candidateFiles.has(target)) fail(`${name}: tarball is missing ${target}`);
+    }
+  }
+  for (const [file, bytes] of candidateFiles) {
+    if (!file.startsWith("dist/") || !/\.(?:js|d\.ts)$/.test(file)) continue;
+    const contents = bytes.toString("utf8");
     for (const forbidden of ["@dougong/", "/Users/", "workspace:", "src/index.ts"]) {
-      if (contents.includes(forbidden)) {
-        fail(`${name}: ${label} contains '${forbidden}'`);
-      }
+      if (contents.includes(forbidden)) fail(`${name}: ${file} contains '${forbidden}'`);
     }
   }
 
@@ -374,7 +403,7 @@ for (const { dir, name } of PACKAGES) {
 }
 
 if (dryRun) {
-  restoreManifests();
+  if (!restoreManifests()) fail("Checkout moved; inspect manifests before resuming");
   step("Dry run complete");
   console.log("  every check passed; no package was published, tagged or pushed");
   console.log(`  tarballs kept at ${stage}`);
@@ -387,7 +416,7 @@ if (!assumeYes) {
   const answer = await rl.question(`\nPublish ${PACKAGES.length} packages at ${version}? [y/N] `);
   rl.close();
   if (answer.trim().toLowerCase() !== "y") {
-    restoreManifests();
+    if (!restoreManifests()) fail("aborted; checkout moved, inspect manifests before resuming");
     fail("aborted; package.json versions restored");
   }
 }
@@ -413,6 +442,15 @@ function awaitRegistry(name) {
   return false;
 }
 
+function assertPublicationInputs(action) {
+  if (!atReleaseSource()) fail(`release source changed during publication; refusing to ${action}`);
+  for (const [dir, contents] of originalManifests) {
+    if (!readFileSync(manifestPath(dir)).equals(versionedManifest(contents))) {
+      fail(`${dir}/package.json changed during release; refusing to ${action}`);
+    }
+  }
+}
+
 const published = [];
 for (const { name } of PACKAGES) {
   if (alreadyPublished.has(name)) {
@@ -421,6 +459,7 @@ for (const { name } of PACKAGES) {
   }
   const publishArgs = ["publish", tarballs.get(name), "--access", "public"];
   if (otp !== undefined) publishArgs.push(`--otp=${otp}`);
+  assertPublicationInputs("publish " + name);
   const result = spawnSync("npm", publishArgs, { stdio: "inherit" });
   if (result.status === 0 && !awaitRegistry(name)) {
     console.error(
@@ -446,15 +485,46 @@ for (const { name } of PACKAGES) {
 
 step("Recording the release");
 
-recordingIndex = true;
-run("git", ["add", ...manifestFiles]);
-const staged = spawnSync("git", ["diff", "--cached", "--quiet"], { stdio: "inherit" });
-if (staged.error) fail(`Cannot inspect staged release manifests: ${staged.error.message}`);
-if (staged.status === 1) run("git", ["commit", "-m", `chore: release ${version}`]);
-else if (staged.status !== 0) fail(`Cannot inspect staged release manifests (${staged.status})`);
+assertPublicationInputs("record");
+const staged = spawnSync("git", ["diff", "--cached", "--quiet", head, "--", ...manifestFiles], {
+  stdio: "inherit",
+});
+if (staged.error || staged.status !== 0)
+  fail(
+    "release manifests have staged changes or the index is unreadable; refusing to replace them",
+  );
+
+let releaseCommit = head;
+// Git's clean filters decide whether worktree bytes represent a different tree.
+const changed = spawnSync("git", ["diff", "--quiet", head, "--", ...manifestFiles], {
+  stdio: "inherit",
+});
+if (changed.error || (changed.status !== 0 && changed.status !== 1))
+  fail("Cannot determine whether release manifests change the Git tree");
+if (changed.status === 1) {
+  // Git's path-scoped commit leaves other owners' staged files outside the release.
+  run("git", ["commit", "--only", "-m", `chore: release ${version}`, "--", ...manifestFiles]);
+  releaseCommit = capture("git", ["rev-parse", "HEAD"]);
+  if (!isReleaseCommit(releaseCommit, head))
+    fail("Git commit differs from the verified release; refusing to tag or push");
+}
 originalManifests.clear();
-if (!hasTag) run("git", ["tag", "-a", tag, "-m", `Dougong ${version}`]);
-run("git", ["push", "--atomic", "--no-follow-tags", "origin", "main", `refs/tags/${tag}`]);
+if (!hasTag) run("git", ["tag", "-a", tag, releaseCommit, "-m", `Dougong ${version}`]);
+const tagObject = capture("git", ["rev-parse", `refs/tags/${tag}`]);
+if (
+  capture("git", ["cat-file", "-t", tagObject]) !== "tag" ||
+  capture("git", ["rev-parse", `${tagObject}^{commit}`]) !== releaseCommit
+)
+  fail(`tag ${tag} does not record the verified release; refusing to push`);
+// Ref names can move while npm or Git hooks run. Publish the verified objects themselves.
+run("git", [
+  "push",
+  "--atomic",
+  "--no-follow-tags",
+  "origin",
+  `${releaseCommit}:refs/heads/main`,
+  `${tagObject}:refs/tags/${tag}`,
+]);
 
 rmSync(stage, { recursive: true, force: true });
 

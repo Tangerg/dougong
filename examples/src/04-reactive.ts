@@ -37,9 +37,7 @@ export async function reactiveLifetime(): Promise<ExampleResult> {
 
   return exampleResult({
     id: "04",
-    stage: "atoms",
     title: "Values change, resources are rebuilt",
-    introduces: ["signal", "computed", "batch", "observe"],
     facts: [
       `Two writes inside one batch() produced ${connects - 1} rebuild, not two.`,
       "observe() disposed the previous child Lifetime before building the next one.",

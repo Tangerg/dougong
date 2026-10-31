@@ -1,4 +1,10 @@
-import { createHost, definePlugin, extensionPoint, type ContributionView } from "dougong";
+import {
+  asyncDisposeSymbol,
+  createHost,
+  definePlugin,
+  extensionPoint,
+  type ContributionView,
+} from "dougong";
 import { createPlatform, MemoryLoader, PermissionSet } from "@dougongjs/platform";
 import { actionActivation, type ActionDeclaration } from "./action-declaration.js";
 import { exampleResult, type ExampleResult } from "./example.js";
@@ -56,13 +62,11 @@ export async function lazyPlatform(): Promise<ExampleResult> {
   const output = await commands.use(commandId, (command) => command.run());
   const after = commands.get().size;
   await platform.remove(registration);
-  await platform[Symbol.asyncDispose]();
+  await platform[asyncDisposeSymbol]();
   await host.stop();
   return exampleResult({
     id: "08",
-    stage: "composition",
     title: "Code that arrives from outside the build",
-    introduces: ["manifest", "permissions", "data-preview", "activation", "derived-activation"],
     facts: [
       `The data-only preview described ${preview.selections.length} selection with ${preview.deferred.length} deferred checks.`,
       `Before activation the ExtensionPoint held ${before} executable commands; loading published ${after}.`,

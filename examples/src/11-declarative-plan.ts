@@ -1,4 +1,4 @@
-import { createHost, definePlugin, service } from "dougong";
+import { asyncDisposeSymbol, createHost, definePlugin, service } from "dougong";
 import {
   createPlatform,
   MemoryLoader,
@@ -16,31 +16,20 @@ const GREETER_NAME = "examples.declarative-plan.greeter";
 const LEGACY_NAME = "examples.declarative-plan.legacy";
 const TOOL_NAME = "examples.declarative-plan.tool";
 
-class PlanDeployment {
-  readonly #platform: Platform<string>;
-  readonly #registrations = new Map<string, Registration<string>>();
-
-  constructor(platform: Platform<string>) {
-    this.#platform = platform;
+// This controller reconciles the whole selection of its dedicated Platform.
+async function deploy(platform: Platform<string>, desired: ReadonlyArray<Artifact<string>>) {
+  const selection = new Map<string, Artifact<string>>();
+  for (const artifact of desired) {
+    const name = artifact.manifest.name;
+    if (selection.has(name)) throw new TypeError(`Duplicate desired Registration '${name}'`);
+    selection.set(name, artifact);
   }
-
-  async apply(desired: ReadonlyArray<Artifact<string>>) {
-    const names = new Set<string>();
-    for (const artifact of desired) {
-      if (names.has(artifact.manifest.name))
-        throw new TypeError(`Duplicate desired Registration '${artifact.manifest.name}'`);
-      names.add(artifact.manifest.name);
-    }
-    const targets: Registration<string>[] = [];
-    for (const artifact of desired) {
-      const registration = await this.#platform.select(artifact);
-      this.#registrations.set(registration.name, registration);
-      targets.push(registration);
-    }
-    const removed = [...this.#registrations.values()].filter((item) => !names.has(item.name));
-    await this.#platform.activate(targets, { remove: removed });
-    for (const registration of removed) this.#registrations.delete(registration.name);
-  }
+  const targets: Registration<string>[] = [];
+  for (const artifact of selection.values()) targets.push(await platform.select(artifact));
+  const remove = platform
+    .registrations()
+    .filter((registration) => !selection.has(registration.name));
+  await platform.activate(targets, { remove });
 }
 
 export async function declarativePlan(): Promise<ExampleResult> {
@@ -90,28 +79,25 @@ export async function declarativePlan(): Promise<ExampleResult> {
   const broken = artifact(GREETER_NAME, "2.0.0", "missing-module");
   const legacyArtifact = artifact(LEGACY_NAME, "1.0.0", "legacy");
   const toolArtifact = artifact(TOOL_NAME, "1.0.0", "tool");
-  const deployment = new PlanDeployment(platform);
-  await deployment.apply([original, legacyArtifact]);
+  await deploy(platform, [original, legacyArtifact]);
   const before = await host.use(GREETER, (greeter) => greeter.greet());
   let rejected = false;
   try {
-    await deployment.apply([broken, toolArtifact]);
+    await deploy(platform, [broken, toolArtifact]);
   } catch {
     rejected = true;
   }
   const afterFailure = await host.use(GREETER, (greeter) => greeter.greet());
   const legacyAfterFailure = legacyDisposals;
-  await deployment.apply([replacement, toolArtifact]);
+  await deploy(platform, [replacement, toolArtifact]);
   const afterCommit = await host.use(GREETER, (greeter) => greeter.greet());
   const legacyAfterCommit = legacyDisposals;
   const deployed = [...platform.diagnostics.get().registrations.keys()].sort().join(", ");
-  await platform[Symbol.asyncDispose]();
+  await platform[asyncDisposeSymbol]();
   await host.stop();
   return exampleResult({
     id: "11",
-    stage: "applications",
     title: "A desired-state controller compiled into one activation Plan",
-    introduces: ["desired-state", "content-revision", "activation-plan"],
     facts: [
       `The initial plan published '${before}'.`,
       `The invalid plan was rejected = ${rejected}; the running service remained '${afterFailure}'.`,

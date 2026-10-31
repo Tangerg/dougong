@@ -94,3 +94,29 @@ describe("Lifetime diagnostic projections", () => {
     subscription[Symbol.dispose]();
   });
 });
+
+it("preserves the original child publication failure at its owner without a second withdrawal", async () => {
+  const root = createLifetime();
+  const child = root.resolveOwner(root.child("child"));
+  const original = new Error("cannot withdraw");
+  const withdraw = vi.fn<() => never>(() => {
+    throw original;
+  });
+  child.stage((detach) => ({
+    publish() {},
+    [Symbol.dispose]() {
+      detach();
+      withdraw();
+    },
+  }));
+  root.publish();
+  const failure = await root.dispose().catch((error: unknown) => error);
+  expect(failure).toBeInstanceOf(AggregateError);
+  expect((failure as AggregateError).errors[0].errors[0]).toBe(original);
+  expect(root.snapshot().children[0]).toMatchObject({
+    phase: "quarantined",
+    publications: 1,
+    unresolved: [{ kind: "publication", error: { message: original.message } }],
+  });
+  expect(withdraw).toHaveBeenCalledOnce();
+});

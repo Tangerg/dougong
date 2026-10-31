@@ -1,6 +1,6 @@
 # Lifetime and resources
 
-Lifetimes compose into a resource tree. Each Instance creates a root; plugins create child owners through `child(label)`. Public handles use standard disposal protocols, so third-party resources need no additional custom method.
+Lifetimes compose into a resource tree. Each Instance creates a root; plugins create child owners through `child(label)`. The root view `ctx.lifetime` registers resources and tasks; only the Engine can stop the Instance. To end a group of operations early, retain the `ChildLifetime` returned by `child(label)`.
 
 | Primitive | Guarantee |
 | --- | --- |
@@ -11,7 +11,7 @@ Lifetimes compose into a resource tree. Each Instance creates a root; plugins cr
 | `acquire(factory)` | Registers the obligation before creation; late resources remain owned |
 | `interrupt(fn)` | Registers an interruption required before draining work |
 | `signal` | Cooperative cancellation |
-| `[Symbol.asyncDispose]()` | Joins the single shutdown execution |
+| `child[Symbol.asyncDispose]()` | Closes the child subtree you created and joins its single shutdown |
 
 Shutdown seals entry, withdraws publications and broadcasts cancellation, runs interruptions, joins active work and acquisitions, then releases resources in reverse order. Use `interrupt` to break a blocking read and `defer` for final destruction that must wait for tasks to finish.
 
@@ -28,3 +28,5 @@ A timeout ends waiting without proving the underlying work stopped. Shutdown alr
 Tasks own background error reporting. Failures of `host.use` and contribution `use` propagate to their caller; do not rethrow the same outcome as another background failure. Lifetime task counts, foreground counts and unresolved obligations are read-only projections of resource facts.
 
 For noncancellable external operations, the example `acquireForLifetime` composes two owners: a generation can stop waiting while a longer-lived operations owner still joins and reclaims late results. This application policy composes `spawn`, `defer` and AbortSignal without hiding resource obligations from the kernel.
+
+Publication withdrawal errors from a child propagate with their original cause. The child remains accountable for the failed release even if the publication detached before throwing; parent diagnostics expose a bounded error snapshot.

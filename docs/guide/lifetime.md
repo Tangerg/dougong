@@ -1,6 +1,6 @@
 # 生命周期与资源
 
-Lifetime 以组合构成资源树。根由 Instance 创建，插件通过 `child(label)` 创建子所有者。所有公开句柄采用标准释放协议，不要求第三方资源增加自定义方法。
+Lifetime 以组合构成资源树。根由 Instance 创建，插件通过 `child(label)` 创建子所有者。插件通过根视图 `ctx.lifetime` 登记资源和任务；只有 Engine 能停止 Instance。插件不能通过该视图释放整个实例。需要提前结束一组工作时，创建并保存 `child(label)` 返回的 `ChildLifetime`。
 
 | 原子能力 | 承诺 |
 | --- | --- |
@@ -11,7 +11,7 @@ Lifetime 以组合构成资源树。根由 Instance 创建，插件通过 `child
 | `acquire(factory)` | 在创建之前登记义务，迟到资源仍归该树负责 |
 | `interrupt(fn)` | 登记排空工作之前必须执行的中断操作 |
 | `signal` | 合作式取消信号 |
-| `[Symbol.asyncDispose]()` | 加入唯一的退出执行 |
+| `child[Symbol.asyncDispose]()` | 提前关闭自己创建的子树，加入同一次退出 |
 
 退出先封闭入口、撤销发布并传播取消，执行中断，等待使用中的工作与创建义务，最后逆序释放资源。用 `interrupt` 关闭阻塞读取的通道，用 `defer` 执行任务退出后才能进行的最终销毁。
 
@@ -28,3 +28,5 @@ lifetime.spawn((signal) => connection.readUntilClosed(signal));
 Task 自己拥有后台异常报告。前台 `host.use` 和贡献 `use` 的失败传播给调用者；不要把同一个错误再次作为后台失败抛出。Lifetime 快照中的任务数、借用数和未完成义务是资源事实的只读投影。
 
 对于不可取消的外部操作，示例的 `acquireForLifetime` 展示两层所有权：代次等待可以结束，而较长寿命的操作所有者继续等待并回收迟到结果。该业务策略由 `spawn`、`defer` 和 AbortSignal 组合，核心不隐藏资源义务。
+
+子树撤回发布时的错误会携带原始原因向上传播。即使发布项先解除登记再抛错，子树仍承担失败的释放义务；父级诊断提供有界错误快照。

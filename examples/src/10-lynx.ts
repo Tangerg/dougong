@@ -1,4 +1,11 @@
-import { createHost, definePlugin, extensionPoint, service, type ContributionView } from "dougong";
+import {
+  asyncDisposeSymbol,
+  createHost,
+  definePlugin,
+  extensionPoint,
+  service,
+  type ContributionView,
+} from "dougong";
 import { createPlatform, MemoryLoader, PermissionSet } from "@dougongjs/platform";
 import { actionActivation, type ActionDeclaration } from "./action-declaration.js";
 import { exampleResult, type ExampleResult } from "./example.js";
@@ -138,7 +145,7 @@ export async function lynxScenario(): Promise<ExampleResult> {
   const secondOutput = await host.use(COMMAND_CATALOG, (commands) => commands.run(openExplorer.id));
   const panelTitle = [...workspacePanels.get().values()][0]?.title;
 
-  await platform[Symbol.asyncDispose]();
+  await platform[asyncDisposeSymbol]();
   const workspace = host.group("workspace-main");
   if (!workspace) throw new Error("Workspace ownership group is missing");
   const remove = host.change();
@@ -154,9 +161,7 @@ export async function lynxScenario(): Promise<ExampleResult> {
   await host.stop();
   return exampleResult({
     id: "10",
-    stage: "applications",
     title: "Lynx: a domain catalog, workspace ownership and updates in place",
-    introduces: ["domain-catalog", "workspace-ownership", "registration-update"],
     facts: [
       "Command uniqueness belongs to CommandCatalog; invocation borrows the contributing Instance.",
       `The workspace shell bound to '${workspaceRoot}' with ${before} executable commands before activation.`,

@@ -11,6 +11,7 @@
 | `catalog.add(input)` | 捕获不可变的发行声明和配置 |
 | `catalog.get(name, revision)` / `catalog.list()` | 查阅已知 Artifact |
 | `catalog.remove(artifact)` | 移除发现记录 |
+| `registrations()` | 枚举当前可用于命令的 Registration 句柄，返回冻结数组 |
 | `select(artifact)` | 设置 Registration 的选择意图 |
 | `preview(registrations, { remove })` | 数据层检查和延迟验证清单 |
 | `activate(registrations, { remove, signal })` | 准入、加载并编译为一笔 Core Plan |
@@ -31,3 +32,5 @@ Platform 状态为 `active/disposing/disposed`。Registration 状态为 `selecte
 Manifest dependencies 负责发行依赖；Plugin requires 负责真实能力绑定。动态导入图属于 bundler/HMR 适配器，不能从这两个图猜测。示例 12 展示将 bundler 影响集合提交为一笔激活计划。
 
 Loader 是结构协议；ImportLoader 用同一 realm 的动态导入，MemoryLoader 适合测试与受控模块表。PermissionSet 是声明权限集合的 Authorizer 实现，不提供操作系统隔离。
+
+最终激活交接（Core 规划、最终准入与 apply）或 Core 释放期间，新发起的变更和释放命令以 `PLATFORM_BUSY` 拒绝，避免回调等待排在自己后面的命令。此前已接纳的激活仍能完成，交接之前的加载保持并发。等外层调用完成后再发起后续命令。

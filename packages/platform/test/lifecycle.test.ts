@@ -34,7 +34,7 @@ describe("Platform lifecycle", () => {
     await host.stop();
   });
 
-  it("joins disposal while a setup is already committing", async () => {
+  it("rejects disposal during setup and joins repeated disposal once the handoff ends", async () => {
     const entered = deferred();
     const release = deferred();
     const cleanup = vi.fn<() => void>();
@@ -51,15 +51,16 @@ describe("Platform lifecycle", () => {
     await host.start();
     const activation = platform.activate([registration]);
     await entered.promise;
+    await expect(platform[Symbol.asyncDispose]()).rejects.toMatchObject({ code: "PLATFORM_BUSY" });
+    expect(platform.status).toBe("active");
+    release.resolve();
+    await activation;
     const first = platform[Symbol.asyncDispose]();
-    const second = platform[Symbol.asyncDispose]();
-    expect(first).toBe(second);
+    expect(platform[Symbol.asyncDispose]()).toBe(first);
     expect(platform.status).toBe("disposing");
     expect(() => platform.select(registration.selectedArtifact)).toThrow(
       expect.objectContaining({ code: "PLATFORM_UNAVAILABLE" }),
     );
-    release.resolve();
-    await activation;
     await first;
     expect(cleanup).toHaveBeenCalledTimes(1);
     expect(platform.status).toBe("disposed");

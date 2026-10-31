@@ -33,3 +33,7 @@
 | reactive | 96 | 89 | 100 | 99 |
 
 Behavioral tests cover atomic publication, planning authority, rollback and quarantine, lifetime obligations, cancellation, cross-copy signals and isolated packed consumers. Guard mutation tests prove prohibited dependency directions fail. API guards inspect emitted declarations including type-only exports, require both languages to document exports and error codes, and validate navigation against real Markdown pages. Generated protocol files have one owner under `tooling/internal`; edit that source and regenerate.
+
+The architecture guard resolves Contract factory symbols, including named aliases and namespace imports. Package boundaries also cover re-exports, literal dynamic imports and import types. API inspection and tarball validation follow each package’s declared `exports`; every public entrypoint, including `dougong/advanced`, must ship its JavaScript and declaration targets.
+
+The expected public API lives in `tooling/architecture/public-api.json`. Source checks, emitted declarations and all four ESM entrypoints use the same budget.

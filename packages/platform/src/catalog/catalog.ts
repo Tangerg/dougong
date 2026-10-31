@@ -11,8 +11,7 @@ export interface Catalog<Reference> {
 
 export class ArtifactCatalog<Reference> implements Catalog<Reference> {
   readonly #apiVersion: string;
-  readonly #artifacts = new Map<string, Map<string, Artifact<Reference>>>();
-  readonly #revisions = new Map<string, Set<string>>();
+  readonly #artifacts = new Map<string, Map<string, Artifact<Reference> | undefined>>();
   readonly #owned = new WeakSet<Artifact<Reference>>();
   #active = true;
   readonly facade: Catalog<Reference> = Object.freeze({
@@ -31,18 +30,16 @@ export class ArtifactCatalog<Reference> implements Catalog<Reference> {
     this.#assertActive();
     const artifact = captureArtifact(this.#apiVersion, input);
     const name = artifact.manifest.name;
-    if (this.#revisions.get(name)?.has(artifact.revision)) {
+    const artifacts =
+      this.#artifacts.get(name) ?? new Map<string, Artifact<Reference> | undefined>();
+    if (artifacts.has(artifact.revision)) {
       throw new PlatformError(
         "ARTIFACT_DUPLICATE",
         `Artifact '${name}' revision '${artifact.revision}' already exists`,
       );
     }
-    const artifacts = this.#artifacts.get(name) ?? new Map<string, Artifact<Reference>>();
     artifacts.set(artifact.revision, artifact);
     this.#artifacts.set(name, artifacts);
-    const revisions = this.#revisions.get(name) ?? new Set<string>();
-    revisions.add(artifact.revision);
-    this.#revisions.set(name, revisions);
     this.#owned.add(artifact);
     return artifact;
   }
@@ -53,15 +50,20 @@ export class ArtifactCatalog<Reference> implements Catalog<Reference> {
 
   list(): ReadonlyMap<string, ReadonlyMap<string, Artifact<Reference>>> {
     return new ReadonlyMapSnapshot(
-      [...this.#artifacts].map(([name, artifacts]) => [name, new ReadonlyMapSnapshot(artifacts)]),
+      [...this.#artifacts].flatMap(([name, artifacts]) => {
+        const available = [...artifacts].flatMap(([revision, artifact]) =>
+          artifact ? [[revision, artifact] as const] : [],
+        );
+        return available.length ? [[name, new ReadonlyMapSnapshot(available)] as const] : [];
+      }),
     );
   }
 
   remove(artifact: Artifact<Reference>) {
     this.assertAvailable(artifact);
     const revisions = this.#artifacts.get(artifact.manifest.name)!;
-    revisions.delete(artifact.revision);
-    if (!revisions.size) this.#artifacts.delete(artifact.manifest.name);
+    // A removed revision stays reserved without retaining its module reference or configuration.
+    revisions.set(artifact.revision, undefined);
   }
 
   assertAvailable(artifact: Artifact<Reference>) {
@@ -77,7 +79,6 @@ export class ArtifactCatalog<Reference> implements Catalog<Reference> {
   close() {
     this.#active = false;
     this.#artifacts.clear();
-    this.#revisions.clear();
   }
 
   #assertActive() {

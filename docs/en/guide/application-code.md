@@ -25,3 +25,5 @@ if (id !== undefined) {
 `host.diagnostics.get()` is the sole entrypoint for reading a stable Host snapshot. Subscriptions do not replay immediately; notifications carry no payload, so read through `get()` in the callback. Unsubscribe with `subscription[Symbol.dispose]()`. Bounded `RecordedFailure` diagnostics avoid retaining arbitrary plugin resource graphs through exceptions.
 
 CLI, UI and agent callers share `change → plan → apply`. Present the Plan's bindings, impact, order and execution guarantees before applying that exact Plan. If state changed, plan again.
+
+`host.change()` returns a frozen staging interface. It grants no access to the underlying operation list, installation records or commit authority. A pending Installation does not hold a Host reference; its handle begins projecting Engine state only when committed.

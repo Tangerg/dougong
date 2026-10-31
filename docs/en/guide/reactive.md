@@ -21,6 +21,8 @@ Bridge rereads after subscribing to close the attachment window. On owner shutdo
 
 `observe(owner, source, observer)` creates a child owner for each source value. Replacement fully disposes the previous child before creating another; changes arriving during a transition coalesce to the latest value. The returned `AsyncDisposable` supports early termination.
 
-Public types: `Readable`, `Signal`, `ReadonlySignal`, `Disposable`, `AsyncDisposable`, `BridgeOwner`, `ObservationOwner`, `ObservationTask`, `Observer`. `ObservationOwner` describes `defer`, `child`, `spawn` and standard disposal structurally. Compatible owners need not inherit framework classes.
+Public types: `Readable`, `Signal`, `ReadonlySignal`, `Disposable`, `AsyncDisposable`, `BridgeOwner`, `ObservationOwner`, `ObservationTask`, `Observer`. `ObservationOwner` needs `defer`, `child` and `spawn`; the returned child supplies standard async disposal. The parent need not expose a disposer. Compatible owners need not inherit framework classes.
 
 Observers register resources synchronously. Use `generation.spawn` for asynchronous work. The observation task's owner reports failures; a failed old-generation exit never silently starts a replacement.
+
+The adapters capture the accepted source methods and subscription disposer. A failed unsubscribe remains a release obligation of the owner: early termination, drain failure and later shutdown cannot turn it into success by running it again.

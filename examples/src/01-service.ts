@@ -38,9 +38,7 @@ export async function serviceBasics(): Promise<ExampleResult> {
 
   return exampleResult({
     id: "01",
-    stage: "atoms",
     title: "A stable Service and the declaration that reaches it",
-    introduces: ["service", "provides", "requires", "host.use"],
     facts: [
       "The provider started before its consumer even though it was installed second.",
       `Observed ${trace.join(" → ")}.`,

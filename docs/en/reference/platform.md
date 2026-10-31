@@ -11,6 +11,7 @@ Type exports: `Platform`, `PlatformOptions`, `PlatformStatus`, `Registration`, `
 | `catalog.add(input)` | Captures immutable delivery declarations and configuration |
 | `catalog.get(name, revision)` / `catalog.list()` | Reads known Artifacts |
 | `catalog.remove(artifact)` | Removes a discovery record |
+| `registrations()` | Enumerates a frozen array of current Registration handles for commands |
 | `select(artifact)` | Sets Registration selection intent |
 | `preview(registrations, { remove })` | Checks declaration data and lists deferred checks |
 | `activate(registrations, { remove, signal })` | Admits, loads and compiles one Core Plan |
@@ -31,3 +32,5 @@ Platform states are `active/disposing/disposed`. Registration states are `select
 Manifest dependencies describe delivery relationships; Plugin requires describe actual capability binding. A bundler/HMR adapter owns the import graph, which cannot be guessed from either of those graphs. Example 12 submits the bundler's affected set as one activation plan.
 
 Loader is structural. ImportLoader uses same-realm dynamic import; MemoryLoader supports testing and controlled module tables. PermissionSet implements Authorizer with a declared permission set and provides no operating-system isolation.
+
+During the final activation handoff (Core planning, final admission and apply) or Core release, new mutation commands and disposal reject with `PLATFORM_BUSY`. A callback cannot enqueue work behind itself and wait for it. Earlier admitted activations can finish; loading outside that window remains concurrent. Issue the next command after the outer call completes.

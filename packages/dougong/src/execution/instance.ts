@@ -61,7 +61,7 @@ export class Instance {
         environment.contracts.remember(token),
       ),
       meta,
-      log: this.lifetime.handle.use(new ScopedLogger(environment.logger, meta)),
+      log: this.lifetime.use(new ScopedLogger(environment.logger, meta)).handle,
     });
     const output = await this.lifetime.prepare(() =>
       this.declaration.plugin.setup(context, config),

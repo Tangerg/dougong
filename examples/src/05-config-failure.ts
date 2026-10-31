@@ -121,16 +121,7 @@ export async function configAndFailure(): Promise<ExampleResult> {
 
   return exampleResult({
     id: "05",
-    stage: "composition",
     title: "A rejected declaration and a failed setup",
-    introduces: [
-      "config-schema",
-      "config-validation",
-      "plugin-description",
-      "change-set",
-      "setup-failure",
-      "rollback",
-    ],
     facts: [
       `The declaration produced ${serializedDescription.length} bytes of JSON for docs and agents, configuration schema '${descriptor.config.status}', with ${startsAfterDescription} setup calls.`,
       `The schema applied its default and the caller's override: capacity ${running}.`,

@@ -10,9 +10,11 @@
 | 插件 / Plugins | `definePlugin`, `describePlugin`, `PluginDescriptor`, `PluginConfigDescriptor`, `PluginDescriptionOptions`, `Plugin`, `AnyPlugin`, `PluginContext`, `Requirements`, `Provisions`, `ResolvedRequirement`, `ResolvedRequirements`, `ProvidedServices`, `InstanceMeta` |
 | 安装与计划 / Installation and planning | `ChangeSet`, `Group`, `Installation`, `InstallationOptions`, `InstallationUpdate`, `InstallationOrigin`, `InitialInstallation`, `Plan`, `PlanReport`, `BindingReport`, `ImpactReason`, `PlanOperation`, `DeclarationSnapshot`, `captureConfig`, `ConfigValue` |
 | 运行 / Execution | `createHost`, `Host`, `HostOptions`, `ApplyResult`, `HostStatus`, `InstallationState` |
-| 资源 / Resources | `LifetimeContext`, `LifetimeOwnership`, `Task`, `Cleanup`, `BackgroundTask`, `LifetimePhase`, `LifetimeSnapshot`, `UnresolvedObligation`, `Disposable`, `AsyncDisposable`, `Resource`, `Awaitable`, `disposeSymbol`, `asyncDisposeSymbol` |
+| 资源 / Resources | `LifetimeContext`, `ChildLifetime`, `LifetimeOwnership`, `Task`, `Cleanup`, `BackgroundTask`, `LifetimePhase`, `LifetimeSnapshot`, `UnresolvedObligation`, `Disposable`, `AsyncDisposable`, `Resource`, `Awaitable`, `disposeSymbol`, `asyncDisposeSymbol` |
 | 事件与贡献 / Events and contributions | `Contribution`, `ContributionView`, `ContributionOperations`, `EventListener`, `EventArguments`, `EventOperations` |
 | 观察与错误 / Observation and errors | `HostSnapshot`, `InstallationSnapshot`, `GroupSnapshot`, `SnapshotView`, `isLogger`, `Logger`, `DougongError`, `ConfigValidationError`, `RecordedFailure`, `isError`, `isCancellationReason`, `ErrorSnapshot`, `ErrorDetails` |
+
+插件上下文的 `LifetimeContext` 只授予工作与资源登记能力；`child(label)` 返回可以提前释放的 `ChildLifetime`。关闭整个 Instance 始终经过 Engine。
 
 ## Host 与安装
 
@@ -52,9 +54,11 @@ Host 状态为 `stopped`、`starting`、`running`、`changing`、`stopping`、`q
 
 从上一版 API 更新时，将已删除的 Host inspect 方法替换为 `host.diagnostics.get()`。删除对旧 ApplyResult outcome 字段的判断；await 正常完成后处理成功，catch 中处理失败及结构化 details。不提供别名或兼容适配器。
 
+Host 只在选项缺省时使用默认值；显式传入 null 的名字、安装列表或分组列表会被拒绝。配置捕获只读取共享输入对象一次并冻结结果；循环引用和过深嵌套仍然拒绝。插件可单独传递 `ctx.log` 的日志函数，释放日志作用域的权限归 Instance。
+
 ## 高级组合原语
 
-正式子路径 `dougong/advanced` 导出 `SnapshotPublisher`、`ReadonlyMapSnapshot`、`SerialQueue`、`normalizePlainRecord`、`batchSnapshotNotifications`。它们服务于下游宿主适配器和领域扩展，不暴露 Engine 或可变安装注册表。共享发布原语让 UI 适配与 Platform 复用同一观察语义。
+正式子路径 `dougong/advanced` 导出 `SnapshotPublisher`、`ReadonlyMapSnapshot`、`SerialQueue`、`normalizePlainRecord`、`batchSnapshotNotifications`。它们服务于下游宿主适配器和领域扩展，不暴露 Engine 或可变安装注册表。共享发布原语让 UI 适配与 Platform 复用同一观察语义。 批处理回调必须同步完成；返回 Promise 不能延长这次发布边界。
 
 `normalizePlainRecord` 规范化具名记录边界；配置数据请用 `captureConfig`，其约束和错误与计划中的配置捕获保持一致。
 

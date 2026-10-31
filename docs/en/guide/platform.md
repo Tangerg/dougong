@@ -30,7 +30,7 @@ await platform[Symbol.asyncDispose]();
 
 Preview checks declaration data and explicitly lists deferred admission, module validation, configuration validation and Core binding checks. Catalog browsing, selection and preview do not execute plugin code. Lazy activation publishes no executable placeholder. Applications render discoverable Manifest data, activate, then borrow real capabilities.
 
-Authorization has two precise boundaries: `load` before module evaluation, and `activate` after dependencies are ready and immediately before setup. Custom `Authorizer` receives Artifact identity, operation and AbortSignal. Loaders should cooperate with cancellation; a late result from an uncooperative loader cannot commit a superseded selection.
+Authorization has two precise boundaries: `load` before module evaluation, and `activate` after Core planning and before handing the plan to Core. Custom `Authorizer` receives Artifact identity, operation and AbortSignal. Loaders should cooperate with cancellation; a late result from an uncooperative loader cannot commit a superseded selection.
 
 To update, add another Artifact and select it. Selection intent may lead execution. `selectedArtifact` and `activeOrigin` express that difference without copying an additional active Manifest.
 
@@ -38,6 +38,8 @@ To update, add another Artifact and select it. Selection intent may lead executi
 const selected = await platform.select(nextArtifact);
 await platform.activate([selected, another], { remove: [obsolete] });
 ```
+
+Applications can reconcile selections with `platform.registrations()` instead of maintaining another name-to-handle registry. Use diagnostics to render state, and this read-only membership list to select command targets.
 
 Combined additions, updates and removals compile to one Core Plan. `remove` uses the same execution path. Deleting a Catalog entry forgets discovery data; it does not implicitly remove selected or running capabilities.
 

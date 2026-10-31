@@ -15,6 +15,8 @@ Planning captures configuration, runs schemas, validates contracts and groups, r
 
 A Plan is issued by one Host and can be consumed once. Before execution effects, apply checks authority, consumption and `stateRevision`. Another commit or a failure that changes running state invalidates old Plans. Task counts and notification counts do not.
 
+Core issues executable Plans only: invalid declarations reject during `host.plan()`, so its report has no constant empty list of blockers. A permanent contract-kind conflict discovered at execution preflight consumes that Plan: correct the declarations and plan again. Platform’s data preview can still report actual blockers.
+
 ## Execution and results
 
 Execution first checks foreground borrows on affected generations. A live borrow rejects with `HOST_BUSY` before execution effects and without consuming the Plan. Once execution is admitted, it seals affected old generations, joins their background work and releases resources, then prepares candidates in dependency order. After every candidate is ready, listeners, contributions, services and origin publish together.

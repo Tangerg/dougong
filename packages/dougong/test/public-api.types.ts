@@ -197,8 +197,13 @@ expectTypeOf<NonNullable<core.HostOptions["onError"]>>().toEqualTypeOf<
   (error: unknown) => core.Awaitable<void>
 >();
 
+expectTypeOf<ReturnType<core.LifetimeContext["child"]>>().toEqualTypeOf<core.ChildLifetime>();
+expectTypeOf<core.ChildLifetime>().toMatchTypeOf<core.AsyncDisposable>();
+// @ts-expect-error An Instance's shutdown authority belongs to its Engine.
+expectTypeOf<core.LifetimeContext[typeof Symbol.asyncDispose]>();
+
 type NarrowLifetime = Omit<core.LifetimeContext, "child"> & {
-  readonly child: (label: "known") => core.LifetimeContext;
+  readonly child: (label: "known") => core.ChildLifetime;
 };
 expectTypeOf<NarrowLifetime extends core.LifetimeContext ? true : false>().toEqualTypeOf<false>();
 expectTypeOf<core.EventArguments<void>>().toEqualTypeOf<[payload?: void]>();

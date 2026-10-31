@@ -32,16 +32,19 @@ export interface Task<T = void> extends AsyncDisposable {
 export type Cleanup = () => Awaitable<unknown>;
 export type BackgroundTask<T> = (signal: AbortSignal) => Awaitable<T>;
 
-export interface LifetimeContext extends AsyncDisposable {
+export interface LifetimeContext {
   readonly signal: AbortSignal;
   readonly use: <T extends Resource>(resource: T) => T;
   readonly defer: (cleanup: Cleanup) => AsyncDisposable;
-  readonly child: (label: string) => LifetimeContext;
+  readonly child: (label: string) => ChildLifetime;
   readonly spawn: <T>(task: BackgroundTask<T>) => Task<T>;
   readonly acquire: <T extends Resource>(
     factory: (signal: AbortSignal) => Awaitable<T>,
   ) => Promise<T>;
   readonly interrupt: (callback: Cleanup) => Disposable;
+}
+
+export interface ChildLifetime extends LifetimeContext, AsyncDisposable {
   [Symbol.asyncDispose](): Promise<void>;
 }
 
@@ -138,24 +141,25 @@ class CleanupRecord {
 class PublicationRecord {
   readonly id: number;
   readonly publication: Publication;
-  failure: RecordedFailure | undefined;
+  failure: { readonly reason: unknown; readonly recorded: RecordedFailure } | undefined;
 
   constructor(id: number, publication: Publication) {
     this.id = id;
     this.publication = publication;
   }
 
-  withdraw() {
-    if (this.failure) throw this.failure;
+  withdraw(): boolean {
+    if (this.failure) return false;
     try {
       assertSynchronous(
         this.publication[disposeSymbol](),
         "Publication withdrawal must be synchronous",
       );
     } catch (error) {
-      this.failure = new RecordedFailure(error);
-      throw error;
+      this.failure = { reason: error, recorded: new RecordedFailure(error) };
+      return false;
     }
+    return true;
   }
 }
 
@@ -255,7 +259,7 @@ export class Lifetime {
   #completion: Promise<void> | undefined;
   #shutdownWork: Promise<void> | undefined;
   #timeoutFailure: RecordedFailure | undefined;
-  readonly handle: LifetimeContext;
+  #handle: LifetimeContext | undefined;
 
   constructor(options: LifetimeOptions, ownership?: ChildOwnership) {
     validateLabel(options.label);
@@ -280,8 +284,16 @@ export class Lifetime {
       this.#detachParentAbort = () => parent.removeEventListener("abort", abort);
       if (parent.aborted) abort();
     }
+  }
+
+  get handle(): LifetimeContext {
+    return (this.#handle ??= this.#context({}));
+  }
+
+  #context<Rights extends object>(rights: Rights): LifetimeContext & Rights {
     const lifetime = this;
-    this.handle = Object.freeze({
+    const handle = Object.freeze({
+      ...rights,
       get signal() {
         return lifetime.signal;
       },
@@ -292,9 +304,9 @@ export class Lifetime {
       acquire: <T extends Resource>(factory: (signal: AbortSignal) => Awaitable<T>) =>
         this.acquire(factory),
       interrupt: (callback: Cleanup) => this.interrupt(callback),
-      [asyncDisposeSymbol]: () => this.dispose(),
     });
-    lifetimeAuthorities.set(this.handle, this);
+    lifetimeAuthorities.set(handle, this);
+    return handle;
   }
 
   resolveOwner(context?: LifetimeContext): Lifetime {
@@ -331,7 +343,8 @@ export class Lifetime {
     };
     for (const record of this.#cleanups) add(record.id, record.kind, record.failure);
     for (const record of this.#interrupts) add(record.id, record.kind, record.failure);
-    for (const record of this.#publications) add(record.id, "publication", record.failure);
+    for (const record of this.#publications)
+      add(record.id, "publication", record.failure?.recorded);
     add(0, "shutdown", this.#timeoutFailure);
     return Object.freeze({
       label: this.#label,
@@ -376,7 +389,7 @@ export class Lifetime {
     return Object.freeze({ [disposeSymbol]: () => record.forget() });
   }
 
-  child(label: string): LifetimeContext {
+  child(label: string): ChildLifetime {
     this.#requireActive();
     const child = new Lifetime(
       {
@@ -398,7 +411,9 @@ export class Lifetime {
     );
     this.#children.add(child);
     this.#changed?.();
-    return child.handle;
+    const handle = child.#context({ [asyncDisposeSymbol]: child.dispose.bind(child) });
+    child.#handle = handle;
+    return handle;
   }
 
   spawn<T>(task: BackgroundTask<T>): Task<T> {
@@ -459,7 +474,7 @@ export class Lifetime {
     this.#requireActive();
     let record: PublicationRecord | undefined;
     const publication = create(() => {
-      if (record) this.#publications.delete(record);
+      if (record && !record.failure) this.#publications.delete(record);
       this.#changed?.();
     });
     record = new PublicationRecord(++this.#sequence, publication);
@@ -567,10 +582,13 @@ export class Lifetime {
     try {
       batchSnapshotNotifications(() => {
         this.#changed?.();
-        this.#withdrawTree(errors);
+        this.#withdrawTree();
       });
     } catch (error) {
       errors.push(error);
+    }
+    for (const record of this.#publications) {
+      if (record.failure) errors.push(record.failure.reason);
     }
     this.#controller?.abort(disposalReason);
     this.detachStartupSignal();
@@ -606,16 +624,13 @@ export class Lifetime {
     this.#report = undefined;
   }
 
-  #withdrawTree(errors: unknown[]) {
+  #withdrawTree() {
     for (const record of [...this.#publications].reverse()) {
-      try {
-        record.withdraw();
-        this.#publications.delete(record);
-      } catch (error) {
-        errors.push(error);
-      }
+      if (record.withdraw()) this.#publications.delete(record);
+      // A publication may detach before its withdrawal fails; the unfinished obligation still belongs here.
+      else this.#publications.add(record);
     }
-    for (const child of this.#children) child.#withdrawTree([]);
+    for (const child of this.#children) child.#withdrawTree();
   }
 
   async #releaseRecords(records: Set<CleanupRecord>, errors: unknown[]) {

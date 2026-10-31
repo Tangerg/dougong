@@ -6,7 +6,7 @@ import {
   extensionPoint,
   optional,
   service,
-  type PluginContext,
+  type ChildLifetime,
   type Task,
 } from "../src/index";
 
@@ -606,7 +606,7 @@ it("joins an already running shutdown without retrying it or quarantining succes
     entered.resolve();
     await resume.promise;
   });
-  let context!: PluginContext<{}>;
+  let child!: ChildLifetime;
   const host = createHost({
     installations: [
       {
@@ -614,15 +614,15 @@ it("joins an already running shutdown without retrying it or quarantining succes
         plugin: definePlugin({
           name: "plugin",
           setup(ctx) {
-            context = ctx;
-            ctx.lifetime.defer(cleanup);
+            child = ctx.lifetime.child("plugin-owned");
+            child.defer(cleanup);
           },
         }),
       },
     ],
   });
   await host.start();
-  const selfDisposal = context.lifetime[Symbol.asyncDispose]();
+  const selfDisposal = child[Symbol.asyncDispose]();
   await entered.promise;
   const settled = vi.fn<() => void>();
   const stopping = host.stop().then(settled, settled);

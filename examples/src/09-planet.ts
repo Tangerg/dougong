@@ -1,7 +1,14 @@
-import { createHost, definePlugin, event, extensionPoint, service } from "dougong";
+import {
+  asyncDisposeSymbol,
+  createHost,
+  definePlugin,
+  event,
+  extensionPoint,
+  service,
+} from "dougong";
 import { createPlatform, MemoryLoader, PermissionSet } from "@dougongjs/platform";
-import { signal, type ReadonlySignal } from "@dougongjs/reactive";
-import { exampleResult, whenAborted, type ExampleResult } from "./example.js";
+import { computed, signal, type ReadonlySignal } from "@dougongjs/reactive";
+import { exampleResult, type ExampleResult } from "./example.js";
 
 interface Track {
   readonly query: string;
@@ -35,6 +42,8 @@ export async function planetScenario(): Promise<ExampleResult> {
   const shellTracks: string[] = [];
   let supersededPlaybacks = 0;
   let playerStarts = 0;
+  const playing = Promise.withResolvers<void>();
+  const finishPlayback = Promise.withResolvers<void>();
 
   const audioAdapter = definePlugin({
     name: "examples.planet.adapter.audio",
@@ -44,6 +53,10 @@ export async function planetScenario(): Promise<ExampleResult> {
         async play(uri: string, signal: AbortSignal) {
           signal.throwIfAborted();
           audioUris.push(uri);
+          if (uri.endsWith("/superseded")) {
+            playing.resolve();
+            await finishPlayback.promise;
+          }
         },
       },
     }),
@@ -72,12 +85,12 @@ export async function planetScenario(): Promise<ExampleResult> {
 
       return {
         player: {
-          current,
+          current: computed(() => current.get()),
           async play(query: string) {
             const previous = playback;
             const currentPlayback = ctx.lifetime.child("playback");
             playback = currentPlayback;
-            await previous[Symbol.asyncDispose]();
+            await previous[asyncDisposeSymbol]();
             let selected: { id: string; score: number } | undefined;
             for (const id of ctx.deps.sources.get().keys()) {
               const score = await ctx.deps.sources.use(id, (source) => source.score(query));
@@ -86,9 +99,12 @@ export async function planetScenario(): Promise<ExampleResult> {
             if (!selected) throw new Error("No media source is available");
             const track = await ctx.deps.sources.use(selected.id, async (source) => {
               const uri = await source.resolve(query, currentPlayback.signal);
+              currentPlayback.signal.throwIfAborted();
               await ctx.deps.audio.play(uri, currentPlayback.signal);
               return Object.freeze({ query, uri, source: source.id });
             });
+            // An external output can finish after the next playback has taken ownership.
+            currentPlayback.signal.throwIfAborted();
             current.set(track);
             await ctx.events.emit(TRACK_CHANGED, track);
           },
@@ -110,8 +126,7 @@ export async function planetScenario(): Promise<ExampleResult> {
         const track = ctx.deps.player.current.get();
         if (track) shellTracks.push(`${track.source}:${track.query}`);
       };
-      const subscription = ctx.deps.player.current.subscribe(synchronize);
-      ctx.lifetime.defer(() => subscription[Symbol.dispose]());
+      ctx.lifetime.use(ctx.deps.player.current.subscribe(synchronize));
     },
   });
   const remoteSource = definePlugin({
@@ -121,9 +136,6 @@ export async function planetScenario(): Promise<ExampleResult> {
         id: "remote",
         score: () => 100,
         async resolve(query, signal) {
-          if (query === "superseded") {
-            await whenAborted(signal);
-          }
           signal.throwIfAborted();
           return `https://media.example/${encodeURIComponent(query)}`;
         },
@@ -171,24 +183,27 @@ export async function planetScenario(): Promise<ExampleResult> {
       if (!(error instanceof DOMException) || error.name !== "AbortError") throw error;
       supersededPlaybacks++;
     });
-  await host.use(PLAYER, (player) => player.play("album 42"));
+  await playing.promise;
+  try {
+    await host.use(PLAYER, (player) => player.play("album 42"));
+  } finally {
+    finishPlayback.resolve();
+  }
   await superseded;
   await platform.remove(remote);
   await host.use(PLAYER, (player) => player.play("outro"));
 
-  await platform[Symbol.asyncDispose]();
+  await platform[asyncDisposeSymbol]();
   await host.stop();
 
   return exampleResult({
     id: "09",
-    stage: "applications",
     title: "Planet: media providers, playback ownership and call-time selection",
-    introduces: ["call-time-selection", "live-provider-swap", "platform-ownership"],
     facts: [
       `The player picked the best available source each time: ${history.map((track) => track.source).join(" → ")}.`,
       `Audio output received ${audioUris.join(", ")}.`,
       `Providers were added and removed live, yet the player started ${playerStarts} time — an ExtensionPoint is not a dependency edge.`,
-      `Replacing playback aborted ${supersededPlaybacks} in-flight resolve through its child Lifetime.`,
+      `Replacing playback aborted ${supersededPlaybacks} late playback completion before it could publish a track.`,
       `The shell observed ${shellTracks.join(", ")}; the player kept one playback Lifetime, replaced per track.`,
       "Platform owns its installation identities; disposal removes its downloaded providers through one Core Plan.",
     ],

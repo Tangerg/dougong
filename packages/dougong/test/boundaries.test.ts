@@ -6,7 +6,7 @@ import {
   extensionPoint,
   type optional,
   service,
-  type LifetimeContext,
+  type ChildLifetime,
   type Contribution,
 } from "../src";
 import { ContributionRegistry } from "../src/contributions/contribution-store";
@@ -74,7 +74,7 @@ it("keeps an entered event callback borrowed until it settles before closing its
   const notice = event<void>("boundary.queued-event");
   const finish = Promise.withResolvers<void>();
   const listener = vi.fn<() => Promise<void>>(() => finish.promise);
-  let child!: LifetimeContext;
+  let child!: ChildLifetime;
   let emit!: () => Promise<void>;
   const host = createHost({
     installations: [
@@ -153,8 +153,8 @@ it("closes all descendant event entrances before cancellation and while tasks se
   const items = extensionPoint<number>("boundary.items");
   const blocked = Promise.withResolvers<void>();
   const aborted = Promise.withResolvers<void>();
-  let parent!: LifetimeContext;
-  let child!: LifetimeContext;
+  let parent!: ChildLifetime;
+  let child!: ChildLifetime;
   let emit!: () => Promise<void>;
   const heard = vi.fn<() => void>();
   const host = createHost({

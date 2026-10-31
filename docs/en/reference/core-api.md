@@ -10,9 +10,11 @@ The main `dougong` package is the actual kernel. Its default surface exposes one
 | 插件 / Plugins | `definePlugin`, `describePlugin`, `PluginDescriptor`, `PluginConfigDescriptor`, `PluginDescriptionOptions`, `Plugin`, `AnyPlugin`, `PluginContext`, `Requirements`, `Provisions`, `ResolvedRequirement`, `ResolvedRequirements`, `ProvidedServices`, `InstanceMeta` |
 | 安装与计划 / Installation and planning | `ChangeSet`, `Group`, `Installation`, `InstallationOptions`, `InstallationUpdate`, `InstallationOrigin`, `InitialInstallation`, `Plan`, `PlanReport`, `BindingReport`, `ImpactReason`, `PlanOperation`, `DeclarationSnapshot`, `captureConfig`, `ConfigValue` |
 | 运行 / Execution | `createHost`, `Host`, `HostOptions`, `ApplyResult`, `HostStatus`, `InstallationState` |
-| 资源 / Resources | `LifetimeContext`, `LifetimeOwnership`, `Task`, `Cleanup`, `BackgroundTask`, `LifetimePhase`, `LifetimeSnapshot`, `UnresolvedObligation`, `Disposable`, `AsyncDisposable`, `Resource`, `Awaitable`, `disposeSymbol`, `asyncDisposeSymbol` |
+| 资源 / Resources | `LifetimeContext`, `ChildLifetime`, `LifetimeOwnership`, `Task`, `Cleanup`, `BackgroundTask`, `LifetimePhase`, `LifetimeSnapshot`, `UnresolvedObligation`, `Disposable`, `AsyncDisposable`, `Resource`, `Awaitable`, `disposeSymbol`, `asyncDisposeSymbol` |
 | 事件与贡献 / Events and contributions | `Contribution`, `ContributionView`, `ContributionOperations`, `EventListener`, `EventArguments`, `EventOperations` |
 | 观察与错误 / Observation and errors | `HostSnapshot`, `InstallationSnapshot`, `GroupSnapshot`, `SnapshotView`, `isLogger`, `Logger`, `DougongError`, `ConfigValidationError`, `RecordedFailure`, `isError`, `isCancellationReason`, `ErrorSnapshot`, `ErrorDetails` |
+
+A plugin receives a `LifetimeContext` with work and resource registration capabilities. Its `child(label)` returns a `ChildLifetime` the caller may dispose. Only the Engine can stop the entire Instance.
 
 ## Host and installation
 
@@ -52,9 +54,11 @@ Subscriptions share `get/subscribe`, do not replay and use standard Disposable c
 
 For callers updating from the previous API, replace the removed Host inspect method with `host.diagnostics.get()`. Remove checks of the former ApplyResult outcome field; code after a successful await handles success, while catch handles failures and their structured details. No alias or compatibility adapter is provided.
 
+Host defaults apply when an option is omitted. An explicit null name, installation list or group list is invalid. Configuration capture reads each shared input object once and freezes its result; cycles and excessive nesting still reject. The logger in `ctx.log` exposes standalone callbacks that the plugin may pass to another function. Its disposal belongs to the Instance.
+
 ## Advanced composition primitives
 
-The formal `dougong/advanced` subpath exports `SnapshotPublisher`, `ReadonlyMapSnapshot`, `SerialQueue`, `normalizePlainRecord` and `batchSnapshotNotifications`. These support downstream host adapters and domain extensions without exposing Engine or mutable installation registries. Shared publishing primitives let UI adapters and Platform reuse observation semantics.
+The formal `dougong/advanced` subpath exports `SnapshotPublisher`, `ReadonlyMapSnapshot`, `SerialQueue`, `normalizePlainRecord` and `batchSnapshotNotifications`. These support downstream host adapters and domain extensions without exposing Engine or mutable installation registries. Shared publishing primitives let UI adapters and Platform reuse observation semantics. Its batch callback must complete synchronously; a Promise cannot extend that publication boundary.
 
 `normalizePlainRecord` normalizes named-record boundaries. Use `captureConfig` for configuration data; it shares the same validation and failure behavior as planning.
 

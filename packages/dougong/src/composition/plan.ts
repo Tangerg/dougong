@@ -48,7 +48,6 @@ export interface PlanReport {
   readonly stopOrder: ReadonlyArray<string>;
   readonly prepareOrder: ReadonlyArray<string>;
   readonly publishOrder: ReadonlyArray<string>;
-  readonly blockers: ReadonlyArray<never>;
   readonly execution: { readonly atomicPublication: true; readonly externalEffectsRollback: false };
 }
 declare const planBrand: unique symbol;

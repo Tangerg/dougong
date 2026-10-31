@@ -1,5 +1,8 @@
 import {
+  asyncDisposeSymbol,
+  disposeSymbol,
   isError,
+  isLogger,
   type AnyPlugin,
   type ApplyResult,
   type Disposable,
@@ -15,7 +18,7 @@ import {
   SnapshotPublisher,
 } from "dougong/advanced";
 import { PermissionSet, type Authorizer } from "../admission/permissions.js";
-import { artifactOrigin, type Artifact } from "../artifacts/artifact.js";
+import { artifactOrigin, describeArtifact, type Artifact } from "../artifacts/artifact.js";
 import { isConcreteVersion } from "../artifacts/manifest.js";
 import { ArtifactCatalog, type Catalog } from "../catalog/catalog.js";
 import {
@@ -50,6 +53,7 @@ export interface Platform<Reference> extends AsyncDisposable {
   readonly status: PlatformStatus;
   readonly catalog: Catalog<Reference>;
   readonly diagnostics: SnapshotView<PlatformSnapshot>;
+  registrations(): ReadonlyArray<Registration<Reference>>;
   readonly select: (artifact: Artifact<Reference>) => Promise<Registration<Reference>>;
   preview(
     registrations: ReadonlyArray<Registration<Reference>>,
@@ -118,6 +122,8 @@ class PlatformImpl<Reference> implements Platform<Reference> {
   readonly #registrationPort: RegistrationPort<Reference>;
   readonly #viewBinding: { synchronize: (() => void) | undefined };
   #hostSnapshot: unknown;
+  #projection: PlatformSnapshot;
+  #executing = false;
   #subscription: Disposable | undefined;
   #state: PlatformState;
 
@@ -171,12 +177,13 @@ class PlatformImpl<Reference> implements Platform<Reference> {
         return undefined;
       },
     };
-    this.#publisher = new SnapshotPublisher(() => this.#snapshot(), reporter(logger ?? console));
+    this.#projection = this.#snapshot();
+    this.#publisher = new SnapshotPublisher(() => this.#projection, reporter(logger ?? console));
     this.#hostSnapshot = host.diagnostics.get();
     const binding = { synchronize: (() => this.#synchronize()) as (() => void) | undefined };
     this.#viewBinding = binding;
     this.diagnostics = diagnosticView(this.#publisher.view, binding);
-    this.#subscription = host.diagnostics.subscribe(() => this.#publish());
+    this.#subscription = host.diagnostics.subscribe(() => this.#synchronize());
     Object.freeze(this);
   }
 
@@ -184,10 +191,14 @@ class PlatformImpl<Reference> implements Platform<Reference> {
     return this.#state.phase;
   }
 
+  registrations(): ReadonlyArray<Registration<Reference>> {
+    return Object.freeze([...this.#registrations.values()].map((record) => record.facade));
+  }
+
   select(artifact: Artifact<Reference>) {
     this.#assertActive();
     this.#catalog.assertAvailable(artifact);
-    return this.#queue.run(() => {
+    return this.#admit(() => {
       this.#assertActive();
       this.#catalog.assertAvailable(artifact);
       let registration = this.#registrations.get(artifact.manifest.name);
@@ -245,32 +256,27 @@ class PlatformImpl<Reference> implements Platform<Reference> {
       throw new TypeError("Activation signal must be an AbortSignal");
     }
     signal?.throwIfAborted();
-    const operation = await this.#queue.run(() => this.#beginActivation(roots, removing, signal));
+    const operation = await this.#admit(() => this.#beginActivation(roots, removing, signal));
     try {
       const loaded = new Map<Artifact<Reference>, AnyPlugin>();
       for (const selection of operation.plan.selections) {
         operation.signal.throwIfAborted();
         selection.registration.assertCurrent(selection);
-        if (selection.registration.activeOrigin?.revision !== selection.artifact.revision) {
+        if (selection.registration.actionFor(selection.artifact) !== "reuse") {
           loaded.set(
             selection.artifact,
             await this.#modules.load(selection.artifact, operation.signal),
           );
         }
       }
-      return await this.#queue.run(() =>
-        this.#commitActivation(operation, roots, removing, loaded),
-      );
+      return await this.#execute(() => this.#commitActivation(operation, roots, removing, loaded));
     } catch (error) {
       const failure =
         operation.signal.aborted && Object.is(error, operation.signal.reason)
           ? error
           : normalizeActivationFailure(error);
       for (const selection of operation.plan.selections) {
-        if (
-          roots.includes(selection.registration) ||
-          selection.registration.activeOrigin?.revision !== selection.artifact.revision
-        ) {
+        if (selection.registration.actionFor(selection.artifact) !== "reuse") {
           selection.registration.fail(selection.revision, failure);
         }
       }
@@ -302,10 +308,11 @@ class PlatformImpl<Reference> implements Platform<Reference> {
   #startDisposal() {
     const state = this.#state;
     if (state.phase === "disposed") return Promise.resolve();
+    if (this.#executing) return Promise.reject(this.#busy());
     if (state.phase === "disposing") return state.completion;
     const operations = [...this.#operations];
     const completion = Promise.all(operations.map((operation) => operation.settled)).then(() =>
-      this.#queue.run(() => this.#release()),
+      this.#execute(() => this.#release()),
     );
     this.#state = { phase: "disposing", ports: state.ports, completion };
     for (const operation of operations) operation.cancel();
@@ -313,7 +320,7 @@ class PlatformImpl<Reference> implements Platform<Reference> {
     return completion;
   }
 
-  [Symbol.asyncDispose]() {
+  [asyncDisposeSymbol]() {
     return this.#startDisposal();
   }
 
@@ -350,16 +357,16 @@ class PlatformImpl<Reference> implements Platform<Reference> {
     const { host, authorizer, group } = this.#ports();
     const change = host.change();
     const pending = candidate.selections.filter(
-      (selection) => selection.registration.activeOrigin?.revision !== selection.artifact.revision,
+      (selection) => selection.registration.actionFor(selection.artifact) !== "reuse",
     );
     const removedInstallations = removing.flatMap((registration) =>
       registration.installation ? [registration.installation] : [],
     );
-    for (const installation of removedInstallations) change.remove(installation);
     if (!pending.length && !removedInstallations.length) {
       this.#commitRemovals(removing);
       return undefined;
     }
+    for (const installation of removedInstallations) change.remove(installation);
     for (const selection of pending) {
       const plugin = loaded.get(selection.artifact);
       if (!plugin)
@@ -389,10 +396,7 @@ class PlatformImpl<Reference> implements Platform<Reference> {
       operation.signal.throwIfAborted();
       await authorizer.authorize(
         Object.freeze({
-          artifact: Object.freeze({
-            revision: selection.artifact.revision,
-            manifest: selection.artifact.manifest,
-          }),
+          artifact: describeArtifact(selection.artifact),
           operation: "activate",
         }),
         operation.signal,
@@ -430,8 +434,7 @@ class PlatformImpl<Reference> implements Platform<Reference> {
       this.#publish();
       throw error;
     }
-    for (const registration of registrations) registration.remove();
-    this.#registrations.clear();
+    this.#commitRemovals(registrations);
     this.#modules.close();
     this.#catalog.close();
     const subscription = this.#subscription;
@@ -440,10 +443,10 @@ class PlatformImpl<Reference> implements Platform<Reference> {
     this.#viewBinding.synchronize = undefined;
     this.#hostSnapshot = undefined;
     try {
-      subscription?.[Symbol.dispose]();
+      subscription?.[disposeSymbol]();
     } finally {
-      this.#publisher.invalidate();
-      this.#publisher[Symbol.dispose]();
+      this.#publish();
+      this.#publisher[disposeSymbol]();
     }
   }
 
@@ -501,30 +504,59 @@ class PlatformImpl<Reference> implements Platform<Reference> {
     return state.ports;
   }
 
+  // A callback inside planning, admission, setup or cleanup cannot await a command queued behind itself.
+  #admit<T>(command: () => T) {
+    return this.#executing ? Promise.reject<T>(this.#busy()) : this.#queue.run(command);
+  }
+
+  #busy() {
+    return new PlatformError("PLATFORM_BUSY", "Platform is executing a Core command", {
+      details: { outcome: "rejected" },
+    });
+  }
+
+  #execute<T>(command: () => Promise<T>) {
+    return this.#queue.run(async () => {
+      this.#executing = true;
+      try {
+        return await command();
+      } finally {
+        this.#executing = false;
+      }
+    });
+  }
+
   #publish() {
-    if (this.#state.phase !== "disposed") {
-      this.#hostSnapshot = this.#ports().host.diagnostics.get();
-      this.#publisher.invalidate();
-    }
+    if (this.#state.phase !== "disposed") this.#hostSnapshot = this.#ports().host.diagnostics.get();
+    const projection = this.#snapshot(this.#projection);
+    if (projection === this.#projection) return;
+    this.#projection = projection;
+    this.#publisher.invalidate();
   }
 
   #synchronize() {
-    if (this.#state.phase === "disposed") return;
-    const snapshot = this.#ports().host.diagnostics.get();
-    if (snapshot !== this.#hostSnapshot) {
-      this.#hostSnapshot = snapshot;
-      this.#publisher.invalidate();
-    }
+    if (
+      this.#state.phase !== "disposed" &&
+      this.#ports().host.diagnostics.get() !== this.#hostSnapshot
+    )
+      this.#publish();
   }
 
-  #snapshot(): PlatformSnapshot {
+  #snapshot(previous?: PlatformSnapshot): PlatformSnapshot {
+    let changed =
+      previous?.status !== this.status || previous.registrations.size !== this.#registrations.size;
+    const entries = [...this.#registrations].map(([name, registration]) => {
+      const before = previous?.registrations.get(name);
+      const next = registration.snapshot(before);
+      if (before !== next) changed = true;
+      return [name, next] as const;
+    });
+    if (!changed && previous) return previous;
     return Object.freeze({
       id: this.id,
       apiVersion: this.apiVersion,
-      status: this.#state.phase,
-      registrations: new ReadonlyMapSnapshot(
-        [...this.#registrations].map(([name, registration]) => [name, registration.snapshot()]),
-      ),
+      status: this.status,
+      registrations: new ReadonlyMapSnapshot(entries),
     });
   }
 }
@@ -547,15 +579,6 @@ function diagnosticView<T>(
     },
     subscribe: view.subscribe,
   });
-}
-
-function isLogger(value: Logger) {
-  return (
-    value &&
-    [value.debug, value.info, value.warn, value.error].every(
-      (method) => typeof method === "function",
-    )
-  );
 }
 
 function reporter(logger: Logger) {

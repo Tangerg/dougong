@@ -1,4 +1,10 @@
-import { createHost, definePlugin, extensionPoint, type ContributionView } from "dougong";
+import {
+  asyncDisposeSymbol,
+  createHost,
+  definePlugin,
+  extensionPoint,
+  type ContributionView,
+} from "dougong";
 import {
   createPlatform,
   MemoryLoader,
@@ -154,13 +160,12 @@ export async function hmrModuleGraph(): Promise<ExampleResult> {
     loader: new MemoryLoader<string>(modules),
   });
 
-  const registrations = new Map<string, Registration<string>>();
   for (const [name, reference] of [
     [OUTLINE, "outline-v1"],
     [SEARCH, "search-v1"],
     [THEME, "theme-v1"],
   ] as const) {
-    registrations.set(name, await platform.select(artifact(platform, name, "1.0.0", reference)));
+    await platform.select(artifact(platform, name, "1.0.0", reference));
   }
   await platform.trigger("startup");
   const before = [...views.get().values()]
@@ -181,11 +186,11 @@ export async function hmrModuleGraph(): Promise<ExampleResult> {
     [SEARCH, artifact(platform, SEARCH, "2.0.0", "search-v2")],
     [THEME, artifact(platform, THEME, "2.0.0", "theme-v2")],
   ]);
+  const selected = new Set(platform.registrations().map((registration) => registration.name));
   const targets: Registration<string>[] = [];
   for (const name of invalidation.registrations) {
-    const registration = registrations.get(name);
     const replacement = replacements.get(name);
-    if (!registration || !replacement) {
+    if (!selected.has(name) || !replacement) {
       throw new TypeError(`HMR plan is incomplete for Registration '${name}'`);
     }
     targets.push(await platform.select(replacement));
@@ -199,14 +204,12 @@ export async function hmrModuleGraph(): Promise<ExampleResult> {
     .join(", ");
   const publishedSnapshots = [...snapshots];
 
-  await platform[Symbol.asyncDispose]();
+  await platform[asyncDisposeSymbol]();
   await host.stop();
 
   return exampleResult({
     id: "12",
-    stage: "applications",
     title: "Module-graph invalidation compiled into atomic multi-Registration HMR",
-    introduces: ["module-graph", "invalidation-closure", "multi-registration-hmr"],
     facts: [
       `Before invalidation the application observed ${before}.`,
       `Changing ${invalidation.changed.join(", ")} invalidated ${invalidation.modules.join(" → ")} by walking importers.`,

@@ -148,7 +148,7 @@ describe("selection and activation races", () => {
     await platform[Symbol.asyncDispose]();
   });
 
-  it("serializes a new choice behind a final activation commit", async () => {
+  it("refuses a new choice while the final activation can call user code", async () => {
     const entered = deferred();
     const release = deferred();
     const old = definePlugin({
@@ -175,11 +175,12 @@ describe("selection and activation races", () => {
     await host.start();
     const activation = platform.activate([registration]);
     await entered.promise;
-    const selection = platform.select(add(platform, "sample", "new", "2.0.0"));
+    const next = add(platform, "sample", "new", "2.0.0");
+    await expect(platform.select(next)).rejects.toMatchObject({ code: "PLATFORM_BUSY" });
     expect(registration.selectedArtifact.revision).toBe("1.0.0");
     release.resolve();
     await activation;
-    await selection;
+    await platform.select(next);
     expect(registration.selectedArtifact.revision).toBe("2.0.0");
     expect(registration.activeOrigin?.revision).toBe("1.0.0");
     expect(await host.use(VALUE, (value) => value.value)).toBe(1);

@@ -78,9 +78,7 @@ export async function contractsAndGroups(): Promise<ExampleResult> {
 
   return exampleResult({
     id: "06",
-    stage: "composition",
     title: "One shape, many identities, and who owns which subtree",
-    introduces: ["contract-family", "group", "atomic-commit", "group-removal"],
     facts: [
       `Two identities resolve to different Service values = ${alphaWorkspace !== betaWorkspace}.`,
       `At startup the readers observed ${atStartup.join(", ")}.`,

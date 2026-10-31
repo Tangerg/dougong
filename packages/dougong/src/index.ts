@@ -58,6 +58,7 @@ export type {
 export type { SnapshotView } from "./observation/snapshot-view.js";
 export type {
   LifetimeContext,
+  ChildLifetime,
   LifetimeOwnership,
   Task,
   Cleanup,

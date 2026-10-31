@@ -69,6 +69,14 @@ available artifact does not remove selected or committed source data. A URL or l
 reference is a location, not a verified content digest. The selected Loader owns reference
 resolution and any integrity guarantees it advertises.
 
+Use `platform.registrations()` to enumerate the current Registration handles for commands.
+The frozen array captures membership at the time of the call; removed handles never acquire
+authority over later selections. Diagnostic snapshots carry data, not command handles.
+Platform snapshots retain identity and do not notify observers for unrelated Core activity.
+
+Module caching follows Artifact reachability. A withdrawn Artifact which is no longer selected
+or otherwise retained does not pin its loaded plugin for the lifetime of the Platform.
+
 Config uses Dougong's captured data protocol. Mutating the caller's input after `catalog.add`
 cannot change a later activation. Functions and resource instances belong in Service
 contracts, not config.
@@ -105,8 +113,12 @@ uses the same compilation path with no activation roots.
 Concurrent activations share module loading but do not share a caller's cancellation.
 Cancelling one waiter cannot cancel a load another waiter still needs. Every operation
 captures each involved Registration's selection revision. A late result from an older
-selection cannot install itself. Selection commands and the final activation commit are
-serialized; long module loading runs outside that boundary.
+selection cannot install itself. Concurrent loads and activations admitted before a final handoff keep their place. While final
+configuration validation, authorization, Core application, or disposal cleanup is executing,
+a newly requested select, activate, remove, trigger, or disposal rejects with `PLATFORM_BUSY`.
+This avoids waiting for the user callback that made the request. Wait until the outer
+operation finishes before issuing another command. Preview and reads remain available
+while the Platform is active. A loader must not recursively wait for its own module result.
 
 Cancellation before the Core handoff prevents that handoff. Once Core execution has started,
 Platform awaits and reports its actual outcome rather than calling a committed operation

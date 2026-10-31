@@ -81,6 +81,10 @@ try {
     recursive: true,
   });
   cpSync(new URL("./application.mts", import.meta.url), join(workspace, "application.mts"));
+  cpSync(
+    new URL("./fallback-disposal.mjs", import.meta.url),
+    join(workspace, "fallback-disposal.mjs"),
+  );
   writeFileSync(
     join(workspace, "package.json"),
     JSON.stringify({ name: "isolated-consumer", private: true, type: "module" }),
@@ -106,10 +110,12 @@ try {
     [resolve(root, "node_modules/typescript/bin/tsc"), "-p", workspace],
     { cwd: workspace, stdio: "inherit" },
   );
-  execFileSync(process.execPath, [join(workspace, "output/application.mjs")], {
-    cwd: workspace,
-    stdio: "inherit",
-  });
+  for (const fixture of ["output/application.mjs", "fallback-disposal.mjs"]) {
+    execFileSync(process.execPath, [join(workspace, fixture)], {
+      cwd: workspace,
+      stdio: "inherit",
+    });
+  }
 } finally {
   rmSync(workspace, { recursive: true, force: true });
 }

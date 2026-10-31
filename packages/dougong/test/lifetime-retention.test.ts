@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { event, extensionPoint } from "../src/contracts/contracts";
 import type { Resource } from "../src/contracts/resource";
 import { ContractRegistry } from "../src/contracts/contract-registry";
-import { Lifetime, type LifetimeContext } from "../src/lifetime/lifetime";
+import { Lifetime, type ChildLifetime } from "../src/lifetime/lifetime";
 import { EventHub } from "../src/events/event-hub";
 import { ContributionRegistry } from "../src/contributions/contribution-store";
 import { createHost } from "../src/execution/host";
@@ -155,6 +155,16 @@ describe("lifetime retention", () => {
     expect(fixture.group.id).toBe("late");
   });
 
+  it.each([false, true])(
+    "a pending Installation alone cannot retain the Engine (planned: %s)",
+    async (planned) => {
+      const fixture = await abandonedInstallation(planned);
+      await collect([fixture.reporter]);
+      expect(fixture.reporter.deref()).toBeUndefined();
+      expect(fixture.installation.status).toBe("pending");
+    },
+  );
+
   it("does not retain configuration authority through an unapplied Group declaration", async () => {
     const fixture = unappliedGroup();
     await collect([fixture.reference]);
@@ -280,7 +290,7 @@ async function retainedHandle(kind: (typeof HANDLE_KINDS)[number]) {
 }
 
 async function releasedChild() {
-  let child!: LifetimeContext;
+  let child!: ChildLifetime;
   const host = createHost({
     installations: [
       {
@@ -414,4 +424,13 @@ function unappliedGroup() {
   const host = createHost();
   const change = host.change();
   return { group: change.group("unapplied"), reference: new WeakRef(host) };
+}
+
+async function abandonedInstallation(planned: boolean) {
+  const onError = () => undefined;
+  const host = createHost({ onError });
+  const change = host.change();
+  const installation = change.install(empty, { id: "pending" });
+  if (planned) await host.plan(change);
+  return { installation, reporter: new WeakRef(onError) };
 }

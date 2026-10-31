@@ -3,6 +3,7 @@ import {
   definePlugin,
   describePlugin,
   service,
+  type ChildLifetime,
   type LifetimeContext,
   type PlanReport,
 } from "dougong";
@@ -49,6 +50,9 @@ assert(
 );
 const host = createHost({ installations: [{ id: "greeting", plugin: greeting }] });
 await host.start();
+assert(!(Symbol.asyncDispose in owner), "Plugin root can bypass Engine shutdown");
+const child: ChildLifetime = owner.child("consumer-work");
+await child[Symbol.asyncDispose]();
 assert(
   (await host.use(GREETING, (value) => value.greet("consumer"))) === "Hello, consumer",
   "Packed core cannot provide a borrowed service",
@@ -96,11 +100,14 @@ assert(
 );
 assert(selected.activeOrigin?.revision === "remote-content-1", "Execution origin did not commit");
 
+assert(platform.registrations()[0] === selected, "Registration enumeration lost selected identity");
 const change = host.change();
+assert(!("take" in change), "Internal draft control escaped the Host");
 const probe = definePlugin({ name: "consumer.probe", setup() {} });
 change.install(probe, { id: "probe", origin: { kind: "fixture", revision: "probe-1" } });
 const plan = await host.plan(change);
 const report: PlanReport = plan.report;
+assert(!("blockers" in report), "An executable Plan exposes a permanent empty blocker list");
 assert(report.baseStateRevision === host.diagnostics.get().stateRevision, "Plan baseline differs");
 assert(
   report.bindings.before.length === report.bindings.after.length,

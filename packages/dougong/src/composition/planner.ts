@@ -1,9 +1,8 @@
 import { DougongError } from "../contracts/errors.js";
 import type { ContractKind } from "../contracts/contracts.js";
 import { InstallationGraph } from "./installation-graph.js";
-import { captureConfig, resolvePluginConfig, type ConfigValue } from "./configuration.js";
-import { normalizePlugin } from "./plugin.js";
-import { captureOrigin, type ChangeOperation } from "./change-set.js";
+import { resolvePluginConfig, type ConfigValue } from "./configuration.js";
+import type { ChangeOperation } from "./change-set.js";
 import type { GroupNode } from "./group.js";
 import type { InstallationDeclaration, InstallationRecord } from "./installation.js";
 import {
@@ -73,11 +72,9 @@ export async function compileTransition(
         declarations.set(
           record,
           Object.freeze({
-            plugin: changedPlugin ? normalizePlugin(replacement.plugin!) : previous.plugin,
-            config: Object.hasOwn(replacement, "config")
-              ? captureConfig(replacement.config)
-              : previous.config,
-            origin: changedPlugin ? captureOrigin(replacement.origin) : previous.origin,
+            plugin: replacement.plugin ?? previous.plugin,
+            config: Object.hasOwn(replacement, "config") ? replacement.config : previous.config,
+            origin: changedPlugin ? replacement.origin : previous.origin,
           }),
         );
         direct.set(record, "updated");
@@ -113,7 +110,14 @@ export async function compileTransition(
       changed.add(record);
       direct.set(record, "removed");
     }
-    for (const id of removed) groups.delete(id);
+    for (const id of removed) {
+      if (!current.groups.has(id))
+        throw new DougongError(
+          "CHANGE_CONFLICT",
+          "Group creation conflicts with ancestor removal: " + id,
+        );
+      groups.delete(id);
+    }
   }
   assertGroups(groups, declarations);
   const graph = InstallationGraph.build(declarations, kinds);
@@ -174,7 +178,6 @@ export async function compileTransition(
     ),
     prepareOrder,
     publishOrder: prepareOrder,
-    blockers: Object.freeze([]),
     execution: Object.freeze({
       atomicPublication: true as const,
       externalEffectsRollback: false as const,

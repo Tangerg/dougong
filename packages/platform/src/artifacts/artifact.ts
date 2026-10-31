@@ -28,6 +28,16 @@ export interface ArtifactOrigin extends Readonly<Record<string, ConfigValue>> {
   readonly manifest: Manifest & Readonly<Record<string, ConfigValue>>;
 }
 
+const descriptors = new WeakMap<ArtifactDescriptor, ArtifactDescriptor>();
+
+export function describeArtifact(artifact: ArtifactDescriptor): ArtifactDescriptor {
+  const existing = descriptors.get(artifact);
+  if (existing) return existing;
+  const descriptor = Object.freeze({ revision: artifact.revision, manifest: artifact.manifest });
+  descriptors.set(artifact, descriptor);
+  return descriptor;
+}
+
 const originProjections = new WeakMap<object, ArtifactOrigin>();
 
 const artifactFields = new Set(["revision", "manifest", "reference", "config"]);
@@ -73,15 +83,23 @@ export function artifactOrigin(platformId: string, artifact: ArtifactDescriptor)
 export function readArtifactOrigin(
   value: Readonly<Record<string, ConfigValue>> | undefined,
   platformId: string,
+  name: string,
 ): ArtifactOrigin | undefined {
   if (value?.kind !== "artifact" || value.platformId !== platformId) return undefined;
-  if (typeof value.revision !== "string" || !value.manifest || typeof value.manifest !== "object") {
+  if (
+    typeof value.revision !== "string" ||
+    !value.revision ||
+    value.revision.trim() !== value.revision ||
+    !value.manifest ||
+    typeof value.manifest !== "object"
+  ) {
     return undefined;
   }
   const existing = originProjections.get(value);
-  if (existing) return existing;
+  if (existing) return existing.manifest.name === name ? existing : undefined;
   try {
     const manifest = defineManifest(value.manifest as unknown as ManifestInput);
+    if (manifest.name !== name) return undefined;
     const origin = Object.freeze({
       kind: "artifact",
       platformId,

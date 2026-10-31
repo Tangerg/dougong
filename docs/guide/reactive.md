@@ -21,6 +21,8 @@ bridge 在订阅后重新读取以封闭挂接窗口。所有者退出时取消�
 
 `observe(owner, source, observer)` 按源值创建子所有者。替换时先完整退出旧子树，再创建新的子树；多个变化在进行中的切换间合并为最新值。返回 `AsyncDisposable`，可以提前结束观察。
 
-公开类型：`Readable`、`Signal`、`ReadonlySignal`、`Disposable`、`AsyncDisposable`、`BridgeOwner`、`ObservationOwner`、`ObservationTask`、`Observer`。`ObservationOwner` 以 `defer`、`child`、`spawn` 和标准释放协议描述结构能力；兼容对象无需继承框架类。
+公开类型：`Readable`、`Signal`、`ReadonlySignal`、`Disposable`、`AsyncDisposable`、`BridgeOwner`、`ObservationOwner`、`ObservationTask`、`Observer`。`ObservationOwner` 只需提供 `defer`、`child` 和 `spawn`；它返回的子所有者实现标准异步释放协议。父所有者无需公开释放入口。
 
 observer 自身同步登记资源，需要异步工作的回调显式 `generation.spawn`。抛出的失败由该观察任务的所有者报告，旧代次退出失败不会静默启动新代次。
+
+适配器在接入时捕获读取、订阅和取消订阅的方法。取消订阅失败后，该失败仍然是所有者的释放义务；提前结束观察、排空失败和后续退出都不能通过重复调用将其变成成功。

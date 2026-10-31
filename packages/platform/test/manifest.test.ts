@@ -162,7 +162,7 @@ describe("manifest declarations", () => {
   it("preserves an unexpected collection validation failure under the manifest boundary", () => {
     const cause = new Error("unreadable activation events");
     const activation = new Proxy(["startup"], {
-      get() {
+      ownKeys() {
         throw cause;
       },
     });
