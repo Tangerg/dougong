@@ -12,6 +12,7 @@ import {
   type SnapshotView,
 } from "dougong";
 import {
+  captureDataArray,
   normalizePlainRecord,
   ReadonlyMapSnapshot,
   SerialQueue,
@@ -31,6 +32,7 @@ import { PlatformError } from "../errors.js";
 import type { Loader } from "../loaders/loader.js";
 import { LoadedModules } from "./loading.js";
 import { ActivationOperation } from "./operation.js";
+import { Preparation } from "./preparation.js";
 import {
   ActivationPlan,
   type ActivationOptions,
@@ -146,21 +148,27 @@ class PlatformImpl<Reference> implements Platform<Reference> {
     }
     if (group !== undefined && host.group(group.id) !== group)
       throw new TypeError("Platform Group must be committed in its Host");
-    if (!loader || typeof loader.load !== "function")
-      throw new TypeError("Platform loader must implement load()");
-    if (authorizer !== undefined && (!authorizer || typeof authorizer.authorize !== "function"))
+    const load = loader?.load;
+    if (typeof load !== "function") throw new TypeError("Platform loader must implement load()");
+    const policy = authorizer === undefined ? new PermissionSet() : authorizer;
+    const authorize = policy?.authorize;
+    if (typeof authorize !== "function")
       throw new TypeError("Platform authorizer must implement authorize()");
     if (logger !== undefined && !isLogger(logger))
       throw new TypeError("Platform logger must implement debug/info/warn/error");
 
     this.id = id;
     this.apiVersion = apiVersion;
-    const policy = authorizer ?? new PermissionSet();
-    const ports: PlatformPorts = Object.freeze({ host, group, authorizer: policy });
+    const admission: Authorizer = Object.freeze({ authorize: authorize.bind(policy) });
+    const ports: PlatformPorts = Object.freeze({ host, group, authorizer: admission });
     this.#state = { phase: "active", ports };
     this.#catalog = new ArtifactCatalog(apiVersion);
     this.catalog = this.#catalog.facade;
-    this.#modules = new LoadedModules({ loader, authorizer: policy });
+    this.#modules = new LoadedModules({
+      loader: { load: load.bind(loader) },
+      authorizer: admission,
+      assertPlacement: () => this.#assertPlacement(),
+    });
     this.#registrationPort = {
       installation: (installationId) => this.#ports().host.installation(installationId),
       operation: (registration, revision) => {
@@ -195,7 +203,7 @@ class PlatformImpl<Reference> implements Platform<Reference> {
     return Object.freeze([...this.#registrations.values()].map((record) => record.facade));
   }
 
-  select(artifact: Artifact<Reference>) {
+  readonly select = (artifact: Artifact<Reference>) => {
     this.#assertActive();
     this.#catalog.assertAvailable(artifact);
     return this.#admit(() => {
@@ -214,15 +222,13 @@ class PlatformImpl<Reference> implements Platform<Reference> {
       this.#publish();
       return registration.facade;
     });
-  }
+  };
 
   preview(
     registrations: ReadonlyArray<Registration<Reference>>,
     options: ActivationPreviewOptions<Reference> = {},
   ) {
     this.#assertActive();
-    if (!Array.isArray(registrations))
-      throw new TypeError("Activation registrations must be an array");
     const declaration = normalizePlainRecord(options, "Activation preview options", {
       fields: previewOptionFields,
     });
@@ -238,24 +244,13 @@ class PlatformImpl<Reference> implements Platform<Reference> {
     options: ActivationOptions<Reference> = {},
   ) {
     this.#assertActive();
-    if (!Array.isArray(registrations))
-      throw new TypeError("Activation registrations must be an array");
-    const roots = this.#resolveAll([...registrations]);
+    const roots = this.#resolveAll(registrations);
     const declaration = normalizePlainRecord(options, "Activation options", {
       fields: activationOptionFields,
     });
     const signal = declaration.signal;
     const removing = this.#resolveRemoval(declaration.remove);
-    if (
-      signal !== undefined &&
-      (!signal ||
-        typeof signal.throwIfAborted !== "function" ||
-        typeof signal.addEventListener !== "function" ||
-        typeof signal.removeEventListener !== "function")
-    ) {
-      throw new TypeError("Activation signal must be an AbortSignal");
-    }
-    signal?.throwIfAborted();
+    if (signal !== undefined) AbortSignal.prototype.throwIfAborted.call(signal);
     const operation = await this.#admit(() => this.#beginActivation(roots, removing, signal));
     try {
       const loaded = new Map<Artifact<Reference>, AnyPlugin>();
@@ -271,10 +266,8 @@ class PlatformImpl<Reference> implements Platform<Reference> {
       }
       return await this.#execute(() => this.#commitActivation(operation, roots, removing, loaded));
     } catch (error) {
-      const failure =
-        operation.signal.aborted && Object.is(error, operation.signal.reason)
-          ? error
-          : normalizeActivationFailure(error);
+      if (operation.signal.aborted && Object.is(error, operation.signal.reason)) throw error;
+      const failure = normalizeActivationFailure(error);
       for (const selection of operation.plan.selections) {
         if (selection.registration.actionFor(selection.artifact) !== "reuse") {
           selection.registration.fail(selection.revision, failure);
@@ -335,8 +328,6 @@ class PlatformImpl<Reference> implements Platform<Reference> {
     const plan = new ActivationPlan(this.#registrations, roots, removing);
     plan.assertValid();
     const operation = new ActivationOperation(plan, signal);
-    for (const selection of plan.selections)
-      selection.registration.clearFailure(selection.revision);
     this.#operations.add(operation);
     this.#publish();
     return operation;
@@ -355,7 +346,6 @@ class PlatformImpl<Reference> implements Platform<Reference> {
     const candidate = new ActivationPlan(this.#registrations, roots, removing);
     candidate.assertValid();
     const { host, authorizer, group } = this.#ports();
-    const change = host.change();
     const pending = candidate.selections.filter(
       (selection) => selection.registration.actionFor(selection.artifact) !== "reuse",
     );
@@ -364,8 +354,11 @@ class PlatformImpl<Reference> implements Platform<Reference> {
     );
     if (!pending.length && !removedInstallations.length) {
       this.#commitRemovals(removing);
+      for (const selection of candidate.selections)
+        selection.registration.clearFailure(selection.revision);
       return undefined;
     }
+    const change = host.change();
     for (const installation of removedInstallations) change.remove(installation);
     for (const selection of pending) {
       const plugin = loaded.get(selection.artifact);
@@ -391,16 +384,15 @@ class PlatformImpl<Reference> implements Platform<Reference> {
           }),
         );
     }
-    const plan = await host.plan(change);
+    const plan = await new Preparation(() => host.plan(change)).wait(operation.signal);
     for (const selection of pending) {
       operation.signal.throwIfAborted();
-      await authorizer.authorize(
-        Object.freeze({
-          artifact: describeArtifact(selection.artifact),
-          operation: "activate",
-        }),
-        operation.signal,
-      );
+      await new Preparation((signal) =>
+        authorizer.authorize(
+          Object.freeze({ artifact: describeArtifact(selection.artifact), operation: "activate" }),
+          signal,
+        ),
+      ).wait(operation.signal);
     }
     operation.signal.throwIfAborted();
     operation.plan.assertCurrent();
@@ -460,13 +452,15 @@ class PlatformImpl<Reference> implements Platform<Reference> {
 
   #resolveRemoval(registrations: ReadonlyArray<Registration<Reference>> | undefined) {
     if (registrations === undefined) return [];
-    if (!Array.isArray(registrations))
-      throw new TypeError("Removed registrations must be an array");
-    return this.#resolveAll(registrations);
+    return this.#resolveAll(registrations, "Removed registrations");
   }
 
-  #resolveAll(registrations: ReadonlyArray<Registration<Reference>>) {
-    const resolved = registrations.map((registration) => {
+  #resolveAll(
+    registrations: ReadonlyArray<Registration<Reference>>,
+    label = "Activation registrations",
+  ) {
+    // Calling a method supplied by the input could hand its owner the internal record returned by this callback.
+    const resolved = captureDataArray(registrations, label).map((registration) => {
       const record =
         registration && typeof registration === "object"
           ? this.#handles.get(registration)
@@ -488,6 +482,10 @@ class PlatformImpl<Reference> implements Platform<Reference> {
 
   #assertPlacement() {
     const { host, group } = this.#ports();
+    if (host.status === "quarantined")
+      throw new PlatformError("PLATFORM_UNAVAILABLE", "Activation Host is quarantined", {
+        details: { outcome: "rejected", phase: "admission", stateRevision: host.stateRevision },
+      });
     if (group && host.group(group.id) !== group)
       throw new PlatformError("REGISTRATION_UNAVAILABLE", "Platform Group has been removed");
   }

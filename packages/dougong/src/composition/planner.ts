@@ -17,7 +17,6 @@ import {
 export interface CompositionState {
   readonly phase: "stopped" | "running" | "quarantined";
   readonly revision: number;
-  readonly declarations: ReadonlyMap<InstallationRecord, InstallationDeclaration>;
   readonly groups: ReadonlyMap<string, GroupNode>;
   readonly graph: InstallationGraph;
   readonly configs: ReadonlyMap<InstallationRecord, { readonly value: ConfigValue | undefined }>;
@@ -29,11 +28,11 @@ export async function compileTransition(
   intent: TransitionIntent,
   kinds: ReadonlyMap<string, ContractKind>,
 ): Promise<PreparedTransition> {
-  const declarations = new Map(current.declarations);
+  const declarations = new Map(current.graph.declarations);
   const groups = new Map(current.groups);
   const changed = new Set<InstallationRecord>();
   const direct = new Map<InstallationRecord, ImpactReason["kind"]>();
-  const installedIds = new Set([...current.declarations.keys()].map((record) => record.id));
+  const installedIds = new Set([...current.graph.declarations.keys()].map((record) => record.id));
 
   for (const operation of operations) {
     if (operation.kind === "group") {
@@ -129,7 +128,9 @@ export async function compileTransition(
   const configs = new Map<InstallationRecord, { readonly value: ConfigValue | undefined }>();
   for (const [record, declaration] of declarations) {
     const cached =
-      current.declarations.get(record) === declaration ? current.configs.get(record) : undefined;
+      current.graph.declarations.get(record) === declaration
+        ? current.configs.get(record)
+        : undefined;
     if (cached) configs.set(record, cached);
     else if (intent === "start" || changed.has(record)) {
       configs.set(
@@ -152,7 +153,7 @@ export async function compileTransition(
           ? Object.freeze({
               kind: operation.kind,
               id: operation.installation.id,
-              before: describeDeclaration(current.declarations.get(operation.installation)),
+              before: describeDeclaration(current.graph.declarations.get(operation.installation)),
               after: describeDeclaration(declarations.get(operation.installation)),
             })
           : Object.freeze({
@@ -184,9 +185,6 @@ export async function compileTransition(
     }),
   });
   return Object.freeze({
-    intent,
-    baseStateRevision: current.revision,
-    declarations,
     groups,
     graph,
     affected,

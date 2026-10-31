@@ -1084,3 +1084,92 @@ it("reports both registration and synchronous rollback failures on observation c
     expect.objectContaining({ errors: [sourceFailure, cleanupFailure] }),
   );
 });
+
+it("runs an observer without handing its caller the internal mutation binding", async () => {
+  const owner = manualOwner(manualLifetime(() => undefined));
+  let receiver: unknown = null;
+  const stop = observe(owner, signal(0), function (this: unknown) {
+    receiver = this;
+  });
+  try {
+    expect(receiver).toBeUndefined();
+  } finally {
+    await stop[Symbol.asyncDispose]();
+  }
+});
+
+it.each(["invalid", "throwing"] as const)(
+  "releases a returned drain Task even if its result is %s",
+  async (kind) => {
+    const fail = new Error("result getter failed");
+    const releases: string[] = [];
+    const source = new ControlledReadable(0);
+    const owner: ObservationOwner = {
+      ...manualOwner(
+        manualLifetime(() => {
+          releases.push("child");
+        }),
+      ),
+      spawn<T>() {
+        return {
+          get result(): Promise<T> {
+            if (kind === "throwing") throw fail;
+            return null as unknown as Promise<T>;
+          },
+          async [Symbol.asyncDispose]() {
+            releases.push("runner");
+          },
+        };
+      },
+    };
+    expect(() => observe(owner, source, () => undefined)).toThrow(
+      kind === "throwing" ? fail : "must return an ObservationTask",
+    );
+    await tick();
+    expect(source.subscriptionsDisposed).toBe(1);
+    expect(releases).toEqual(["runner", "child"]);
+  },
+);
+
+it("uses the accepted release methods for the observation registration, drain and child", async () => {
+  const released: string[] = [];
+  const child = manualLifetime(() => {
+    released.push("child");
+  });
+  const base = manualOwner(child);
+  let registration!: AsyncDisposable, runner!: AsyncDisposable;
+  const owner: ObservationOwner = {
+    ...base,
+    defer(dispose) {
+      registration = {
+        async [Symbol.asyncDispose]() {
+          released.push("registration");
+          await dispose();
+        },
+      };
+      return registration;
+    },
+    spawn<T>(task: (signal: AbortSignal) => T | PromiseLike<T>) {
+      const actual = base.spawn(task);
+      const handle = {
+        result: actual.result,
+        async [Symbol.asyncDispose]() {
+          released.push("runner");
+          await actual[Symbol.asyncDispose]();
+        },
+      };
+      runner = handle;
+      return handle;
+    },
+  };
+  const observation = observe(owner, signal(1), () => undefined);
+  for (const handle of [child, runner, registration]) {
+    Object.defineProperty(handle, Symbol.asyncDispose, {
+      value() {
+        throw new Error("replacement must not run");
+      },
+    });
+  }
+  await observation[Symbol.asyncDispose]();
+  expect(released).toEqual(["registration", "runner", "child"]);
+});

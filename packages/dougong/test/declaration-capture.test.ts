@@ -1,5 +1,5 @@
 import { expect, it, vi } from "vitest";
-import { createHost, definePlugin, optional, service } from "../src/index";
+import { ConfigValidationError, createHost, definePlugin, optional, service } from "../src/index";
 
 it("captures plugin declarations and configuration before external mutation", async () => {
   const token = service<number>("capture/value");
@@ -83,4 +83,17 @@ it("captures optional token identity only once during use", async () => {
   const wrapper = optional(token);
   expect(await host.use(wrapper, (value) => value)).toBe(7);
   await host.stop();
+});
+
+it("rejects executable array fields without substituting fabricated declarations or issues", () => {
+  const iterator = vi.fn<() => Generator<{ message: string }>>(function* () {
+    yield { message: "substituted" };
+  });
+  for (const key of ["installations", "groups"] as const) {
+    const array = Object.assign([], { [Symbol.iterator]: iterator });
+    expect(() => createHost({ [key]: array })).toThrow(/dense/);
+  }
+  const issues = Object.assign([{ message: "real" }], { [Symbol.iterator]: iterator });
+  expect(() => new ConfigValidationError(issues)).toThrow(/dense/);
+  expect(iterator).not.toHaveBeenCalled();
 });

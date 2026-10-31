@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { gzipSync } from "node:zlib";
 import { Header, Pax } from "tar";
 import { afterEach, expect, it } from "vitest";
-import { readPackageFiles } from "../release/release-archive.mjs";
+import { readPackageFiles } from "../package-archive.mjs";
 
 const workspaces = [];
 afterEach(() => {

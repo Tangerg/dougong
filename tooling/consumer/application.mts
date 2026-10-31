@@ -7,7 +7,7 @@ import {
   type LifetimeContext,
   type PlanReport,
 } from "dougong";
-import { ReadonlyMapSnapshot, SerialQueue } from "dougong/advanced";
+import { captureDataArray, ReadonlyMapSnapshot, SerialQueue } from "dougong/advanced";
 import { bridge, computed } from "@dougongjs/reactive";
 import type * as Reactive from "@dougongjs/reactive";
 import { createPlatform, MemoryLoader } from "@dougongjs/platform";
@@ -92,7 +92,12 @@ const selected = await platform.select(
     reference: "module",
   }),
 );
-assert(platform.preview([selected]).selections.length === 1, "Packed Platform preview differs");
+const selection = captureDataArray([selected], "Registrations");
+assert(
+  selection[0] === selected && Object.isFrozen(selection),
+  "Data snapshot changed handle identity",
+);
+assert(platform.preview(selection).selections.length === 1, "Packed Platform preview differs");
 await platform.activate([selected]);
 assert(
   (await host.use(REMOTE, (value) => value.value)) === "Hello, remote",

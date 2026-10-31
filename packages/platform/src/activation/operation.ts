@@ -1,20 +1,18 @@
+import { onAbort } from "dougong/advanced";
 import type { RegistrationRecord } from "../catalog/registration.js";
 import { PlatformError } from "../errors.js";
 import type { ActivationPlan } from "./plan.js";
 
 export class ActivationOperation<Reference> {
   readonly #controller = new AbortController();
-  readonly #external: AbortSignal | undefined;
-  readonly #abort: () => void;
+  readonly #detach: (() => void) | undefined;
   readonly #completion = Promise.withResolvers<void>();
   readonly plan: ActivationPlan<Reference>;
 
   constructor(plan: ActivationPlan<Reference>, signal: AbortSignal | undefined) {
     this.plan = plan;
-    this.#external = signal;
-    this.#abort = () => this.#controller.abort(signal?.reason);
-    signal?.throwIfAborted();
-    signal?.addEventListener("abort", this.#abort, { once: true });
+    this.#detach = signal && onAbort(signal, (reason) => this.#controller.abort(reason));
+    this.signal.throwIfAborted();
   }
 
   get signal() {
@@ -50,7 +48,7 @@ export class ActivationOperation<Reference> {
   }
 
   finish() {
-    this.#external?.removeEventListener("abort", this.#abort);
+    this.#detach?.();
     this.#completion.resolve();
   }
 }

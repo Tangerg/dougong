@@ -137,3 +137,67 @@ it("preserves a caught failure as a stable value through an observed computed ch
   value.set(2);
   expect(seen).toEqual(["unavailable", "unavailable", 2]);
 });
+
+it("runs computed calculations as standalone callbacks without exposing their mutable node", () => {
+  let receiver: unknown = null;
+  const input = signal(0);
+  const derived = computed(function (this: unknown) {
+    receiver = this;
+    return input.get();
+  });
+  expect(derived.get()).toBe(0);
+  expect(receiver).toBeUndefined();
+});
+
+it.each(["batch", "observer"] as const)(
+  "does not replay a preceding write to a newly subscribed computed inside a %s",
+  (boundary) => {
+    const source = signal(0);
+    const derived = computed(() => source.get() + 1);
+    const first: number[] = [],
+      second: number[] = [];
+    using _first = derived.subscribe(() => first.push(derived.get()));
+    let late!: Disposable;
+    const writeThenSubscribe = () => {
+      source.set(1);
+      late = derived.subscribe(() => second.push(derived.get()));
+    };
+    if (boundary === "batch") batch(writeThenSubscribe);
+    else {
+      const trigger = signal(0);
+      using _trigger = trigger.subscribe(writeThenSubscribe);
+      trigger.set(1);
+    }
+    try {
+      expect(first).toEqual([2]);
+      expect(second).toEqual([]);
+      source.set(2);
+      expect(first).toEqual([2, 3]);
+      expect(second).toEqual([3]);
+    } finally {
+      late[Symbol.dispose]();
+    }
+  },
+);
+
+it("rejects a failed computed's public subscription even while an indirect subscriber is observing recovery", () => {
+  const input = signal(false);
+  const unavailable = new Error("unavailable");
+  const sometimes = computed(() => {
+    if (!input.get()) throw unavailable;
+    return 1;
+  });
+  const safe = computed(() => {
+    try {
+      return sometimes.get();
+    } catch {
+      return 0;
+    }
+  });
+  using _subscription = safe.subscribe(() => safe.get());
+  let unexpected = 0;
+  expect(() => sometimes.subscribe(() => unexpected++)).toThrow(unavailable);
+  input.set(true);
+  expect(safe.get()).toBe(1);
+  expect(unexpected).toBe(0);
+});

@@ -21,6 +21,8 @@ export interface ObservationOwner<Child extends AsyncDisposable = AsyncDisposabl
 
 export type Observer<T, Child extends AsyncDisposable> = (value: T, lifetime: Child) => void;
 
+type Release = () => PromiseLike<void>;
+
 type ObservedValue<T> = { readonly present: false } | { readonly present: true; readonly value: T };
 
 interface ObservationBinding<T, Child extends AsyncDisposable> {
@@ -39,13 +41,13 @@ type ObservationState<T, Child extends AsyncDisposable> =
 class Observation<T, Child extends AsyncDisposable> {
   #state: ObservationState<T, Child>;
   #unsubscribe: (() => void) | undefined;
-  #current: Child | undefined;
+  #current: Release | undefined;
   #currentRelease: Promise<void> | undefined;
   #starting = false;
   #observed: ObservedValue<T> = { present: false };
   #dirty = false;
-  #drainTask: ObservationTask | undefined;
-  #ownerCleanup: AsyncDisposable | undefined;
+  #drainTask: Release | undefined;
+  #ownerCleanup: Release | undefined;
   #wakeDrain: (() => void) | undefined;
   #disposePromise: Promise<void> | undefined;
 
@@ -69,15 +71,21 @@ class Observation<T, Child extends AsyncDisposable> {
     this.#createCurrent();
 
     const runner = owner.spawn((signal) => this.#drain(signal));
-    const result = captureObservationTaskResult(runner);
-    this.#drainTask = runner;
+    const cancel = captureRelease(
+      runner,
+      "ObservationOwner.spawn() must return an ObservationTask",
+    );
+    // Once cancellation is available, rollback owns the runner even if its result is malformed.
+    this.#drainTask = cancel;
+    const result = captureThenable(runner.result);
+    if (!result) throw new TypeError("ObservationOwner.spawn() must return an ObservationTask");
     void result.then(
-      () => this.#releaseDrainTask(runner),
-      () => this.#releaseDrainTask(runner),
+      () => this.#releaseDrainTask(cancel),
+      () => this.#releaseDrainTask(cancel),
     );
   }
 
-  attachOwnerCleanup(cleanup: AsyncDisposable) {
+  attachOwnerCleanup(cleanup: Release) {
     this.#ownerCleanup = cleanup;
   }
 
@@ -183,8 +191,10 @@ class Observation<T, Child extends AsyncDisposable> {
   #createCurrent() {
     const { owner } = this.#requireBinding();
     const current = owner.child("observation");
-    assertAsyncDisposable(current, "ObservationOwner.child()");
-    this.#current = current;
+    this.#current = captureRelease(
+      current,
+      "ObservationOwner.child() must return an AsyncDisposable",
+    );
     // Creating a child can synchronously change the source, so subscribe before ownership and read afterward.
     const value = this.#requireBinding().source.get();
     this.#invokeObserver(value, current);
@@ -194,7 +204,8 @@ class Observation<T, Child extends AsyncDisposable> {
   }
 
   #invokeObserver(value: T, lifetime: Child) {
-    const result: unknown = this.#requireBinding().observer(value, lifetime);
+    const { observer } = this.#requireBinding();
+    const result: unknown = observer(value, lifetime);
     assertSynchronous(result, "Observers must be synchronous; use owner.spawn() for async work");
   }
 
@@ -203,7 +214,7 @@ class Observation<T, Child extends AsyncDisposable> {
     if (!current) return;
     // Replacement and terminal shutdown share the same attempt, including its rejection.
     return (this.#currentRelease ??= Promise.resolve()
-      .then(() => current[asyncDisposeSymbol]())
+      .then(current)
       .then(() => {
         this.#current = undefined;
         this.#currentRelease = undefined;
@@ -216,7 +227,7 @@ class Observation<T, Child extends AsyncDisposable> {
     return runner;
   }
 
-  #releaseDrainTask(runner: ObservationTask) {
+  #releaseDrainTask(runner: Release) {
     if (this.#drainTask === runner) this.#drainTask = undefined;
   }
 
@@ -225,7 +236,7 @@ class Observation<T, Child extends AsyncDisposable> {
     // The drain is the caller here; joining it from the owner's cleanup would wait on itself.
     this.#drainTask = undefined;
     const cleanup = this.#ownerCleanup;
-    if (cleanup) await cleanup[asyncDisposeSymbol]();
+    if (cleanup) await cleanup();
     else await this.dispose();
   }
 
@@ -257,16 +268,18 @@ export function observe<T, Child extends AsyncDisposable>(
   }
   const binding = { defer: defer.bind(owner), child: child.bind(owner), spawn: spawn.bind(owner) };
   const observation = new Observation(binding, readable, observer);
-  const handle = binding.defer(() => observation.dispose());
-  assertAsyncDisposable(handle, "ObservationOwner.defer()");
-  observation.attachOwnerCleanup(handle);
+  const close = captureRelease(
+    binding.defer(() => observation.dispose()),
+    "ObservationOwner.defer() must return an AsyncDisposable",
+  );
+  observation.attachOwnerCleanup(close);
   try {
     observation.start();
-    return handle;
+    return Object.freeze({ [asyncDisposeSymbol]: close });
   } catch (error) {
     // Roll back the owner's registration as well as the subscription; failed cleanup stays owned.
     try {
-      void Promise.resolve(handle[asyncDisposeSymbol]()).catch(() => undefined);
+      void Promise.resolve(close()).catch(() => undefined);
     } catch (cleanupError) {
       throw new AggregateError([error, cleanupError], "Observation construction failed");
     }
@@ -274,27 +287,16 @@ export function observe<T, Child extends AsyncDisposable>(
   }
 }
 
-function assertAsyncDisposable(value: unknown, source: string): asserts value is AsyncDisposable {
-  if (!value || typeof (value as AsyncDisposable)[asyncDisposeSymbol] !== "function") {
-    throw new TypeError(`${source} must return an AsyncDisposable`);
-  }
+function captureRelease(value: AsyncDisposable, message: string): Release {
+  const release = value?.[asyncDisposeSymbol];
+  if (typeof release !== "function") throw new TypeError(message);
+  return () => Reflect.apply(release, value, []);
 }
 
-function captureObservationTaskResult(value: unknown): Promise<unknown> {
-  const result =
-    value && typeof (value as ObservationTask)[asyncDisposeSymbol] === "function"
-      ? captureThenable((value as ObservationTask).result)
-      : undefined;
-  if (!result) {
-    throw new TypeError("ObservationOwner.spawn() must return an ObservationTask");
-  }
-  return result;
-}
-
-async function collect(resource: AsyncDisposable | undefined, errors: unknown[]) {
+async function collect(resource: Release | undefined, errors: unknown[]) {
   if (!resource) return;
   try {
-    await resource[asyncDisposeSymbol]();
+    await resource();
   } catch (error) {
     errors.push(error);
   }

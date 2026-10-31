@@ -105,6 +105,8 @@
       "ReadonlyMapSnapshot",
       "SerialQueue",
       "normalizePlainRecord",
+      "captureDataArray",
+      "onAbort",
       "batchSnapshotNotifications"
     ],
     "types": []

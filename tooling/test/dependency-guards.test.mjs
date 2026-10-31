@@ -132,7 +132,8 @@ it("follows actual Contract factory symbols, including ESM aliases, without trea
         'import { service as declare } from "../contracts/contracts.js";',
         'import * as contract from "../contracts/contracts.js";',
         'export const first = declare("probe/duplicate");',
-        'export const second = contract.event("probe/duplicate");',
+        "const emit = contract.event;",
+        'export const second = emit("probe/duplicate");',
         'export function unrelated(declare: (id: string) => string) { return declare("probe/shadow"); }',
         'export const actual = declare("probe/shadow");',
       ].join("\n"),
@@ -157,4 +158,30 @@ it("checks import types, re-exports and dynamic imports against the same package
   expect(result.status).toBe(1);
   expect(result.output.match(/\[exports.public\]/g)).toHaveLength(2);
   expect(result.output).toContain("[runtime.portable]");
+});
+
+it("checks the defining Lifetime constructor, production source roots and readonly callback types", () => {
+  const result = runGuard("check-layers.mjs", (workspace) => {
+    const directory = join(workspace, "packages/dougong");
+    mkdirSync(join(directory, "test"));
+    writeFileSync(join(directory, "test/helper.ts"), "export type Helper = string;\n");
+    writeFileSync(
+      join(directory, "src/composition/owner-probe.ts"),
+      [
+        'import { Lifetime as Scope } from "../lifetime/lifetime.js";',
+        "const Alias = Scope;",
+        'export const invalid = () => new Alias({ label: "orphan" });',
+        "class Lifetime {}",
+        "export const unrelated = new Lifetime();",
+        'export type TestHelper = import("../../test/helper.js").Helper;',
+        "type Notify = () => void;",
+        "interface ProbePort { notify?: Notify; readonly receive: Notify; count: number }",
+      ].join("\n"),
+    );
+  });
+  expect(result.status).toBe(1);
+  expect(result.output).toContain("owner-probe.ts:3: [lifetime.owner]");
+  expect(result.output.match(/\[lifetime.owner\]/g)).toHaveLength(1);
+  expect(result.output).toContain("owner-probe.ts:6: [ownership.module]");
+  expect(result.output).toContain("owner-probe.ts:8: [callbacks.readonly]");
 });

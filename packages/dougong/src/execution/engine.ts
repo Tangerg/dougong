@@ -12,6 +12,7 @@ import { EventHub } from "../events/event-hub.js";
 import { ContributionRegistry } from "../contributions/contribution-store.js";
 import { SnapshotPublisher, batchSnapshotNotifications } from "../observation/snapshot-view.js";
 import { SerialQueue } from "../internal/serial-queue.js";
+import { captureDataArray } from "../internal/data-array.js";
 import { normalizePlainRecord } from "../internal/record.js";
 import {
   ChangeSetDraft,
@@ -131,10 +132,14 @@ export class Engine {
     this.#contributions = new ContributionRegistry((error) => this.#report(error));
     const declarations = new Map<InstallationRecord, InstallationDeclaration>();
     const groups = new Map<string, GroupNode>();
-    const initialGroups = input.groups === undefined ? [] : input.groups;
-    const initialInstallations = input.installations === undefined ? [] : input.installations;
-    if (!Array.isArray(initialGroups) || !Array.isArray(initialInstallations))
-      throw new TypeError("Initial declarations must be arrays");
+    const initialGroups = captureDataArray(
+      input.groups === undefined ? [] : input.groups,
+      "Initial Groups",
+    );
+    const initialInstallations = captureDataArray(
+      input.installations === undefined ? [] : input.installations,
+      "Initial Installations",
+    );
     const groupParents = new Map<string, string | undefined>();
     for (const raw of initialGroups) {
       const group = normalizePlainRecord(raw, "Initial Group", {
@@ -194,7 +199,6 @@ export class Engine {
     assertGroups(groups, declarations);
     this.#state = Object.freeze({
       revision: 0,
-      declarations,
       groups,
       graph: InstallationGraph.build(declarations, this.#contracts.kinds),
       configs: new Map(),
@@ -223,7 +227,7 @@ export class Engine {
   }
 
   installation(id: string): Installation | undefined {
-    return [...this.#state.declarations.keys()].find((record) => record.id === id)?.facade;
+    return [...this.#state.graph.declarations.keys()].find((record) => record.id === id)?.facade;
   }
 
   group(id: string): Group | undefined {
@@ -259,9 +263,14 @@ export class Engine {
     this.#drafts.delete(change);
     const operations = draft.take();
     try {
-      return this.#plans.issue(
-        await compileTransition(this.#state, operations, "change", this.#contracts.kinds),
+      const prepared = await compileTransition(
+        this.#state,
+        operations,
+        "change",
+        this.#contracts.kinds,
       );
+      this.#assertHealthy();
+      return this.#plans.issue(prepared, this.#state);
     } catch (error) {
       this.#discardPending(operations);
       throw error;
@@ -280,29 +289,34 @@ export class Engine {
     return this.#lifecycle("stop");
   }
 
-  async use<T, R>(
+  use<T, R>(
     requirement: Service<T> | OptionalService<T>,
     callback: (value: T | undefined) => Awaitable<R>,
   ): Promise<R> {
-    if (typeof callback !== "function") throw new TypeError("Service callback must be a function");
-    const normalized = normalizeRequirement(requirement);
-    if (normalized.kind === "extensionPoint") throw new TypeError("Expected a Service");
-    const token = normalized.kind === "optional" ? normalized.service : normalized;
-    this.#contracts.assertCompatible(token);
-    this.#assertHealthy();
-    if (this.#state.phase !== "running")
-      throw new DougongError("SERVICE_UNAVAILABLE", "Host is not running");
-    const provider = this.#state.graph.provider(token.id);
-    if (!provider) {
-      if (normalized.kind === "optional") return callback(undefined);
-      throw new DougongError("SERVICE_UNAVAILABLE", "No provider for " + token.id);
+    try {
+      if (typeof callback !== "function")
+        throw new TypeError("Service callback must be a function");
+      const normalized = normalizeRequirement(requirement);
+      if (normalized.kind === "extensionPoint") throw new TypeError("Expected a Service");
+      const token = normalized.kind === "optional" ? normalized.service : normalized;
+      this.#contracts.assertCompatible(token);
+      this.#assertHealthy();
+      if (this.#state.phase !== "running")
+        throw new DougongError("SERVICE_UNAVAILABLE", "Host is not running");
+      const provider = this.#state.graph.providers.get(token.id);
+      if (!provider) {
+        if (normalized.kind === "optional") return Promise.resolve(callback(undefined));
+        throw new DougongError("SERVICE_UNAVAILABLE", "No provider for " + token.id);
+      }
+      if (this.#transition?.affected.has(provider))
+        throw new DougongError("SERVICE_UNAVAILABLE", "Service is changing: " + token.id);
+      const instance = this.#state.instances.get(provider);
+      if (!instance)
+        throw new DougongError("SERVICE_UNAVAILABLE", "Service is not running: " + token.id);
+      return instance.use<T, R>(token.id, callback);
+    } catch (error) {
+      return Promise.reject(error);
     }
-    if (this.#transition?.affected.has(provider))
-      throw new DougongError("SERVICE_UNAVAILABLE", "Service is changing: " + token.id);
-    const instance = this.#state.instances.get(provider);
-    if (!instance)
-      throw new DougongError("SERVICE_UNAVAILABLE", "Service is not running: " + token.id);
-    return instance.use<T, R>(token.id, callback);
   }
 
   contributions<T>(point: ExtensionPoint<T>) {
@@ -325,13 +339,13 @@ export class Engine {
       if (intent === "start") {
         this.#transition = {
           phase: "starting",
-          affected: new Set(this.#state.declarations.keys()),
+          affected: new Set(this.#state.graph.declarations.keys()),
         };
         this.#notify();
       }
       try {
         const prepared = await compileTransition(this.#state, [], intent, this.#contracts.kinds);
-        return await this.#execute(this.#plans.issue(prepared));
+        return await this.#execute(this.#plans.issue(prepared, this.#state));
       } finally {
         if (this.#transition) {
           this.#transition = undefined;
@@ -343,19 +357,8 @@ export class Engine {
 
   async #execute(plan: Plan): Promise<ApplyResult> {
     this.#assertHealthy();
-    const prepared = this.#plans.read(plan);
-    if (prepared.baseStateRevision !== this.#state.revision) {
-      this.#plans.consume(plan);
-      this.#detachUncommitted(prepared);
-      throw new DougongError("PLAN_STALE", "Host state changed after planning", {
-        details: {
-          outcome: "rejected",
-          expectedRevision: prepared.baseStateRevision,
-          stateRevision: this.#state.revision,
-        },
-      });
-    }
-    if (prepared.intent === "change" && prepared.report.operations.length === 0) {
+    const prepared = this.#plans.read(plan, this.#state.revision);
+    if (prepared.report.intent === "change" && prepared.report.operations.length === 0) {
       this.#plans.consume(plan);
       return this.#result([]);
     }
@@ -379,15 +382,15 @@ export class Engine {
     try {
       writer = this.#contracts.writer(prepared.graph.contractKinds);
     } catch (error) {
-      this.#detachUncommitted(prepared);
+      this.#detachUncommitted(prepared.graph.declarations.keys());
       throw error;
     }
     for (const instance of affectedInstances) instance.lifetime.seal();
     this.#transition = {
       phase:
-        prepared.intent === "start"
+        prepared.report.intent === "start"
           ? "starting"
-          : prepared.intent === "stop"
+          : prepared.report.intent === "stop"
             ? "stopping"
             : "changing",
       affected: prepared.affected,
@@ -395,7 +398,7 @@ export class Engine {
     this.#notify();
     this.#contributions.beginBatch();
     try {
-      if (previous.phase === "stopped" && prepared.intent !== "start") {
+      if (previous.phase === "stopped" && prepared.report.intent !== "start") {
         writer.commit();
         this.#commit(prepared, new Map(), "stopped");
         return this.#result(prepared.report.affectedInstallations);
@@ -408,7 +411,7 @@ export class Engine {
         writer.discard();
         throw await this.#quarantine(previous, [], stopErrors, prepared, "stop");
       }
-      if (prepared.intent === "stop") {
+      if (prepared.report.intent === "stop") {
         writer.commit();
         this.#commit(prepared, new Map(), "stopped");
         return this.#result(prepared.report.affectedInstallations);
@@ -419,7 +422,8 @@ export class Engine {
       const failures = new PreparationFailures((error) => this.#report(error));
       try {
         await this.#prepare(prepared, retained, candidates, writer, failures);
-        for (const instance of candidates.values()) instance.lifetime.signal.throwIfAborted();
+        for (const instance of candidates.values())
+          AbortSignal.prototype.throwIfAborted.call(instance.lifetime.signal);
         failures.seal();
       } catch (error) {
         writer.discard();
@@ -441,9 +445,8 @@ export class Engine {
             "prepare",
           );
         if (previous.phase === "stopped") {
-          this.#state = Object.freeze({
+          this.#advance({
             ...previous,
-            revision: previous.revision + 1,
             error: new RecordedFailure(failure).snapshot,
           });
           throw this.#transitionError(
@@ -482,7 +485,7 @@ export class Engine {
       return this.#result(prepared.report.affectedInstallations);
     } finally {
       this.#transition = undefined;
-      this.#detachUncommitted(prepared);
+      this.#detachUncommitted(prepared.graph.declarations.keys());
       batchSnapshotNotifications(() => {
         this.#contributions.endBatch();
         this.#notify();
@@ -535,7 +538,7 @@ export class Engine {
                 continue;
               }
               const token = requirement.kind === "optional" ? requirement.service : requirement;
-              const provider = prepared.graph.providerFor(instance.installation, token.id);
+              const provider = prepared.graph.providers.get(token.id);
               deps[alias] = provider
                 ? (candidates.get(provider) ?? retained.get(provider))?.read(token.id)
                 : undefined;
@@ -577,13 +580,13 @@ export class Engine {
         writer,
         failures,
       );
-      for (const instance of candidates.values()) instance.lifetime.signal.throwIfAborted();
+      for (const instance of candidates.values())
+        AbortSignal.prototype.throwIfAborted.call(instance.lifetime.signal);
       failures.seal();
       for (const [record, instance] of candidates) retained.set(record, instance);
       writer.commit();
-      this.#state = Object.freeze({
+      this.#advance({
         ...previous,
-        revision: previous.revision + 1,
         instances: retained,
         error: new RecordedFailure(error).snapshot,
       });
@@ -612,9 +615,7 @@ export class Engine {
     candidates: ReadonlyMap<InstallationRecord, Instance> = new Map(),
   ) {
     const previous = this.#state;
-    this.#state = Object.freeze({
-      revision: previous.revision + 1,
-      declarations: prepared.declarations,
+    this.#advance({
       groups: prepared.groups,
       graph: prepared.graph,
       configs: prepared.configs,
@@ -623,14 +624,19 @@ export class Engine {
       unresolved: Object.freeze([]),
       error: undefined,
     });
-    for (const record of prepared.declarations.keys()) {
-      if (!previous.declarations.has(record)) this.#attachInstallation(record);
+    for (const record of prepared.graph.declarations.keys()) {
+      if (!previous.graph.declarations.has(record)) this.#attachInstallation(record);
     }
-    for (const record of previous.declarations.keys()) {
-      if (!prepared.declarations.has(record))
+    for (const record of previous.graph.declarations.keys()) {
+      if (!prepared.graph.declarations.has(record))
         record.detach({ status: "removed", origin: undefined });
     }
     for (const instance of candidates.values()) instance.publish();
+  }
+
+  #advance(next: Omit<CommittedState, "revision">) {
+    this.#state = Object.freeze({ ...next, revision: this.#state.revision + 1 });
+    this.#plans.invalidate();
   }
 
   async #quarantine(
@@ -659,9 +665,8 @@ export class Engine {
       [...errors, ...cleanupErrors],
       "Execution could not establish a healthy state",
     );
-    this.#state = Object.freeze({
+    this.#advance({
       ...previous,
-      revision: this.#state.revision + 1,
       phase: "quarantined",
       instances: new Map(),
       unresolved: Object.freeze(unresolved),
@@ -692,32 +697,29 @@ export class Engine {
       }
     }
 
-    const errors: unknown[] = [];
-    const visited = new Set<Instance>();
-    const dispose = async (instance: Instance): Promise<void> => {
-      if (visited.has(instance)) return;
-      visited.add(instance);
-      const consumers = dependents.get(instance) ?? [];
-      for (const consumer of consumers) {
-        if (targets.has(consumer)) await dispose(consumer);
-      }
-      // Bindings belong to each execution generation, not the latest installation declaration.
-      // A failed or busy consumer only retains the providers it can still reach.
-      if (
-        [...consumers].some((consumer) => consumer.lifetime.phase !== "disposed") ||
-        instance.lifetime.busy ||
-        instance.lifetime.phase === "disposed" ||
-        instance.lifetime.phase === "quarantined"
-      )
-        return;
-      try {
-        await instance.dispose();
-      } catch (error) {
-        errors.push(error);
-      }
-    };
-    for (const instance of [...targets].reverse()) await dispose(instance);
-    return errors;
+    const pending = new Map<Instance, Promise<void>>();
+    for (const instance of [...targets].reverse()) {
+      // Register every branch before looking up joins, including bindings across generations.
+      pending.set(
+        instance,
+        Promise.resolve().then(async () => {
+          const consumers = [...(dependents.get(instance) ?? [])];
+          await Promise.allSettled(consumers.map((consumer) => pending.get(consumer)));
+          if (
+            consumers.some((consumer) => consumer.lifetime.phase !== "disposed") ||
+            instance.lifetime.busy ||
+            instance.lifetime.phase === "disposed" ||
+            instance.lifetime.phase === "quarantined"
+          )
+            return;
+          await instance.dispose();
+        }),
+      );
+    }
+    const outcomes = await Promise.allSettled(pending.values());
+    return outcomes.flatMap((result) =>
+      result.status === "rejected" ? [result.reason as unknown] : [],
+    );
   }
 
   #transitionError(
@@ -768,13 +770,13 @@ export class Engine {
   #attachInstallation(record: InstallationRecord) {
     record.attach(() => ({
       status: this.#installationStatus(record),
-      origin: this.#state.declarations.get(record)?.origin,
+      origin: this.#state.graph.declarations.get(record)?.origin,
     }));
   }
 
-  #detachUncommitted(prepared: PreparedTransition) {
-    for (const record of prepared.declarations.keys()) {
-      if (!this.#state.declarations.has(record))
+  #detachUncommitted(records: Iterable<InstallationRecord>) {
+    for (const record of records) {
+      if (!this.#state.graph.declarations.has(record))
         record.detach({ status: "removed", origin: undefined });
     }
   }
@@ -793,22 +795,20 @@ export class Engine {
   }
 
   #discardPending(operations: ReadonlyArray<ChangeOperation>) {
-    for (const operation of operations) {
-      if (operation.kind === "install" && !this.#state.declarations.has(operation.installation)) {
-        operation.installation.detach({ status: "removed", origin: undefined });
-      }
-    }
+    this.#detachUncommitted(
+      operations.flatMap((op) => (op.kind === "install" ? [op.installation] : [])),
+    );
   }
 
   #installationStatus(record: InstallationRecord): InstallationState {
-    if (!this.#state.declarations.has(record)) return "pending";
+    if (!this.#state.graph.declarations.has(record)) return "pending";
     if (this.#state.phase === "quarantined") return "quarantined";
     if (this.#transition?.affected.has(record)) return "changing";
     return this.#state.instances.has(record) ? "running" : "stopped";
   }
 
   #snapshot(): HostSnapshot {
-    const installations: InstallationSnapshot[] = [...this.#state.declarations].map(
+    const installations: InstallationSnapshot[] = [...this.#state.graph.declarations].map(
       ([record, declaration]) => {
         const instance = this.#state.instances.get(record);
         return Object.freeze({
@@ -890,7 +890,8 @@ export class Engine {
       }
     };
     try {
-      void Promise.resolve(this.#onError(error)).catch(fallback);
+      const report = this.#onError;
+      void Promise.resolve(report(error)).catch(fallback);
     } catch (failure) {
       fallback(failure);
     }

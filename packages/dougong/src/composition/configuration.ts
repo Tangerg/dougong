@@ -1,4 +1,5 @@
 import type { StandardSchemaV1 } from "@standard-schema/spec";
+import { captureDataArray } from "../internal/data-array.js";
 import { ConfigValidationError } from "../contracts/errors.js";
 
 export type ConfigValue =
@@ -40,26 +41,8 @@ export function captureConfig(input: unknown): ConfigValue | undefined {
     };
     let result: ConfigValue;
     if (Array.isArray(value)) {
-      const keys = Reflect.ownKeys(value);
-      const length: unknown = Object.getOwnPropertyDescriptor(value, "length")?.value;
-      if (keys.length - 1 !== length) throw new TypeError(`Config array must be dense at ${path}`);
-      const items: ConfigValue[] = [];
-      for (const key of keys) {
-        if (key === "length") continue;
-        const index = typeof key === "string" ? Number(key) : NaN;
-        if (
-          !Number.isInteger(index) ||
-          index < 0 ||
-          index >= keys.length - 1 ||
-          String(index) !== key
-        )
-          throw new TypeError(`Config array must be dense at ${path}`);
-        const field = Object.getOwnPropertyDescriptor(value, key);
-        if (!field || !("value" in field))
-          throw new TypeError(`Config must contain data properties at ${path}`);
-        items[index] = member(field.value, `${path}[${index}]`);
-      }
-      result = Object.freeze(items);
+      const items = captureDataArray(value, `Config array at ${path}`);
+      result = Object.freeze(items.map((item, index) => member(item, `${path}[${index}]`)));
     } else {
       const prototype = Object.getPrototypeOf(value);
       if (prototype !== Object.prototype && prototype !== null)

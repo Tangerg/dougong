@@ -1,3 +1,4 @@
+import { createHost, definePlugin, service } from "../src/index";
 import { expect, it, vi } from "vitest";
 import { SnapshotPublisher } from "../src/observation/snapshot-view";
 import { captureDisposer } from "../src/contracts/resource";
@@ -55,3 +56,33 @@ it.each(["object", "function"] as const)(
     publisher[Symbol.dispose]();
   },
 );
+
+it("settles the public service callback result exactly once, within the borrow", async () => {
+  const value = service<number>("borrow/value");
+  const host = createHost({
+    installations: [
+      {
+        id: "provider",
+        plugin: definePlugin({
+          name: "provider",
+          provides: { value },
+          setup: () => ({ value: 1 }),
+        }),
+      },
+    ],
+  });
+  await host.start();
+  let reads = 0;
+  const result = new Proxy(
+    {},
+    {
+      get(target, key, receiver) {
+        if (key === "then" && ++reads > 1) throw new Error("callback result was assimilated again");
+        return Reflect.get(target, key, receiver);
+      },
+    },
+  );
+  expect(await host.use(value, () => result)).toBe(result);
+  expect(reads).toBe(1);
+  await host.stop();
+});

@@ -639,3 +639,63 @@ it("joins an already running shutdown without retrying it or quarantining succes
   expect(cleanup).toHaveBeenCalledOnce();
   expect(host.diagnostics.get().unresolved).toEqual([]);
 });
+
+it("starts independent shutdown branches while protecting a provider until its last consumer finishes", async () => {
+  const value = service<number>("stop/value");
+  const waiting = Promise.withResolvers<void>();
+  const release = Promise.withResolvers<void>();
+  const order: string[] = [];
+  const host = createHost({
+    installations: [
+      {
+        id: "provider",
+        plugin: definePlugin({
+          name: "provider",
+          provides: { value },
+          setup({ lifetime }) {
+            lifetime.defer(() => {
+              order.push("provider");
+            });
+            return { value: 1 };
+          },
+        }),
+      },
+      {
+        id: "independent",
+        plugin: definePlugin({
+          name: "independent",
+          setup({ lifetime }) {
+            lifetime.defer(() => {
+              order.push("independent");
+            });
+          },
+        }),
+      },
+      {
+        id: "consumer",
+        plugin: definePlugin({
+          name: "consumer",
+          requires: { value },
+          setup({ lifetime }) {
+            lifetime.defer(async () => {
+              waiting.resolve();
+              await release.promise;
+              order.push("consumer");
+            });
+          },
+        }),
+      },
+    ],
+  });
+  await host.start();
+  const stopping = host.stop();
+  try {
+    await waiting.promise;
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    expect([...order]).toEqual(["independent"]);
+  } finally {
+    release.resolve();
+    await stopping;
+  }
+  expect(order).toEqual(["independent", "consumer", "provider"]);
+});

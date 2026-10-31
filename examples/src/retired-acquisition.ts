@@ -1,39 +1,59 @@
-import type { LifetimeContext } from "dougong";
+import { asyncDisposeSymbol, type LifetimeContext } from "dougong";
 import { abandonOnAbort } from "./abandon-on-abort.js";
+
+type Destination = Pick<LifetimeContext, "signal" | "defer">;
+type Operations = Pick<LifetimeContext, "spawn" | "defer">;
 
 export type AcquisitionResult<T> =
   | { readonly status: "acquired"; readonly value: T }
   | { readonly status: "failed"; readonly error: unknown }
   | { readonly status: "retired" };
 
+async function handoff<T>(
+  generation: Destination,
+  operations: Operations,
+  signal: AbortSignal,
+  start: () => PromiseLike<T>,
+  dispose: (value: T) => unknown,
+): Promise<AcquisitionResult<T>> {
+  if (signal.aborted || generation.signal.aborted) return { status: "retired" };
+
+  // Reserve before starting: shutdown may seal both owners before a non-cooperative factory returns.
+  let reclaim: (() => unknown) | undefined;
+  const reservation = operations.defer(() => reclaim?.());
+  let result: AcquisitionResult<T> = { status: "retired" };
+  try {
+    if (!signal.aborted && !generation.signal.aborted) {
+      const value = await start();
+      reclaim = () => dispose(value);
+      if (!generation.signal.aborted) {
+        generation.defer(reclaim);
+        reclaim = undefined;
+        result = { status: "acquired", value };
+      }
+    }
+  } catch (error) {
+    try {
+      await reservation[asyncDisposeSymbol]();
+    } catch (releaseError) {
+      throw new AggregateError([error, releaseError], "Resource ownership transfer failed");
+    }
+    throw error;
+  }
+  await reservation[asyncDisposeSymbol]();
+  return result;
+}
+
 export function acquireForLifetime<T>(
-  generation: LifetimeContext,
-  operations: LifetimeContext,
+  generation: Destination,
+  operations: Operations,
   start: () => PromiseLike<T>,
   dispose: (value: T) => unknown,
 ): Promise<AcquisitionResult<T>> {
   return abandonOnAbort(generation.signal, () => {
     const operation = operations.spawn(async (signal) => {
-      if (signal.aborted || generation.signal.aborted) return { status: "retired" } as const;
-
       try {
-        const value = await start();
-        if (generation.signal.aborted) {
-          await dispose(value);
-          return { status: "retired" } as const;
-        }
-
-        try {
-          generation.defer(() => dispose(value));
-        } catch (error) {
-          try {
-            await dispose(value);
-          } catch (disposalError) {
-            throw new AggregateError([error, disposalError], "Resource ownership transfer failed");
-          }
-          throw error;
-        }
-        return { status: "acquired", value } as const;
+        return await handoff(generation, operations, signal, start, dispose);
       } catch (cause) {
         // An external AbortError is not cancellation requested by this Task.
         throw new Error("External resource operation failed", { cause });

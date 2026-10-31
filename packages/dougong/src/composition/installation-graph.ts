@@ -6,24 +6,14 @@ import type { InstallationDeclaration, InstallationRecord } from "./installation
 // Immutable candidate plans preserve the previous declaration versions for rollback.
 
 export class InstallationGraph {
-  readonly #declarations: ReadonlyMap<InstallationRecord, InstallationDeclaration>;
-  readonly #resolvedProviders: ReadonlyMap<
-    InstallationRecord,
-    ReadonlyMap<string, InstallationRecord>
-  >;
-
   private constructor(
-    declarations: ReadonlyMap<InstallationRecord, InstallationDeclaration>,
+    readonly declarations: ReadonlyMap<InstallationRecord, InstallationDeclaration>,
     readonly order: ReadonlyArray<InstallationRecord>,
     readonly layers: ReadonlyArray<ReadonlyArray<InstallationRecord>>,
     readonly providers: ReadonlyMap<string, InstallationRecord>,
     readonly dependents: ReadonlyMap<InstallationRecord, ReadonlySet<InstallationRecord>>,
     readonly contractKinds: ReadonlyMap<string, ContractKind>,
-    resolvedProviders: ReadonlyMap<InstallationRecord, ReadonlyMap<string, InstallationRecord>>,
-  ) {
-    this.#declarations = declarations;
-    this.#resolvedProviders = resolvedProviders;
-  }
+  ) {}
 
   static build(
     declarations: ReadonlyMap<InstallationRecord, InstallationDeclaration>,
@@ -41,28 +31,19 @@ export class InstallationGraph {
     );
 
     return new InstallationGraph(
-      new Map(declarations),
+      declarations,
       Object.freeze(order),
       Object.freeze(layers.map((layer) => Object.freeze(layer))),
       providers,
       dependencies.dependents,
       contractKinds,
-      dependencies.resolvedProviders,
     );
   }
 
   declarationFor(installation: InstallationRecord) {
-    const declaration = this.#declarations.get(installation);
+    const declaration = this.declarations.get(installation);
     if (!declaration) throw new Error(`Installation '${installation.id}' is not in this plan`);
     return declaration;
-  }
-
-  providerFor(installation: InstallationRecord, serviceId: string) {
-    return this.#resolvedProviders.get(installation)?.get(serviceId);
-  }
-
-  provider(serviceId: string) {
-    return this.providers.get(serviceId);
   }
 
   // Use both plans because replacing a Service affects both its old consumers and its new consumers.
@@ -120,7 +101,6 @@ function connectRequirements(
   providers: ReadonlyMap<string, InstallationRecord>,
   contractKinds: Map<string, ContractKind>,
 ) {
-  const resolvedProviders = new Map<InstallationRecord, Map<string, InstallationRecord>>();
   const dependents = new Map<InstallationRecord, Set<InstallationRecord>>();
   const indegree = new Map([...declarations.keys()].map((installation) => [installation, 0]));
 
@@ -154,10 +134,6 @@ function connectRequirements(
         );
       }
 
-      const resolved = resolvedProviders.get(installation) ?? new Map();
-      resolved.set(token.id, provider);
-      resolvedProviders.set(installation, resolved);
-
       const targets = dependents.get(provider) ?? new Set();
       if (targets.has(installation)) continue;
       targets.add(installation);
@@ -165,7 +141,7 @@ function connectRequirements(
       indegree.set(installation, (indegree.get(installation) ?? 0) + 1);
     }
   }
-  return { resolvedProviders, dependents, indegree };
+  return { dependents, indegree };
 }
 
 function sortDependencies(

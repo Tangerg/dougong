@@ -5,9 +5,9 @@ export interface Loader<Reference> {
 // Same-realm imports provide no isolation; authorization cannot constrain admitted code.
 export class ImportLoader implements Loader<string | URL> {
   readonly load = async (reference: string | URL, signal: AbortSignal): Promise<unknown> => {
-    signal.throwIfAborted();
+    AbortSignal.prototype.throwIfAborted.call(signal);
     const module = await import(/* @vite-ignore */ String(reference));
-    signal.throwIfAborted();
+    AbortSignal.prototype.throwIfAborted.call(signal);
     return module;
   };
 }
@@ -20,8 +20,7 @@ export class MemoryLoader<Reference> implements Loader<Reference> {
       !modules ||
       (typeof modules !== "object" && typeof modules !== "function") ||
       typeof modules.get !== "function" ||
-      typeof modules.has !== "function" ||
-      typeof modules[Symbol.iterator] !== "function"
+      typeof modules.has !== "function"
     ) {
       throw new TypeError("MemoryLoader modules must be a ReadonlyMap");
     }
@@ -29,7 +28,7 @@ export class MemoryLoader<Reference> implements Loader<Reference> {
   }
 
   readonly load = (reference: Reference, signal: AbortSignal) => {
-    signal.throwIfAborted();
+    AbortSignal.prototype.throwIfAborted.call(signal);
     if (!this.#modules.has(reference)) throw new TypeError("Unknown module reference");
     return this.#modules.get(reference);
   };

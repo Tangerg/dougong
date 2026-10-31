@@ -31,6 +31,7 @@ type Dependency = {
 // Synchronous collection avoids adding tracking context to every read; restore it before the calculation returns.
 let batchDepth = 0;
 let flushing = false;
+let propagating = false;
 const pendingSlots = new Set<ListenerSlot>();
 const pendingInvalidations = new Set<ListenerSlot>();
 let activeCollector: ((source: ReadonlySignal<unknown>) => void) | undefined;
@@ -51,16 +52,14 @@ class ReactiveSubscription implements Disposable {
   }
 }
 
-// Drain dependency invalidations first so diamond observers cannot read before all paths become dirty.
 function flushPendingListeners() {
   if (flushing) return;
   const errors: unknown[] = [];
   flushing = true;
   try {
-    while (pendingInvalidations.size || pendingSlots.size) {
-      const queue = pendingInvalidations.size ? pendingInvalidations : pendingSlots;
-      const slot = queue.values().next().value!;
-      queue.delete(slot);
+    while (pendingSlots.size) {
+      const slot = pendingSlots.values().next().value!;
+      pendingSlots.delete(slot);
       const listener = slot.listener;
       if (!listener) continue;
       try {
@@ -71,7 +70,6 @@ function flushPendingListeners() {
     }
   } finally {
     pendingSlots.clear();
-    pendingInvalidations.clear();
     flushing = false;
   }
   throwListenerFailures(errors);
@@ -81,6 +79,21 @@ function publish(slots: ReadonlySet<ListenerSlot>) {
   // Capture membership before delivery so new subscriptions wait for a subsequent publication.
   for (const slot of slots) {
     (slot.kind === "dependency" ? pendingInvalidations : pendingSlots).add(slot);
+  }
+  // Capture downstream membership at the write, including inside batches and reentrant
+  // observers. Delaying graph invalidation would deliver old writes to new subscribers.
+  if (propagating) return;
+  propagating = true;
+  try {
+    while (pendingInvalidations.size) {
+      const slot = pendingInvalidations.values().next().value!;
+      pendingInvalidations.delete(slot);
+      const invalidate = slot.listener;
+      invalidate?.();
+    }
+  } finally {
+    propagating = false;
+    pendingInvalidations.clear();
   }
   if (!batchDepth) flushPendingListeners();
 }
@@ -252,11 +265,11 @@ class ComputedNode<T> implements ReactiveNode {
     const wasUnobserved = this.#listeners.size === 0;
     this.#listeners.add(slot);
 
-    if (wasUnobserved) {
+    if (wasUnobserved || kind === "observer") {
       try {
         this.refresh();
         if (kind === "observer") this.#readResult();
-        this.#attachDependencies();
+        if (wasUnobserved) this.#attachDependencies();
       } catch (error) {
         this.#listeners.delete(slot);
         if (!this.#listeners.size) this.#detachDependencies();
@@ -325,7 +338,8 @@ class ComputedNode<T> implements ReactiveNode {
     activeCollector = (source) => sources.add(source);
 
     try {
-      const value = this.#calculate();
+      const calculate = this.#calculate;
+      const value = calculate();
       assertSynchronous(value, "Computed signal calculations must be synchronous");
       return { phase: "value", value };
     } catch (error) {

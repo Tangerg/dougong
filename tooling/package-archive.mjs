@@ -1,7 +1,17 @@
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
+import { join } from "node:path";
 import { Parser } from "tar";
 
-export function readPackageFiles(archive) {
+export function packageArchiveIn(directory) {
+  const archives = readdirSync(directory, { withFileTypes: true }).filter((entry) =>
+    entry.name.endsWith(".tgz"),
+  );
+  if (archives.length !== 1 || !archives[0].isFile())
+    throw new Error(`Expected one regular package archive in ${directory}`);
+  return join(directory, archives[0].name);
+}
+
+export function readPackageFiles(archive, bytes = readFileSync(archive)) {
   // Extraction loses link types, duplicate members and case-sensitive paths.
   const entries = new Map();
   const parser = new Parser({ strict: true, file: archive });
@@ -41,7 +51,7 @@ export function readPackageFiles(archive) {
   };
   parser.on("entry", readEntry);
   parser.on("ignoredEntry", readEntry);
-  parser.end(readFileSync(archive));
+  parser.end(bytes);
   // Input exhaustion can silently discard a partial final header, even in strict mode.
   if (!archiveEnded) {
     throw new Error(`Package archive ended before its end-of-archive marker: ${archive}`);

@@ -1,4 +1,5 @@
 import { DougongError, type ErrorDetails } from "dougong";
+import { captureDataArray } from "dougong/advanced";
 
 export type PlatformErrorCode =
   | "MANIFEST_INVALID"
@@ -41,18 +42,17 @@ export class PermissionDeniedError extends PlatformError {
     if (typeof manifestName !== "string" || !manifestName || manifestName.trim() !== manifestName) {
       throw new TypeError("PermissionDeniedError manifestName must be a non-empty trimmed string");
     }
-    if (!Array.isArray(denied)) {
-      throw new TypeError("PermissionDeniedError denied permissions must be an array");
-    }
     const immutableDenied = Object.freeze(
-      Array.from(denied, (permission, index) => {
-        if (typeof permission !== "string" || !permission || permission.trim() !== permission) {
-          throw new TypeError(
-            `PermissionDeniedError denied permission at index ${index} must be a non-empty trimmed string`,
-          );
-        }
-        return permission;
-      }),
+      captureDataArray(denied, "PermissionDeniedError denied permissions").map(
+        (permission, index) => {
+          if (typeof permission !== "string" || !permission || permission.trim() !== permission) {
+            throw new TypeError(
+              `PermissionDeniedError denied permission at index ${index} must be a non-empty trimmed string`,
+            );
+          }
+          return permission;
+        },
+      ),
     );
     super(
       "PERMISSION_DENIED",

@@ -7,7 +7,6 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
-  readdirSync,
   realpathSync,
   rmSync,
   writeFileSync,
@@ -15,6 +14,7 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { packageArchiveIn } from "../package-archive.mjs";
 import { x } from "tar";
 import { publishedDirectories } from "../packages.mjs";
 
@@ -65,12 +65,9 @@ try {
       cwd: directory,
       stdio: "pipe",
     });
-    const archives = readdirSync(destination).filter((file) => file.endsWith(".tgz"));
-    if (archives.length !== 1)
-      throw new Error(`Packing ${name} produced ${archives.length} archives`);
     const target = join(modules, name);
     mkdirSync(target, { recursive: true });
-    await x({ file: join(destination, archives[0]), cwd: target, strip: 1 });
+    await x({ file: packageArchiveIn(destination), cwd: target, strip: 1 });
     const manifest = JSON.parse(readFileSync(join(target, "package.json"), "utf8"));
     for (const dependency of Object.keys(manifest.dependencies ?? {})) {
       if (!published.has(dependency)) copyDependency(installedDependency(directory, dependency));

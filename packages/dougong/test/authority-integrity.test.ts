@@ -160,3 +160,31 @@ it.each(["name", "groups", "installations"] as const)(
     expect(() => createHost({ [field]: null } as never)).toThrow(TypeError);
   },
 );
+
+it("gives application callbacks only their explicit context", async () => {
+  const receivers: unknown[] = [];
+  const report = function (this: unknown) {
+    receivers.push(this);
+  };
+  const host = createHost({
+    onError: report,
+    installations: [
+      {
+        id: "owner",
+        plugin: definePlugin({
+          name: "owner",
+          setup: function (this: unknown) {
+            receivers.push(this);
+          },
+        }),
+      },
+    ],
+  });
+  using _subscription = host.diagnostics.subscribe(() => {
+    throw new Error("subscriber failed");
+  });
+  await host.start();
+  expect(receivers.length).toBeGreaterThan(1);
+  expect(receivers.every((receiver) => receiver === undefined)).toBe(true);
+  await host.stop();
+});

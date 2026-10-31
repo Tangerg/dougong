@@ -3,10 +3,7 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import {
   chmodSync,
-  existsSync,
-  globSync,
   lstatSync,
-  mkdirSync,
   mkdtempSync,
   readFileSync,
   realpathSync,
@@ -20,7 +17,7 @@ import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { valid } from "semver";
-import { readPackageFiles } from "./release-archive.mjs";
+import { packageArchiveIn, readPackageFiles } from "../package-archive.mjs";
 import { packageEntrypoints, publishedDirectories } from "../packages.mjs";
 
 function fail(message) {
@@ -311,17 +308,47 @@ for (const { dir, name } of PACKAGES) {
 step("Packing and inspecting tarballs");
 
 const stage = mkdtempSync(join(tmpdir(), "dougong-release-"));
-const tarballs = new Map();
+let keepStage = false;
+process.once("exit", () => {
+  if (!keepStage) rmSync(stage, { recursive: true, force: true });
+});
+const candidates = new Map();
+
+function verifyRegistryContents(name, candidateFiles) {
+  const downloaded = mkdtempSync(join(stage, "registry-"));
+  execFileSync("npm", ["pack", `${name}@${version}`, "--pack-destination", downloaded], {
+    stdio: "ignore",
+  });
+  const publishedFiles = readPackageFiles(packageArchiveIn(downloaded));
+  rmSync(downloaded, { recursive: true, force: true });
+  for (const file of new Set([...publishedFiles.keys(), ...candidateFiles.keys()])) {
+    const publishedContents = publishedFiles.get(file);
+    const candidateContents = candidateFiles.get(file);
+    if (!publishedContents || !candidateContents || !publishedContents.equals(candidateContents))
+      fail(
+        `${name}@${version} is published but its ${file} differs from this build; ` +
+          `release a new version instead of resuming`,
+      );
+  }
+}
+
+function writeCandidate(candidate, directory) {
+  const path = join(directory, candidate.filename);
+  writeFileSync(path, candidate.bytes, { flag: "wx" });
+  return path;
+}
 
 for (const { dir, name } of PACKAGES) {
-  const packed = capture("pnpm", ["pack", "--pack-destination", stage], { cwd: resolve(dir) })
-    .split("\n")
-    .at(-1);
-  const tarball = resolve(packed.startsWith("/") ? packed : join(stage, packed));
-  if (!existsSync(tarball)) fail(`${name}: pnpm pack did not produce ${tarball}`);
-  tarballs.set(name, tarball);
-
-  const candidateFiles = readPackageFiles(tarball);
+  const packed = mkdtempSync(join(stage, "pack-"));
+  execFileSync("pnpm", ["pack", "--pack-destination", packed], {
+    cwd: resolve(dir),
+    stdio: "pipe",
+  });
+  const archive = packageArchiveIn(packed);
+  const bytes = readFileSync(archive);
+  const candidateFiles = readPackageFiles(archive, bytes);
+  candidates.set(name, { filename: basename(archive), bytes, files: candidateFiles });
+  rmSync(packed, { recursive: true, force: true });
   for (const required of ["package.json", "README.md", "LICENSE"]) {
     if (!candidateFiles.has(required)) fail(`${name}: tarball is missing ${required}`);
   }
@@ -375,35 +402,20 @@ for (const { dir, name } of PACKAGES) {
     }
   }
 
-  // Compare existing registry bytes because immutable versions cannot accept a different artifact on resume.
   if (alreadyPublished.has(name)) {
-    const downloaded = join(stage, `published__${basename(dir)}`);
-    mkdirSync(downloaded, { recursive: true });
-    execFileSync("npm", ["pack", `${name}@${version}`, "--pack-destination", downloaded], {
-      stdio: "ignore",
-    });
-    const [archive] = globSync(join(downloaded, "*.tgz"));
-    if (!archive) fail(`${name}: cannot download the published ${version} to compare`);
-    const publishedFiles = readPackageFiles(archive);
-    for (const file of new Set([...publishedFiles.keys(), ...candidateFiles.keys()])) {
-      const publishedContents = publishedFiles.get(file);
-      const candidateContents = candidateFiles.get(file);
-      if (!publishedContents || !candidateContents || !publishedContents.equals(candidateContents))
-        fail(
-          `${name}@${version} is published but its ${file} differs from this build; ` +
-            `release a new version instead of resuming`,
-        );
-    }
+    verifyRegistryContents(name, candidateFiles);
     console.log(`  ${name.padEnd(22)} ${"skip".padStart(7)}     already published, contents match`);
     continue;
   }
 
-  const size = (readFileSync(tarball).byteLength / 1024).toFixed(1);
+  const size = (bytes.byteLength / 1024).toFixed(1);
   console.log(`  ${name.padEnd(22)} ${size.padStart(7)} KB  ${packedManifest.version}`);
 }
 
 if (dryRun) {
   if (!restoreManifests()) fail("Checkout moved; inspect manifests before resuming");
+  for (const candidate of candidates.values()) writeCandidate(candidate, stage);
+  keepStage = true;
   step("Dry run complete");
   console.log("  every check passed; no package was published, tagged or pushed");
   console.log(`  tarballs kept at ${stage}`);
@@ -421,7 +433,7 @@ if (!assumeYes) {
   }
 }
 
-// Publish inspected tarballs so verified bytes are the uploaded bytes; confirm registry presence before recording success.
+// Publish inspected tarballs so verified bytes are the uploaded bytes; confirm registry presence and contents before recording success.
 
 step("Publishing");
 
@@ -457,9 +469,11 @@ for (const { name } of PACKAGES) {
     console.log(`  · ${name}@${version} already published, skipped`);
     continue;
   }
-  const publishArgs = ["publish", tarballs.get(name), "--access", "public"];
-  if (otp !== undefined) publishArgs.push(`--otp=${otp}`);
   assertPublicationInputs("publish " + name);
+  const candidate = candidates.get(name);
+  const upload = writeCandidate(candidate, mkdtempSync(join(stage, "upload-")));
+  const publishArgs = ["publish", upload, "--access", "public"];
+  if (otp !== undefined) publishArgs.push(`--otp=${otp}`);
   const result = spawnSync("npm", publishArgs, { stdio: "inherit" });
   if (result.status === 0 && !awaitRegistry(name)) {
     console.error(
@@ -477,6 +491,7 @@ for (const { name } of PACKAGES) {
     console.error(`  Fix the cause and re-run \`pnpm release ${version}\`; it resumes from here.`);
     process.exit(1);
   }
+  verifyRegistryContents(name, candidate.files);
   published.push(name);
   console.log(`  ✓ ${name}@${version}`);
 }
@@ -525,8 +540,6 @@ run("git", [
   `${releaseCommit}:refs/heads/main`,
   `${tagObject}:refs/tags/${tag}`,
 ]);
-
-rmSync(stage, { recursive: true, force: true });
 
 console.log(`\n[32m✓ Dougong ${version} released[0m`);
 for (const { name } of PACKAGES)

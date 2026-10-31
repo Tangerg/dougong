@@ -1,4 +1,6 @@
 import type { StandardSchemaV1 } from "@standard-schema/spec";
+import { abortReason, isAborted } from "../internal/abort.js";
+import { captureDataArray } from "../internal/data-array.js";
 
 export interface ErrorDetails {
   readonly outcome?: "rejected" | "restored" | "quarantined";
@@ -27,15 +29,15 @@ export class DougongError<Code extends string = string> extends Error {
     if (typeof message !== "string") throw new TypeError("DougongError message must be a string");
     super(message, options);
     this.code = code;
-    this.details = Object.freeze({
-      ...options?.details,
-      ...(options?.details?.dependencyPath
-        ? { dependencyPath: Object.freeze([...options.details.dependencyPath]) }
-        : {}),
-      ...(options?.details?.affectedInstallations
-        ? { affectedInstallations: Object.freeze([...options.details.affectedInstallations]) }
-        : {}),
-    });
+    const details = { ...options?.details };
+    if (details.dependencyPath !== undefined)
+      details.dependencyPath = captureDataArray(details.dependencyPath, "Dependency path");
+    if (details.affectedInstallations !== undefined)
+      details.affectedInstallations = captureDataArray(
+        details.affectedInstallations,
+        "Affected Installations",
+      );
+    this.details = Object.freeze(details);
   }
 }
 
@@ -237,18 +239,12 @@ export function normalizeFailure(error: unknown, code: string, message: string):
 
 // A live signal must not classify an unrelated AbortError as requested cancellation.
 export function isCancellationReason(signal: AbortSignal, error: unknown) {
-  if (
-    !signal ||
-    typeof signal !== "object" ||
-    typeof signal.aborted !== "boolean" ||
-    typeof signal.addEventListener !== "function" ||
-    typeof signal.removeEventListener !== "function" ||
-    typeof signal.throwIfAborted !== "function"
-  ) {
-    throw new TypeError("Cancellation classifier expects an AbortSignal");
+  try {
+    if (!isAborted(signal)) return false;
+  } catch (cause) {
+    throw new TypeError("Cancellation classifier expects an AbortSignal", { cause });
   }
-  if (!signal.aborted) return false;
-  if (Object.is(error, signal.reason)) return true;
+  if (Object.is(error, abortReason(signal))) return true;
   return isError(error) && readErrorProperty(error, "name") === "AbortError";
 }
 
@@ -272,11 +268,8 @@ export class ConfigValidationError extends DougongError {
 
 // Copy validator issues so retained errors cannot retain third-party object graphs.
 function snapshotValidationIssues(issues: unknown): ReadonlyArray<StandardSchemaV1.Issue> {
-  if (!Array.isArray(issues)) {
-    throw new TypeError("Config validation issues must be an array");
-  }
   return Object.freeze(
-    Array.from(issues, (issue: unknown, index) => {
+    captureDataArray(issues, "Config validation issues").map((issue, index) => {
       if (!issue || typeof issue !== "object") {
         throw new TypeError(`Config validation issue at index ${index} must be an object`);
       }
@@ -295,25 +288,24 @@ function snapshotValidationIssues(issues: unknown): ReadonlyArray<StandardSchema
 }
 
 function snapshotValidationPath(path: unknown, issueIndex: number) {
-  if (!Array.isArray(path)) {
-    throw new TypeError(`Config validation issue at index ${issueIndex} path must be an array`);
-  }
   return Object.freeze(
-    Array.from(path, (part: unknown, pathIndex) => {
-      if (isPropertyKey(part)) return part;
-      if (!part || typeof part !== "object") {
-        throw new TypeError(
-          `Config validation issue at index ${issueIndex} path segment ${pathIndex} must be a property key`,
-        );
-      }
-      const key = (part as { readonly key?: unknown }).key;
-      if (!isPropertyKey(key)) {
-        throw new TypeError(
-          `Config validation issue at index ${issueIndex} path segment ${pathIndex} must contain a property key`,
-        );
-      }
-      return Object.freeze({ key });
-    }),
+    captureDataArray(path, `Config validation issue at index ${issueIndex} path`).map(
+      (part, pathIndex) => {
+        if (isPropertyKey(part)) return part;
+        if (!part || typeof part !== "object") {
+          throw new TypeError(
+            `Config validation issue at index ${issueIndex} path segment ${pathIndex} must be a property key`,
+          );
+        }
+        const key = (part as { readonly key?: unknown }).key;
+        if (!isPropertyKey(key)) {
+          throw new TypeError(
+            `Config validation issue at index ${issueIndex} path segment ${pathIndex} must contain a property key`,
+          );
+        }
+        return Object.freeze({ key });
+      },
+    ),
   );
 }
 

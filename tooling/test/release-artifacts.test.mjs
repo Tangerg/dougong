@@ -263,6 +263,9 @@ async function runRelease(
       interrupted,
       interruptedState,
       publishedAfterFirstAttempt,
+      publishedCoreModule: existsSync(join(workspace, "published/dougong/package/dist/index.js"))
+        ? readFileSync(join(workspace, "published/dougong/package/dist/index.js"), "utf8")
+        : undefined,
       published: publishedManifests(),
       calls,
       recorded: calls.filter(({ command }) => command === "git").map(({ args }) => args[0]),
@@ -875,4 +878,33 @@ it("lets Git recognize an unchanged resumed release after worktree line-ending c
   });
   expect(result.status).toBe(0);
   expect(result.recorded.filter((action) => action === "commit")).toHaveLength(1);
+});
+
+it("refuses an ambiguous pack output even when the command prints one valid path", async () => {
+  const result = await runRelease(() => undefined, { concurrentEdit: "ambiguous-archive" });
+  expect(result.status).not.toBe(0);
+  expect(result.stderr).toContain("Expected one regular package archive");
+  expect(result.recorded).toEqual([]);
+});
+
+it("confirms file contents of a newly visible upload before publishing any dependent or recording Git", async () => {
+  const result = await runRelease(() => undefined, {
+    dryRun: false,
+    publishedPackages: [],
+    concurrentEdit: "registry-bytes",
+  });
+  expect(result.status).not.toBe(0);
+  expect(result.stderr).toContain("dist/index.js differs from this build");
+  expect(Object.keys(result.published)).toEqual(["reactive"]);
+  expect(result.recorded).toEqual([]);
+});
+
+it("publishes captured bytes even if a later pack rewrites an earlier archive", async () => {
+  const result = await runRelease(() => undefined, {
+    publishedPackages: [],
+    dryRun: false,
+    concurrentEdit: "rewrite-pack",
+  });
+  expect(result.status).toBe(0);
+  expect(result.publishedCoreModule).toBe("export const signal = value => value;\n");
 });

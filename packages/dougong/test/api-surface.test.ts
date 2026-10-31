@@ -368,7 +368,7 @@ describe("public API surface", () => {
     ]);
     expect(Object.keys(surfaces.view).sort()).toEqual(["get", "subscribe", "use"]);
     expect(Object.keys(surfaces.listener)).toEqual([]);
-    expect(Object.keys(surfaces.contribution)).toEqual([]);
+    expect(Object.keys(surfaces.contribution)).toEqual(["update"]);
     expect(Object.keys(surfaces.cleanup)).toEqual([]);
     expect(Object.keys(surfaces.child).sort()).toEqual([
       "acquire",
@@ -415,4 +415,20 @@ describe("public API surface", () => {
 
     await host.stop();
   });
+});
+
+it("reads error detail fields once and retains a snapshot independent of caller mutation", () => {
+  const path = ["one"];
+  let reads = 0;
+  const failure = new core.DougongError("TEST", "failure", {
+    details: {
+      get dependencyPath() {
+        return ++reads === 1 ? path : undefined;
+      },
+    } as { dependencyPath: string[] },
+  });
+  path.push("two");
+  expect(reads).toBe(1);
+  expect(failure.details.dependencyPath).toEqual(["one"]);
+  expect(Object.isFrozen(failure.details.dependencyPath)).toBe(true);
 });

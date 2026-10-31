@@ -17,11 +17,15 @@ A Plan is issued by one Host and can be consumed once. Before execution effects,
 
 Core issues executable Plans only: invalid declarations reject during `host.plan()`, so its report has no constant empty list of blockers. A permanent contract-kind conflict discovered at execution preflight consumes that Plan: correct the declarations and plan again. Platform’s data preview can still report actual blockers.
 
+If another operation commits while schema validation is pending, planning rejects with `PLAN_STALE`; on quarantine it rejects with `HOST_QUARANTINED`. Build a new change against the current Host. An uncommitted Installation in an issued Plan becomes `removed` as soon as that revision ends. Keeping an obsolete Plan for its report does not retain the old executable payload.
+
 ## Execution and results
 
 Execution first checks foreground borrows on affected generations. A live borrow rejects with `HOST_BUSY` before execution effects and without consuming the Plan. Once execution is admitted, it seals affected old generations, joins their background work and releases resources, then prepares candidates in dependency order. After every candidate is ready, listeners, contributions, services and origin publish together.
 
 Candidate failure cleans candidates and attempts to reconstruct the previous declarations using their validated configuration. Reconstruction creates new Instances; it does not revive disposed objects. Incomplete cleanup or restoration quarantines the Host. Failed consumers retain the providers they transitively use; other independently safe branches continue cleaning up and independent errors are aggregated.
+
+`stopOrder` describes the dependency order, not wall-clock completion order. Independent consumers may shut down concurrently. Each provider waits for the consumers bound to that generation to exit successfully.
 
 | Outcome | Caller observes |
 | --- | --- |

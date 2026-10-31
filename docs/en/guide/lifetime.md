@@ -25,8 +25,14 @@ Cleanup failure cannot claim a clean exit. Lifetime retains failed releases and 
 
 A timeout ends waiting without proving the underlying work stopped. Shutdown already started may finish later, but failed cleanup is not automatically retried. Quarantine is terminal for the whole Host; late completion updates diagnostics without resuming service. AbortSignal cannot forcibly terminate arbitrary JavaScript; that requires a real execution boundary. See [Application handling after quarantine](./transactions.md#quarantine) for incident handling and replacement preconditions.
 
-Tasks own background error reporting. Failures of `host.use` and contribution `use` propagate to their caller; do not rethrow the same outcome as another background failure. Lifetime task counts, foreground counts and unresolved obligations are read-only projections of resource facts.
+Only the native AbortSignal state establishes cancellation. Dispatching an event named `abort` does not cancel a child scope or task and does not consume its subscription to genuine cancellation.
+
+After successful shutdown, each Lifetime exposes its own already-aborted signal. A retained child handle no longer holds the original controller or its listeners, and another retired scope cannot notify listeners on this signal.
+
+Tasks own background error reporting. Failures of `host.use` and contribution `use` propagate to their caller; do not rethrow the same outcome as another background failure. Task completion and borrow release follow the same Promise returned to the caller. Lifetime task counts, foreground counts and unresolved obligations are read-only projections of resource facts. Event listeners, snapshot subscribers and error callbacks receive no internal owner as their JavaScript `this`; use the explicit capabilities supplied to the plugin.
 
 For noncancellable external operations, the example `acquireForLifetime` composes two owners: a generation can stop waiting while a longer-lived operations owner still joins and reclaims late results. This application policy composes `spawn`, `defer` and AbortSignal without hiding resource obligations from the kernel.
+
+The example reserves reclamation with the operations owner before starting external work. Ownership transfers when the generation accepts the resource. If the generation has retired or refuses registration, the operations owner reclaims it. A factory rejection is a task failure; failure to reclaim a returned resource remains a cleanup obligation and prevents a successful Host shutdown.
 
 Publication withdrawal errors from a child propagate with their original cause. The child remains accountable for the failed release even if the publication detached before throwing; parent diagnostics expose a bounded error snapshot.

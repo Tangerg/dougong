@@ -489,9 +489,69 @@ it("consumes a stale Plan and detaches the Installation identities it can no lon
   });
   const plan = await host.plan(change);
   await host.start();
-  await expect(host.apply(plan)).rejects.toMatchObject({ code: "PLAN_STALE" });
   expect(candidate.status).toBe("removed");
+  await expect(host.apply(plan)).rejects.toMatchObject({ code: "PLAN_STALE" });
   expect(host.installation("candidate")).toBeUndefined();
   await expect(host.apply(plan)).rejects.toMatchObject({ code: "PLAN_CONSUMED" });
   await host.stop();
 });
+
+it.each([false, true])(
+  "rejects validation that outlives its base state (quarantine: %s)",
+  async (quarantine) => {
+    const validating = Promise.withResolvers<void>();
+    const finish = Promise.withResolvers<void>();
+    const host = createHost({
+      installations: [
+        {
+          id: "owner",
+          plugin: definePlugin({
+            name: "owner",
+            setup({ lifetime }) {
+              if (quarantine)
+                lifetime.defer(() => {
+                  throw new Error("unclean");
+                });
+            },
+          }),
+        },
+      ],
+    });
+    await host.start();
+    const revision = host.stateRevision;
+    const change = host.change();
+    const candidate = change.install(
+      definePlugin({
+        name: "candidate",
+        config: {
+          "~standard": {
+            version: 1,
+            vendor: "test",
+            async validate() {
+              validating.resolve();
+              await finish.promise;
+              return { value: null };
+            },
+          },
+        },
+        setup() {},
+      }),
+      { id: "candidate", config: null },
+    );
+    const planning = host.plan(change);
+    await validating.promise;
+    await host.stop().catch((error: unknown) => {
+      if (!quarantine) throw error;
+    });
+    finish.resolve();
+    await expect(planning).rejects.toMatchObject(
+      quarantine
+        ? { code: "HOST_QUARANTINED", details: { stateRevision: host.stateRevision } }
+        : {
+            code: "PLAN_STALE",
+            details: { expectedRevision: revision, stateRevision: host.stateRevision },
+          },
+    );
+    expect(candidate.status).toBe("removed");
+  },
+);

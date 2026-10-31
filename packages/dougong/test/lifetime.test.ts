@@ -30,6 +30,45 @@ describe("structured lifetime", () => {
     expect(isCancellationReason(controller.signal, new Error("late failure"))).toBe(false);
   });
 
+  it("uses actual cancellation to close every scoped operation and reclaim late acquisitions", async () => {
+    const controller = new AbortController();
+    const owner = new Lifetime({ label: "owner", parentSignal: controller.signal, report() {} });
+    const ready = Promise.withResolvers<void>();
+    const finish = Promise.withResolvers<void>();
+    const release = vi.fn<() => void>();
+    const acquired = owner.handle.acquire(async () => {
+      ready.resolve();
+      await finish.promise;
+      return { [Symbol.dispose]: release };
+    });
+    const events = new EventHub().scope(owner, () => undefined);
+    const contributions = new ContributionRegistry(() => undefined).scope(
+      owner,
+      "owner",
+      () => undefined,
+    );
+    const token = extensionPoint<number>("items");
+    const c = contributions.add(token, "a", 1);
+    await ready.promise;
+    Object.defineProperties(owner.signal, {
+      aborted: { value: false },
+      reason: { value: "forged" },
+    });
+    controller.abort(null);
+    try {
+      expect(() => owner.handle.defer(() => undefined)).toThrow("closed");
+      expect(() => events.on(event("test"), () => undefined)).toThrow("closed");
+      expect(() => contributions.add(token, "b", 2)).toThrow("closed");
+      expect(() => c.update(2)).toThrow("closed");
+    } finally {
+      finish.resolve();
+      const outcome = await Promise.allSettled([acquired]);
+      await owner.dispose();
+      expect(outcome).toEqual([{ status: "rejected", reason: null }]);
+      expect(release).toHaveBeenCalledOnce();
+    }
+  });
+
   it("detaches settled tasks while aborting and awaiting live tasks", async () => {
     const owner = lifetime();
     let completedSignal!: AbortSignal;

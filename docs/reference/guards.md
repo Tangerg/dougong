@@ -7,7 +7,7 @@
 | 规则 | 含义 |
 | --- | --- |
 | `ownership.package` | 每个源码包必须声明责任 |
-| `ownership.module` | 新的责任目录默认拒绝 |
+| `ownership.module` | 生产源码必须属于已声明职责，不能依赖工作区测试、工具或其他非生产目录 |
 | `direction.package` | 包依赖只能沿声明方向 |
 | `direction.module` | 低层不得导入高层责任 |
 | `types.suppressions` | 禁止静默禁用类型检查 |
@@ -37,3 +37,5 @@
 架构守卫从 TypeScript 符号识别契约工厂；别名与命名空间导入仍指向同一个定义。跨包入口和运行时目标从实际解析的模块和包的 `exports` 检查，覆盖再导出、字面量动态导入和导入类型。发布前还要验证 tarball 具有每个公开入口的 JavaScript 和类型文件，包括 `dougong/advanced`。
 
 公开 API 的预期清单只在 `tooling/architecture/public-api.json` 中维护。源码测试、发行声明及四个真实 ESM 入口都对照这份清单检查。
+
+发布时每个包只接受一个常规归档文件，上传的是检查时捕获的字节。无论首次上传还是恢复发布，均须从注册表取回该版本，逐文件比对内容一致后才继续。

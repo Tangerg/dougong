@@ -58,9 +58,18 @@ Host 只在选项缺省时使用默认值；显式传入 null 的名字、安装
 
 ## 高级组合原语
 
-正式子路径 `dougong/advanced` 导出 `SnapshotPublisher`、`ReadonlyMapSnapshot`、`SerialQueue`、`normalizePlainRecord`、`batchSnapshotNotifications`。它们服务于下游宿主适配器和领域扩展，不暴露 Engine 或可变安装注册表。共享发布原语让 UI 适配与 Platform 复用同一观察语义。 批处理回调必须同步完成；返回 Promise 不能延长这次发布边界。
+`dougong/advanced` 供适配器与领域扩展使用，不暴露 Engine 或可变安装注册表。
 
-`normalizePlainRecord` 规范化具名记录边界；配置数据请用 `captureConfig`，其约束和错误与计划中的配置捕获保持一致。
+| 原语 | 职责 |
+| --- | --- |
+| `SnapshotPublisher`、`ReadonlyMapSnapshot` | 发布快照、提供只读集合。 |
+| `batchSnapshotNotifications` | 在一个同步回调中批量发布。返回 Promise 不能延长此次发布边界。 |
+| `SerialQueue` | 顺序执行提交的操作。 |
+| `normalizePlainRecord` | 捕获普通记录的数据字段。插件配置请用 `captureConfig`。 |
+| `captureDataArray(input, label)` | 浅拷贝自有的稠密数据索引并冻结数组，不调用输入的方法或迭代器。元素的校验归调用方。 |
+| `onAbort(signal, callback)` | 观察真实取消，回调只接收一次原因；已取消时立即回调。返回的函数用于解除观察。手动派发名为 `abort` 的事件不能取消作用域。 |
+
+观察未来的取消依赖原生事件送达监听器。同一运行环境中，较早的监听器调用 `stopImmediatePropagation()` 可以阻止该通知，但不能改变信号已经取消的事实。
 
 ## 声明描述与可执行计划
 

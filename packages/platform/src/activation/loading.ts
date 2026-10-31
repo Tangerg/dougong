@@ -9,72 +9,19 @@ import type { Authorizer } from "../admission/permissions.js";
 import { describeArtifact, type Artifact } from "../artifacts/artifact.js";
 import { PlatformError } from "../errors.js";
 import type { Loader } from "../loaders/loader.js";
+import { Preparation } from "./preparation.js";
 
 interface LoadingPorts<Reference> {
   readonly loader: Loader<Reference>;
+  readonly assertPlacement: () => void;
   readonly authorizer: Authorizer;
-}
-
-interface LoadWaiter {
-  resolve: (plugin: AnyPlugin) => void;
-  reject: (reason: unknown) => void;
-}
-
-class SharedLoad {
-  readonly #controller = new AbortController();
-  readonly result: Promise<AnyPlugin>;
-  #waiters: Set<LoadWaiter> | undefined = new Set();
-
-  constructor(load: (signal: AbortSignal) => Promise<AnyPlugin>) {
-    this.result = Promise.resolve().then(() => load(this.#controller.signal));
-    // One reaction per load: an aborted caller can release all its references even if the loader never settles.
-    void this.result.then(
-      (plugin) => this.#settle((waiter) => waiter.resolve(plugin)),
-      (error) => this.#settle((waiter) => waiter.reject(error)),
-    );
-  }
-
-  get cancelled() {
-    return this.#controller.signal.aborted;
-  }
-
-  wait(signal: AbortSignal): Promise<AnyPlugin> {
-    signal.throwIfAborted();
-    this.#controller.signal.throwIfAborted();
-    const waiters = this.#waiters;
-    if (!waiters) return this.result;
-    return new Promise<AnyPlugin>((resolve, reject) => {
-      const waiter: LoadWaiter = {
-        resolve: (plugin) => {
-          signal.removeEventListener("abort", abort);
-          resolve(plugin);
-        },
-        reject: (reason) => {
-          signal.removeEventListener("abort", abort);
-          reject(reason);
-        },
-      };
-      const abort = () => {
-        waiters.delete(waiter);
-        if (!waiters.size) this.#controller.abort();
-        waiter.reject(signal.reason);
-      };
-      waiters.add(waiter);
-      signal.addEventListener("abort", abort, { once: true });
-    });
-  }
-
-  #settle(complete: (waiter: LoadWaiter) => void) {
-    const waiters = this.#waiters!;
-    this.#waiters = undefined;
-    for (const waiter of waiters) complete(waiter);
-    waiters.clear();
-  }
 }
 
 export class LoadedModules<Reference> {
   #state:
-    | (LoadingPorts<Reference> & { readonly loads: WeakMap<Artifact<Reference>, SharedLoad> })
+    | (LoadingPorts<Reference> & {
+        readonly loads: WeakMap<Artifact<Reference>, Preparation<AnyPlugin>>;
+      })
     | undefined;
 
   constructor(ports: LoadingPorts<Reference>) {
@@ -82,30 +29,37 @@ export class LoadedModules<Reference> {
   }
 
   load(artifact: Artifact<Reference>, signal: AbortSignal) {
-    signal.throwIfAborted();
-    const ports = this.#state;
-    if (!ports) throw new PlatformError("PLATFORM_UNAVAILABLE", "Module loading is closed");
-    let operation = ports.loads.get(artifact);
+    AbortSignal.prototype.throwIfAborted.call(signal);
+    const { loads } = this.#ports();
+    let operation = loads.get(artifact);
     if (!operation || operation.cancelled) {
-      operation = new SharedLoad(async (loadSignal) => {
-        loadSignal.throwIfAborted();
-        await ports.authorizer.authorize(
-          Object.freeze({
-            artifact: describeArtifact(artifact),
-            operation: "load",
-          }),
-          loadSignal,
-        );
-        loadSignal.throwIfAborted();
-        return loadPlugin(ports.loader, artifact, loadSignal);
-      });
-      ports.loads.set(artifact, operation);
+      operation = new Preparation((loadSignal) => this.#load(artifact, loadSignal));
+      loads.set(artifact, operation);
       const current = operation;
       void operation.result.then(undefined, () => {
-        if (ports.loads.get(artifact) === current) ports.loads.delete(artifact);
+        if (loads.get(artifact) === current) loads.delete(artifact);
       });
     }
     return operation.wait(signal);
+  }
+
+  #ports() {
+    if (!this.#state) throw new PlatformError("PLATFORM_UNAVAILABLE", "Module loading is closed");
+    return this.#state;
+  }
+
+  async #load(artifact: Artifact<Reference>, signal: AbortSignal) {
+    AbortSignal.prototype.throwIfAborted.call(signal);
+    this.#ports().assertPlacement();
+    await this.#ports().authorizer.authorize(
+      Object.freeze({ artifact: describeArtifact(artifact), operation: "load" }),
+      signal,
+    );
+    AbortSignal.prototype.throwIfAborted.call(signal);
+    const ports = this.#ports();
+    // An admission decision does not keep the destination Host or Group alive across the await.
+    ports.assertPlacement();
+    return loadPlugin(ports.loader, artifact, signal);
   }
 
   close() {
@@ -123,14 +77,14 @@ async function loadPlugin<Reference>(
   try {
     loaded = await loader.load(artifact.reference, signal);
   } catch (error) {
-    if (signal.aborted && Object.is(error, signal.reason)) throw error;
+    AbortSignal.prototype.throwIfAborted.call(signal);
     throw new PlatformError(
       "MODULE_LOAD_FAILED",
       `Failed to load Artifact '${artifact.manifest.name}'`,
       { cause: error },
     );
   }
-  signal.throwIfAborted();
+  AbortSignal.prototype.throwIfAborted.call(signal);
   let plugin: AnyPlugin;
   try {
     if (!loaded || (typeof loaded !== "object" && typeof loaded !== "function")) {

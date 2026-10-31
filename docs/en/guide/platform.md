@@ -30,9 +30,9 @@ await platform[Symbol.asyncDispose]();
 
 Preview checks declaration data and explicitly lists deferred admission, module validation, configuration validation and Core binding checks. Catalog browsing, selection and preview do not execute plugin code. Lazy activation publishes no executable placeholder. Applications render discoverable Manifest data, activate, then borrow real capabilities.
 
-Authorization has two precise boundaries: `load` before module evaluation, and `activate` after Core planning and before handing the plan to Core. Custom `Authorizer` receives Artifact identity, operation and AbortSignal. Loaders should cooperate with cancellation; a late result from an uncooperative loader cannot commit a superseded selection.
+Authorization has two precise boundaries: `load` before module evaluation, and `activate` after Core planning and before handing the plan to Core. Custom `Authorizer` receives Artifact identity, operation and AbortSignal. If the selected Group disappears or the Host enters quarantine while waiting for load admission, Platform skips module evaluation. Cancelling an activation also stops waiting for a non-cooperative loader, validator or authorizer. After `host.apply` begins, the caller receives the actual Core outcome.
 
-To update, add another Artifact and select it. Selection intent may lead execution. `selectedArtifact` and `activeOrigin` express that difference without copying an additional active Manifest.
+To update, add another Artifact and select it. Selection intent may lead execution. A native change can alter the committed Manifest even on the same Installation with the same revision; the next activation restores the selected declaration before treating dependent versions as satisfied. `selectedArtifact` and `activeOrigin` express that difference without copying an additional active Manifest.
 
 ```ts
 const selected = await platform.select(nextArtifact);

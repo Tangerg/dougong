@@ -88,7 +88,9 @@ A stopped Host can contain committed installations; `activeOrigin` does not impl
 Instances are currently running.
 
 Registration keeps the Installation handle it created. It projects that handle only while
-Core still recognizes the same committed identity. A matching ID or copied origin data cannot
+Core still recognizes the same committed identity. On that Installation, reuse requires
+both the declared revision and the normalized Manifest to agree with the selection. An
+externally changed Manifest with the same revision still needs an update. A matching ID or copied origin data cannot
 make it adopt another installation. Platforms that collide on an installation ID receive
 Core's normal conflict error; removing either Registration cannot remove the other's identity.
 
@@ -120,7 +122,9 @@ This avoids waiting for the user callback that made the request. Wait until the 
 operation finishes before issuing another command. Preview and reads remain available
 while the Platform is active. A loader must not recursively wait for its own module result.
 
-Cancellation before the Core handoff prevents that handoff. Once Core execution has started,
+Cancellation before the Core handoff ends the caller's wait, even for a validator or
+authorizer that never settles. A late preparation cannot submit its Plan or overwrite
+the selected Registration's last failure. Once Core execution has started,
 Platform awaits and reports its actual outcome rather than calling a committed operation
 cancelled. Dynamic import side effects are outside Core rollback.
 
@@ -154,7 +158,8 @@ boundary when stronger execution controls are required.
 ## Placement and diagnostics
 
 `PlatformOptions.group` can place installations in a committed Group owned by `host`.
-Group remains an installation-ownership boundary. A removed Group is rejected before loading;
+Group remains an installation-ownership boundary. Platform checks the Host and Group before
+and after load admission. A quarantined Host or a removed Group cannot start module evaluation;
 removing the now-unavailable Registrations or disposing Platform remains possible.
 
 `platform.diagnostics` follows the Core snapshot protocol. Its reads synchronize against the

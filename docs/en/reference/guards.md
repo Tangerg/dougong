@@ -7,7 +7,7 @@
 | Rule | Meaning |
 | --- | --- |
 | `ownership.package` | Each source package declares its responsibility |
-| `ownership.module` | Unknown responsibility directories are rejected |
+| `ownership.module` | Production source belongs to declared responsibility directories and cannot depend on workspace tests or tooling |
 | `direction.package` | Package imports follow declared directions |
 | `direction.module` | Lower responsibilities do not import higher ones |
 | `types.suppressions` | Silent type-check suppression is forbidden |
@@ -37,3 +37,5 @@ Behavioral tests cover atomic publication, planning authority, rollback and quar
 The architecture guard resolves Contract factory symbols, including named aliases and namespace imports. Package boundaries also cover re-exports, literal dynamic imports and import types. API inspection and tarball validation follow each package’s declared `exports`; every public entrypoint, including `dougong/advanced`, must ship its JavaScript and declaration targets.
 
 The expected public API lives in `tooling/architecture/public-api.json`. Source checks, emitted declarations and all four ESM entrypoints use the same budget.
+
+Release captures the one regular archive produced for each package and uploads the bytes it inspected. For both a new upload and a resumed version, the registry archive must contain the same files and bytes before the release proceeds.

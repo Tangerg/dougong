@@ -20,7 +20,7 @@ if (id !== undefined) {
 }
 ```
 
-`get()` returns an immutable collection snapshot for enumeration and rendering. `use` is the execution boundary; reading a snapshot does not grant indefinite execution authority.
+`get()` returns an immutable collection snapshot for enumeration and rendering. `use` is the execution boundary; reading a snapshot does not grant indefinite execution authority. While a Host transition holds publication open, `get()` keeps the last published map. Adding or updating an entry makes that ID unavailable to `use` (`CONTRIBUTION_UNAVAILABLE`) until its new value is published. An unchanged entry whose owner is still serving remains callable. A plugin can pass its contribution’s `update` function on its own; it always targets that entry and rejects after disposal.
 
 `host.diagnostics.get()` is the sole entrypoint for reading a stable Host snapshot. Subscriptions do not replay immediately; notifications carry no payload, so read through `get()` in the callback. Unsubscribe with `subscription[Symbol.dispose]()`. Bounded `RecordedFailure` diagnostics avoid retaining arbitrary plugin resource graphs through exceptions.
 

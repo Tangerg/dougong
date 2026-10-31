@@ -195,13 +195,12 @@ function notifySnapshotSubscription(subscription: SnapshotSubscription, failures
   const binding = snapshotSubscriptionBindings.get(subscription);
   if (!binding) return;
   try {
-    assertSynchronous(binding.listener(), "Snapshot subscribers must be synchronous");
+    const { listener } = binding;
+    assertSynchronous(listener(), "Snapshot subscribers must be synchronous");
   } catch (subscriberError) {
     try {
-      assertSynchronous(
-        binding.report(subscriberError),
-        "Snapshot error reporters must be synchronous",
-      );
+      const { report } = binding;
+      assertSynchronous(report(subscriberError), "Snapshot error reporters must be synchronous");
     } catch (reporterError) {
       failures.push(subscriberError, reporterError);
     }

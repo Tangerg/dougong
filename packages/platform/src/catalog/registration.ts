@@ -1,6 +1,7 @@
 import { RecordedFailure, type Installation } from "dougong";
 import {
   describeArtifact,
+  matchesArtifact,
   readArtifactOrigin,
   type Artifact,
   type ArtifactDescriptor,
@@ -148,7 +149,7 @@ export class RegistrationRecord<Reference> {
   }
 
   actionFor(artifact: Artifact<Reference>): "install" | "update" | "reuse" {
-    if (this.activeOrigin?.revision === artifact.revision) return "reuse";
+    if (matchesArtifact(this.activeOrigin, artifact)) return "reuse";
     return this.installation ? "update" : "install";
   }
 

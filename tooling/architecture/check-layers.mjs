@@ -79,12 +79,21 @@ const resolution = ts.createModuleResolutionCache(
   ts.sys.useCaseSensitiveFileNames ? (file) => file : (file) => file.toLowerCase(),
   options,
 );
-const contractSource = program.getSourceFile("packages/dougong/src/contracts/contracts.ts");
-const factories = new Set(
-  checker
-    .getExportsOfModule(checker.getSymbolAtLocation(contractSource))
-    .filter((symbol) => ["service", "event", "extensionPoint"].includes(symbol.name)),
-);
+function exportedDeclarations(file, names) {
+  const source = program.getSourceFile(file);
+  return new Set(
+    checker
+      .getExportsOfModule(checker.getSymbolAtLocation(source))
+      .filter((symbol) => names.includes(symbol.name))
+      .flatMap((symbol) => symbol.declarations ?? []),
+  );
+}
+const factories = exportedDeclarations("packages/dougong/src/contracts/contracts.ts", [
+  "service",
+  "event",
+  "extensionPoint",
+]);
+const lifetime = exportedDeclarations("packages/dougong/src/lifetime/lifetime.ts", ["Lifetime"]);
 
 function moduleSpecifier(node) {
   if (ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) return node.moduleSpecifier;
@@ -92,16 +101,6 @@ function moduleSpecifier(node) {
     return node.argument.literal;
   if (ts.isCallExpression(node) && node.expression.kind === ts.SyntaxKind.ImportKeyword)
     return node.arguments[0];
-}
-
-function isContractFactory(expression) {
-  const symbol = checker.getSymbolAtLocation(
-    ts.isPropertyAccessExpression(expression) ? expression.name : expression,
-  );
-  return (
-    symbol &&
-    factories.has(symbol.flags & ts.SymbolFlags.Alias ? checker.getAliasedSymbol(symbol) : symbol)
-  );
 }
 
 function location(path) {
@@ -229,6 +228,18 @@ for (const [file, dependencies] of Object.entries(graph)) {
       ).resolvedModule;
       if (target) {
         const targetFile = relative(process.cwd(), target.resolvedFileName).split(sep).join("/");
+        if (
+          /^(?:packages\/[^/]+|examples)\/src\//.test(file) &&
+          !/^(?:packages\/[^/]+|examples)\/src\//.test(targetFile) &&
+          !targetFile.split("/").includes("node_modules")
+        )
+          violation(
+            file,
+            "ownership.module",
+            `runtime source cannot import a non-runtime workspace file: ${targetFile}`,
+            node,
+            source,
+          );
         const targetPackage = targetFile.startsWith("examples/")
           ? "examples"
           : /^packages\/([^/]+)\//.exec(targetFile)?.[1];
@@ -247,7 +258,15 @@ for (const [file, dependencies] of Object.entries(graph)) {
       violation(file, "types.precise", "explicit any loses contract information", node, source);
     if (ts.isInterfaceDeclaration(node) && /(?:Port|Control)$/.test(node.name.text)) {
       for (const member of node.members)
-        if (ts.isMethodSignature(member))
+        if (
+          ts.isMethodSignature(member) ||
+          (ts.isPropertySignature(member) &&
+            !member.modifiers?.some(
+              (modifier) => modifier.kind === ts.SyntaxKind.ReadonlyKeyword,
+            ) &&
+            checker.getNonNullableType(checker.getTypeAtLocation(member)).getCallSignatures()
+              .length > 0)
+        )
           violation(
             file,
             "callbacks.readonly",
@@ -298,8 +317,7 @@ for (const [file, dependencies] of Object.entries(graph)) {
       }
       if (
         ts.isNewExpression(node) &&
-        ts.isIdentifier(node.expression) &&
-        node.expression.text === "Lifetime" &&
+        lifetime.has(checker.getResolvedSignature(node)?.declaration?.parent) &&
         owner.module !== "lifetime" &&
         owner.module !== "execution"
       )
@@ -312,7 +330,11 @@ for (const [file, dependencies] of Object.entries(graph)) {
         );
       if (ts.isCallExpression(node)) {
         const id = node.arguments[0];
-        if (id && ts.isStringLiteralLike(id) && isContractFactory(node.expression)) {
+        if (
+          id &&
+          ts.isStringLiteralLike(id) &&
+          factories.has(checker.getResolvedSignature(node)?.declaration)
+        ) {
           const previous = definitions.get(id.text);
           if (previous)
             violation(

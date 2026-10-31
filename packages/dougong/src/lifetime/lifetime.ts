@@ -1,4 +1,5 @@
 import { DougongError, isCancellationReason, RecordedFailure } from "../contracts/errors.js";
+import { abortReason, isAborted, onAbort } from "../internal/abort.js";
 import { assertSynchronous } from "../internal/sync-result.js";
 import { batchSnapshotNotifications } from "../observation/snapshot-view.js";
 import type {
@@ -72,7 +73,6 @@ class Visibility {
 }
 
 const disposalReason = Object.freeze(new DOMException("Resource disposed", "AbortError"));
-const disposedSignal = AbortSignal.abort(disposalReason);
 
 class CleanupRecord {
   readonly id: number;
@@ -179,39 +179,37 @@ class TaskRecord<T> implements Task<T> {
     const controller = new AbortController();
     this.#controller = controller;
     this.#detach = detach;
-    const abort = () => controller.abort(parentSignal.reason);
-    parentSignal.addEventListener("abort", abort, { once: true });
-    this.#detachAbort = () => parentSignal.removeEventListener("abort", abort);
-    if (parentSignal.aborted) abort();
-    const result = Promise.withResolvers<T>();
-    this.result = result.promise;
-    // Observe owned work even when its caller does not await the public result.
-    void this.result.catch(() => undefined);
-    const fail = (error: unknown) => {
+    this.#detachAbort = onAbort(parentSignal, (reason) => controller.abort(reason));
+    let reporter = report;
+    const failed = (error: unknown) => {
+      if (!reporter) return;
+      const notify = reporter;
+      reporter = undefined;
       try {
-        if (report && !isCancellationReason(controller.signal, error)) report(error);
+        if (!isCancellationReason(controller.signal, error)) notify(error);
       } catch (reporterError) {
         queueMicrotask(() => {
           throw reporterError;
         });
-      } finally {
-        this.#settle();
-        result.reject(error);
       }
     };
-    void Promise.resolve().then(() => {
-      let output: Awaitable<T>;
+    // Classify a synchronous throw before disposal can overtake it. The public promise
+    // adopts the returned value itself, so an application thenable is resolved only once.
+    this.result = Promise.resolve().then<T>(() => {
       try {
-        output = task(controller.signal);
+        return task(controller.signal);
       } catch (error) {
-        fail(error);
-        return;
+        failed(error);
+        throw error;
       }
-      void Promise.resolve(output).then((value) => {
-        this.#settle();
-        result.resolve(value);
-      }, fail);
     });
+    void this.result.then(
+      () => this.#settle(),
+      (error: unknown) => {
+        failed(error);
+        this.#settle();
+      },
+    );
     Object.freeze(this);
   }
 
@@ -240,7 +238,8 @@ class TaskRecord<T> implements Task<T> {
 
 export class Lifetime {
   readonly #label: string;
-  #controller: AbortController | undefined = new AbortController();
+  #cancellation: { readonly signal: AbortSignal; abort?(reason: unknown): void } =
+    new AbortController();
   readonly #visibility: Visibility;
   readonly #children = new Set<Lifetime>();
   readonly #cleanups = new Set<CleanupRecord>();
@@ -278,11 +277,9 @@ export class Lifetime {
     this.#visibility = ownership?.visibility ?? new Visibility();
     this.#detachFromParent = ownership?.detach;
     if (options.parentSignal) {
-      const parent = options.parentSignal;
-      const abort = () => this.#controller?.abort(parent.reason);
-      parent.addEventListener("abort", abort, { once: true });
-      this.#detachParentAbort = () => parent.removeEventListener("abort", abort);
-      if (parent.aborted) abort();
+      this.#detachParentAbort = onAbort(options.parentSignal, (reason) => {
+        this.#cancellation.abort?.(reason);
+      });
     }
   }
 
@@ -324,10 +321,13 @@ export class Lifetime {
   }
 
   get signal() {
-    return this.#controller?.signal ?? disposedSignal;
+    return this.#cancellation.signal;
   }
   get phase() {
     return this.#phase;
+  }
+  get acceptsWork() {
+    return this.#phase === "active" && !isAborted(this.signal);
   }
   get published() {
     return this.#visibility.published;
@@ -454,9 +454,10 @@ export class Lifetime {
       .then(() => factory(this.signal))
       .then(async (resource) => {
         const record = this.#own(captureDisposer(resource), "cleanup");
-        if (this.#phase !== "active" || this.signal.aborted) {
+        if (!this.acceptsWork) {
+          const reason = isAborted(this.signal) ? abortReason(this.signal) : disposalReason;
           await record.dispose();
-          throw this.signal.reason ?? disposalReason;
+          throw reason;
         }
         return resource;
       });
@@ -489,18 +490,20 @@ export class Lifetime {
     if (typeof callback !== "function") throw new TypeError("Borrow callback must be a function");
     this.#foreground++;
     this.#changed?.();
-    let result: Awaitable<T>;
-    try {
-      result = callback();
-    } catch (error) {
+    const release = () => {
       this.#foreground--;
       this.#changed?.();
+    };
+    try {
+      const value = callback();
+      const result = new Promise<T>((resolve) => resolve(value));
+      // A finally() chain would adopt its value a second time after releasing the borrow.
+      void result.then(release, release);
+      return result;
+    } catch (error) {
+      release();
       return Promise.reject(error);
     }
-    return Promise.resolve(result).finally(() => {
-      this.#foreground--;
-      this.#changed?.();
-    });
   }
 
   seal() {
@@ -590,7 +593,7 @@ export class Lifetime {
     for (const record of this.#publications) {
       if (record.failure) errors.push(record.failure.reason);
     }
-    this.#controller?.abort(disposalReason);
+    this.#cancellation.abort?.(disposalReason);
     this.detachStartupSignal();
     const children = Promise.allSettled(
       [...this.#children].reverse().map((child) => {
@@ -615,7 +618,9 @@ export class Lifetime {
       throw new AggregateError(errors, "Lifetime has unresolved cleanup obligations");
     }
     this.#phase = "disposed";
-    this.#controller = undefined;
+    // Detach the original signal's listeners/reason without pinning every retired scope's
+    // future listeners to a globally shared EventTarget.
+    this.#cancellation = { signal: AbortSignal.abort(disposalReason) };
     this.#changed?.();
     this.#changed = undefined;
     const detach = this.#detachFromParent;
@@ -667,7 +672,7 @@ export class Lifetime {
   }
 
   #requireActive() {
-    if (this.#phase !== "active" || this.signal.aborted) {
+    if (!this.acceptsWork) {
       throw new DougongError("LIFETIME_DISPOSED", "Lifetime is closed to new work");
     }
   }

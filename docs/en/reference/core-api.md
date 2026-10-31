@@ -58,9 +58,18 @@ Host defaults apply when an option is omitted. An explicit null name, installati
 
 ## Advanced composition primitives
 
-The formal `dougong/advanced` subpath exports `SnapshotPublisher`, `ReadonlyMapSnapshot`, `SerialQueue`, `normalizePlainRecord` and `batchSnapshotNotifications`. These support downstream host adapters and domain extensions without exposing Engine or mutable installation registries. Shared publishing primitives let UI adapters and Platform reuse observation semantics. Its batch callback must complete synchronously; a Promise cannot extend that publication boundary.
+Use `dougong/advanced` for adapters and domain extensions. These primitives expose neither the Engine nor a mutable installation registry.
 
-`normalizePlainRecord` normalizes named-record boundaries. Use `captureConfig` for configuration data; it shares the same validation and failure behavior as planning.
+| Primitive | Responsibility |
+| --- | --- |
+| `SnapshotPublisher`, `ReadonlyMapSnapshot` | Publish snapshots and expose read-only collections. |
+| `batchSnapshotNotifications` | Group publications in one synchronous callback. A returned Promise cannot extend the boundary. |
+| `SerialQueue` | Run submitted operations in sequence. |
+| `normalizePlainRecord` | Capture the data fields of a plain record. Use `captureConfig` when the input is plugin configuration. |
+| `captureDataArray(input, label)` | Freeze a shallow copy of dense own index data without invoking the input’s methods or iterator. The caller validates the elements. |
+| `onAbort(signal, callback)` | Observe genuine cancellation once, passing its reason immediately if already aborted. The returned function detaches the callback. Dispatching an event named `abort` does not cancel a scope. |
+
+For future cancellation, the native event must reach the listener. Earlier same-realm code that calls `stopImmediatePropagation()` can suppress that notification; the signal itself remains aborted.
 
 ## Declaration descriptions and executable plans
 

@@ -1,9 +1,4 @@
-const browsers = Object.freeze([
-  Object.freeze({ manifest: "Chrome >= 119", build: "chrome119" }),
-  Object.freeze({ manifest: "Edge >= 119", build: "edge119" }),
-  Object.freeze({ manifest: "Firefox >= 121", build: "firefox121" }),
-  Object.freeze({ manifest: "Safari >= 17.4", build: "safari17.4" }),
-]);
+const browsers = { Chrome: "119", Edge: "119", Firefox: "121", Safari: "17.4" };
 
 export const developmentEngines = Object.freeze({
   node: "^22.12.0 || ^24.0.0 || >=26.0.0",
@@ -11,6 +6,10 @@ export const developmentEngines = Object.freeze({
 
 export const runtimeBaseline = Object.freeze({
   engines: Object.freeze({ node: ">=22" }),
-  browserslist: Object.freeze(browsers.map(({ manifest }) => manifest)),
-  buildTargets: Object.freeze(browsers.map(({ build }) => build)),
+  browserslist: Object.freeze(
+    Object.entries(browsers).map(([name, minimum]) => `${name} >= ${minimum}`),
+  ),
+  buildTargets: Object.freeze(
+    Object.entries(browsers).map(([name, minimum]) => name.toLowerCase() + minimum),
+  ),
 });

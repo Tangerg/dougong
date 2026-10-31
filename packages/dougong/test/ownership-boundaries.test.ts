@@ -392,6 +392,33 @@ it("reports a synchronous Task failure even when disposal overtakes its result r
   await host.stop();
 });
 
+it("reports a Task's AbortError when only its public signal properties claim cancellation", async () => {
+  const failure = new DOMException("independent failure", "AbortError");
+  const report = vi.fn<(error: unknown) => void>();
+  let task!: Task;
+  const host = createHost({
+    onError: report,
+    installations: [
+      {
+        id: "owner",
+        plugin: definePlugin({
+          name: "owner",
+          setup({ lifetime }) {
+            task = lifetime.spawn((signal) => {
+              Object.defineProperty(signal, "aborted", { value: true });
+              throw failure;
+            });
+          },
+        }),
+      },
+    ],
+  });
+  await host.start();
+  await expect(task.result).rejects.toBe(failure);
+  expect(report).toHaveBeenCalledExactlyOnceWith(failure);
+  await host.stop();
+});
+
 it("retains an immutable historical snapshot while a removed Installation detaches", async () => {
   const host = createHost({
     installations: [{ id: "owner", plugin: definePlugin({ name: "owned.snapshot", setup() {} }) }],

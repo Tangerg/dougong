@@ -75,8 +75,7 @@ class ContributionViewHandle<T> implements ContributionView<T> {
     if (typeof listener !== "function")
       throw new TypeError("Contribution subscriber must be a function");
     return binding.store.subscribe(() => {
-      if (binding.owner && (binding.owner.phase !== "active" || binding.owner.signal.aborted))
-        return;
+      if (binding.owner && !binding.owner.acceptsWork) return;
       return listener();
     }, binding.own);
   }
@@ -84,7 +83,7 @@ class ContributionViewHandle<T> implements ContributionView<T> {
   #requireBinding() {
     const binding = this.#state.binding;
     if (!binding) throw new TypeError("Contribution view has been disposed");
-    if (binding.owner && (binding.owner.phase !== "active" || binding.owner.signal.aborted)) {
+    if (binding.owner && !binding.owner.acceptsWork) {
       throw new DougongError("LIFETIME_DISPOSED", "Contribution view owner is closed");
     }
     return binding;
@@ -109,9 +108,7 @@ class ContributionHandle<T> implements Contribution<T> {
     Object.freeze(this);
   }
 
-  update(value: T) {
-    this.#contribution.update(value);
-  }
+  readonly update = (value: T) => this.#contribution.update(value);
 
   [disposeSymbol]() {
     this.#contribution[disposeSymbol]();
@@ -152,7 +149,8 @@ class ContributionRecord<T> implements Publication {
     const state = this.#state;
     if (state.phase === "disposed")
       throw new DougongError("CONTRIBUTION_UNAVAILABLE", "Contribution is no longer available");
-    return state.owner.borrow(() => callback(state.value));
+    const { owner, value } = state;
+    return owner.borrow(() => callback(value));
   }
 
   update(value: T) {
@@ -160,7 +158,7 @@ class ContributionRecord<T> implements Publication {
     if (state.phase === "disposed") {
       throw new TypeError(`Contribution '${this.#id}' has been disposed`);
     }
-    if (state.owner.phase !== "active" || state.owner.signal.aborted)
+    if (!state.owner.acceptsWork)
       throw new DougongError("LIFETIME_DISPOSED", "Contribution owner is closed");
     if (Object.is(state.value, value)) return;
     state.value = value;
@@ -184,7 +182,7 @@ export class ContributionStore<T> {
   readonly #releaseIfUnused: (store: ContributionStore<unknown>) => void;
   readonly #claims = new Map<
     string,
-    { readonly contribution: ContributionRecord<T>; published: boolean }
+    { readonly contribution: ContributionRecord<T>; phase: "staged" | "pending" | "published" }
   >();
   readonly #publisher: SnapshotPublisher<ReadonlyMap<string, T>>;
   #snapshot: ReadonlyMap<string, T> = new ReadonlyMapSnapshot();
@@ -213,7 +211,7 @@ export class ContributionStore<T> {
       }
       return owner.stage((detach) => {
         const contribution = new ContributionRecord(this, id, value, owner, detach);
-        this.#claims.set(id, { contribution, published: false });
+        this.#claims.set(id, { contribution, phase: "staged" });
         return contribution;
       }).handle;
     } catch (error) {
@@ -259,7 +257,7 @@ export class ContributionStore<T> {
 
   use<R>(id: string, callback: (value: T) => Awaitable<R>): Promise<R> {
     const claim = this.#claims.get(id);
-    if (!claim?.published)
+    if (claim?.phase !== "published")
       throw new DougongError("CONTRIBUTION_UNAVAILABLE", `Contribution '${id}' is not available`);
     if (typeof callback !== "function")
       throw new TypeError("Contribution callback must be a function");
@@ -298,17 +296,18 @@ export class ContributionStore<T> {
 
   publishClaim(id: string, contribution: ContributionRecord<T>) {
     const claim = this.#requireClaim(id, contribution);
-    if (claim.published) return;
-    claim.published = true;
+    if (claim.phase !== "staged") return;
+    claim.phase = "pending";
     this.#claims.delete(id);
     this.#claims.set(id, claim);
     this.#invalidate(this as ContributionStore<unknown>);
   }
 
   valueChanged(id: string, contribution: ContributionRecord<T>) {
-    if (this.#requireClaim(id, contribution).published) {
-      this.#invalidate(this as ContributionStore<unknown>);
-    }
+    const claim = this.#requireClaim(id, contribution);
+    if (claim.phase === "staged") return;
+    claim.phase = "pending";
+    this.#invalidate(this as ContributionStore<unknown>);
   }
 
   removeContribution(id: string, contribution: ContributionRecord<T>) {
@@ -316,7 +315,7 @@ export class ContributionStore<T> {
 
     try {
       this.#claims.delete(id);
-      if (claim.published) {
+      if (claim.phase !== "staged") {
         this.#invalidate(this as ContributionStore<unknown>);
       }
     } finally {
@@ -326,9 +325,13 @@ export class ContributionStore<T> {
 
   // Snapshot equality includes entry order: reordered values can change consumer selection.
   publishSnapshot() {
-    const nextEntries = [...this.#claims].flatMap(([key, claim]) =>
-      claim.published ? [[key, claim.contribution.value] as const] : [],
-    );
+    const nextEntries: Array<readonly [string, T]> = [];
+    for (const [key, claim] of this.#claims) {
+      if (claim.phase === "staged") continue;
+      nextEntries.push([key, claim.contribution.value]);
+      // Executable access starts at the same publication boundary as the visible value.
+      claim.phase = "published";
+    }
     const previousEntries = this.#snapshot.entries();
     const unchanged =
       nextEntries.length === this.#snapshot.size &&
@@ -540,7 +543,7 @@ class ContributionScope implements ContributionOperations {
     options?: LifetimeOwnership,
   ): Contribution<T> {
     const binding = this.#binding;
-    if (!binding || binding.owner.phase !== "active" || binding.owner.signal.aborted) {
+    if (!binding || !binding.owner.acceptsWork) {
       throw new DougongError("LIFETIME_DISPOSED", "Contribution scope is closed");
     }
     const identity = normalizeContract(token, "extensionPoint");

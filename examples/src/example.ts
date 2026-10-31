@@ -1,3 +1,4 @@
+import { onAbort } from "dougong/advanced";
 const curriculum = [
   { id: "01", stage: "atoms", introduces: ["service", "provides", "requires", "host.use"] },
   {
@@ -101,8 +102,7 @@ export function nextTurn() {
 
 export function whenAborted(signal: AbortSignal) {
   return new Promise<void>((resolve) => {
-    if (signal.aborted) resolve();
-    else signal.addEventListener("abort", () => resolve(), { once: true });
+    onAbort(signal, () => resolve());
   });
 }
 

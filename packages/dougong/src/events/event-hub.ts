@@ -44,7 +44,8 @@ class ListenerRegistration<T> implements Publication {
   invoke(payload: T): Promise<unknown> {
     const binding = this.#binding;
     if (!binding) return Promise.resolve();
-    return binding.owner.borrow(() => binding.listener(payload));
+    const { owner, listener } = binding;
+    return owner.borrow(() => listener(payload));
   }
 
   [disposeSymbol]() {
@@ -97,7 +98,7 @@ class EventScope implements EventOperations {
 
   #requireBinding() {
     const binding = this.#binding;
-    if (!binding || binding.owner.phase !== "active" || binding.owner.signal.aborted) {
+    if (!binding || !binding.owner.acceptsWork) {
       throw new DougongError("LIFETIME_DISPOSED", "Event scope is closed");
     }
     return binding;

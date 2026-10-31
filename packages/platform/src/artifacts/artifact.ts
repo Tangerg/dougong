@@ -38,6 +38,31 @@ export function describeArtifact(artifact: ArtifactDescriptor): ArtifactDescript
   return descriptor;
 }
 
+const manifestKeys = new WeakMap<Manifest, string>();
+
+function manifestKey(manifest: Manifest): string {
+  const existing = manifestKeys.get(manifest);
+  if (existing !== undefined) return existing;
+  // Permissions and activation events express membership; dependency keys express named ranges.
+  const key = JSON.stringify({
+    ...manifest,
+    permissions: [...manifest.permissions].sort(),
+    activation: [...manifest.activation].sort(),
+    dependencies: Object.keys(manifest.dependencies)
+      .sort()
+      .map((name) => [name, manifest.dependencies[name]]),
+  });
+  manifestKeys.set(manifest, key);
+  return key;
+}
+
+export function matchesArtifact(origin: ArtifactOrigin | undefined, artifact: ArtifactDescriptor) {
+  return (
+    origin?.revision === artifact.revision &&
+    manifestKey(origin.manifest) === manifestKey(artifact.manifest)
+  );
+}
+
 const originProjections = new WeakMap<object, ArtifactOrigin>();
 
 const artifactFields = new Set(["revision", "manifest", "reference", "config"]);
@@ -72,7 +97,7 @@ export function captureArtifact<Reference>(
 }
 
 export function artifactOrigin(platformId: string, artifact: ArtifactDescriptor): ArtifactOrigin {
-  return captureConfig({
+  return Object.freeze({
     kind: "artifact",
     platformId,
     revision: artifact.revision,

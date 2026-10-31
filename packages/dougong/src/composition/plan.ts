@@ -56,9 +56,6 @@ export interface Plan {
   readonly report: PlanReport;
 }
 export interface PreparedTransition {
-  readonly intent: TransitionIntent;
-  readonly baseStateRevision: number;
-  readonly declarations: ReadonlyMap<InstallationRecord, InstallationDeclaration>;
   readonly groups: ReadonlyMap<string, GroupNode>;
   readonly graph: InstallationGraph;
   readonly affected: ReadonlySet<InstallationRecord>;
@@ -66,23 +63,65 @@ export interface PreparedTransition {
   readonly report: PlanReport;
 }
 
+interface PlanBase {
+  readonly revision: number;
+  readonly graph: InstallationGraph;
+}
+
+function stalePlan(expectedRevision: number, stateRevision: number) {
+  return new DougongError("PLAN_STALE", "Host state changed during or after planning", {
+    details: { outcome: "rejected", expectedRevision, stateRevision },
+  });
+}
+
+function pendingProjection(): { status: "pending" | "removed"; readonly origin: undefined } {
+  return { status: "pending", origin: undefined };
+}
+
 export class PlanAuthority {
-  readonly #plans = new WeakMap<Plan, PreparedTransition | null>();
-  issue(prepared: PreparedTransition): Plan {
-    const plan = Object.freeze({ report: prepared.report }) as Plan;
-    this.#plans.set(plan, prepared);
+  readonly #issued = new WeakMap<Plan, "issued" | "consumed">();
+  #prepared = new WeakMap<Plan, PreparedTransition>();
+  #pending = pendingProjection();
+
+  issue(prepared: PreparedTransition, base: PlanBase): Plan {
+    const { report } = prepared;
+    if (report.baseStateRevision !== base.revision)
+      throw stalePlan(report.baseStateRevision, base.revision);
+    const plan = Object.freeze({ report }) as Plan;
+    // A pending handle may outlive its Host. Capture only its revision's inert projection.
+    const pending = this.#pending;
+    const read = () => pending;
+    for (const record of prepared.graph.declarations.keys()) {
+      if (!base.graph.declarations.has(record)) record.attach(read);
+    }
+    this.#issued.set(plan, "issued");
+    this.#prepared.set(plan, prepared);
     return plan;
   }
-  read(plan: Plan): PreparedTransition {
-    const prepared = this.#plans.get(plan);
-    if (prepared === undefined)
+
+  read(plan: Plan, revision: number): PreparedTransition {
+    const issued = this.#issued.get(plan);
+    if (issued === undefined)
       throw new DougongError("PLAN_FOREIGN", "Plan was not issued by this Host");
-    if (prepared === null)
+    if (issued === "consumed")
       throw new DougongError("PLAN_CONSUMED", "Plan has already been executed");
+    const prepared = this.#prepared.get(plan);
+    if (!prepared) {
+      this.consume(plan);
+      throw stalePlan(plan.report.baseStateRevision, revision);
+    }
     return prepared;
   }
+
   consume(plan: Plan) {
-    this.#plans.set(plan, null);
+    this.#issued.set(plan, "consumed");
+    this.#prepared.delete(plan);
+  }
+
+  invalidate() {
+    this.#pending.status = "removed";
+    this.#pending = pendingProjection();
+    this.#prepared = new WeakMap();
   }
 }
 
@@ -97,7 +136,7 @@ export function describeBindings(graph: InstallationGraph): ReadonlyArray<Bindin
             installation: installation.id,
             contract: token.id,
             optional: requirement.kind === "optional",
-            provider: graph.providerFor(installation, token.id)?.id,
+            provider: graph.providers.get(token.id)?.id,
           }),
         ];
       }),

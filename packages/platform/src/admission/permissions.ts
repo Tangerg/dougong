@@ -1,4 +1,5 @@
 import type { Awaitable } from "dougong";
+import { captureDataArray } from "dougong/advanced";
 import type { ArtifactDescriptor } from "../artifacts/artifact.js";
 import { PermissionDeniedError } from "../errors.js";
 
@@ -16,11 +17,7 @@ export class PermissionSet implements Authorizer {
   readonly #allowed: ReadonlySet<string>;
 
   constructor(allowed: Iterable<string> & object = []) {
-    if (
-      !allowed ||
-      (typeof allowed !== "object" && typeof allowed !== "function") ||
-      typeof allowed[Symbol.iterator] !== "function"
-    ) {
+    if (!allowed || (typeof allowed !== "object" && typeof allowed !== "function")) {
       throw new TypeError("PermissionSet permissions must be an iterable object");
     }
     const permissions = new Set<string>();
@@ -35,10 +32,9 @@ export class PermissionSet implements Authorizer {
   }
 
   readonly authorize = ({ artifact }: AdmissionRequest, signal: AbortSignal) => {
-    signal.throwIfAborted();
-    const denied = artifact.manifest.permissions.filter(
-      (permission) => !this.#allowed.has(permission),
-    );
+    AbortSignal.prototype.throwIfAborted.call(signal);
+    const requested = captureDataArray(artifact.manifest.permissions, "Manifest permissions");
+    const denied = requested.filter((permission) => !this.#allowed.has(permission));
     if (denied.length) throw new PermissionDeniedError(artifact.manifest.name, denied);
   };
 }

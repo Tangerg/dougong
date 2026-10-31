@@ -8,7 +8,7 @@ import {
   renameSync,
   writeFileSync,
 } from "node:fs";
-import { basename, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { installCommandFixture } from "../release-command-fixture.mjs";
 
 const workspace = process.cwd();
@@ -29,6 +29,7 @@ function packageAt(state, reference) {
 }
 
 let injected = false;
+let previousPack;
 installCommandFixture((name, args, options, nativeSpawn) => {
   const race = process.env.DOUGONG_RELEASE_CONCURRENT_EDIT;
   const git = process.env.DOUGONG_RELEASE_REAL_GIT;
@@ -114,7 +115,10 @@ installCommandFixture((name, args, options, nativeSpawn) => {
     let source;
     if (name === "pnpm") {
       if (args.length !== 3 || args[1] !== "--pack-destination") process.exit(99);
-      writeFileSync(join(workspace, "release-stage"), stage);
+      writeFileSync(
+        join(workspace, "release-stage"),
+        basename(stage).startsWith("pack-") ? dirname(stage) : stage,
+      );
       if (process.env.DOUGONG_RELEASE_REAL_PNPM) {
         return nativeSpawn(process.execPath, [process.env.DOUGONG_RELEASE_REAL_PNPM, ...args], {
           ...options,
@@ -144,6 +148,23 @@ installCommandFixture((name, args, options, nativeSpawn) => {
       { stdio: "pipe", env: { ...process.env, COPYFILE_DISABLE: "1" } },
     );
     if (packed.error || packed.status !== 0) process.exit(99);
+    if (name === "pnpm" && race === "rewrite-pack") {
+      if (previousPack && existsSync(previousPack.archive)) {
+        writeFileSync(
+          join(previousPack.source, "package/dist/index.js"),
+          "export const replaced = true;",
+        );
+        const rewritten = nativeSpawn(
+          "tar",
+          ["-czf", previousPack.archive, "-C", previousPack.source, "package"],
+          { stdio: "pipe" },
+        );
+        if (rewritten.status !== 0) process.exit(99);
+      }
+      previousPack = { archive, source };
+    }
+    if (name === "pnpm" && race === "ambiguous-archive")
+      cpSync(archive, join(stage, "another.tgz"));
     return { status: 0, stdout: archive };
   }
 
@@ -189,7 +210,10 @@ installCommandFixture((name, args, options, nativeSpawn) => {
     }
     const target = join(workspace, visibility === "immediate" ? "published" : "pending", directory);
     mkdirSync(target, { recursive: true });
-    return nativeSpawn("tar", ["-xzf", args[1], "-C", target], { stdio: "pipe" });
+    const extracted = nativeSpawn("tar", ["-xzf", args[1], "-C", target], { stdio: "pipe" });
+    if (race === "registry-bytes" && extracted.status === 0)
+      writeFileSync(join(target, "package/dist/index.js"), "export const replaced = true;");
+    return extracted;
   }
 
   if (name === "sleep" && args.length === 1 && args[0] === "15") {

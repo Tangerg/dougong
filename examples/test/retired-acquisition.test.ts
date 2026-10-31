@@ -37,20 +37,6 @@ async function createFixture(options: HostOptions = {}) {
   };
 }
 
-function withDefer(lifetime: LifetimeContext, defer: LifetimeContext["defer"]): LifetimeContext {
-  return {
-    get signal() {
-      return lifetime.signal;
-    },
-    defer,
-    use: lifetime.use.bind(lifetime),
-    child: lifetime.child.bind(lifetime),
-    spawn: lifetime.spawn.bind(lifetime),
-    acquire: lifetime.acquire.bind(lifetime),
-    interrupt: lifetime.interrupt.bind(lifetime),
-  };
-}
-
 describe("resource acquisition with explicit waiter retirement", () => {
   it("never starts an operation for an already disposed generation", async () => {
     const { host, generation, operations, report } = await createFixture();
@@ -515,7 +501,27 @@ describe("acquisition failure ownership", () => {
 
       if (mode === "operation rejection") operation.reject(failure);
       else operation.resolve(resource);
-      await stopping;
+      const releaseFailed = mode !== "operation rejection";
+      await expect(Promise.allSettled([stopping])).resolves.toMatchObject([
+        releaseFailed
+          ? { status: "rejected", reason: { code: "HOST_QUARANTINED" } }
+          : { status: "fulfilled" },
+      ]);
+      const retained = host.diagnostics
+        .get()
+        .unresolved.flatMap((instance) =>
+          instance.lifetime.children.flatMap((child) => child.children),
+        );
+      expect(retained).toMatchObject(
+        releaseFailed
+          ? [
+              {
+                label: "external-operations",
+                unresolved: [{ kind: "cleanup" }],
+              },
+            ]
+          : [],
+      );
       await setImmediate();
 
       expect(report).toHaveBeenCalledExactlyOnceWith(
@@ -524,7 +530,7 @@ describe("acquisition failure ownership", () => {
       expect(dispose.mock.calls).toEqual(mode === "operation rejection" ? [] : [[resource]]);
     } finally {
       operation.resolve(resource);
-      await host.stop();
+      await Promise.allSettled([host.stop()]);
     }
   });
 
@@ -588,9 +594,12 @@ describe("acquisition failure ownership", () => {
       const registrationFailure = new Error("cleanup registration failed");
       const releaseFailure = new Error("reclamation failed");
       const resource = { id: "unregistered" };
-      const refusingGeneration = withDefer(generation, () => {
-        throw registrationFailure;
-      });
+      const refusingGeneration = {
+        signal: generation.signal,
+        defer() {
+          throw registrationFailure;
+        },
+      };
       const dispose = vi.fn<(value: object) => void | Promise<never>>(() => {
         if (releaseFails) return Promise.reject(releaseFailure);
         return undefined;
@@ -612,10 +621,20 @@ describe("acquisition failure ownership", () => {
         );
         expect(report).toHaveBeenCalledExactlyOnceWith(result.error);
         await generation[Symbol.asyncDispose]();
-        await operations[Symbol.asyncDispose]();
+        await expect(
+          Promise.allSettled([operations[Symbol.asyncDispose]()]),
+        ).resolves.toMatchObject([
+          releaseFails
+            ? { status: "rejected", reason: { errors: [releaseFailure] } }
+            : { status: "fulfilled" },
+        ]);
         expect(dispose).toHaveBeenCalledExactlyOnceWith(resource);
       } finally {
-        await host.stop();
+        await expect(Promise.allSettled([host.stop()])).resolves.toMatchObject([
+          releaseFails
+            ? { status: "rejected", reason: { code: "HOST_QUARANTINED" } }
+            : { status: "fulfilled" },
+        ]);
       }
     },
   );

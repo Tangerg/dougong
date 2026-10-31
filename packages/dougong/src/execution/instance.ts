@@ -63,10 +63,9 @@ export class Instance {
       meta,
       log: this.lifetime.use(new ScopedLogger(environment.logger, meta)).handle,
     });
-    const output = await this.lifetime.prepare(() =>
-      this.declaration.plugin.setup(context, config),
-    );
-    this.lifetime.signal.throwIfAborted();
+    const { setup } = this.declaration.plugin;
+    const output = await this.lifetime.prepare(() => setup(context, config));
+    AbortSignal.prototype.throwIfAborted.call(this.lifetime.signal);
     const entries = Object.entries(this.declaration.plugin.provides);
     if (!entries.length) {
       if (output !== undefined)
@@ -79,7 +78,7 @@ export class Instance {
     const values = normalizePlainRecord(output, "Provided Services", {
       fields: new Set(entries.map(([alias]) => alias)),
     });
-    this.lifetime.signal.throwIfAborted();
+    AbortSignal.prototype.throwIfAborted.call(this.lifetime.signal);
     for (const [alias, token] of entries) {
       if (!Object.hasOwn(values, alias))
         throw new DougongError("PROVIDES_INVALID", "Plugin did not provide " + alias);

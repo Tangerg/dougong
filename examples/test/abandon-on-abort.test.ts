@@ -186,3 +186,18 @@ describe("explicitly abandoning an operation on abort", () => {
     }
   });
 });
+
+it("keeps waiting after a synthetic abort and rejects with the controller's real reason", async () => {
+  const controller = new AbortController();
+  const operation = Promise.withResolvers<string>();
+  const result = abandonOnAbort(controller.signal, () => operation.promise);
+  const rejected = vi.fn<(reason: unknown) => void>();
+  void result.catch(rejected);
+  controller.signal.dispatchEvent(new Event("abort"));
+  await setImmediate();
+  const reason = new Error("actual abort");
+  controller.abort(reason);
+  operation.resolve("late");
+  await expect(result).rejects.toBe(reason);
+  expect(rejected).toHaveBeenCalledExactlyOnceWith(reason);
+});

@@ -434,3 +434,61 @@ async function abandonedInstallation(planned: boolean) {
   if (planned) await host.plan(change);
   return { installation, reporter: new WeakRef(onError) };
 }
+
+it("keeps stale Plan reports and pending identities without retaining their plugin payload", async () => {
+  const host = createHost();
+  const { plan, pending, reference } = await retainedCandidate(host);
+  // A separate in-flight validation still holds the old base. It does not own other plans.
+  const entered = Promise.withResolvers<void>();
+  const finish = Promise.withResolvers<void>();
+  const change = host.change();
+  change.install(
+    definePlugin({
+      name: "validating",
+      config: {
+        "~standard": {
+          version: 1,
+          vendor: "test",
+          async validate() {
+            entered.resolve();
+            await finish.promise;
+            return { value: null };
+          },
+        },
+      },
+      setup() {},
+    }),
+    { id: "validating", config: null },
+  );
+  const validation = host.plan(change);
+  await entered.promise;
+  await host.start();
+  try {
+    await collect([reference]);
+    expect(reference.deref()).toBeUndefined();
+  } finally {
+    finish.resolve();
+    await expect(validation).rejects.toMatchObject({ code: "PLAN_STALE" });
+  }
+  expect(pending.status).toBe("removed");
+  expect(plan.report.operations[0]?.id).toBe("candidate");
+  await expect(host.apply(plan)).rejects.toMatchObject({ code: "PLAN_STALE" });
+  expect(pending.status).toBe("removed");
+  await expect(host.apply(plan)).rejects.toMatchObject({ code: "PLAN_CONSUMED" });
+  await host.stop();
+});
+
+async function retainedCandidate(host: Host) {
+  const payload = { uses: 0 };
+  const change = host.change();
+  const pending = change.install(
+    definePlugin({
+      name: "candidate",
+      setup() {
+        payload.uses++;
+      },
+    }),
+    { id: "candidate" },
+  );
+  return { plan: await host.plan(change), pending, reference: new WeakRef(payload) };
+}
