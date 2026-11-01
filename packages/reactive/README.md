@@ -2,6 +2,8 @@
 
 Independent synchronous signals and structurally owned reactive generations. No external runtime dependencies.
 
+Upgrading from 0.8.3? Read the [migration guide](https://tangerg.github.io/dougong/en/guide/migrating-to-0.9) and [0.9.0 release notes](https://tangerg.github.io/dougong/en/reference/release-0.9.0).
+
 ```ts
 import { batch, computed, signal } from "@dougongjs/reactive";
 
