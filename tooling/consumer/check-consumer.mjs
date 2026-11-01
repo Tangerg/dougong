@@ -5,6 +5,8 @@ import { cpSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { build, normalizePath } from "vite";
+import { runtimeBaseline } from "../runtime-baseline.mjs";
 import { candidateOutput, packCandidates, writeVerifiedCandidates } from "./package-candidates.mjs";
 import { installConsumerDependencies } from "./install-dependencies.mjs";
 
@@ -65,6 +67,38 @@ try {
       stdio: "inherit",
     });
   }
+  const browserEntry = join(workspace, "browser.mjs");
+  writeFileSync(
+    browserEntry,
+    'export { onAbort } from "dougong/advanced";\nexport { observe } from "@dougongjs/reactive";\n',
+  );
+  // Compile the packed files as a browser consumer, including each package's private resolution conditions.
+  const browser = await build({
+    configFile: false,
+    root: workspace,
+    logLevel: "silent",
+    build: {
+      target: runtimeBaseline.buildTargets,
+      write: false,
+      lib: { entry: browserEntry, formats: ["es"] },
+    },
+  });
+  const bundledModules = (Array.isArray(browser) ? browser : [browser])
+    .flatMap((result) => result.output)
+    .filter((file) => file.type === "chunk")
+    .flatMap((chunk) => Object.keys(chunk.modules));
+  for (const name of ["dougong", "@dougongjs/reactive"]) {
+    if (
+      !bundledModules.includes(normalizePath(join(modules, name, "runtime/abort-listener.web.mjs")))
+    )
+      throw new Error(`${name}: browser build did not use its Web abort listener`);
+  }
+  if (
+    bundledModules.some(
+      (id) => id.includes("abort-listener.node.mjs") || id.includes("__vite-browser-external"),
+    )
+  )
+    throw new Error("Browser consumer includes a Node-only module");
   if (process.env[candidateOutput])
     writeVerifiedCandidates(process.env[candidateOutput], candidates);
 } finally {

@@ -364,6 +364,7 @@ export class Lifetime {
       label: this.#label,
       phase: this.#phase,
       cleanups: this.#cleanups.size,
+      interrupts: this.#interrupts.size,
       tasks: this.#tasks.size,
       acquisitions: this.#acquisitions.size,
       publications: this.#publications.size,
@@ -374,19 +375,20 @@ export class Lifetime {
   }
 
   use<T extends Resource>(resource: T): T {
-    this.#requireActive();
-    const release = captureDisposer(resource);
-    this.#requireActive();
-    this.#own(release, "cleanup");
+    this.#adopt(resource);
     return resource;
   }
 
   own(resource: Resource): () => void {
+    const record = this.#adopt(resource);
+    return () => record.forget();
+  }
+
+  #adopt(resource: Resource) {
     this.#requireActive();
     const release = captureDisposer(resource);
     this.#requireActive();
-    const record = this.#own(release, "cleanup");
-    return () => record.forget();
+    return this.#own(release, "cleanup");
   }
 
   defer(cleanup: Cleanup): AsyncDisposable {
@@ -430,33 +432,23 @@ export class Lifetime {
   }
 
   spawn<T>(task: BackgroundTask<T>): Task<T> {
-    this.#requireActive();
-    if (typeof task !== "function") throw new TypeError("Background task must be a function");
-    let record: TaskRecord<T>;
-    record = new TaskRecord(
-      task,
-      (error) => this.#reportError(error),
-      () => {
-        this.#tasks.delete(record as TaskRecord<unknown>);
-        this.#changed?.();
-      },
-    );
-    this.#tasks.add(record as TaskRecord<unknown>);
-    this.#changed?.();
-    return record.handle;
+    return this.#startTask(task, (error) => this.#reportError(error));
   }
 
   prepare<T>(task: BackgroundTask<T>): Promise<T> {
+    return this.#startTask(task).result;
+  }
+
+  #startTask<T>(task: BackgroundTask<T>, report?: (error: unknown) => void): Task<T> {
     this.#requireActive();
-    if (typeof task !== "function") throw new TypeError("Preparation must be a function");
-    let record: TaskRecord<T>;
-    record = new TaskRecord(task, undefined, () => {
-      this.#tasks.delete(record as TaskRecord<unknown>);
+    if (typeof task !== "function") throw new TypeError("Task must be a function");
+    const record: TaskRecord<T> = new TaskRecord(task, report, () => {
+      this.#tasks.delete(record);
       this.#changed?.();
     });
-    this.#tasks.add(record as TaskRecord<unknown>);
+    this.#tasks.add(record);
     this.#changed?.();
-    return record.handle.result;
+    return record.handle;
   }
 
   acquire<T extends Resource>(
@@ -622,14 +614,24 @@ export class Lifetime {
     }
     // A child's deadline ends its caller's wait, not its use of parent-owned resources.
     const children = Promise.allSettled([...this.#children].map((child) => child.#shutdownWork!));
-    await this.#releaseRecords(this.#interrupts, errors);
+    // An interruption may await work unblocked by another one in the same scope.
+    const interruptions = [...this.#interrupts].reverse().map((record) => record.dispose());
+    for (const result of await Promise.allSettled(interruptions)) {
+      if (result.status === "rejected") errors.push(result.reason);
+    }
     const tasks = [...this.#tasks].map((task) => task.settled);
     await Promise.all(tasks);
     await Promise.allSettled([...this.#acquisitions]);
     const childResults = await children;
     for (const result of childResults) if (result.status === "rejected") errors.push(result.reason);
     if (childResults.every((result) => result.status === "fulfilled")) {
-      await this.#releaseRecords(this.#cleanups, errors);
+      for (const record of [...this.#cleanups].reverse()) {
+        try {
+          await record.dispose();
+        } catch (error) {
+          errors.push(error);
+        }
+      }
     }
     this.#timeoutFailure = undefined;
     if (errors.length) {
@@ -654,16 +656,6 @@ export class Lifetime {
       if (record.withdraw()) this.#publications.delete(record);
       // A publication may detach before its withdrawal fails; the unfinished obligation still belongs here.
       else this.#publications.add(record);
-    }
-  }
-
-  async #releaseRecords(records: Set<CleanupRecord>, errors: unknown[]) {
-    for (const record of [...records].reverse()) {
-      try {
-        await record.dispose();
-      } catch (error) {
-        errors.push(error);
-      }
     }
   }
 

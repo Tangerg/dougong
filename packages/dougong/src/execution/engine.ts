@@ -20,17 +20,15 @@ import { SnapshotPublisher, batchSnapshotNotifications } from "../observation/sn
 import { SerialQueue } from "../internal/serial-queue.js";
 import { captureDataArray } from "../internal/data-array.js";
 import { normalizePlainRecord } from "../internal/record.js";
+import { ChangeSets, assertId, type ChangeOperation } from "../composition/change-set.js";
 import {
-  ChangeSets,
-  assertId,
-  captureOrigin,
-  type ChangeOperation,
-} from "../composition/change-set.js";
-import { InstallationRecord, type InstallationDeclaration } from "../composition/installation.js";
+  captureInstallationDeclaration,
+  claimInstallationId,
+  InstallationRecord,
+  type InstallationDeclaration,
+} from "../composition/installation.js";
 import { InstallationGraph } from "../composition/installation-graph.js";
 import { buildInitialGroups, GroupNode } from "../composition/group.js";
-import { captureConfig } from "../composition/configuration.js";
-import { normalizePlugin } from "../composition/plugin.js";
 import { compileTransition, type CompositionState } from "../composition/planner.js";
 import {
   PlanAuthority,
@@ -155,12 +153,7 @@ export class Engine {
       });
       assertId(initial.id, "Installation id");
       if (initial.groupId !== undefined) assertId(initial.groupId, "Installation Group id");
-      if (ids.has(initial.id))
-        throw new DougongError(
-          "INSTALLATION_CONFLICT",
-          "Duplicate initial Installation: " + initial.id,
-        );
-      ids.add(initial.id);
+      claimInstallationId(ids, initial.id);
       const group =
         initial.groupId === undefined ? undefined : groups.get(initial.groupId as string);
       if (initial.groupId !== undefined && !group)
@@ -168,11 +161,7 @@ export class Engine {
       const record = this.#createInstallation(initial.id, group);
       declarations.set(
         record,
-        Object.freeze({
-          plugin: normalizePlugin(initial.plugin as never),
-          config: captureConfig(initial.config),
-          origin: captureOrigin(initial.origin),
-        }),
+        captureInstallationDeclaration(initial.plugin, initial.config, initial.origin),
       );
     }
     this.#state = Object.freeze({
@@ -205,7 +194,7 @@ export class Engine {
   }
 
   installation(id: string): Installation | undefined {
-    return [...this.#state.graph.declarations.keys()].find((record) => record.id === id)?.facade;
+    return this.#state.graph.byId.get(id)?.facade;
   }
 
   group(id: string): Group | undefined {
@@ -812,6 +801,7 @@ export class Engine {
         });
       },
     );
+    const members = Map.groupBy(installations, (installation) => installation.groupId);
     return Object.freeze({
       name: this.name,
       status: this.status,
@@ -823,9 +813,7 @@ export class Engine {
             id: group.id,
             parentId: group.parentId,
             installations: Object.freeze(
-              installations
-                .filter((installation) => installation.groupId === group.id)
-                .map((installation) => installation.id),
+              (members.get(group.id) ?? []).map((installation) => installation.id),
             ),
           }),
         ),

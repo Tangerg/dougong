@@ -1,3 +1,4 @@
+import { isAborted, onAbort } from "./abort.js";
 import {
   asyncDisposeSymbol,
   captureReadable,
@@ -130,10 +131,16 @@ class Observation<T, Child extends AsyncDisposable> {
 
   // Stop on drain failure because continuing would observe a value whose resource ownership never established.
   async #drain(signal: AbortSignal) {
+    const detach = onAbort(signal, () => this.#wakeDrain?.());
     try {
-      while (this.#state.phase === "active" && !signal.aborted) {
-        await this.#waitForInvalidation(signal);
-        while (this.#state.phase === "active" && !signal.aborted && this.#dirty) {
+      while (this.#state.phase === "active" && !isAborted(signal)) {
+        if (!this.#dirty) {
+          const wake = Promise.withResolvers<void>();
+          this.#wakeDrain = wake.resolve;
+          await wake.promise;
+          this.#wakeDrain = undefined;
+        }
+        while (this.#state.phase === "active" && !isAborted(signal) && this.#dirty) {
           this.#dirty = false;
           await this.#replaceCurrent(signal);
         }
@@ -149,28 +156,14 @@ class Observation<T, Child extends AsyncDisposable> {
         );
       }
       throw error;
+    } finally {
+      detach();
     }
-  }
-
-  #waitForInvalidation(signal: AbortSignal) {
-    if (this.#dirty || this.#state.phase !== "active" || signal.aborted) {
-      return Promise.resolve();
-    }
-    return new Promise<void>((resolve) => {
-      const wake = () => {
-        signal.removeEventListener("abort", wake);
-        if (this.#wakeDrain === wake) this.#wakeDrain = undefined;
-        resolve();
-      };
-      this.#wakeDrain = wake;
-      signal.addEventListener("abort", wake, { once: true });
-      if (this.#dirty || this.#state.phase !== "active" || signal.aborted) wake();
-    });
   }
 
   // Clear the observed marker during replacement so interruption cannot leave a value without its owner.
   async #replaceCurrent(signal: AbortSignal) {
-    if (this.#state.phase !== "active" || signal.aborted) return;
+    if (this.#state.phase !== "active" || isAborted(signal)) return;
     const beforeCleanup = this.#state.binding.source.get();
     // Notifications can preserve the value; compare again before tearing down its live resources.
     if (this.#observed.present && Object.is(beforeCleanup, this.#observed.value)) return;
@@ -183,7 +176,7 @@ class Observation<T, Child extends AsyncDisposable> {
       throw error;
     }
     this.#observed = { present: false };
-    if (this.#state.phase !== "active" || signal.aborted) return;
+    if (this.#state.phase !== "active" || isAborted(signal)) return;
 
     this.#createCurrent();
   }
@@ -266,7 +259,12 @@ export function observe<T, Child extends AsyncDisposable>(
   if (typeof defer !== "function" || typeof child !== "function" || typeof spawn !== "function") {
     throw new TypeError("observe() expects an observation owner");
   }
-  const binding = { defer: defer.bind(owner), child: child.bind(owner), spawn: spawn.bind(owner) };
+  const binding: ObservationOwner<Child> = {
+    defer: (release) => Reflect.apply(defer, owner, [release]),
+    child: (label) => Reflect.apply(child, owner, [label]),
+    spawn: <T>(task: (signal: AbortSignal) => T | PromiseLike<T>) =>
+      Reflect.apply(spawn<T>, owner, [task]),
+  };
   const observation = new Observation(binding, readable, observer);
   const close = captureRelease(
     binding.defer(() => observation.dispose()),

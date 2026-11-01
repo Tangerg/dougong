@@ -210,7 +210,10 @@ for (const [file, dependencies] of Object.entries(graph)) {
           source,
         );
       }
-      if (owner.package === "reactive" && !specifier.startsWith(".")) {
+      const runtimePort =
+        specifier === "#abort-listener" &&
+        (owner.package === "reactive" || owner.package === "dougong");
+      if (owner.package === "reactive" && !specifier.startsWith(".") && !runtimePort) {
         violation(
           file,
           "reactive.independent",
@@ -230,8 +233,10 @@ for (const [file, dependencies] of Object.entries(graph)) {
         const targetFile = relative(process.cwd(), target.resolvedFileName).split(sep).join("/");
         if (
           /^(?:packages\/[^/]+|examples)\/src\//.test(file) &&
-          !/^(?:packages\/[^/]+|examples)\/src\//.test(targetFile) &&
-          !targetFile.split("/").includes("node_modules")
+          (runtimePort
+            ? targetFile !== `packages/${owner.package}/runtime/abort-listener.d.mts`
+            : !/^(?:packages\/[^/]+|examples)\/src\//.test(targetFile) &&
+              !targetFile.split("/").includes("node_modules"))
         )
           violation(
             file,
@@ -330,21 +335,20 @@ for (const [file, dependencies] of Object.entries(graph)) {
         );
       if (ts.isCallExpression(node)) {
         const id = node.arguments[0];
-        if (
-          id &&
-          ts.isStringLiteralLike(id) &&
-          factories.has(checker.getResolvedSignature(node)?.declaration)
-        ) {
-          const previous = definitions.get(id.text);
-          if (previous)
-            violation(
-              file,
-              "contracts.owner",
-              `fixed Contract ID '${id.text}' already belongs to ${previous}`,
-              node,
-              source,
-            );
-          else definitions.set(id.text, file);
+        if (id && factories.has(checker.getResolvedSignature(node)?.declaration)) {
+          const type = checker.getTypeAtLocation(id);
+          if (type.isStringLiteral()) {
+            const previous = definitions.get(type.value);
+            if (previous)
+              violation(
+                file,
+                "contracts.owner",
+                `fixed Contract ID '${type.value}' already belongs to ${previous}`,
+                node,
+                source,
+              );
+            else definitions.set(type.value, file);
+          }
         }
       }
     }

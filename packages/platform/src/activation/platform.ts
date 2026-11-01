@@ -159,19 +159,17 @@ class PlatformImpl<Reference> implements Platform<Reference> {
 
     this.id = id;
     this.apiVersion = apiVersion;
-    const admission: Authorizer = Object.freeze({ authorize: authorize.bind(policy) });
+    const admission: Authorizer = Object.freeze<Authorizer>({
+      authorize: (request, signal) => Reflect.apply(authorize, policy, [request, signal]),
+    });
     const ports: PlatformPorts = Object.freeze({ host, group, authorizer: admission });
     this.#state = { phase: "active", ports };
     this.#catalog = new ArtifactCatalog(apiVersion);
     this.catalog = this.#catalog.facade;
     this.#modules = new LoadedModules({
-      loader: { load: load.bind(loader) },
+      loader: { load: (reference, signal) => Reflect.apply(load, loader, [reference, signal]) },
       authorizer: admission,
-      assertPlacement: () => {
-        // Each shared load keeps running only while it still has a live activation waiter.
-        for (const operation of this.#operations) operation.synchronizeCancellation();
-        this.#assertPlacement();
-      },
+      assertPlacement: () => this.#assertPlacement(),
     });
     this.#registrationPort = {
       installation: (installationId) => this.#ports().host.installation(installationId),
@@ -275,7 +273,7 @@ class PlatformImpl<Reference> implements Platform<Reference> {
             )
           : target;
       return { roots, operation: this.#beginActivation(roots, removing, signal) };
-    });
+    }, signal);
     try {
       const loaded = new Map<Artifact<Reference>, AnyPlugin>();
       for (const selection of operation.plan.selections) {
@@ -525,8 +523,8 @@ class PlatformImpl<Reference> implements Platform<Reference> {
   }
 
   // A callback inside planning, admission, setup or cleanup cannot await a command queued behind itself.
-  #admit<T>(command: () => T) {
-    return this.#executing ? Promise.reject<T>(this.#busy()) : this.#queue.run(command);
+  #admit<T>(command: () => T, signal?: AbortSignal) {
+    return this.#executing ? Promise.reject<T>(this.#busy()) : this.#queue.run(command, signal);
   }
 
   #busy() {
@@ -536,16 +534,19 @@ class PlatformImpl<Reference> implements Platform<Reference> {
   }
 
   #execute<T>(owner: ActivationOperation<Reference> | "disposal", command: () => Promise<T>) {
-    return this.#queue.run(async () => {
-      this.#executing = owner;
-      try {
-        this.#publish();
-        return await command();
-      } finally {
-        this.#executing = undefined;
-        this.#publish();
-      }
-    });
+    return this.#queue.run(
+      async () => {
+        this.#executing = owner;
+        try {
+          this.#publish();
+          return await command();
+        } finally {
+          this.#executing = undefined;
+          this.#publish();
+        }
+      },
+      owner === "disposal" ? undefined : owner.signal,
+    );
   }
 
   #publish() {

@@ -432,3 +432,21 @@ it("reads error detail fields once and retains a snapshot independent of caller 
   expect(failure.details.dependencyPath).toEqual(["one"]);
   expect(Object.isFrozen(failure.details.dependencyPath)).toBe(true);
 });
+
+it("preserves the bounded diagnostic tree of a failure nested by another owner", () => {
+  const cause = new core.DougongError("PLUGIN_FAILURE", "deferred operation failed", {
+    cause: new TypeError("root"),
+    details: { phase: "prepare", installation: "worker" },
+  });
+  const first = new core.RecordedFailure(cause);
+  const second = new core.RecordedFailure(new AggregateError([first], "shutdown"));
+  expect(second.snapshot.errors).toEqual([first.snapshot]);
+  let wrapped = first;
+  for (let index = 0; index < 12; index++) {
+    wrapped = new core.RecordedFailure(new Error("outer", { cause: wrapped }));
+  }
+  let child = wrapped.snapshot;
+  for (let depth = 0; depth < 5; depth++) child = child.cause!;
+  expect(child).toMatchObject({ truncated: true });
+  expect(child.cause).toBeUndefined();
+});

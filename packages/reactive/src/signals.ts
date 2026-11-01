@@ -1,4 +1,4 @@
-import { disposeSymbol, type Disposable, type Readable } from "./protocol.js";
+import { assertListener, disposeSymbol, type Disposable, type Readable } from "./protocol.js";
 import { assertSynchronous } from "./sync-result.js";
 
 declare const dougongSignal: unique symbol;
@@ -23,7 +23,6 @@ type ReactiveNode = {
 };
 
 type Dependency = {
-  readonly node: ReactiveNode;
   version: number;
   subscription: Disposable | undefined;
 };
@@ -36,8 +35,8 @@ let flushing = false;
 let propagating = false;
 const pendingSlots = new Set<ListenerSlot>();
 const pendingInvalidations = new Set<ListenerSlot>();
-let activeCollector: ((source: ReadonlySignal<unknown>) => void) | undefined;
-const nodes = new WeakMap<ReadonlySignal<unknown>, ReactiveNode>();
+let activeSources: Set<ReactiveNode> | undefined;
+const refreshing: ComputedNode<unknown>[] = [];
 
 class ReactiveSubscription implements Disposable {
   #dispose: (() => void) | undefined;
@@ -121,10 +120,6 @@ function throwListenerFailures(errors: unknown[]) {
   }
 }
 
-function track(source: ReadonlySignal<unknown>) {
-  activeCollector?.(source);
-}
-
 // Queue subscriptions rather than callbacks so distinct subscriptions are never merged.
 export function batch<T>(callback: () => T): T {
   if (typeof callback !== "function") throw new TypeError("batch() expects a function");
@@ -175,13 +170,12 @@ class SignalNode<T> implements ReactiveNode {
     this.#value = initialValue;
     this.view = Object.freeze({
       get: () => {
-        track(this.view);
+        activeSources?.add(this);
         return this.#value;
       },
       set: (value: T) => this.#set(value),
       subscribe: (listener: Listener) => subscribeSlot(this.#listeners, listener, "observer"),
     }) as Signal<T>;
-    nodes.set(this.view, this);
   }
 
   get version() {
@@ -195,7 +189,7 @@ class SignalNode<T> implements ReactiveNode {
   }
 
   #set(value: T) {
-    if (activeCollector) {
+    if (activeSources) {
       throw new TypeError("Computed signal calculations cannot write signals");
     }
     if (Object.is(this.#value, value)) return;
@@ -214,10 +208,11 @@ type ComputedResult<T> =
 class ComputedNode<T> implements ReactiveNode {
   readonly #calculate: () => T;
   readonly #listeners = new Set<ListenerSlot>();
-  readonly #dependencies = new Map<ReadonlySignal<unknown>, Dependency>();
+  readonly #dependencies = new Map<ReactiveNode, Dependency>();
   #result: ComputedResult<T> | undefined;
   #checkedAt = -1;
-  #evaluating = false;
+  #evaluationDepth: number | undefined;
+  #sources: Set<ReactiveNode> | undefined;
   #dirty = true;
   #version = 0;
 
@@ -229,7 +224,6 @@ class ComputedNode<T> implements ReactiveNode {
       get: () => this.#get(),
       subscribe: (listener: Listener) => this.#subscribe(listener),
     }) as ReadonlySignal<T>;
-    nodes.set(this.view, this);
   }
 
   get version() {
@@ -237,19 +231,38 @@ class ComputedNode<T> implements ReactiveNode {
   }
 
   refresh() {
-    if (this.#evaluating) throw new TypeError("Circular computed signal");
-    this.#evaluating = true;
+    if (this.#evaluationDepth !== undefined) {
+      if (activeSources) this.#collectCycleInputs(this.#evaluationDepth, activeSources);
+      throw new TypeError("Circular computed signal");
+    }
+    this.#evaluationDepth = refreshing.length;
+    refreshing.push(this);
     try {
       this.#refresh();
     } finally {
-      this.#evaluating = false;
+      refreshing.pop();
+      this.#evaluationDepth = undefined;
+    }
+  }
+
+  // A back edge cannot be subscribed to. Track the writable inputs that can break the cycle,
+  // including cached edges that were being validated before a calculation read back into them.
+  #collectCycleInputs(start: number, sources: Set<ReactiveNode>) {
+    const inputs = new Set<ReactiveNode>();
+    for (const node of refreshing.slice(start)) {
+      for (const input of node.#sources ?? node.#dependencies.keys()) inputs.add(input);
+    }
+    for (const input of inputs) {
+      if (input instanceof ComputedNode) {
+        for (const source of input.#dependencies.keys()) inputs.add(source);
+      } else sources.add(input);
     }
   }
 
   #get() {
     this.refresh();
     // Failed calculations still create dependencies; circular refresh must fail before adding a back edge.
-    track(this.view);
+    activeSources?.add(this);
     return this.#readResult();
   }
 
@@ -302,8 +315,8 @@ class ComputedNode<T> implements ReactiveNode {
   }
 
   #attachDependencies() {
-    for (const entry of this.#dependencies.values()) {
-      entry.subscription ??= entry.node.subscribeInvalidation(this.#invalidate);
+    for (const [node, entry] of this.#dependencies) {
+      entry.subscription ??= node.subscribeInvalidation(this.#invalidate);
     }
   }
 
@@ -319,7 +332,7 @@ class ComputedNode<T> implements ReactiveNode {
     }
     this.#dirty = true;
 
-    const sources = new Set<ReadonlySignal<unknown>>();
+    const sources = new Set<ReactiveNode>();
     const next = this.#evaluate(sources);
     this.#reconcileDependencies(sources);
 
@@ -338,16 +351,19 @@ class ComputedNode<T> implements ReactiveNode {
   }
 
   #dependenciesChanged() {
-    for (const dependency of this.#dependencies.values()) {
-      dependency.node.refresh();
-      if (dependency.version !== dependency.node.version) return true;
+    for (const [node, dependency] of this.#dependencies) {
+      // An old edge may now be cyclic. Reevaluate the actual branch before recording a failure.
+      if (node instanceof ComputedNode && node.#evaluationDepth !== undefined) return true;
+      node.refresh();
+      if (dependency.version !== node.version) return true;
     }
     return this.#dirty;
   }
 
-  #evaluate(sources: Set<ReadonlySignal<unknown>>): ComputedResult<T> {
-    const previousCollector = activeCollector;
-    activeCollector = (source) => sources.add(source);
+  #evaluate(sources: Set<ReactiveNode>): ComputedResult<T> {
+    const previous = activeSources;
+    this.#sources = sources;
+    activeSources = sources;
 
     try {
       const calculate = this.#calculate;
@@ -357,11 +373,12 @@ class ComputedNode<T> implements ReactiveNode {
     } catch (error) {
       return { phase: "error", error };
     } finally {
-      activeCollector = previousCollector;
+      activeSources = previous;
+      this.#sources = undefined;
     }
   }
 
-  #reconcileDependencies(sources: ReadonlySet<ReadonlySignal<unknown>>) {
+  #reconcileDependencies(sources: ReadonlySet<ReactiveNode>) {
     // Track dependencies on failure too so later source changes can recover the calculation.
     for (const [dependency, entry] of this.#dependencies) {
       if (sources.has(dependency)) continue;
@@ -369,23 +386,10 @@ class ComputedNode<T> implements ReactiveNode {
       this.#dependencies.delete(dependency);
     }
 
-    for (const dependency of sources) {
-      const node = nodes.get(dependency);
-      if (!node) continue;
-
-      const entry = this.#dependencies.get(dependency) ?? {
-        node,
-        version: node.version,
-        subscription: undefined,
-      };
-      entry.version = node.version;
-      this.#dependencies.set(dependency, entry);
+    for (const node of sources) {
+      const entry = this.#dependencies.get(node);
+      if (entry) entry.version = node.version;
+      else this.#dependencies.set(node, { version: node.version, subscription: undefined });
     }
-  }
-}
-
-function assertListener(listener: unknown): asserts listener is Listener {
-  if (typeof listener !== "function") {
-    throw new TypeError("Signal subscriber must be a function");
   }
 }

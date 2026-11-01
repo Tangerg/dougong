@@ -9,6 +9,13 @@ Object.defineProperties(masked, descriptors);
 globalThis.Symbol = masked;
 
 const { createHost, definePlugin, disposeSymbol, asyncDisposeSymbol } = await import("dougong");
+const { onAbort } = await import("dougong/advanced");
+const controller = new AbortController();
+let called = 0;
+const detach = onAbort(controller.signal, () => called++);
+detach();
+controller.abort();
+assert.equal(called, 0);
 const { createPlatform, MemoryLoader } = await import("@dougongjs/platform");
 const { bridge, signal } = await import("@dougongjs/reactive");
 assert.equal(disposeSymbol, Symbol.for("Symbol.dispose"));

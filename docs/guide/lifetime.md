@@ -13,7 +13,7 @@ Lifetime 以组合构成资源树。根由 Instance 创建，插件通过 `child
 | `signal` | 合作式取消信号 |
 | `child[Symbol.asyncDispose]()` | 提前关闭自己创建的子树，加入同一次退出 |
 
-退出先封闭入口、撤销发布并传播取消，执行中断，等待使用中的工作与创建义务，最后逆序释放资源。用 `interrupt` 关闭阻塞读取的通道，用 `defer` 执行任务退出后才能进行的最终销毁。
+退出先封闭入口、撤销发布并传播取消，发起全部中断并等待它们完成，再等待使用中的工作与创建义务，最后逆序释放资源。用 `interrupt` 关闭阻塞读取的通道，用 `defer` 执行任务退出后才能进行的最终销毁。
 
 ```ts
 const { resource: connection } = await lifetime.acquire(async (signal) => openConnection(signal));
@@ -31,7 +31,7 @@ lifetime.spawn((signal) => connection.readUntilClosed(signal));
 
 成功退出后，每个 Lifetime 都暴露自己已经中止的信号。保留子树句柄不会再保留原控制器及其监听器；其他已退出子树也不能通知这个信号的监听器。
 
-Task 自己拥有后台异常报告。前台 `host.use` 和贡献 `use` 的失败传播给调用者；不要把同一个错误再次作为后台失败抛出。任务完成和借用释放都以交给调用者的同一个 Promise 为准。Lifetime 快照中的任务数、借用数和未完成义务是资源事实的只读投影。事件监听器、快照订阅者和错误回调的 JavaScript `this` 不携带内部所有者；请使用插件显式获得的能力。Lifetime 在公开任务或获取结果前就登记自己的等待，给返回的 Promise 装饰方法不会提前解除所有权。
+Task 自己拥有后台异常报告。前台 `host.use` 和贡献 `use` 的失败传播给调用者；不要把同一个错误再次作为后台失败抛出。任务完成和借用释放都以交给调用者的同一个 Promise 为准。Lifetime 快照中的任务数、中断数、借用数和未完成义务是资源事实的只读投影。事件监听器、快照订阅者和错误回调的 JavaScript `this` 不携带内部所有者；请使用插件显式获得的能力。Lifetime 在公开任务或获取结果前就登记自己的等待，给返回的 Promise 装饰方法不会提前解除所有权。
 
 对于不可取消的外部操作，示例的 `acquireForLifetime` 展示两层所有权：代次等待可以结束，而较长寿命的操作所有者继续等待并回收迟到结果。该业务策略由 `spawn`、`defer` 和 AbortSignal 组合，核心不隐藏资源义务。
 

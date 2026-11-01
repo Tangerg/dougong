@@ -8,6 +8,7 @@ import type { InstallationDeclaration, InstallationRecord } from "./installation
 export class InstallationGraph {
   private constructor(
     readonly declarations: ReadonlyMap<InstallationRecord, InstallationDeclaration>,
+    readonly byId: ReadonlyMap<string, InstallationRecord>,
     readonly order: ReadonlyArray<InstallationRecord>,
     readonly layers: ReadonlyArray<ReadonlyArray<InstallationRecord>>,
     readonly providers: ReadonlyMap<string, InstallationRecord>,
@@ -29,6 +30,7 @@ export class InstallationGraph {
 
     return new InstallationGraph(
       declarations,
+      new Map(installations.map((installation) => [installation.id, installation])),
       Object.freeze(order),
       Object.freeze(layers.map((layer) => Object.freeze(layer))),
       providers,
@@ -44,14 +46,14 @@ export class InstallationGraph {
   }
 
   // Use both plans because replacing a Service affects both its old consumers and its new consumers.
-  affectedByTransitionTo(other: InstallationGraph, changed: ReadonlySet<InstallationRecord>) {
+  affectedByTransitionTo(other: InstallationGraph, changed: ReadonlyArray<InstallationRecord>) {
     const affected = new Set<InstallationRecord>();
     this.#expand(changed, affected);
     other.#expand(changed, affected);
     return affected;
   }
 
-  #expand(changed: ReadonlySet<InstallationRecord>, affected: Set<InstallationRecord>) {
+  #expand(changed: ReadonlyArray<InstallationRecord>, affected: Set<InstallationRecord>) {
     const queue = [...changed];
     const visited = new Set<InstallationRecord>();
     for (let index = 0; index < queue.length; index++) {

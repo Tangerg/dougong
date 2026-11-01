@@ -66,13 +66,15 @@ Host 只在选项缺省时使用默认值；显式传入 null 的名字、安装
 | --- | --- |
 | `SnapshotPublisher`、`ReadonlyMapSnapshot` | 发布快照、提供只读集合。 |
 | `batchSnapshotNotifications` | 在一个同步回调中批量发布。返回 Promise 不能延长此次发布边界。 |
-| `SerialQueue` | 顺序执行提交的操作。 |
+| `SerialQueue` | 顺序执行提交的操作。传给 `run(operation, signal)` 的信号可立即撤回仍在排队的操作。操作开始后，由它自己决定完成结果。 |
 | `normalizePlainRecord` | 捕获普通记录的数据字段。插件配置请用 `captureConfig`。 |
 | `captureDataArray(input, label)` | 浅拷贝自有的稠密数据索引并冻结数组，不调用输入的方法或迭代器。元素的校验归调用方。 |
 | `captureLogger(logger)` | 接管日志后端时一次捕获四个方法及其原始接收者。 |
 | `onAbort(signal, callback)` | 观察真实取消，回调只接收一次原因；已取消时立即回调。返回的函数用于解除观察。手动派发名为 `abort` 的事件不能取消作用域。 |
 
-观察未来的取消依赖原生事件送达监听器。同一运行环境中，较早的监听器调用 `stopImmediatePropagation()` 可以阻止该通知，但不能改变信号已经取消的事实。
+较早的监听器调用 `stopImmediatePropagation()` 时，仍能收到真实取消。Core 和 Reactive 使用同一套原生状态读取与解绑逻辑。
+
+在 Node 上，框架使用 Node 的受保护监听器。对于 `AbortSignal.timeout()` 或合成信号，Node 自身的监听器管理也会访问 `aborted`。若自定义 getter 抛错，注册会回滚并抛出该错误。若提前将它覆写为 `true`，请保留源信号或解绑函数直到观察结束，以免 Node 提前回收仍在等待的超时信号。
 
 ## 声明描述与可执行计划
 

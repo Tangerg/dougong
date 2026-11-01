@@ -13,7 +13,7 @@ Lifetimes compose into a resource tree. Each Instance creates a root; plugins cr
 | `signal` | Cooperative cancellation |
 | `child[Symbol.asyncDispose]()` | Closes the child subtree you created and joins its single shutdown |
 
-Shutdown seals entry, withdraws publications and broadcasts cancellation, runs interruptions, joins active work and acquisitions, then releases resources in reverse order. Use `interrupt` to break a blocking read and `defer` for final destruction that must wait for tasks to finish.
+Shutdown seals entry, withdraws publications and broadcasts cancellation, starts all interruptions and waits for them together, joins active work and acquisitions, then releases resources in reverse order. Use `interrupt` to break a blocking read and `defer` for final destruction that must wait for tasks to finish.
 
 ```ts
 const { resource: connection } = await lifetime.acquire(async (signal) => openConnection(signal));
@@ -31,7 +31,7 @@ Only the native AbortSignal state establishes cancellation. Dispatching an event
 
 After successful shutdown, each Lifetime exposes its own already-aborted signal. A retained child handle no longer holds the original controller or its listeners, and another retired scope cannot notify listeners on this signal.
 
-Tasks own background error reporting. Failures of `host.use` and contribution `use` propagate to their caller; do not rethrow the same outcome as another background failure. Task completion and borrow release follow settlement of the Promise returned to the caller. Shutdown registers its own join before exposing a task or acquisition result: decorating that Promise cannot release ownership. Lifetime task counts, foreground counts and unresolved obligations are read-only projections of resource facts. Event listeners, snapshot subscribers and error callbacks receive no internal owner as their JavaScript `this`; use the explicit capabilities supplied to the plugin.
+Tasks own background error reporting. Failures of `host.use` and contribution `use` propagate to their caller; do not rethrow the same outcome as another background failure. Task completion and borrow release follow settlement of the Promise returned to the caller. Shutdown registers its own join before exposing a task or acquisition result: decorating that Promise cannot release ownership. Lifetime task counts, interrupt counts, foreground counts and unresolved obligations are read-only projections of resource facts. Event listeners, snapshot subscribers and error callbacks receive no internal owner as their JavaScript `this`; use the explicit capabilities supplied to the plugin.
 
 For noncancellable external operations, the example `acquireForLifetime` composes two owners: a generation can stop waiting while a longer-lived operations owner still joins and reclaims late results. This application policy composes `spawn`, `defer` and AbortSignal without hiding resource obligations from the kernel.
 

@@ -8,6 +8,7 @@ export function libraryBuild(
     readonly name: string;
     readonly type: string;
     readonly exports: Readonly<Record<string, { readonly types: string; readonly import: string }>>;
+    readonly imports?: Readonly<Record<string, unknown>>;
     readonly dependencies?: Readonly<Record<string, string>>;
   },
   programs: Record<string, string> = {},
@@ -39,7 +40,10 @@ export function libraryBuild(
       },
       // A subpath is supplied by the same installed package as its root.
       rollupOptions: {
-        external: (id) => dependencies.some((name) => id === name || id.startsWith(name + "/")),
+        // The consumer selects private runtime conditions when it resolves the installed library.
+        external: (id) =>
+          Object.hasOwn(manifest.imports ?? {}, id) ||
+          dependencies.some((name) => id === name || id.startsWith(name + "/")),
       },
     },
   });

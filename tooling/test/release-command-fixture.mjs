@@ -43,7 +43,9 @@ export function installCommandFixture(handle) {
     const result = childProcess.spawnSync(command, args, options);
     if (result.error) throw result.error;
     if (result.status !== 0) {
-      throw Object.assign(new Error(`Command failed: ${command} ${args.join(" ")}`), result);
+      const failure = `Command failed: ${command} ${args.join(" ")}`;
+      const message = result.stderr?.length ? `${failure}\n${result.stderr}` : failure;
+      throw Object.assign(new Error(message), result);
     }
     return result.stdout;
   };

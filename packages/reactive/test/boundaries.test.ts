@@ -229,3 +229,48 @@ it("validates shared branches once per source write while preserving lazy values
   expect(tip.get()).toBe(2 ** 25);
   expect(reads).toBe(3);
 });
+
+it.each(["left", "right"] as const)(
+  "recovers every member of a conditional cycle first entered from %s",
+  (entry) => {
+    const cyclic = signal(true);
+    const left: ReadonlySignal<number> = computed(() => (cyclic.get() ? right.get() : 1));
+    const middle = computed(() => left.get() + 1);
+    const right = computed(() => middle.get() + 1);
+    expect(() => (entry === "left" ? left : right).get()).toThrow("Circular computed signal");
+    cyclic.set(false);
+    expect([middle.get(), right.get(), left.get()]).toEqual([2, 3, 1]);
+  },
+);
+
+it("notifies a subscriber that caught a cycle when the inputs of the interrupted read change", () => {
+  const mode = signal("cyclic");
+  const cyclic = computed(() => mode.get() === "cyclic");
+  const left: ReadonlySignal<number> = computed(() => (cyclic.get() ? right.get() : 1));
+  const right = computed(() => left.get() + 1);
+  expect(() => left.get()).toThrow("Circular computed signal");
+  const safe = computed(() => {
+    try {
+      return right.get();
+    } catch {
+      return 0;
+    }
+  });
+  const seen: number[] = [];
+  using _subscription = safe.subscribe(() => seen.push(safe.get()));
+  expect(safe.get()).toBe(0);
+  mode.set("acyclic");
+  expect(seen).toEqual([2]);
+});
+
+it("rechecks a cached branch that becomes cyclic during dependency validation", () => {
+  const linkLeft = signal(false);
+  const linkRight = signal(true);
+  const left: ReadonlySignal<number> = computed(() => (linkLeft.get() ? right.get() : 1));
+  const right = computed(() => (linkRight.get() ? left.get() : 2));
+  expect(right.get()).toBe(1);
+  linkLeft.set(true);
+  expect(() => left.get()).toThrow("Circular computed signal");
+  linkRight.set(false);
+  expect(left.get()).toBe(2);
+});

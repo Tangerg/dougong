@@ -179,8 +179,8 @@ function captureSchema(value: unknown, name: string): PluginSchema<unknown, unkn
   };
   if (version !== 1 || typeof vendor !== "string" || typeof validate !== "function")
     throw invalid();
-  const captured: StandardSchemaV1["~standard"]["validate"] = (input) =>
-    Reflect.apply(validate, standard, [input]);
+  const captured: StandardSchemaV1["~standard"]["validate"] = (...args) =>
+    Reflect.apply(validate, standard, args);
   const converter = jsonSchema === undefined ? undefined : captureSchemaConverter(jsonSchema, name);
   return Object.freeze({
     "~standard": Object.freeze({

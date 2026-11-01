@@ -6,6 +6,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readFileSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -28,6 +29,8 @@ function runGuard(script, arrange = () => undefined) {
       cpSync(join(repository, "packages", name, "src"), join(directory, "src"), {
         recursive: true,
       });
+      const runtime = join(repository, "packages", name, "runtime");
+      if (existsSync(runtime)) cpSync(runtime, join(directory, "runtime"), { recursive: true });
       copyFileSync(
         join(repository, "packages", name, "package.json"),
         join(directory, "package.json"),
@@ -133,7 +136,8 @@ it("follows actual Contract factory symbols, including ESM aliases, without trea
         'import * as contract from "../contracts/contracts.js";',
         'export const first = declare("probe/duplicate");',
         "const emit = contract.event;",
-        'export const second = emit("probe/duplicate");',
+        'const ids = { conflict: "probe/duplicate" } as const;',
+        "export const second = emit(ids.conflict);",
         'export function unrelated(declare: (id: string) => string) { return declare("probe/shadow"); }',
         'export const actual = declare("probe/shadow");',
       ].join("\n"),
@@ -184,4 +188,20 @@ it("checks the defining Lifetime constructor, production source roots and readon
   expect(result.output.match(/\[lifetime.owner\]/g)).toHaveLength(1);
   expect(result.output).toContain("owner-probe.ts:6: [ownership.module]");
   expect(result.output).toContain("owner-probe.ts:8: [callbacks.readonly]");
+});
+
+it("rejects a private runtime port redirected into non-runtime workspace files", () => {
+  const result = runGuard("check-layers.mjs", (workspace) => {
+    const root = join(workspace, "packages", "reactive");
+    const manifest = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
+    manifest.imports["#abort-listener"].types = "./runtime/undeclared.d.mts";
+    writeFileSync(join(root, "package.json"), JSON.stringify(manifest));
+    copyFileSync(
+      join(root, "runtime/abort-listener.d.mts"),
+      join(root, "runtime/undeclared.d.mts"),
+    );
+  });
+  expect(result.status).toBe(1);
+  expect(result.output).toContain("[ownership.module]");
+  expect(result.output).toContain("runtime/undeclared.d.mts");
 });

@@ -8,6 +8,7 @@ describe("SerialQueue", () => {
     expect(() => queue.run(undefined as never)).toThrowError(
       new TypeError("SerialQueue operation must be a function"),
     );
+    expect(() => queue.run(() => 1, null as never)).toThrow(TypeError);
     await expect(queue.run(() => 1)).resolves.toBe(1);
   });
 
@@ -67,4 +68,67 @@ describe("SerialQueue", () => {
       await first;
     }
   });
+});
+
+it("cancels only queued work and retains the position of later commands", async () => {
+  const queue = new SerialQueue();
+  const controller = new AbortController();
+  const entered = Promise.withResolvers<void>();
+  const release = Promise.withResolvers<number>();
+  const first = queue.run(() => {
+    entered.resolve();
+    return release.promise;
+  }, controller.signal);
+  await entered.promise;
+  let called = false;
+  const cancelled = queue.run(() => {
+    called = true;
+  }, controller.signal);
+  const trace: string[] = [];
+  const last = queue.run(() => trace.push("last"));
+  controller.abort("retired");
+  try {
+    await expect(cancelled).rejects.toBe("retired");
+    await expect(
+      queue.run(() => {
+        called = true;
+      }, controller.signal),
+    ).rejects.toBe("retired");
+    expect(called).toBe(false);
+    expect(trace).toEqual([]);
+  } finally {
+    release.resolve(7);
+    expect(await first).toBe(7);
+    await last;
+  }
+  expect(called).toBe(false);
+  expect(trace).toEqual(["last"]);
+});
+
+it("drops a withdrawn command and its rejection reason while the queue is stalled", async () => {
+  const queue = new SerialQueue();
+  const first = Promise.withResolvers<void>();
+  const running = queue.run(() => first.promise);
+  async function withdraw() {
+    const payload = {};
+    const reason = {};
+    const controller = new AbortController();
+    const result = queue.run(() => payload, controller.signal);
+    controller.abort(reason);
+    expect(await result.catch((error: unknown) => error)).toBe(reason);
+    return [new WeakRef(payload), new WeakRef(reason)];
+  }
+  try {
+    const references = await withdraw();
+    const collect = globalThis.gc;
+    if (!collect) throw new Error("Retention tests require --expose-gc");
+    for (let pass = 0; pass < 8 && references.some((ref) => ref.deref()); pass++) {
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      collect();
+    }
+    expect(references.map((ref) => ref.deref())).toEqual([undefined, undefined]);
+  } finally {
+    first.resolve();
+    await running;
+  }
 });

@@ -4,7 +4,11 @@ import { InstallationGraph } from "./installation-graph.js";
 import { resolvePluginConfig, type ConfigValue } from "./configuration.js";
 import type { ChangeOperation } from "./change-set.js";
 import type { GroupNode } from "./group.js";
-import type { InstallationDeclaration, InstallationRecord } from "./installation.js";
+import {
+  claimInstallationId,
+  type InstallationDeclaration,
+  type InstallationRecord,
+} from "./installation.js";
 import {
   describeBindings,
   describeImpact,
@@ -31,9 +35,8 @@ export async function compileTransition(
 ): Promise<PreparedTransition> {
   const declarations = new Map(current.graph.declarations);
   const groups = new Map(current.groups);
-  const changed = new Set<InstallationRecord>();
+  const ids = new Set(current.graph.byId.keys());
   const direct = new Map<InstallationRecord, ImpactReason["kind"]>();
-  const installedIds = new Set([...current.graph.declarations.keys()].map((record) => record.id));
 
   for (const operation of operations) {
     if (operation.kind === "group") {
@@ -48,12 +51,7 @@ export async function compileTransition(
     if (operation.kind === "remove-group") continue;
     const record = operation.installation;
     if (operation.kind === "install") {
-      if (installedIds.has(record.id))
-        throw new DougongError(
-          "INSTALLATION_CONFLICT",
-          "Installation id is already installed: " + record.id,
-        );
-      installedIds.add(record.id);
+      claimInstallationId(ids, record.id);
       declarations.set(record, operation.declaration);
       direct.set(record, "installed");
     } else {
@@ -80,7 +78,6 @@ export async function compileTransition(
         direct.set(record, "updated");
       }
     }
-    changed.add(record);
   }
 
   for (const operation of operations) {
@@ -107,7 +104,6 @@ export async function compileTransition(
           "Installation change conflicts with Group removal: " + record.id,
         );
       declarations.delete(record);
-      changed.add(record);
       direct.set(record, "removed");
     }
     for (const id of removed) {
@@ -124,9 +120,8 @@ export async function compileTransition(
   contracts.assertKinds(graph.contractKinds);
   const affected =
     intent === "change"
-      ? current.graph.affectedByTransitionTo(graph, changed)
+      ? current.graph.affectedByTransitionTo(graph, [...direct.keys()])
       : new Set(graph.order);
-  if (intent !== "change") for (const record of affected) direct.set(record, intent);
   const configs = new Map<InstallationRecord, { readonly value: ConfigValue | undefined }>();
   for (const [record, declaration] of declarations) {
     const cached =
@@ -134,7 +129,7 @@ export async function compileTransition(
         ? current.configs.get(record)
         : undefined;
     if (cached) configs.set(record, cached);
-    else if (intent === "start" || changed.has(record)) {
+    else if (intent === "start" || direct.has(record)) {
       configs.set(
         record,
         await resolvePluginConfig(
@@ -146,6 +141,7 @@ export async function compileTransition(
       );
     }
   }
+  if (intent !== "change") for (const record of affected) direct.set(record, intent);
   const prepareOrder = Object.freeze(
     intent === "stop" || (intent === "change" && current.phase === "stopped")
       ? []

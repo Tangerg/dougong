@@ -58,24 +58,17 @@ export function isConcreteVersion(version: string) {
 
 export type ManifestInput = z.input<typeof manifestSchema>;
 
-// Only declaration validation grants error provenance; copied constructors cannot.
-const manifestDeclarationFailures = new WeakSet<object>();
-
-function manifestDeclarationError(message: string) {
-  const failure = new PlatformError("MANIFEST_INVALID", message);
-  Object.freeze(failure);
-  manifestDeclarationFailures.add(failure);
-  return failure;
-}
-
 // Untrusted manifests can crash validators; preserve the cause under one public failure code.
 export function defineManifest(input: ManifestInput | Manifest): Manifest {
+  let failure: PlatformError | undefined;
+  const declarationError = (message: string) =>
+    (failure = Object.freeze(new PlatformError("MANIFEST_INVALID", message)));
   let declaration: Readonly<Record<string, unknown>>;
   try {
-    declaration = snapshotManifestDeclaration(input);
+    declaration = snapshotManifestDeclaration(input, declarationError);
   } catch (error) {
-    if (error !== null && typeof error === "object" && manifestDeclarationFailures.has(error))
-      throw error;
+    // A supplier may rethrow a genuine declaration error from an earlier call.
+    if (failure && error === failure) throw failure;
     throw new PlatformError("MANIFEST_INVALID", "Manifest declaration could not be read", {
       cause: error,
     });
@@ -99,18 +92,16 @@ export function defineManifest(input: ManifestInput | Manifest): Manifest {
   assertUnique(manifest.activation, "activation event", manifest.name);
   assertUnique(manifest.permissions, "permission", manifest.name);
 
-  return Object.freeze({
-    ...manifest,
-    activation: Object.freeze([...manifest.activation]),
-    permissions: Object.freeze([...manifest.permissions]),
-    dependencies: Object.freeze({ ...manifest.dependencies }),
-  });
+  Object.freeze(manifest.activation);
+  Object.freeze(manifest.permissions);
+  Object.freeze(manifest.dependencies);
+  return Object.freeze(manifest);
 }
 
 // Own the validated data so the supplier cannot mutate it between validation and storage.
-function snapshotManifestDeclaration(input: unknown) {
+function snapshotManifestDeclaration(input: unknown, createError: (message: string) => Error) {
   const declaration = normalizePlainRecord(input, "Manifest declaration", {
-    createError: manifestDeclarationError,
+    createError,
   });
   const collections = {
     activation: captureConfig(declaration.activation),
@@ -118,10 +109,10 @@ function snapshotManifestDeclaration(input: unknown) {
   };
   if (declaration.dependencies !== undefined) {
     const dependencies = normalizePlainRecord(declaration.dependencies, "Manifest dependencies", {
-      createError: manifestDeclarationError,
+      createError,
     });
     if (Object.hasOwn(dependencies, "__proto__")) {
-      throw manifestDeclarationError("Manifest dependency '__proto__' is not supported");
+      throw createError("Manifest dependency '__proto__' is not supported");
     }
     return { ...declaration, ...collections, dependencies };
   }

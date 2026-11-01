@@ -15,11 +15,11 @@ observe(lifetime, title, (value, generation) => {
 });
 ```
 
-A write marks dependent computed signals stale without evaluating them. A batch delays notification, but eligibility is decided at each write: subscribing to a computed signal after a write, even inside the same batch or from another listener, does not replay that write. A later write in the batch can notify the new subscriber. A shared dependency is checked at most once between writes, so repeated reads of a diamond graph do not rewalk each path.
+A write marks dependent computed signals stale without evaluating them. A batch delays notification, but eligibility is decided at each write: subscribing to a computed signal after a write, even inside the same batch or from another listener, does not replay that write. A later write in the batch can notify the new subscriber. A shared dependency is checked at most once between writes, so repeated reads of a diamond graph do not rewalk each path. Reading a cyclic computation throws. When an input breaks the cycle, direct reads and subscribers that caught the error can recover.
 
 A computed collector tracks nodes from its own module copy. For another bundle, another copy of the package or another implementation, use the `Readable<T>` protocol and explicitly enter the local graph with `bridge(owner, source)`. `BridgeOwner` only needs `defer`. The caller's Lifetime owns the subscription; no cross-copy global collector exists.
 
-Bridge rereads after subscribing to close the attachment window. On owner shutdown it unsubscribes, invalidates local dependants and clears the retained value. Terminal get and subscribe calls reject; do not retain a bridge beyond its owner's lifetime.
+Bridge rereads after subscribing to close the attachment window. On owner shutdown it unsubscribes, invalidates local dependants and clears the retained value. Existing subscribers receive one terminal invalidation, including inside a batch, unless they unsubscribe before delivery. Terminal get and subscribe calls reject; do not retain a bridge beyond its owner's lifetime.
 
 Once attached, a failed source read invalidates the bridge: local reads throw the source error, and a later successful read recovers even if the value equals its last success.
 

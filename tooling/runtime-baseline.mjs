@@ -1,4 +1,4 @@
-const browsers = { Chrome: "119", Edge: "119", Firefox: "121", Safari: "17.4" };
+const browsers = { Chrome: "119", Edge: "119", Firefox: "124", Safari: "17.4" };
 
 export const developmentEngines = Object.freeze({
   node: "^22.12.0 || ^24.0.0 || >=26.0.0",

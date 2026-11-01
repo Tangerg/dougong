@@ -1,21 +1,26 @@
-import { readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 const root = new URL("../", import.meta.url);
 const check = process.argv.includes("--check");
-for (const name of ["sync-result", "disposal-runtime"]) {
-  const source = readFileSync(new URL(`tooling/internal/${name}.ts`, root), "utf8");
+for (const filename of [
+  "abort.ts",
+  "sync-result.ts",
+  "disposal-runtime.ts",
+  "abort-listener.node.mjs",
+  "abort-listener.web.mjs",
+  "abort-listener.d.mts",
+]) {
+  const source = readFileSync(new URL(`tooling/internal/${filename}`, root), "utf8");
   const generated =
-    `// Generated from tooling/internal/${name}.ts. Run pnpm generate:internal.\n` + source;
-  const targets =
-    name === "disposal-runtime"
-      ? [
-          "packages/dougong/src/internal/disposal-runtime.ts",
-          "packages/reactive/src/disposal-runtime.ts",
-        ]
-      : ["packages/dougong/src/internal/sync-result.ts", "packages/reactive/src/sync-result.ts"];
-  for (const relative of targets) {
-    const target = new URL(relative, root);
+    `// Generated from tooling/internal/${filename}. Run pnpm generate:internal.\n` + source;
+  for (const name of ["dougong", "reactive"]) {
+    const directory = filename.endsWith(".ts")
+      ? name === "dougong"
+        ? "src/internal"
+        : "src"
+      : "runtime";
+    const target = new URL(`packages/${name}/${directory}/${filename}`, root);
     let existing;
     try {
       existing = readFileSync(target, "utf8");
@@ -24,6 +29,7 @@ for (const name of ["sync-result", "disposal-runtime"]) {
     }
     if (existing === generated) continue;
     if (check) throw new Error(`${fileURLToPath(target)} differs from its authoritative source`);
+    mkdirSync(new URL("./", target), { recursive: true });
     writeFileSync(target, generated);
   }
 }

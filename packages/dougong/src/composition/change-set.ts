@@ -12,6 +12,8 @@ import type {
 } from "./declarations.js";
 import {
   PendingInstallations,
+  captureInstallationDeclaration,
+  captureOrigin,
   type InstallationDeclaration,
   type InstallationRecord,
 } from "./installation.js";
@@ -47,15 +49,6 @@ export function assertId(id: unknown, label: string): asserts id is string {
   if (typeof id !== "string" || !id.trim() || id.trim() !== id) {
     throw new TypeError(label + " must be a non-empty trimmed string");
   }
-}
-
-export function captureOrigin(value: unknown): InstallationOrigin | undefined {
-  const captured = captureConfig(value);
-  if (captured === undefined) return undefined;
-  if (captured === null || Array.isArray(captured) || typeof captured !== "object") {
-    throw new TypeError("Installation origin must be a data record");
-  }
-  return captured as InstallationOrigin;
 }
 
 interface DraftState {
@@ -126,11 +119,7 @@ class ChangeSetDraft {
     });
     assertId(input.id, "Installation id");
     const group = input.group === undefined ? undefined : port.resolveGroup(input.group as object);
-    const declaration = Object.freeze({
-      plugin: normalizePlugin(plugin),
-      config: captureConfig(input.config),
-      origin: captureOrigin(input.origin),
-    });
+    const declaration = captureInstallationDeclaration(plugin, input.config, input.origin);
     this.#requireOpen();
     const installation = port.create(input.id, group);
     this.#stage(installation, { kind: "install", installation, declaration });

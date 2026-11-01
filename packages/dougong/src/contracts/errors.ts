@@ -74,11 +74,15 @@ export class RecordedFailure extends Error {
     return this.#snapshot;
   }
 
+  static #recorded(value: unknown) {
+    return value !== null && typeof value === "object" && #snapshot in value
+      ? value.#snapshot
+      : undefined;
+  }
+
   constructor(error: unknown) {
     const snapshot =
-      error !== null && typeof error === "object" && #snapshot in error
-        ? error.#snapshot
-        : captureError(error);
+      RecordedFailure.#recorded(error) ?? captureError(error, RecordedFailure.#recorded);
     super(snapshot.message);
     this.code = snapshot.code;
     this.#snapshot = snapshot;
@@ -88,10 +92,16 @@ export class RecordedFailure extends Error {
   }
 }
 
-function captureError(error: unknown): ErrorSnapshot {
+function captureError(
+  error: unknown,
+  recorded: (value: unknown) => ErrorSnapshot | undefined,
+): ErrorSnapshot {
   const seen = new Set<unknown>();
   let remaining = 32;
-  const visit = (value: unknown, depth: number): ErrorSnapshot => {
+  const visit = (raw: unknown, depth: number, fromSnapshot = false): ErrorSnapshot => {
+    // A nested record still shares this report's depth and size budget.
+    const sealed = fromSnapshot ? (raw as ErrorSnapshot) : recorded(raw);
+    const value = sealed ?? raw;
     if (depth > 4 || remaining-- <= 0 || seen.has(value)) {
       return Object.freeze({
         name: "TruncatedError",
@@ -99,7 +109,7 @@ function captureError(error: unknown): ErrorSnapshot {
         truncated: true,
       });
     }
-    if (!isError(value)) {
+    if (!sealed && !isError(value)) {
       const message =
         value === null ||
         ["string", "number", "boolean", "undefined", "bigint", "symbol"].includes(typeof value)
@@ -108,7 +118,7 @@ function captureError(error: unknown): ErrorSnapshot {
       return Object.freeze({ name: "NonError", message });
     }
     seen.add(value);
-    let truncated = false;
+    let truncated = sealed?.truncated ?? false;
     const clip = (raw: string, limit: number) => {
       if (raw.length > limit) truncated = true;
       return raw.slice(0, limit);
@@ -186,10 +196,10 @@ function captureError(error: unknown): ErrorSnapshot {
       message,
       ...(code === undefined ? {} : { code }),
       ...(stack === undefined ? {} : { stack }),
-      ...(cause === undefined ? {} : { cause: visit(cause, depth + 1) }),
+      ...(cause === undefined ? {} : { cause: visit(cause, depth + 1, !!sealed) }),
       ...(errors === undefined
         ? {}
-        : { errors: Object.freeze(errors.map((error) => visit(error, depth + 1))) }),
+        : { errors: Object.freeze(errors.map((error) => visit(error, depth + 1, !!sealed))) }),
       ...(manifestName === undefined ? {} : { manifestName }),
       ...(denied === undefined ? {} : { denied: Object.freeze(denied) }),
       ...(issues === undefined ? {} : { issues: Object.freeze(issues) }),

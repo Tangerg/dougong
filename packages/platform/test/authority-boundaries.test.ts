@@ -467,7 +467,7 @@ it("rejects a cancelled direct import even if the caller replaced its signal che
 });
 
 it.each(["load", "activate"] as const)(
-  "rechecks genuine caller cancellation after %s admission even if its event was intercepted",
+  "detaches during %s admission even if an earlier listener intercepts the caller event",
   async (stage) => {
     const controller = new AbortController();
     controller.signal.addEventListener("abort", (event) => event.stopImmediatePropagation());
@@ -493,11 +493,64 @@ it.each(["load", "activate"] as const)(
     const request = platform.activate([registration], { signal: controller.signal });
     await authorizing.promise;
     controller.abort("caller left");
-    resume.resolve();
-    await expect(request).rejects.toBe("caller left");
+    try {
+      await expect(Promise.race([request, nextTurn()])).rejects.toBe("caller left");
+    } finally {
+      resume.resolve();
+      await request.catch(() => undefined);
+    }
     expect(load).toHaveBeenCalledTimes(stage === "load" ? 0 : 1);
     expect(registration.error).toBeUndefined();
     expect(registration.installation).toBeUndefined();
     await platform[Symbol.asyncDispose]();
   },
 );
+
+it("invokes captured admission and load methods even when their bind properties are decorated", async () => {
+  const platformOptions = {
+    loader: { load: vi.fn<(name: string) => unknown>((name) => ({ default: emptyPlugin(name) })) },
+    authorizer: { authorize: vi.fn<Authorizer["authorize"]>() },
+  };
+  for (const method of [platformOptions.loader.load, platformOptions.authorizer.authorize]) {
+    Object.defineProperty(method, "bind", {
+      get() {
+        throw new Error("adapter binding is not part of the protocol");
+      },
+    });
+  }
+  const platform = createPlatform({
+    id: "adapters",
+    host: createHost(),
+    apiVersion: "1.0.0",
+    ...platformOptions,
+  });
+  const record = await select(platform, "sample", "sample");
+  await platform.activate([record]);
+  expect(platformOptions.authorizer.authorize).toHaveBeenCalledTimes(2);
+  expect(platformOptions.loader.load).toHaveBeenCalledOnce();
+  await platform[Symbol.asyncDispose]();
+});
+
+it("keeps activation admission and its completion paired for a decorated caller signal", async () => {
+  const controller = new AbortController();
+  let reads = 0;
+  Object.defineProperties(controller.signal, {
+    aborted: { get: () => ++reads === 1 },
+    reason: { value: "forged refusal" },
+  });
+  const { platform } = fixture(new Map([["sample", emptyPlugin("sample")]]));
+  const registration = await select(platform, "sample", "sample");
+  const result = await platform
+    .activate([registration], { signal: controller.signal })
+    .catch((error: unknown) => error);
+  const status = registration.status;
+  const closed = await Promise.race([
+    platform[Symbol.asyncDispose]().then(() => true),
+    nextTurn().then(() => false),
+  ]);
+  expect({ result, status, closed }).toEqual({
+    result: expect.objectContaining({ affectedInstallations: [registration.id] }),
+    status: "installed",
+    closed: true,
+  });
+});

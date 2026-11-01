@@ -3,6 +3,7 @@ import {
   captureReadable,
   captureUnsubscribe,
   disposeSymbol,
+  assertListener,
   type AsyncDisposable,
   type Disposable,
   type Readable,
@@ -18,24 +19,8 @@ type BridgeValue<T> =
   | { readonly phase: "error"; readonly source: Readable<T>; readonly error: unknown }
   | { readonly phase: "disposed" };
 
-class BridgeSubscription implements Disposable {
-  #release: (() => void) | undefined;
-
-  constructor(release: () => void) {
-    this.#release = release;
-    Object.freeze(this);
-  }
-
-  [disposeSymbol]() {
-    const release = this.#release;
-    this.#release = undefined;
-    release?.();
-  }
-}
-
 class ReadableBridge<T> implements Disposable {
   readonly #value: Signal<BridgeValue<T>>;
-  readonly #subscriptions = new Set<Disposable>();
   #release: (() => void) | undefined;
   #reading: symbol | undefined;
   #failure: { readonly value: unknown } | undefined;
@@ -67,7 +52,7 @@ class ReadableBridge<T> implements Disposable {
       if (typeof close !== "function") {
         throw new TypeError("BridgeOwner.defer() must return an AsyncDisposable");
       }
-      releaseRegistration = close.bind(cleanup);
+      releaseRegistration = () => Reflect.apply(close, cleanup, []);
       const state = this.#value.get();
       if (state.phase === "disposed") throw new Error("Readable bridge has been disposed");
       const release = captureUnsubscribe(state.source.subscribe(() => this.#refresh()));
@@ -128,12 +113,12 @@ class ReadableBridge<T> implements Disposable {
   #subscribe(listener: () => void): Disposable {
     if (this.#value.get().phase === "disposed")
       throw new Error("Readable bridge has been disposed");
-    const inner = this.#value.subscribe(listener);
-    const subscription = new BridgeSubscription(() => {
-      this.#subscriptions.delete(subscription);
-      inner[disposeSymbol]();
+    assertListener(listener);
+    const subscription = this.#value.subscribe(() => {
+      // A batch may deliver termination later. Keep the slot until delivery or explicit withdrawal.
+      if (this.#value.get().phase === "disposed") subscription[disposeSymbol]();
+      return listener();
     });
-    this.#subscriptions.add(subscription);
     return subscription;
   }
 
@@ -152,9 +137,6 @@ class ReadableBridge<T> implements Disposable {
       this.#release = undefined;
     } catch (error) {
       errors.push(error);
-    } finally {
-      for (const subscription of this.#subscriptions) subscription[disposeSymbol]();
-      this.#subscriptions.clear();
     }
     if (errors.length) {
       const failure =
@@ -173,7 +155,7 @@ export function bridge<T>(owner: BridgeOwner, source: Readable<T>): ReadonlySign
     throw new TypeError("bridge() expects a resource owner");
   }
   const captured = captureReadable(source, "bridge()");
-  const capturedOwner: BridgeOwner = { defer: (dispose) => defer.call(owner, dispose) };
+  const capturedOwner: BridgeOwner = { defer: (dispose) => Reflect.apply(defer, owner, [dispose]) };
   const instance = new ReadableBridge(captured);
   try {
     instance.start(capturedOwner);

@@ -8,7 +8,7 @@
   "browserslist": [
     "Chrome >= 119",
     "Edge >= 119",
-    "Firefox >= 121",
+    "Firefox >= 124",
     "Safari >= 17.4"
   ],
   "sideEffects": false,

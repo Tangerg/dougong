@@ -1,3 +1,4 @@
+import type { StandardSchemaV1 } from "@standard-schema/spec";
 import { expect, it, vi } from "vitest";
 import { ConfigValidationError, createHost, definePlugin, optional, service } from "../src/index";
 
@@ -96,4 +97,44 @@ it("rejects executable array fields without substituting fabricated declarations
   const issues = Object.assign([{ message: "real" }], { [Symbol.iterator]: iterator });
   expect(() => new ConfigValidationError(issues)).toThrow(/dense/);
   expect(iterator).not.toHaveBeenCalled();
+});
+
+it("preserves Standard Schema options and method identity through capture", () => {
+  const validate = vi.fn<StandardSchemaV1.Props<unknown, unknown>["validate"]>(
+    (_input, options) => ({
+      value: options?.libraryOptions?.mode,
+    }),
+  );
+  const standard = { version: 1 as const, vendor: "test", validate };
+  const plugin = definePlugin({
+    name: "validation.options",
+    config: { "~standard": standard },
+    setup() {},
+  });
+  const options = { libraryOptions: { mode: "strict" } };
+  expect(plugin.config!["~standard"].validate(null, options)).toEqual({ value: "strict" });
+  expect(validate.mock.contexts).toEqual([standard]);
+  expect(validate).toHaveBeenCalledExactlyOnceWith(null, options);
+});
+
+it("rejects duplicate installation IDs before reading the conflicting initial Plugin and retains the committed identity on a failed Plan", async () => {
+  const plugin = definePlugin({ name: "unique", setup() {} });
+  const conflicting = new Proxy(plugin, {
+    getPrototypeOf() {
+      throw new Error("conflicting Plugin should not be inspected");
+    },
+  });
+  const original = { id: "same", plugin };
+  const conflict = { code: "INSTALLATION_CONFLICT" };
+  expect(() =>
+    createHost({ installations: [original, { id: original.id, plugin: conflicting }] }),
+  ).toThrowError(expect.objectContaining(conflict));
+  const host = createHost({ installations: [original] });
+  const committed = host.installation(original.id)!;
+  const change = host.change();
+  change.remove(committed);
+  const replacement = change.install(plugin, { id: original.id });
+  await expect(host.plan(change)).rejects.toMatchObject(conflict);
+  expect(host.installation(original.id)).toBe(committed);
+  expect(replacement.status).toBe("removed");
 });

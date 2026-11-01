@@ -8,12 +8,13 @@
   "browserslist": [
     "Chrome >= 119",
     "Edge >= 119",
-    "Firefox >= 121",
+    "Firefox >= 124",
     "Safari >= 17.4"
   ],
   "sideEffects": false,
   "files": [
     "dist",
+    "runtime",
     "README.md",
     "LICENSE"
   ],
@@ -25,6 +26,13 @@
     "./advanced": {
       "types": "./dist/advanced.d.ts",
       "import": "./dist/advanced.js"
+    }
+  },
+  "imports": {
+    "#abort-listener": {
+      "types": "./runtime/abort-listener.d.mts",
+      "node": "./runtime/abort-listener.node.mjs",
+      "default": "./runtime/abort-listener.web.mjs"
     }
   },
   "scripts": {

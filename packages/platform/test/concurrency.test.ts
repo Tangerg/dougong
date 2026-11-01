@@ -370,3 +370,54 @@ it.each([true, false])(
     await platform[Symbol.asyncDispose]();
   },
 );
+
+it("withdraws a loaded activation while another activation owns the Core handoff", async () => {
+  const admissionEntered = deferred();
+  const releaseAdmission = deferred();
+  const loading = deferred();
+  const releaseLoader = deferred();
+  const platform = createPlatform({
+    id: "handoff",
+    host: createHost(),
+    apiVersion: "1.0.0",
+    loader: {
+      async load(name: string) {
+        if (name === "queued") {
+          loading.resolve();
+          await releaseLoader.promise;
+        }
+        return { default: emptyPlugin(name) };
+      },
+    },
+    authorizer: {
+      async authorize({ operation, artifact }) {
+        if (operation === "activate" && artifact.manifest.name === "first") {
+          admissionEntered.resolve();
+          await releaseAdmission.promise;
+        }
+      },
+    },
+  });
+  const queued = await select(platform, "queued", "queued");
+  const first = await select(platform, "first", "first");
+  const controller = new AbortController();
+  const attempt = platform
+    .activate([queued], { signal: controller.signal })
+    .catch((e: unknown) => e);
+  await loading.promise;
+  const applying = platform.activate([first]);
+  await admissionEntered.promise;
+  releaseLoader.resolve();
+  await nextTurn();
+  controller.abort("withdrawn");
+  try {
+    expect(await Promise.race([attempt, nextTurn().then(() => "blocked")])).toBe("withdrawn");
+    expect(queued.status).toBe("selected");
+  } finally {
+    releaseAdmission.resolve();
+    await applying;
+    await attempt;
+    expect(queued.installation).toBeUndefined();
+    await platform[Symbol.asyncDispose]();
+  }
+});

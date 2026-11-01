@@ -5,7 +5,7 @@ import type { ActivationPlan } from "./plan.js";
 
 export class ActivationOperation<Reference> {
   readonly #controller = new AbortController();
-  #caller: { readonly signal: AbortSignal; readonly detach: () => void } | undefined;
+  #detachCaller: (() => void) | undefined;
   readonly #completion = Promise.withResolvers<void>();
   readonly plan: ActivationPlan<Reference>;
   readonly #roles = new Map<
@@ -19,11 +19,7 @@ export class ActivationOperation<Reference> {
       this.#roles.set(registration, { revision, status: "activating" });
     for (const { registration, revision } of plan.removals)
       this.#roles.set(registration, { revision, status: "removing" });
-    if (signal)
-      this.#caller = {
-        signal,
-        detach: onAbort(signal, (reason) => this.#controller.abort(reason)),
-      };
+    if (signal) this.#detachCaller = onAbort(signal, (reason) => this.#controller.abort(reason));
     this.signal.throwIfAborted();
   }
 
@@ -34,29 +30,14 @@ export class ActivationOperation<Reference> {
     return this.#completion.promise;
   }
 
-  // Same-realm code can suppress delivery of an abort event, but not the caller signal's native state.
-  synchronizeCancellation() {
-    if (!this.#caller || this.signal.aborted) return;
-    try {
-      AbortSignal.prototype.throwIfAborted.call(this.#caller.signal);
-    } catch (reason) {
-      this.#controller.abort(reason);
-    }
-  }
-
   checkpoint() {
-    this.synchronizeCancellation();
     this.signal.throwIfAborted();
   }
 
   handoff() {
     this.checkpoint();
-    this.#detachCaller();
-  }
-
-  #detachCaller() {
-    this.#caller?.detach();
-    this.#caller = undefined;
+    this.#detachCaller?.();
+    this.#detachCaller = undefined;
   }
 
   statusFor(registration: RegistrationRecord<Reference>, revision: number) {
@@ -80,7 +61,7 @@ export class ActivationOperation<Reference> {
   }
 
   finish() {
-    this.#detachCaller();
+    this.#detachCaller?.();
     this.#completion.resolve();
   }
 }

@@ -1,4 +1,7 @@
-// An abort event can be dispatched by any signal holder; only the controller can change native state.
+// Generated from tooling/internal/abort.ts. Run pnpm generate:internal.
+import { listenForAbort } from "#abort-listener";
+
+// Event dispatch and shadow properties are public; the native signal state belongs to the controller.
 export function isAborted(signal: AbortSignal): boolean {
   return Reflect.get(AbortSignal.prototype, "aborted", signal) as boolean;
 }
@@ -9,26 +12,31 @@ export function abortReason(signal: AbortSignal): unknown {
 
 export function onAbort(signal: AbortSignal, callback: (reason: unknown) => void): () => void {
   if (typeof callback !== "function") throw new TypeError("Abort listener must be a function");
-  // The native getter also rejects non-signals before a TypeError could be mistaken for a reason.
-  const alreadyAborted = isAborted(signal);
+  if (isAborted(signal)) {
+    callback(abortReason(signal));
+    return () => {};
+  }
+
   let binding: { signal: AbortSignal; callback: (reason: unknown) => void } | undefined = {
     signal,
     callback,
   };
+  let remove: (() => void) | undefined;
   function detach() {
-    if (!binding) return;
-    EventTarget.prototype.removeEventListener.call(binding.signal, "abort", notify);
     binding = undefined;
+    remove?.();
+    remove = undefined;
   }
   function notify() {
-    if (!binding) return;
+    if (!binding || !isAborted(binding.signal)) return;
     const { signal, callback } = binding;
-    if (!isAborted(signal)) return;
     const reason = abortReason(signal);
     detach();
     callback(reason);
   }
-  if (alreadyAborted) notify();
-  else EventTarget.prototype.addEventListener.call(signal, "abort", notify);
+  remove = listenForAbort(signal, notify);
+  // A runtime registration hook may have delivered genuine cancellation before returning its disposer.
+  if (binding) notify();
+  else detach();
   return detach;
 }

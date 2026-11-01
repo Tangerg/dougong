@@ -20,8 +20,10 @@ describe("explicitly abandoning an operation on abort", () => {
     const controller = new AbortController();
     const reason = new Error("retired");
     const start = vi.fn<() => Promise<string>>(() => Promise.resolve("unused"));
+    controller.signal.addEventListener("abort", (event) => event.stopImmediatePropagation(), {
+      once: true,
+    });
     const result = abandonOnAbort(controller.signal, start);
-    expect(getEventListeners(controller.signal, "abort")).toHaveLength(1);
 
     controller.abort(reason);
 

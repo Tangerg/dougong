@@ -81,6 +81,33 @@ installCommandFixture((name, args, options, nativeSpawn) => {
       runGit("commit", "--allow-empty", "-m", "Concurrent commit before tag");
       injected = true;
     }
+    if (race === "retag-during-resume" && name === "pnpm" && args[0] === "pack") {
+      const { version } = JSON.parse(readFileSync(join(options.cwd, "package.json"), "utf8"));
+      const tag = `v${version}`;
+      const existing = nativeSpawn(git, ["tag", "--list", tag], {
+        cwd: workspace,
+        encoding: "utf8",
+      });
+      if (existing.stdout.trim()) {
+        runGit("tag", "-f", "-a", tag, "-m", "A different annotation for the same commit");
+        injected = true;
+      }
+    }
+    if (race === "remote-main-at-push" && name === "git" && args[0] === "push") {
+      runGit("-C", join(workspace, "remote.git"), "update-ref", "-d", "refs/heads/main");
+      injected = true;
+    }
+    if (race === "remote-tag-during-gate" && name === "pnpm" && args[0] === "pack") {
+      const { version } = JSON.parse(readFileSync(join(options.cwd, "package.json"), "utf8"));
+      runGit(
+        "-C",
+        join(workspace, "remote.git"),
+        "update-ref",
+        `refs/tags/v${version}`,
+        "refs/heads/main",
+      );
+      injected = true;
+    }
     if (race === "remote-tag-at-push" && name === "git" && args[0] === "push") {
       const tagRef = args.at(-1).split(":")[1];
       const original = nativeSpawn(git, ["rev-parse", "origin/main"], {
@@ -161,7 +188,7 @@ installCommandFixture((name, args, options, nativeSpawn) => {
     if (name === "pnpm") {
       if (args.length !== 3 || args[1] !== "--pack-destination") process.exit(99);
       if (process.env.DOUGONG_RELEASE_REAL_PNPM) {
-        return nativeSpawn(process.execPath, [process.env.DOUGONG_RELEASE_REAL_PNPM, ...args], {
+        return nativeSpawn(process.env.DOUGONG_RELEASE_REAL_PNPM, args, {
           ...options,
           stdio: "pipe",
           env: { ...process.env, ...options.env, COREPACK_ENABLE_NETWORK: "0" },

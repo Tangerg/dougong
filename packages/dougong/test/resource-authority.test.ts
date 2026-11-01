@@ -1,3 +1,4 @@
+import { getEventListeners } from "node:events";
 import { expect, it, vi } from "vitest";
 import { createHost, definePlugin, event, extensionPoint, type PluginContext } from "../src/index";
 import { onAbort } from "../src/advanced";
@@ -243,6 +244,7 @@ it("propagates only an actual parent cancellation to child scopes and tasks", as
 it("uses native cancellation state, preserves the exact reason, and detaches explicitly", () => {
   const controller = new AbortController();
   const { signal } = controller;
+  signal.addEventListener("abort", (event) => event.stopImmediatePropagation());
   const fake = vi.fn<() => never>(() => {
     throw new Error("untrusted signal method");
   });
@@ -270,6 +272,48 @@ it("uses native cancellation state, preserves the exact reason, and detaches exp
   expect(fake).not.toHaveBeenCalled();
   expect(() => onAbort(new EventTarget() as AbortSignal, notified)).toThrow(TypeError);
   expect(() => onAbort(signal, null as never)).toThrow(TypeError);
+});
+
+it("observes an existing composite without consulting shadow state on its upstream signal", () => {
+  const controller = new AbortController();
+  const signal = AbortSignal.any([controller.signal]);
+  const reason = new Error("cancelled upstream");
+  Object.defineProperties(controller.signal, {
+    aborted: { value: true },
+    reason: { value: "wrong" },
+  });
+  signal.addEventListener("abort", (event) => event.stopImmediatePropagation());
+  const notified = vi.fn<(reason: unknown) => void>();
+  const detach = onAbort(signal, notified);
+  signal.dispatchEvent(new Event("abort"));
+  signal.dispatchEvent(new Event("abort"));
+  expect(notified).not.toHaveBeenCalled();
+  controller.abort(reason);
+  expect(notified).toHaveBeenCalledExactlyOnceWith(reason);
+  detach();
+});
+
+it("leaves unrelated listeners intact even when a native registration hook throws", () => {
+  const controller = new AbortController();
+  const signal = AbortSignal.any([controller.signal]);
+  const independent = vi.fn<() => void>();
+  signal.addEventListener("abort", independent);
+  const failure = new Error("unreadable instance property");
+  Object.defineProperty(signal, "aborted", {
+    get() {
+      throw failure;
+    },
+  });
+  const withdrawn = vi.fn<() => void>();
+  try {
+    onAbort(signal, withdrawn)();
+  } catch (error) {
+    if (error !== failure) throw error;
+  }
+  expect(getEventListeners(signal, "abort")).toEqual([independent]);
+  controller.abort();
+  expect(independent).toHaveBeenCalledOnce();
+  expect(withdrawn).not.toHaveBeenCalled();
 });
 
 it("retains only ordered IDs in a snapshot when an executable contribution is replaced or removed", async () => {

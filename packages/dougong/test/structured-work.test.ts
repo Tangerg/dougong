@@ -275,6 +275,50 @@ describe("structured work boundaries", () => {
     expect(trace).toEqual(["abort", "interrupt", "joined", "release"]);
   });
 
+  it("starts every interruption before waiting for any of them to release blocked work", async () => {
+    const owner = lifetime();
+    const io = Promise.withResolvers<void>();
+    const finalCleanup = vi.fn<() => void>();
+    owner.defer(finalCleanup);
+    const task = owner.spawn(() => io.promise);
+    const interruptIo = vi.fn<() => void>(io.resolve);
+    owner.interrupt(interruptIo);
+    owner.interrupt(() => task.result);
+    const closing = owner.dispose();
+    try {
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(interruptIo).toHaveBeenCalledOnce();
+    } finally {
+      io.resolve();
+      await closing;
+    }
+    expect(finalCleanup).toHaveBeenCalledOnce();
+  });
+
+  it("retains failed interruptions independently after every interruption was attempted", async () => {
+    const owner = lifetime();
+    const first = new Error("socket interrupt failed");
+    const second = new Error("reader interrupt failed");
+    const interrupted = vi.fn<() => void>();
+    owner.interrupt(() => {
+      throw first;
+    });
+    owner.interrupt(interrupted);
+    owner.interrupt(() => {
+      throw second;
+    });
+    await expect(owner.dispose()).rejects.toMatchObject({ errors: [second, first] });
+    expect(interrupted).toHaveBeenCalledOnce();
+    expect(owner.snapshot()).toMatchObject({
+      phase: "quarantined",
+      interrupts: 2,
+      unresolved: [
+        { kind: "interrupt", error: { message: first.message } },
+        { kind: "interrupt", error: { message: second.message } },
+      ],
+    });
+  });
+
   it("cancels owned tasks and children even when a plugin consumes the public abort event", async () => {
     const owner = lifetime();
     owner.signal.addEventListener("abort", (event) => event.stopImmediatePropagation());

@@ -170,19 +170,22 @@ if (ahead !== "0" && !pendingReleaseCommit) {
 }
 
 const tag = `v${version}`;
-const hasTag = Boolean(capture("git", ["tag", "--list", tag]));
+const mainRef = "refs/heads/main";
+const tagRef = `refs/tags/${tag}`;
+const existingTag = capture("git", ["tag", "--list", tag])
+  ? capture("git", ["rev-parse", tagRef])
+  : undefined;
 if (
-  hasTag &&
+  existingTag &&
   (!PACKAGES.every(({ dir }) => readManifest(dir).version === version) ||
-    capture("git", ["cat-file", "-t", `refs/tags/${tag}`]) !== "tag" ||
-    capture("git", ["rev-parse", `refs/tags/${tag}^{commit}`]) !== head)
+    capture("git", ["cat-file", "-t", existingTag]) !== "tag" ||
+    capture("git", ["rev-parse", `${existingTag}^{commit}`]) !== head)
 ) {
   fail(`tag ${tag} already exists but does not record this release`);
 }
 // Fetching main need not fetch its tags. A remote reservation must be checked before the first upload.
-const tagRef = `refs/tags/${tag}`;
 const remoteTag = capture("git", ["ls-remote", "--refs", "origin", tagRef]);
-if (remoteTag && (!hasTag || remoteTag !== capture("git", ["rev-parse", tagRef]) + "\t" + tagRef))
+if (remoteTag && remoteTag !== existingTag + "\t" + tagRef)
   fail(`origin already has a different release tag ${tag}; inspect it before publishing`);
 console.log(
   `  main is clean${pendingReleaseCommit ? "; resuming its release record" : " and equals origin/main"} at ${head}`,
@@ -227,7 +230,7 @@ const alreadyPublished = new Set();
 for (const { name } of PACKAGES) {
   if (registryHasVersion(name)) alreadyPublished.add(name);
 }
-if ((pendingReleaseCommit || hasTag) && alreadyPublished.size !== PACKAGES.length) {
+if ((pendingReleaseCommit || existingTag) && alreadyPublished.size !== PACKAGES.length) {
   fail("Git records this release but not every package is published; refusing to advance it");
 }
 if (alreadyPublished.size) {
@@ -413,6 +416,15 @@ function assertPublicationInputs(action) {
   }
 }
 
+// Registry uploads cannot be rolled back if the verified branch or release tag changed while waiting.
+const verifiedRefs = [remoteMain + "\t" + mainRef, remoteTag].filter(Boolean).sort().join("\n");
+function assertRemoteReleaseRefs() {
+  const observed = capture("git", ["ls-remote", "--refs", "origin", mainRef, tagRef]);
+  if (observed.split("\n").sort().join("\n") !== verifiedRefs) {
+    fail("remote release refs changed since preflight; refusing to publish");
+  }
+}
+
 const published = [];
 for (const { dir, name } of PACKAGES) {
   if (alreadyPublished.has(name)) {
@@ -424,6 +436,7 @@ for (const { dir, name } of PACKAGES) {
   const upload = writeCandidate(candidate, mkdtempSync(join(stage, "upload-")));
   const publishArgs = ["publish", upload, "--access", "public"];
   if (otp !== undefined) publishArgs.push(`--otp=${otp}`);
+  assertRemoteReleaseRefs();
   const result = spawnSync("npm", publishArgs, { stdio: "inherit" });
   if (result.status === 0 && !awaitRegistry(name)) {
     console.error(
@@ -474,21 +487,23 @@ if (changed.status === 1) {
     fail("Git commit differs from the verified release; refusing to tag or push");
 }
 originalManifests.clear();
-if (!hasTag) run("git", ["tag", "-a", tag, releaseCommit, "-m", `Dougong ${version}`]);
-const tagObject = capture("git", ["rev-parse", `refs/tags/${tag}`]);
+if (!existingTag) run("git", ["tag", "-a", tag, releaseCommit, "-m", `Dougong ${version}`]);
+const tagObject = existingTag ?? capture("git", ["rev-parse", tagRef]);
 if (
   capture("git", ["cat-file", "-t", tagObject]) !== "tag" ||
   capture("git", ["rev-parse", `${tagObject}^{commit}`]) !== releaseCommit
 )
   fail(`tag ${tag} does not record the verified release; refusing to push`);
-// Ref names can move while npm or Git hooks run. Publish the verified objects themselves.
+// Pin both sides: a plain fast-forward push can recreate a branch somebody just deleted.
 run("git", [
   "push",
   "--atomic",
   "--no-follow-tags",
+  `--force-with-lease=${mainRef}:${remoteMain}`,
+  `--force-with-lease=${tagRef}:${remoteTag.split("\t")[0]}`,
   "origin",
-  `${releaseCommit}:refs/heads/main`,
-  `${tagObject}:refs/tags/${tag}`,
+  `${releaseCommit}:${mainRef}`,
+  `${tagObject}:${tagRef}`,
 ]);
 
 console.log(`\n[32m✓ Dougong ${version} released[0m`);

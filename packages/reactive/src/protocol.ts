@@ -26,7 +26,10 @@ export function captureReadable<T>(source: Readable<T>, operation: string): Read
   const subscribe = source?.subscribe;
   if (typeof get !== "function" || typeof subscribe !== "function")
     throw new TypeError(`${operation} expects a readable source`);
-  return Object.freeze({ get: get.bind(source), subscribe: subscribe.bind(source) });
+  return Object.freeze({
+    get: () => Reflect.apply(get, source, []),
+    subscribe: (listener: () => void) => Reflect.apply(subscribe, source, [listener]),
+  });
 }
 
 export function captureUnsubscribe(subscription: Disposable): () => void {
@@ -38,4 +41,10 @@ export function captureUnsubscribe(subscription: Disposable): () => void {
       Reflect.apply(release, subscription, []),
       "Readable subscriptions must dispose synchronously",
     );
+}
+
+export function assertListener(listener: unknown): asserts listener is () => void {
+  if (typeof listener !== "function") {
+    throw new TypeError("Signal subscriber must be a function");
+  }
 }

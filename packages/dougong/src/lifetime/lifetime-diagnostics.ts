@@ -13,6 +13,7 @@ export interface LifetimeSnapshot {
   readonly label: string;
   readonly phase: LifetimePhase;
   readonly cleanups: number;
+  readonly interrupts: number;
   readonly tasks: number;
   readonly acquisitions: number;
   readonly publications: number;

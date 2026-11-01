@@ -66,13 +66,15 @@ Use `dougong/advanced` for adapters and domain extensions. These primitives expo
 | --- | --- |
 | `SnapshotPublisher`, `ReadonlyMapSnapshot` | Publish snapshots and expose read-only collections. |
 | `batchSnapshotNotifications` | Group publications in one synchronous callback. A returned Promise cannot extend the boundary. |
-| `SerialQueue` | Run submitted operations in sequence. |
+| `SerialQueue` | Runs operations in order. The optional signal in `run(operation, signal)` withdraws a waiting operation immediately. Once invoked, the operation owns its result. |
 | `normalizePlainRecord` | Capture the data fields of a plain record. Use `captureConfig` when the input is plugin configuration. |
 | `captureDataArray(input, label)` | Freeze a shallow copy of dense own index data without invoking the input’s methods or iterator. The caller validates the elements. |
 | `captureLogger(logger)` | Capture the four methods and their original receiver once when adopting a logging backend. |
 | `onAbort(signal, callback)` | Observe genuine cancellation once, passing its reason immediately if already aborted. The returned function detaches the callback. Dispatching an event named `abort` does not cancel a scope. |
 
-For future cancellation, the native event must reach the listener. Earlier same-realm code that calls `stopImmediatePropagation()` can suppress that notification; the signal itself remains aborted.
+An earlier listener calling `stopImmediatePropagation()` cannot suppress genuine cancellation. Core and Reactive share the same native-state and detachment protocol.
+
+On Node, Dougong uses a protected Node listener. Node itself may read `aborted` when registering on a timeout or composite signal. A throwing override can make registration fail. Any partial subscription is removed and the error propagates. If an override returns `true` on a live timeout, retain the signal or its detach function until observation ends so Node cannot collect the pending timer.
 
 ## Declaration descriptions and executable plans
 

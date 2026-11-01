@@ -57,6 +57,17 @@ it.each([
   expect(result.execution).toEqual(expectedExecution);
 });
 
+it("includes child stderr in a failing pack command's diagnostic", async () => {
+  const result = await evaluate(`
+    import childProcess from "node:child_process";
+    import { installCommandFixture } from ${JSON.stringify(fixture)};
+    installCommandFixture(() => ({ status: 1, stderr: Buffer.from("launcher failed") }));
+    try { childProcess.execFileSync("pnpm", ["pack"], { stdio: "pipe" }); }
+    catch (error) { console.log(JSON.stringify({ message: error.message, status: error.status })); }
+  `);
+  expect(result).toEqual({ message: "Command failed: pnpm pack\nlauncher failed", status: 1 });
+});
+
 it("refuses to simulate a command in a missing working directory", async () => {
   const result = await evaluate(`
     import childProcess from "node:child_process";

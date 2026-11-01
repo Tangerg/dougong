@@ -12,8 +12,13 @@ describe("Lifetime diagnostic projections", () => {
     const events = new EventHub();
     const first = events.stage("notice", () => undefined, lifetime);
     events.stage("notice", () => undefined, lifetime);
+    const interrupt = lifetime.interrupt(() => undefined);
     lifetime.publish();
     const before = lifetime.snapshot();
+    expect(before.interrupts).toBe(1);
+    interrupt[Symbol.dispose]();
+    expect(lifetime.snapshot().interrupts).toBe(0);
+    expect(before.interrupts).toBe(1);
     expect(before.publications).toBe(2);
     first[Symbol.dispose]();
     first[Symbol.dispose]();

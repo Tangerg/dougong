@@ -127,6 +127,27 @@ describe("manifest declarations", () => {
     );
   });
 
+  it("attributes a replayed validation error to the supplier that threw it", () => {
+    let previous: unknown;
+    try {
+      defineManifest({ name: "old", version: "1.0.0", dependencies: [] } as never);
+    } catch (error) {
+      previous = error;
+    }
+    expect(previous).toBeInstanceOf(PlatformError);
+    const unreadable = new Proxy(
+      { name: "new", version: "1.0.0" },
+      {
+        ownKeys() {
+          throw previous;
+        },
+      },
+    );
+    expect(() => defineManifest(unreadable)).toThrow(
+      expect.objectContaining({ code: "MANIFEST_INVALID", cause: previous }),
+    );
+  });
+
   it("captures inaccessible rejection values without inspecting them", () => {
     const reason = Proxy.revocable({}, {});
     reason.revoke();

@@ -1173,3 +1173,87 @@ it("uses the accepted release methods for the observation registration, drain an
   await observation[Symbol.asyncDispose]();
   expect(released).toEqual(["registration", "runner", "child"]);
 });
+
+it.each(["bridge", "observe"] as const)(
+  "invokes the captured %s methods even when the callable shadows bind or call",
+  async (adapter) => {
+    const base = manualOwner(manualLifetime(() => undefined));
+    const source = new ControlledReadable(5);
+    function decorated<F extends (...args: never[]) => unknown>(fn: F): F {
+      return Object.assign(fn, { bind: null, call: null });
+    }
+    const owner: ObservationOwner = {
+      child: decorated((label) => base.child(label)),
+      spawn: decorated(base.spawn),
+      defer: decorated((release) => {
+        const cleanup = base.defer(release);
+        return { [Symbol.asyncDispose]: decorated(() => cleanup[Symbol.asyncDispose]()) };
+      }),
+    };
+    const readable = {
+      get: decorated(source.get.bind(source)),
+      subscribe: decorated(source.subscribe.bind(source)),
+    };
+    const seen: number[] = [];
+    if (adapter === "observe") {
+      const handle = observe(owner, readable, (value) => seen.push(value));
+      await handle[Symbol.asyncDispose]();
+    } else {
+      const local = bridge(owner, readable);
+      seen.push(local.get());
+    }
+    expect(seen).toEqual([5]);
+  },
+);
+
+it.each([false, true])(
+  "obeys the task controller when owner signal properties contradict native state (already aborted: %s)",
+  async (alreadyAborted) => {
+    const controller = new AbortController();
+    const parent = controller.signal;
+    parent.addEventListener("abort", (event) => event.stopImmediatePropagation());
+    if (alreadyAborted) controller.abort("finished before attachment");
+    const foreignMethod = vi.fn<() => never>(() => {
+      throw new Error("signal method overridden by supplier");
+    });
+    Object.defineProperties(parent, {
+      aborted: { value: !alreadyAborted },
+      reason: { value: "forged reason" },
+      addEventListener: { value: foreignMethod },
+      removeEventListener: { value: foreignMethod },
+    });
+    let finished = false;
+    const owner: ObservationOwner = {
+      ...manualOwner(manualLifetime(() => undefined)),
+      spawn(task) {
+        const result = Promise.resolve(task(parent)).finally(() => {
+          finished = true;
+        });
+        return {
+          result,
+          async [Symbol.asyncDispose]() {
+            await result;
+          },
+        };
+      },
+    };
+    const source = new ControlledReadable(1);
+    const seen: number[] = [];
+    const observation = observe(owner, source, (value) => seen.push(value));
+    try {
+      parent.dispatchEvent(new Event("abort"));
+      source.value = 2;
+      source.notify();
+      await tick();
+      expect(finished).toBe(alreadyAborted);
+      expect(seen).toEqual(alreadyAborted ? [1] : [1, 2]);
+      controller.abort("real shutdown");
+      await tick();
+      expect(finished).toBe(true);
+    } finally {
+      await observation[Symbol.asyncDispose]();
+    }
+    expect(source.subscriptionsDisposed).toBe(1);
+    expect(foreignMethod).not.toHaveBeenCalled();
+  },
+);

@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   bridge,
+  batch,
   computed,
   signal,
   type AsyncDisposable,
@@ -439,3 +440,39 @@ it("projects a source read failure and notifies recovery even when the recovered
   subscription[Symbol.dispose]();
   await owner[Symbol.asyncDispose]();
 });
+
+it.each(["batch", "subscriber"] as const)(
+  "delivers terminal invalidation once during a %s and permits explicit withdrawal",
+  (boundary) => {
+    let close!: () => unknown;
+    const local = bridge(
+      {
+        defer(dispose) {
+          close = dispose;
+          return {
+            async [Symbol.asyncDispose]() {
+              await dispose();
+            },
+          };
+        },
+      },
+      signal(1),
+    );
+    const notified = vi.fn<() => void>(() => expect(() => local.get()).toThrow("disposed"));
+    const withdrawn = vi.fn<() => void>();
+    local.subscribe(notified);
+    const subscription = local.subscribe(withdrawn);
+    const stop = () => {
+      close();
+      subscription[Symbol.dispose]();
+    };
+    if (boundary === "batch") batch(stop);
+    else {
+      const trigger = signal(false);
+      using _subscription = trigger.subscribe(stop);
+      trigger.set(true);
+    }
+    expect(notified).toHaveBeenCalledTimes(1);
+    expect(withdrawn).not.toHaveBeenCalled();
+  },
+);

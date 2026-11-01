@@ -1,13 +1,41 @@
+import { DougongError } from "../contracts/errors.js";
 import type { InstallationState } from "../contracts/status.js";
 import type { Installation, InstallationOrigin } from "./declarations.js";
-import type { NormalizedPlugin } from "./plugin.js";
-import type { ConfigValue } from "./configuration.js";
+import { normalizePlugin, type AnyPlugin, type NormalizedPlugin } from "./plugin.js";
+import { captureConfig, type ConfigValue } from "./configuration.js";
 import type { GroupNode } from "./group.js";
 
 export interface InstallationDeclaration {
   readonly plugin: NormalizedPlugin;
   readonly config: ConfigValue | undefined;
   readonly origin: InstallationOrigin | undefined;
+}
+
+export function claimInstallationId(ids: Set<string>, id: string) {
+  if (ids.has(id))
+    throw new DougongError("INSTALLATION_CONFLICT", "Installation id is already installed: " + id);
+  ids.add(id);
+}
+
+export function captureInstallationDeclaration(
+  plugin: AnyPlugin,
+  config: unknown,
+  origin: unknown,
+): InstallationDeclaration {
+  return Object.freeze({
+    plugin: normalizePlugin(plugin),
+    config: captureConfig(config),
+    origin: captureOrigin(origin),
+  });
+}
+
+export function captureOrigin(value: unknown): InstallationOrigin | undefined {
+  const captured = captureConfig(value);
+  if (captured === undefined) return undefined;
+  if (captured === null || Array.isArray(captured) || typeof captured !== "object") {
+    throw new TypeError("Installation origin must be a data record");
+  }
+  return captured as InstallationOrigin;
 }
 
 export interface InstallationProjection {

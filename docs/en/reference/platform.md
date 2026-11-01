@@ -43,4 +43,4 @@ Registrations affected by one failed activation share one detached error snapsho
 
 Registration status follows the command executing in Core, including removal during Platform disposal, even if an older request is still loading. Manifest dependency traversal uses an explicit stack; a cycle report contains the closed cycle itself. Platform IDs, Manifest names and dependency names must be well-formed Unicode so they can identify an Installation. The logger is captured with its original receiver at construction.
 
-A caller that stops delivery of its own native abort event may delay observation until external work resumes. Platform rechecks native cancellation before module loading and at final admission; after handing the Plan to Core, only Core determines the result.
+An activation waiting in the admission or commit queue can be withdrawn immediately while an earlier command is still waiting on application code. A private dependent signal delivers cancellation even if a listener intercepts the original signal’s event.
