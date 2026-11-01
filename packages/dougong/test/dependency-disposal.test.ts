@@ -557,7 +557,7 @@ it("retains a timed out consumer while releasing independent work", async () => 
 });
 
 it.each([false, true])(
-  "retains candidate ownership when contract publication fails before commit (unclean: %s)",
+  "quarantines a rejected Contract admission only when candidate cleanup fails (unclean: %s)",
   async (unclean) => {
     const entered = Promise.withResolvers<void>();
     const resume = Promise.withResolvers<void>();
@@ -587,7 +587,9 @@ it.each([false, true])(
     host.contributions(collision);
     resume.resolve();
     const error = await changing;
-    expect(error).toMatchObject({ details: { outcome: "quarantined", phase: "publish" } });
+    expect(error).toMatchObject({
+      details: { outcome: unclean ? "quarantined" : "restored", phase: "prepare" },
+    });
     expect(release).toHaveBeenCalledOnce();
     expect(host.diagnostics.get().installations).toEqual([]);
     expect(host.diagnostics.get().unresolved.map((entry) => entry.installation)).toEqual(

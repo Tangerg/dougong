@@ -4,6 +4,27 @@ export const publishedDirectories = Object.freeze([
   "packages/platform",
 ]);
 
+// A package specifier is also a relative node_modules path; scoped names own exactly two components.
+export function packageName(name) {
+  if (typeof name !== "string" || !name || name.trim() !== name)
+    throw new Error("Expected a non-empty trimmed package name");
+  const parts = name.split("/");
+  if (
+    parts.length !== (name.startsWith("@") ? 2 : 1) ||
+    parts[0] === "@" ||
+    parts.some(
+      (part) =>
+        !part ||
+        part === "." ||
+        part === ".." ||
+        /[\\:]/.test(part) ||
+        part.toLowerCase() === "node_modules",
+    )
+  )
+    throw new Error(`Invalid package name: ${name}`);
+  return name;
+}
+
 function isLiteralPackagePath(path) {
   return (
     typeof path === "string" &&
@@ -35,7 +56,11 @@ export function packageEntrypoints(manifest) {
       );
     }
     const target = (path, extension) => {
-      if (!isLiteralPackagePath(path) || !path.endsWith(extension))
+      if (
+        !isLiteralPackagePath(path) ||
+        path.split("/").some((part) => part.toLowerCase() === "node_modules") ||
+        !path.endsWith(extension)
+      )
         throw new Error(`${specifier} requires a package-relative ${extension} target`);
       return path.slice(2);
     };

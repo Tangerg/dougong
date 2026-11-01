@@ -14,7 +14,8 @@ export interface BridgeOwner {
 }
 
 type BridgeValue<T> =
-  | { readonly phase: "active"; readonly source: Readable<T>; readonly value: T }
+  | { readonly phase: "value"; readonly source: Readable<T>; readonly value: T }
+  | { readonly phase: "error"; readonly source: Readable<T>; readonly error: unknown }
   | { readonly phase: "disposed" };
 
 class BridgeSubscription implements Disposable {
@@ -41,11 +42,12 @@ class ReadableBridge<T> implements Disposable {
   readonly view: ReadonlySignal<T>;
 
   constructor(source: Readable<T>) {
-    this.#value = signal<BridgeValue<T>>({ phase: "active", source, value: source.get() });
+    this.#value = signal<BridgeValue<T>>({ phase: "value", source, value: source.get() });
     this.view = Object.freeze({
       get: () => {
         const state = this.#value.get();
         if (state.phase === "disposed") throw new Error("Readable bridge has been disposed");
+        if (state.phase === "error") throw state.error;
         return state.value;
       },
       subscribe: (listener: () => void) => this.#subscribe(listener),
@@ -81,8 +83,7 @@ class ReadableBridge<T> implements Disposable {
       }
       // Re-read after subscription so a source change during attachment cannot be lost.
       this.#refresh();
-      if (this.#value.get().phase === "disposed")
-        throw new Error("Readable bridge has been disposed");
+      this.view.get();
     } catch (error) {
       // The synchronous factory unwinds the bridge; the owner's registration joins that same outcome.
       if (releaseRegistration)
@@ -106,10 +107,19 @@ class ReadableBridge<T> implements Disposable {
     const read = Symbol();
     this.#reading = read;
     try {
-      const value = before.source.get();
-      if (this.#reading !== read || this.#value.get() !== before || Object.is(before.value, value))
+      const { source } = before;
+      let next: BridgeValue<T>;
+      try {
+        next = { phase: "value", source, value: source.get() };
+      } catch (error) {
+        next = { phase: "error", source, error };
+      }
+      if (this.#reading !== read || this.#value.get() !== before) return;
+      if (before.phase === "value" && next.phase === "value" && Object.is(before.value, next.value))
         return;
-      this.#value.set({ ...before, value });
+      if (before.phase === "error" && next.phase === "error" && Object.is(before.error, next.error))
+        return;
+      this.#value.set(next);
     } finally {
       this.#reading = undefined;
     }

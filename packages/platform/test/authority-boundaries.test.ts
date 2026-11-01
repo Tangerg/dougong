@@ -465,3 +465,39 @@ it("rejects a cancelled direct import even if the caller replaced its signal che
   controller.abort("retired import");
   await expect(result).rejects.toBe("retired import");
 });
+
+it.each(["load", "activate"] as const)(
+  "rechecks genuine caller cancellation after %s admission even if its event was intercepted",
+  async (stage) => {
+    const controller = new AbortController();
+    controller.signal.addEventListener("abort", (event) => event.stopImmediatePropagation());
+    const authorizing = deferred();
+    const resume = deferred();
+    const load = vi.fn<() => unknown>(() => ({ default: emptyPlugin("sample") }));
+    const host = createHost();
+    const platform = createPlatform({
+      id: "cancellation-boundary",
+      host,
+      apiVersion: "1.0.0",
+      loader: { load },
+      authorizer: {
+        async authorize({ operation }) {
+          if (operation === stage) {
+            authorizing.resolve();
+            await resume.promise;
+          }
+        },
+      },
+    });
+    const registration = await select(platform, "sample", "module");
+    const request = platform.activate([registration], { signal: controller.signal });
+    await authorizing.promise;
+    controller.abort("caller left");
+    resume.resolve();
+    await expect(request).rejects.toBe("caller left");
+    expect(load).toHaveBeenCalledTimes(stage === "load" ? 0 : 1);
+    expect(registration.error).toBeUndefined();
+    expect(registration.installation).toBeUndefined();
+    await platform[Symbol.asyncDispose]();
+  },
+);

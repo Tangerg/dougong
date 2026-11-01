@@ -23,6 +23,8 @@ Type exports: `Platform`, `PlatformOptions`, `PlatformStatus`, `Registration`, `
 
 An Artifact's `revision` is a caller-supplied content or release identity, never a clock-generated version. Reuse requires the revision and validated Manifest of the same committed Installation to match the selection. The order of dependencies, activation events and permissions does not affect that match. Registration's `selectionRevision` rejects stale activation. `activeOrigin` derives from Installation origin, which is already correct inside Core commit notifications.
 
+Discovery and preview are synchronous. Selection, activation, triggering and removal always return a Promise, including for invalid input. A trigger matches the selections in effect when that command is admitted; an earlier queued selection is included even if its caller has not yet awaited it.
+
 ## States and boundaries
 
 Platform states are `active/disposing/disposed`. Registration states are `selected/activating/removing/installed/failed/quarantined/removed`, reflecting selection, active operations and Core execution facts. An aborted caller does not replace the last real failure; a successful activation of the current selection clears it. The root and removal arrays capture their own indexed data slots once. Sparse arrays and accessors are rejected without invoking getters.
@@ -36,3 +38,9 @@ Platform captures the Loader and Authorizer methods once during construction, pr
 During the final activation handoff (Core planning, final admission and apply) or Core release, new mutation commands and disposal reject with `PLATFORM_BUSY`. A callback cannot enqueue work behind itself and wait for it. Earlier admitted activations can finish; loading outside that window remains concurrent. Issue the next command after the outer call completes.
 
 If a caller aborts during validation or final admission, Platform releases the command reservation and discards the late result. Cancellation cannot undo module side effects or revoke a Plan already handed to `host.apply`. Metadata-only removal can still forget a Registration that no longer has a committed Installation.
+
+Registrations affected by one failed activation share one detached error snapshot. Withdrawing the last loading waiter detaches Platform’s continuation from the external promise: even if an adapter never settles, successful disposal no longer retains the Artifact or its delivery ports.
+
+Registration status follows the command executing in Core, including removal during Platform disposal, even if an older request is still loading. Manifest dependency traversal uses an explicit stack; a cycle report contains the closed cycle itself. Platform IDs, Manifest names and dependency names must be well-formed Unicode so they can identify an Installation. The logger is captured with its original receiver at construction.
+
+A caller that stops delivery of its own native abort event may delay observation until external work resumes. Platform rechecks native cancellation before module loading and at final admission; after handing the Plan to Core, only Core determines the result.

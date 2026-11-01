@@ -19,6 +19,10 @@ Core issues executable Plans only: invalid declarations reject during `host.plan
 
 If another operation commits while schema validation is pending, planning rejects with `PLAN_STALE`; on quarantine it rejects with `HOST_QUARANTINED`. Build a new change against the current Host. An uncommitted Installation in an issued Plan becomes `removed` as soon as that revision ends. Keeping an obsolete Plan for its report does not retain the old executable payload.
 
+Contract kinds belong to the Host registry, so a live plugin or application can claim a kind without a graph commit. Planning checks its graph against those claims before issuing a Plan. If a different kind wins while candidate setup is running, admission rejects before publication: candidate cleanup and restoration follow the same path as a failed setup. A conflict by itself does not quarantine the Host.
+
+Invalidation ends the waiting `plan()` immediately, even if its validator never settles. No later validator is started for the obsolete change. A validator already running may finish its own external work; that result cannot affect the Host.
+
 ## Execution and results
 
 Execution first checks foreground borrows on affected generations. A live borrow rejects with `HOST_BUSY` before execution effects and without consuming the Plan. Once execution is admitted, it seals affected old generations, joins their background work and releases resources, then prepares candidates in dependency order. After every candidate is ready, listeners, contributions, services and origin publish together.
@@ -43,6 +47,8 @@ After a busy rejection, wait for the current work. The same unconsumed Plan can 
 ## Application handling after quarantine {#quarantine}
 
 **`quarantined` is terminal for the entire Host. There is no unquarantine, in-place recovery or automatic cleanup retry entrypoint.** It is the health boundary for one complete execution graph. The [design rationale](../reference/architecture.md#quarantine) explains why dependency-aware cleanup does not imply partial service recovery.
+
+An existing Installation handle retains only its final status and origin. Open ChangeSets are revoked, release their staged declarations, and cannot accept new work; their uncommitted Installations become `removed`. Only the diagnostics view needs to track late cleanup.
 
 | Operation after quarantine | Behavior and purpose |
 | --- | --- |

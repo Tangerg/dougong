@@ -43,7 +43,7 @@
       "prettier --write",
       "oxlint --fix --deny-warnings"
     ],
-    "tooling/**/*.mjs": [
+    "tooling/**/*.{mjs,mts}": [
       "prettier --write",
       "oxlint --fix --deny-warnings"
     ],

@@ -1,7 +1,16 @@
 import { describe, expect, it, vi } from "vitest";
 import { createHost, definePlugin, type AnyPlugin } from "dougong";
 import { createPlatform } from "../src";
-import { add, deferred, emptyPlugin, nextTurn, select, VALUE, valuePlugin } from "./fixtures";
+import {
+  add,
+  deferred,
+  emptyPlugin,
+  fixture,
+  nextTurn,
+  select,
+  VALUE,
+  valuePlugin,
+} from "./fixtures";
 
 describe("selection and activation races", () => {
   it("rejects a late old selection even when the Host revision has not changed", async () => {
@@ -344,3 +353,20 @@ describe("selection and activation races", () => {
     await platform[Symbol.asyncDispose]();
   });
 });
+
+it.each([true, false])(
+  "derives trigger roots from the selection admitted before it (next matches: %s)",
+  async (matches) => {
+    const { host, platform } = fixture(new Map([["module", emptyPlugin("sample")]]));
+    const first = await select(platform, "sample", "module", {
+      activation: matches ? [] : ["open"],
+    });
+    const replacement = add(platform, "sample", "module", "2.0.0", {
+      manifest: { name: "sample", version: "2.0.0", activation: matches ? ["open"] : [] },
+    });
+    await Promise.all([platform.select(replacement), platform.trigger("open")]);
+    expect(first.activeOrigin?.revision).toBe(matches ? "2.0.0" : undefined);
+    expect(host.installation(first.id)).toBe(matches ? first.installation : undefined);
+    await platform[Symbol.asyncDispose]();
+  },
+);

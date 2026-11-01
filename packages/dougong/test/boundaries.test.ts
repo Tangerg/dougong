@@ -31,8 +31,18 @@ it.each(["left", "right"])(
     const leftView = host.contributions(left);
     const rightView = host.contributions(right);
     const seen: number[][][] = [];
+    const readings: Promise<void>[] = [];
     using _subscription = (side === "left" ? leftView : rightView).subscribe(() => {
-      seen.push([[...leftView.get().values()], [...rightView.get().values()]]);
+      const pair: number[][] = [[], []];
+      seen.push(pair);
+      for (const [index, view] of [leftView, rightView].entries()) {
+        for (const id of view.get())
+          readings.push(
+            view.use(id, (value) => {
+              pair[index]!.push(value);
+            }),
+          );
+      }
     });
     await host.start();
     const update = host.change();
@@ -45,8 +55,10 @@ it.each(["left", "right"])(
       cause: { message: "activation failed" },
     });
     await host.stop();
+    await Promise.all(readings);
     expect(seen).toEqual([
       [[1], [2]],
+      [[2], [4]],
       [[2], [4]],
       [[], []],
     ]);
@@ -65,7 +77,8 @@ it("publishes a changed contribution key even when both values are undefined", a
   old[Symbol.dispose]();
   store.stage("owner", "new", undefined, owner);
   registry.endBatch();
-  expect([...store.snapshot()]).toEqual([["owner/new", undefined]]);
+  expect(store.snapshot()).toEqual(["owner/new"]);
+  expect(await store.use("owner/new", (value) => value)).toBeUndefined();
   expect(changed).toHaveBeenCalledOnce();
   await owner.dispose();
 });
@@ -200,7 +213,7 @@ it("closes all descendant event entrances before cancellation and while tasks se
     await aborted.promise;
     await emit();
     expect(heard).not.toHaveBeenCalled();
-    expect(host.contributions(items).get().size).toBe(0);
+    expect(host.contributions(items).get().length).toBe(0);
     expect(() => child.defer(() => undefined)).toThrow("closed");
   } finally {
     blocked.resolve();

@@ -203,7 +203,9 @@ describe("structured work boundaries", () => {
     pending.resolve();
     await invocation;
     await owner.dispose();
-    expect(() => view.use("plugin/run", (command) => command.run())).toThrow("not available");
+    await expect(view.use("plugin/run", (command) => command.run())).rejects.toThrow(
+      "not available",
+    );
   });
 
   it("does not report foreground event failures a second time", async () => {
@@ -273,6 +275,59 @@ describe("structured work boundaries", () => {
     expect(trace).toEqual(["abort", "interrupt", "joined", "release"]);
   });
 
+  it("cancels owned tasks and children even when a plugin consumes the public abort event", async () => {
+    const owner = lifetime();
+    owner.signal.addEventListener("abort", (event) => event.stopImmediatePropagation());
+    const child = owner.child("operation");
+    child.signal.addEventListener("abort", (event) => event.stopImmediatePropagation());
+    const entered = Promise.withResolvers<AbortSignal>();
+    const gate = Promise.withResolvers<void>();
+    const task = child.spawn((signal) => {
+      entered.resolve(signal);
+      return gate.promise;
+    });
+    const taskSignal = await entered.promise;
+    owner.interrupt(() => task.result);
+    const closing = owner.dispose();
+    try {
+      expect([child.signal.aborted, taskSignal.aborted]).toEqual([true, true]);
+    } finally {
+      gate.resolve();
+      await closing;
+    }
+  });
+
+  it("publishes, inspects, borrows from and drains deep ownership without using the JS call stack", async () => {
+    const owner = lifetime();
+    let deepest = owner.handle;
+    const depth = 6000;
+    for (let level = 0; level < depth; level++) deepest = deepest.child("nested");
+    const leaf = owner.resolveOwner(deepest);
+    const trace: string[] = [];
+    owner.defer(() => trace.push("root"));
+    deepest.defer(() => trace.push("leaf"));
+    leaf.stage(() => ({
+      publish: () => trace.push("publish"),
+      [Symbol.dispose]: () => trace.push("withdraw"),
+    }));
+    owner.publish();
+    let snapshot = owner.snapshot();
+    let count = 0;
+    while (snapshot.children.length) {
+      count++;
+      snapshot = snapshot.children[0]!;
+    }
+    expect(count).toBe(depth);
+    const gate = Promise.withResolvers<void>();
+    const borrowed = leaf.borrow(() => gate.promise);
+    await expect(owner.dispose()).rejects.toMatchObject({ code: "BUSY" });
+    gate.resolve();
+    await borrowed;
+    await owner.dispose();
+    expect(trace).toEqual(["publish", "withdraw", "leaf", "root"]);
+    expect(owner.snapshot().children).toEqual([]);
+  });
+
   it("owns setup work until it settles without background error reporting", async () => {
     const report = vi.fn<(error: unknown) => void>();
     const owner = lifetime({ report });
@@ -296,6 +351,32 @@ describe("structured work boundaries", () => {
     expect(await rejected).toMatchObject({ name: "AbortError" });
     await stopping;
     expect(report).not.toHaveBeenCalled();
+  });
+
+  it("delivers exactly the resource whose disposer it adopted, without assimilating it again", async () => {
+    const owner = lifetime();
+    const dispose = vi.fn<() => void>();
+    const raw = { [Symbol.dispose]: dispose };
+    let reads = 0;
+    const substitute = { [Symbol.dispose]() {} };
+    const resource = new Proxy(raw, {
+      get(target, key, receiver) {
+        if (key === "then")
+          return ++reads === 1
+            ? undefined
+            : (resolve: (value: typeof substitute) => void) => resolve(substitute);
+        return Reflect.get(target, key, receiver);
+      },
+    });
+    try {
+      const receipt = await owner.handle.acquire(() => resource);
+      expect(receipt.resource).toBe(resource);
+      expect(Object.isFrozen(receipt)).toBe(true);
+      expect(reads).toBe(1);
+    } finally {
+      await owner.dispose();
+    }
+    expect(dispose).toHaveBeenCalledOnce();
   });
 
   it("reclaims a resource that arrives after cancellation", async () => {

@@ -16,6 +16,8 @@
 
 插件上下文的 `LifetimeContext` 只授予工作与资源登记能力；`child(label)` 返回可以提前释放的 `ChildLifetime`。关闭整个 Instance 始终经过 Engine。
 
+`LifetimeContext.acquire(factory)` 返回的 Promise 以冻结的 `{ resource }` 回执完成；解构即可取得实际被接管的资源。
+
 ## Host 与安装
 
 `HostOptions` 包含 `name`、初始 `installations`、初始 `groups`、日志与错误报告端口和退出超时。每个 Installation ID 在 Host 中唯一，Group ID 也是应用声明的稳定身份。
@@ -46,7 +48,7 @@ await host.stop();
 
 Host 状态为 `stopped`、`starting`、`running`、`changing`、`stopping`、`quarantined`。隔离是整个 Host 的终止状态，不提供原地恢复；操作边界与替换前提见[隔离后的应用处理](../guide/transactions.md#quarantine)。`Plan.report` 可序列化，不包含模块、函数、真实配置载荷或可变运行对象。`HostSnapshot` 中 Lifetime 也是普通数据快照。
 
-订阅统一 `get/subscribe`，不重放，使用标准 Disposable 取消。`ContributionView.use(id, fn)` 借用贡献所有者；`get()` 仅给出集合快照。`EventOperations.on/emit` 支持同步或异步监听，emit 等待所有监听结果并汇总失败；每次监听调用借用其所有者。`ContributionOperations.add` 登记带 owner 的贡献。
+订阅统一 `get/subscribe`，不重放，使用标准 Disposable 取消。`ContributionView.use(id, fn)` 借用贡献所有者；`get()` 仅给出冻结的有序 ID 数组；读取元数据和调用处理函数都通过 `use`。`EventOperations.on/emit` 支持同步或异步监听，emit 等待所有监听结果并汇总失败；每次监听调用借用其所有者。`ContributionOperations.add` 登记带 owner 的贡献。
 
 `ErrorDetails` 给出 outcome、phase、stateRevision 和可选的安装、契约、依赖路径与影响范围。`RecordedFailure` 是有界脱离资源图的诊断投影；原始拒绝的 cause 仍由直接调用者接收。
 
@@ -54,7 +56,7 @@ Host 状态为 `stopped`、`starting`、`running`、`changing`、`stopping`、`q
 
 从上一版 API 更新时，将已删除的 Host inspect 方法替换为 `host.diagnostics.get()`。删除对旧 ApplyResult outcome 字段的判断；await 正常完成后处理成功，catch 中处理失败及结构化 details。不提供别名或兼容适配器。
 
-Host 只在选项缺省时使用默认值；显式传入 null 的名字、安装列表或分组列表会被拒绝。配置捕获只读取共享输入对象一次并冻结结果；循环引用和过深嵌套仍然拒绝。插件可单独传递 `ctx.log` 的日志函数，释放日志作用域的权限归 Instance。
+Host 只在选项缺省时使用默认值；显式传入 null 的名字、安装列表或分组列表会被拒绝。配置捕获只读取共享输入对象一次并冻结结果；循环引用和过深嵌套仍然拒绝。插件可单独传递 `ctx.log` 的日志函数，释放日志作用域的权限归 Instance。Host 创建时一次性捕获日志方法，保留原后端作为接收者；错误兜底同样使用捕获的方法。
 
 ## 高级组合原语
 
@@ -67,6 +69,7 @@ Host 只在选项缺省时使用默认值；显式传入 null 的名字、安装
 | `SerialQueue` | 顺序执行提交的操作。 |
 | `normalizePlainRecord` | 捕获普通记录的数据字段。插件配置请用 `captureConfig`。 |
 | `captureDataArray(input, label)` | 浅拷贝自有的稠密数据索引并冻结数组，不调用输入的方法或迭代器。元素的校验归调用方。 |
+| `captureLogger(logger)` | 接管日志后端时一次捕获四个方法及其原始接收者。 |
 | `onAbort(signal, callback)` | 观察真实取消，回调只接收一次原因；已取消时立即回调。返回的函数用于解除观察。手动派发名为 `abort` 的事件不能取消作用域。 |
 
 观察未来的取消依赖原生事件送达监听器。同一运行环境中，较早的监听器调用 `stopImmediatePropagation()` 可以阻止该通知，但不能改变信号已经取消的事实。

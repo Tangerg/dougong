@@ -33,7 +33,7 @@ export class LoadedModules<Reference> {
     const { loads } = this.#ports();
     let operation = loads.get(artifact);
     if (!operation || operation.cancelled) {
-      operation = new Preparation((loadSignal) => this.#load(artifact, loadSignal));
+      operation = Preparation.start((loadSignal) => this.#load(artifact, loadSignal));
       loads.set(artifact, operation);
       const current = operation;
       void operation.result.then(undefined, () => {
@@ -51,8 +51,12 @@ export class LoadedModules<Reference> {
   async #load(artifact: Artifact<Reference>, signal: AbortSignal) {
     AbortSignal.prototype.throwIfAborted.call(signal);
     this.#ports().assertPlacement();
-    await this.#ports().authorizer.authorize(
-      Object.freeze({ artifact: describeArtifact(artifact), operation: "load" }),
+    await Preparation.waitFor(
+      (admissionSignal) =>
+        this.#ports().authorizer.authorize(
+          Object.freeze({ artifact: describeArtifact(artifact), operation: "load" }),
+          admissionSignal,
+        ),
       signal,
     );
     AbortSignal.prototype.throwIfAborted.call(signal);
@@ -75,7 +79,10 @@ async function loadPlugin<Reference>(
 ): Promise<AnyPlugin> {
   let loaded: unknown;
   try {
-    loaded = await loader.load(artifact.reference, signal);
+    loaded = await Preparation.waitFor(
+      (loadSignal) => loader.load(artifact.reference, loadSignal),
+      signal,
+    );
   } catch (error) {
     AbortSignal.prototype.throwIfAborted.call(signal);
     throw new PlatformError(

@@ -411,3 +411,31 @@ it.each([0, 2])(
     await owner[Symbol.asyncDispose]();
   },
 );
+
+it("projects a source read failure and notifies recovery even when the recovered value is unchanged", async () => {
+  const revision = signal(0);
+  const failure = new Error("unavailable");
+  const source = computed(() => {
+    if (revision.get() === 1) throw failure;
+    return "ready";
+  });
+  const owner = new Owner();
+  const local = bridge(owner, source);
+  const rendered = computed(() => {
+    try {
+      return local.get();
+    } catch (error) {
+      return error;
+    }
+  });
+  const seen: unknown[] = [];
+  using subscription = rendered.subscribe(() => {
+    seen.push(rendered.get());
+  });
+  revision.set(1);
+  expect(() => local.get()).toThrow(failure);
+  revision.set(2);
+  expect(seen).toEqual([failure, "ready"]);
+  subscription[Symbol.dispose]();
+  await owner[Symbol.asyncDispose]();
+});

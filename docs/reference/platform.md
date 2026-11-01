@@ -23,6 +23,8 @@
 
 Artifact 的 `revision` 是调用方给定的内容或发行身份；没有依赖时钟生成的版本。复用要求同一已提交 Installation 上的 revision 和经验证的 Manifest 都与选择一致。依赖键、激活事件和权限的声明顺序不影响匹配。Registration 的 `selectionRevision` 用于拒绝过期激活。`activeOrigin` 由 Installation origin 派生，Core 提交通知中已经能够看到正确来源。
 
+发现与预览是同步操作；选择、激活、触发与移除始终返回 Promise，输入不合法也通过拒绝报告。事件匹配和计划捕获使用同一批已接纳的选择；即使调用方尚未 await，排在触发命令之前的选择也已生效。
+
 ## 状态和边界
 
 Platform 状态为 `active/disposing/disposed`。Registration 状态为 `selected/activating/removing/installed/failed/quarantined/removed`，反映选择、正在执行的操作及 Core 执行事实。调用方取消不会覆盖上次实际失败；当前选择激活成功后清除该错误。激活目标及移除列表只捕获数组自己的索引数据。稀疏数组和访问器会被拒绝，不会调用 getter。
@@ -36,3 +38,9 @@ Platform 构造时捕获 Loader 和 Authorizer 的方法，并保留各自的接
 最终激活交接（Core 规划、最终准入与 apply）或 Core 释放期间，新发起的变更和释放命令以 `PLATFORM_BUSY` 拒绝，避免回调等待排在自己后面的命令。此前已接纳的激活仍能完成，交接之前的加载保持并发。等外层调用完成后再发起后续命令。
 
 在配置验证或最终准入期间取消，Platform 会结束等待并释放命令占用；迟到的结果不能提交。取消不能撤销模块副作用或已经交给 `host.apply` 的 Plan。已没有已提交 Installation 的 Registration 仍可直接移除。
+
+同一次激活失败所影响的 Registration 共享一份已脱离运行资源的错误快照。最后一个加载等待者离开时，会断开外部 Promise 到 Platform 后续操作的引用；即使适配器永不结束，成功释放后的 Platform 也不会因此保留 Artifact 或加载能力。
+
+即使较早的请求仍在加载，Registration 状态也反映真正交给 Core 执行的命令；Platform 释放期间正在移除的安装显示为 `removing`。Manifest 依赖遍历使用显式栈，环诊断只包含实际闭环。Platform ID、Manifest 名称及依赖名称须为可编码的良构 Unicode。构造时一次捕获日志后端方法及其原始接收者。
+
+调用方若阻止自身原生 abort 事件继续传播，Platform 可能要等外部工作恢复才观察到取消；进入模块加载前及最终准入时会重新核对原生取消状态。Plan 已经交给 Core 后，结果只由 Core 决定。

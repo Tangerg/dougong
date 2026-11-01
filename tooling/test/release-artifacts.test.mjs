@@ -46,6 +46,7 @@ async function runRelease(
     interruptAt,
     interruptAfter = false,
     resume = false,
+    beforeRelease = () => undefined,
     beforeResume = () => undefined,
   } = {},
 ) {
@@ -79,6 +80,7 @@ async function runRelease(
         {
           name: packageName,
           type: "module",
+          files: ["dist", "README.md", "LICENSE"],
           version: "0.7.1",
           exports: {
             ".": { types: "./dist/index.d.ts", import: "./dist/index.js" },
@@ -217,6 +219,7 @@ async function runRelease(
           return existsSync(path) ? [[name, JSON.parse(readFileSync(path, "utf8"))]] : [];
         }),
       );
+    beforeRelease(git, workspace);
     const interrupted = await execute(interruptAt, publishFailure);
     const publishedAfterFirstAttempt = publishedManifests();
     const interruptedState = interruptAt
@@ -377,18 +380,29 @@ it.each(["lightweight", "another commit"])("refuses a release tag pointing to %s
   expect(result.stdout).not.toContain("Running the full gate");
 });
 
-it("preserves remote main when the remote release tag conflicts", async () => {
+it("rejects an existing remote tag before uploading an irreversible npm version", async () => {
   const result = await runRelease(() => undefined, {
-    publishedPackages: packages,
+    publishedPackages: [],
     dryRun: false,
-    interruptAt: "push",
-    resume: true,
-    beforeResume(git, workspace) {
+    beforeRelease(git, workspace) {
+      git(["config", "remote.origin.tagOpt", "--no-tags"]);
       git(
-        ["update-ref", `refs/tags/v${version}`, git(["rev-parse", "origin/main"])],
+        ["update-ref", `refs/tags/v${version}`, git(["rev-parse", "HEAD"])],
         join(workspace, "remote.git"),
       );
     },
+  });
+  expect(result.status).toBe(1);
+  expect(result.stderr).toContain("origin already has a different release tag");
+  expect(result.published).toEqual({});
+  expect(result.recorded).toEqual([]);
+});
+
+it("preserves remote main when the remote release tag changes after preflight", async () => {
+  const result = await runRelease(() => undefined, {
+    publishedPackages: packages,
+    dryRun: false,
+    concurrentEdit: "remote-tag-at-push",
   });
   expect(result.status).toBe(1);
   expect(result.stderr).toContain("atomic push failed");
@@ -907,4 +921,76 @@ it("publishes captured bytes even if a later pack rewrites an earlier archive", 
   });
   expect(result.status).toBe(0);
   expect(result.publishedCoreModule).toBe("export const signal = value => value;\n");
+});
+
+it("rejects build output changed between verification and packing before any package is uploaded", async () => {
+  const result = await runRelease(() => undefined, {
+    dryRun: false,
+    publishedPackages: [],
+    concurrentEdit: "build-before-pack",
+  });
+  expect(result.status).toBe(1);
+  expect(result.stderr).toContain("dist/index.js differs from the verified build");
+  expect(result.published).toEqual({});
+  expect(result.recorded).toEqual([]);
+});
+
+it.each([
+  ["scripts", { postinstall: "node dist/index.js" }],
+  ["bin", { injected: "dist/index.js" }],
+  ["optionalDependencies", { injected: "1.0.0" }],
+  ["peerDependencies", { injected: "^1.0.0" }],
+  ["imports", { "#internal": "./unexpected.js" }],
+])("rejects consumer behavior introduced only by packing (%s)", async (field, value) => {
+  const result = await runRelease(() => undefined, { packedOverrides: { [field]: value } });
+  expect(result.status).toBe(1);
+  expect(result.stderr).toContain(field);
+  expect(result.recorded).toEqual([]);
+});
+
+it("checks the actual release version of every package before allowing the first upload", async () => {
+  const result = await runRelease(() => undefined, { dryRun: false, publishedPackages: [] });
+  expect(result.status).toBe(0);
+  expect(result.calls.find(({ command }) => command === "gate-versions")?.args).toEqual(
+    packages.map(() => version),
+  );
+});
+
+it.each([
+  ["alter-receipt", "archive changed after consumer verification"],
+  ["undeclared-file", "binding.gyp differs from the verified build"],
+])("does not upload bytes the consumer did not accept: %s", async (concurrentEdit, diagnostic) => {
+  const result = await runRelease(() => undefined, {
+    dryRun: false,
+    publishedPackages: [],
+    concurrentEdit,
+  });
+  expect(result.stderr).toContain(diagnostic);
+  expect(result.published).toEqual({});
+  expect(result.recorded).toEqual([]);
+});
+
+it("refuses destination metadata present only in a packed manifest", async () => {
+  const result = await runRelease(() => undefined, {
+    dryRun: false,
+    publishedPackages: [],
+    packedOverrides: { publishConfig: { registry: "https://fixture.invalid" } },
+  });
+  expect(result.stderr).toContain("publishConfig differs");
+  expect(result.published).toEqual({});
+});
+
+it("preflights the fetched remote commit even when the tracking ref is stale", async () => {
+  const result = await runRelease(() => undefined, {
+    dryRun: false,
+    publishedPackages: [],
+    beforeRelease(git) {
+      const ahead = git(["commit-tree", "HEAD^{tree}", "-p", "HEAD", "-m", "Remote change"]);
+      git(["push", "origin", ahead + ":refs/heads/main"]);
+      git(["update-ref", "refs/remotes/origin/main", "HEAD"]);
+      git(["config", "remote.origin.fetch", "+refs/heads/another:refs/remotes/origin/another"]);
+    },
+  });
+  expect(result.stderr).toContain("behind origin/main");
+  expect(result.published).toEqual({});
 });

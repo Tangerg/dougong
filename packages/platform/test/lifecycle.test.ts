@@ -58,7 +58,7 @@ describe("Platform lifecycle", () => {
     const first = platform[Symbol.asyncDispose]();
     expect(platform[Symbol.asyncDispose]()).toBe(first);
     expect(platform.status).toBe("disposing");
-    expect(() => platform.select(registration.selectedArtifact)).toThrow(
+    await expect(platform.select(registration.selectedArtifact)).rejects.toThrow(
       expect.objectContaining({ code: "PLATFORM_UNAVAILABLE" }),
     );
     await first;
@@ -278,9 +278,9 @@ describe("Platform lifecycle", () => {
 
   it.each(["", " event", "event ", null])(
     "validates activation event %j before dispatch",
-    (event) => {
+    async (event) => {
       const { platform } = fixture();
-      expect(() => platform.trigger(event as never)).toThrow(TypeError);
+      await expect(platform.trigger(event as never)).rejects.toThrow(TypeError);
     },
   );
 
@@ -354,4 +354,95 @@ describe("Platform lifecycle", () => {
     expect(Object.isFrozen(registration)).toBe(true);
     await platform[Symbol.asyncDispose]();
   });
+});
+
+it.each(["remove", "dispose"] as const)(
+  "projects the real %s command while Core releases an Installation",
+  async (action) => {
+    const holdLoad = deferred();
+    const loading = deferred();
+    const holdCleanup = deferred();
+    const cleaning = deferred();
+    const plugin = definePlugin({
+      name: "sample",
+      setup({ lifetime }) {
+        lifetime.defer(() => {
+          cleaning.resolve();
+          return holdCleanup.promise;
+        });
+      },
+    });
+    const host = createHost();
+    const platform = createPlatform({
+      id: "real-release",
+      host,
+      apiVersion: "1.0.0",
+      loader: {
+        async load(reference: string) {
+          if (reference === "two") {
+            loading.resolve();
+            await holdLoad.promise;
+          }
+          return { default: plugin };
+        },
+      },
+    });
+    await host.start();
+    const registration = await select(platform, "sample", "one");
+    await platform.activate([registration]);
+    await platform.select(add(platform, "sample", "two", "2.0.0"));
+    const preparing = platform.activate([registration]).catch((error: unknown) => error);
+    await loading.promise;
+    const closing =
+      action === "remove" ? platform.remove(registration) : platform[Symbol.asyncDispose]();
+    try {
+      await cleaning.promise;
+      expect(registration.status).toBe("removing");
+      expect(platform.diagnostics.get().registrations.get("sample")?.status).toBe("removing");
+    } finally {
+      holdCleanup.resolve();
+      holdLoad.resolve();
+      await closing;
+      await preparing;
+      await platform[Symbol.asyncDispose]();
+      await host.stop();
+    }
+  },
+);
+
+it("captures the logger's adopted method and original receiver exactly once", async () => {
+  const logs: unknown[] = [];
+  let reads = 0;
+  const logger = {
+    debug() {},
+    info() {},
+    warn() {},
+    get error() {
+      reads++;
+      return function (this: typeof logger, value: unknown) {
+        if (this !== logger) throw new Error("logger receiver changed");
+        logs.push(value);
+      };
+    },
+  };
+  const platform = createPlatform({
+    id: "log",
+    host: createHost(),
+    apiVersion: "1.0.0",
+    loader: new MemoryLoader(new Map()),
+    logger,
+  });
+  Object.defineProperty(logger, "error", {
+    value: () => {
+      throw new Error("unadopted sink");
+    },
+  });
+  const failure = new Error("observe");
+  platform.diagnostics.subscribe(() => {
+    throw failure;
+  });
+  await select(platform, "sample", "one");
+  expect(reads).toBe(1);
+  expect(logs).toContain(failure);
+  await platform[Symbol.asyncDispose]();
 });

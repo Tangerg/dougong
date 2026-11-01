@@ -161,6 +161,11 @@ it("queries the release identities captured from package manifests", async () =>
 it.each([
   { label: "missing", names: [undefined, "dougong", "platform"], error: "package name" },
   { label: "duplicate", names: ["shared", "shared", "platform"], error: "unique" },
+  {
+    label: "path traversal",
+    names: ["../not-a-package", "dougong", "@dougongjs/platform"],
+    error: "Invalid package name",
+  },
 ])("rejects $label release identities before querying npm", async ({ names, error }) => {
   const result = await runRelease(
     { status: 1, stdout: JSON.stringify({ error: { code: "E404" } }) },

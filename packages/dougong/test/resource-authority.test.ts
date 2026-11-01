@@ -144,19 +144,17 @@ it("publishes executable contribution values at the same boundary as their colle
   try {
     existing.update(next);
     context.contributions.add(point, "new", next);
-    expect(view.get().get("owner/existing")).toBe(first);
-    expect(view.get().has("owner/new")).toBe(false);
+    expect(view.get()).toEqual(["owner/existing", "owner/stable"]);
     const unavailable = { code: "CONTRIBUTION_UNAVAILABLE" };
     for (const id of ["owner/existing", "owner/new"])
-      await expect(async () => view.use(id, (action) => action())).rejects.toMatchObject(
-        unavailable,
-      );
+      await expect(view.use(id, (action) => action())).rejects.toMatchObject(unavailable);
     expect(await view.use("owner/stable", (action) => action())).toBe(1);
   } finally {
     gate.resolve();
     await updating;
     try {
-      expect(view.get().get("owner/existing")).toBe(next);
+      expect(view.get()).toEqual(["owner/existing", "owner/stable", "owner/new"]);
+      expect(await view.use("owner/existing", (action) => action())).toBe(2);
       expect(await view.use("owner/new", (action) => action())).toBe(2);
     } finally {
       await host.stop();
@@ -183,7 +181,7 @@ it("binds a detached public contribution updater to its original entry", async (
   try {
     await host.start();
     update(2);
-    expect(host.contributions(point).get().get("owner/one")).toBe(2);
+    expect(await host.contributions(point).use("owner/one", (value) => value)).toBe(2);
   } finally {
     await host.stop();
   }
@@ -272,4 +270,162 @@ it("uses native cancellation state, preserves the exact reason, and detaches exp
   expect(fake).not.toHaveBeenCalled();
   expect(() => onAbort(new EventTarget() as AbortSignal, notified)).toThrow(TypeError);
   expect(() => onAbort(signal, null as never)).toThrow(TypeError);
+});
+
+it("retains only ordered IDs in a snapshot when an executable contribution is replaced or removed", async () => {
+  const token = extensionPoint<() => string>("authority/snapshot");
+  let context!: PluginContext<{}>;
+  const host = createHost({
+    installations: [
+      {
+        id: "owner",
+        plugin: definePlugin({
+          name: "owner",
+          setup(ctx) {
+            context = ctx;
+          },
+        }),
+      },
+    ],
+  });
+  await host.start();
+  const view = host.contributions(token);
+  const run = () => "first";
+  const entry = context.contributions.add(token, "run", run);
+  const before = view.get();
+  entry.update(run);
+  expect(view.get()).toBe(before);
+  entry.update(() => "second");
+  const after = view.get();
+  expect(Object.isFrozen(before)).toBe(true);
+  expect(before).toEqual(["owner/run"]);
+  expect(after).not.toBe(before);
+  expect(after).toEqual(before);
+  expect(await view.use(before[0]!, (invoke) => invoke())).toBe("second");
+  await host.stop();
+  expect(view.get()).toEqual([]);
+  expect(before).toEqual(["owner/run"]);
+  await expect(view.use(before[0]!, (invoke) => invoke())).rejects.toMatchObject({
+    code: "CONTRIBUTION_UNAVAILABLE",
+  });
+});
+
+it.each(["task", "acquisition"] as const)(
+  "joins the real %s even when its public result is decorated by application code",
+  async (kind) => {
+    const owner = new Lifetime({ label: "owner", report() {} });
+    const entered = Promise.withResolvers<void>();
+    const gate = Promise.withResolvers<void>();
+    const cleanup = vi.fn<() => void>();
+    owner.handle.defer(cleanup);
+    const pending = async () => {
+      entered.resolve();
+      await gate.promise;
+      return { [Symbol.dispose]() {} };
+    };
+    const result =
+      kind === "task" ? owner.handle.spawn(pending).result : owner.handle.acquire(pending);
+    const outcome = result.catch(() => undefined);
+    await entered.promise;
+    // oxlint-disable-next-line unicorn/no-thenable -- the caller must not control the owner’s internal join
+    Object.defineProperty(result, "then", {
+      value: (accept: () => void) => Promise.resolve().then(accept),
+    });
+    const closing = owner.dispose();
+    try {
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(cleanup).not.toHaveBeenCalled();
+      expect(owner.snapshot().phase).toBe("disposing");
+    } finally {
+      gate.resolve();
+      await outcome;
+      await closing;
+    }
+    expect(cleanup).toHaveBeenCalledOnce();
+  },
+);
+
+it.each(["event", "contribution"] as const)(
+  "does not reserve a contract kind when an invalid %s registration is rejected",
+  async (kind) => {
+    let context!: PluginContext<{}>;
+    const host = createHost({
+      installations: [
+        {
+          id: "owner",
+          plugin: definePlugin({
+            name: "owner",
+            setup(ctx) {
+              context = ctx;
+            },
+          }),
+        },
+      ],
+    });
+    await host.start();
+    const id = "authority/unclaimed";
+    const notice = event<void>(id);
+    const commands = extensionPoint<number>(id);
+    try {
+      const invalid =
+        kind === "event"
+          ? () => context.events.on(notice, null as never)
+          : () => context.contributions.add(commands, "", 0);
+      const valid =
+        kind === "event"
+          ? () => context.contributions.add(commands, "entry", 1)
+          : () => context.events.on(notice, () => undefined);
+      expect(invalid).toThrow(TypeError);
+      expect(valid).not.toThrow();
+    } finally {
+      await host.stop();
+    }
+  },
+);
+
+it.each(["deferred cleanup", "child"] as const)(
+  "keeps an early %s shutdown receipt from authorizing parent release",
+  async (kind) => {
+    const root = new Lifetime({ label: "owner", report() {} });
+    const entered = Promise.withResolvers<void>();
+    const gate = Promise.withResolvers<void>();
+    const releaseParent = vi.fn<() => void>();
+    root.defer(releaseParent);
+    const release = () => {
+      entered.resolve();
+      return gate.promise;
+    };
+    const child = root.child("child");
+    const registered = (kind === "child" ? child : root.handle).defer(release);
+    const shared = (kind === "child" ? child : registered)[Symbol.asyncDispose]();
+    await entered.promise;
+    Reflect.defineProperty(shared, "constructor", { value: Object });
+    // oxlint-disable-next-line unicorn/no-thenable -- reproduce tampering with an early shutdown receipt
+    Reflect.defineProperty(shared, "then", {
+      value: (accept: () => void) => Promise.resolve().then(accept),
+    });
+    Reflect.defineProperty(shared, "catch", {
+      value: () => {
+        throw new Error("caller-supplied catch");
+      },
+    });
+    const result = Promise.allSettled([root.dispose()]);
+    try {
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(releaseParent).not.toHaveBeenCalled();
+    } finally {
+      gate.resolve();
+    }
+    expect(await result).toMatchObject([{ status: "fulfilled" }]);
+    expect(releaseParent).toHaveBeenCalledOnce();
+  },
+);
+
+it("rejects shutdown delays that native timers would overflow instead of expiring almost immediately", () => {
+  const limit = 2 ** 31 - 1;
+  expect(() => createHost({ shutdownTimeoutMs: limit + 1 })).toThrow(/shutdownTimeoutMs/);
+  expect(
+    () => new Lifetime({ label: "invalid", report() {}, shutdownTimeoutMs: limit + 1 }),
+  ).toThrow(/shutdownTimeoutMs/);
+  expect(createHost({ shutdownTimeoutMs: limit }).status).toBe("stopped");
 });

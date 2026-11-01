@@ -76,6 +76,7 @@ class EventScope implements EventOperations {
 
   on<T>(token: Event<T>, listener: EventListener<T>, options?: LifetimeOwnership) {
     const binding = this.#requireBinding();
+    if (typeof listener !== "function") throw new TypeError("Event listener must be a function");
     const identity = normalizeContract(token, "event");
     const owner = binding.owner.resolveOwner(options?.lifetime);
     binding.remember(identity);
@@ -113,7 +114,6 @@ export class EventHub {
   }
 
   stage<T>(eventId: string, listener: EventListener<T>, owner: Lifetime): Disposable {
-    if (typeof listener !== "function") throw new TypeError("Event listener must be a function");
     return owner.stage((detach) => new ListenerRegistration(this, eventId, listener, owner, detach))
       .handle;
   }

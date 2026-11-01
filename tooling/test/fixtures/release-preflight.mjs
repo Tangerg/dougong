@@ -9,7 +9,10 @@ installCommandFixture((name, args, options, nativeSpawn) => {
       return { status: 0, stdout: args.includes("--abbrev-ref") ? "main" : "a".repeat(40) };
     }
     if (args[0] === "rev-list") return { status: 0, stdout: "0" };
-    if (["status", "fetch"].includes(args[0]) || (args[0] === "tag" && args[1] === "--list")) {
+    if (
+      ["status", "fetch", "ls-remote"].includes(args[0]) ||
+      (args[0] === "tag" && args[1] === "--list")
+    ) {
       return { status: 0 };
     }
     process.exit(99);

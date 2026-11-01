@@ -51,40 +51,37 @@ export class ActivationPlan<Reference> {
     const selections: Selection<Reference>[] = [];
     const blockers: ActivationBlocker[] = [];
     const removed = new Set(removing);
-    const selectedPaths = new Map<string, ReadonlyArray<string>>();
-
-    const visit = (registration: RegistrationRecord<Reference>, path: ReadonlyArray<string>) => {
-      const name = registration.name;
-      if (removed.has(registration)) return;
-      if (selectedPaths.has(name)) return;
-      selectedPaths.set(name, [...path, name]);
-      const selection = registration.capture();
-      for (const dependencyName of Object.keys(selection.artifact.manifest.dependencies)) {
-        const dependency = registrations.get(dependencyName);
-        if (dependency) visit(dependency, [...path, name]);
-      }
-      selections.push(selection);
-    };
-
-    for (const root of roots) {
-      if (removed.has(root)) {
-        blockers.push(
-          blocker(
-            "REGISTRATION_DEPENDENCY_MISSING",
-            `Activation requires removed Registration '${root.name}'`,
-            [root.name],
-          ),
-        );
-      } else {
-        visit(root, []);
-      }
-    }
+    const parents = new Map<string, string | undefined>();
+    const admitted = roots.filter((root) => {
+      if (!removed.has(root)) return true;
+      blockers.push(
+        blocker(
+          "REGISTRATION_DEPENDENCY_MISSING",
+          `Activation requires removed Registration '${root.name}'`,
+          [root.name],
+        ),
+      );
+      return false;
+    });
+    walk(
+      admitted,
+      function* (registration) {
+        for (const name of Object.keys(registration.selectedArtifact.manifest.dependencies)) {
+          const dependency = registrations.get(name);
+          if (dependency && !removed.has(dependency)) yield dependency;
+        }
+      },
+      {
+        enter: (registration, parent) => parents.set(registration.name, parent?.name),
+        leave: (registration) => selections.push(registration.capture()),
+      },
+    );
     const candidate = activeArtifacts(
       [...registrations.values()].filter((registration) => !removed.has(registration)),
     );
     for (const selection of selections)
       candidate.set(selection.registration.name, selection.artifact);
-    blockers.push(...validateArtifacts(candidate, selectedPaths));
+    validateArtifacts(candidate, parents, blockers);
 
     this.selections = Object.freeze(selections);
     this.removals = Object.freeze(removing.map((registration) => registration.capture()));
@@ -138,56 +135,97 @@ function activeArtifacts<Reference>(registrations: Iterable<RegistrationRecord<R
   return result;
 }
 
-function validateArtifacts(
-  candidate: ReadonlyMap<string, ArtifactDescriptor>,
-  selectedPaths: ReadonlyMap<string, ReadonlyArray<string>>,
+// A delivery graph may be deeper than the JS stack. Only a reported blocker needs a materialized path.
+function walk<T>(
+  roots: Iterable<T>,
+  dependencies: (value: T) => Iterable<T>,
+  events: {
+    readonly enter?: (value: T, parent: T | undefined) => void;
+    readonly leave?: (value: T) => void;
+    readonly cycle?: (path: T[]) => void;
+  },
 ) {
-  const blockers: ActivationBlocker[] = [];
-  const visited = new Set<string>();
-  const visiting = new Set<string>();
-  const visit = (name: string, path: ReadonlyArray<string>) => {
-    if (visiting.has(name)) {
-      const cycle = [...path, name];
-      blockers.push(
-        blocker(
-          "REGISTRATION_CYCLE",
-          `Registration dependency cycle: ${cycle.join(" -> ")}`,
-          cycle,
-        ),
-      );
+  const visited = new Set<T>();
+  const active = new Map<T, number>();
+  const stack: Array<{ value: T; edges: Iterator<T> }> = [];
+  const enter = (value: T, parent?: T) => {
+    if (visited.has(value)) return;
+    const from = active.get(value);
+    if (from !== undefined) {
+      events.cycle?.([...stack.slice(from).map((frame) => frame.value), value]);
       return;
     }
-    if (visited.has(name)) return;
-    visiting.add(name);
-    const artifact = candidate.get(name)!;
-    for (const [dependencyName, range] of Object.entries(artifact.manifest.dependencies)) {
-      const dependency = candidate.get(dependencyName);
-      const selectedPath = selectedPaths.get(name);
-      const dependencyPath = [...(selectedPath ?? [name]), dependencyName];
-      if (!dependency) {
-        blockers.push(
-          blocker(
-            selectedPath ? "REGISTRATION_DEPENDENCY_MISSING" : "REGISTRATION_DEPENDENCY_INACTIVE",
-            `Registration '${name}' requires '${dependencyName}' to be installed`,
-            dependencyPath,
-          ),
-        );
-      } else if (!satisfies(dependency.manifest.version, range)) {
-        blockers.push(
-          blocker(
-            "REGISTRATION_DEPENDENCY_INCOMPATIBLE",
-            `Registration '${name}' requires '${dependencyName}' ${range}, candidate ${dependency.manifest.version}`,
-            dependencyPath,
-          ),
-        );
-      }
-      if (dependency) visit(dependencyName, [...path, name]);
-    }
-    visiting.delete(name);
-    visited.add(name);
+    events.enter?.(value, parent);
+    active.set(value, stack.length);
+    stack.push({ value, edges: dependencies(value)[Symbol.iterator]() });
   };
-  for (const name of candidate.keys()) visit(name, []);
-  return blockers;
+  for (const root of roots) {
+    enter(root);
+    while (stack.length) {
+      const frame = stack[stack.length - 1]!;
+      const edge = frame.edges.next();
+      if (!edge.done) enter(edge.value, frame.value);
+      else {
+        stack.pop();
+        active.delete(frame.value);
+        visited.add(frame.value);
+        events.leave?.(frame.value);
+      }
+    }
+  }
+}
+
+function validateArtifacts(
+  candidate: ReadonlyMap<string, ArtifactDescriptor>,
+  parents: ReadonlyMap<string, string | undefined>,
+  blockers: ActivationBlocker[],
+) {
+  const dependencyPath = (name: string, dependency: string) => {
+    const path = [dependency, name];
+    for (let parent = parents.get(name); parent !== undefined; parent = parents.get(parent))
+      path.push(parent);
+    return path.reverse();
+  };
+  walk(
+    candidate.keys(),
+    function* (name) {
+      const artifact = candidate.get(name)!;
+      for (const [dependencyName, range] of Object.entries(artifact.manifest.dependencies)) {
+        const dependency = candidate.get(dependencyName);
+        if (!dependency) {
+          blockers.push(
+            blocker(
+              parents.has(name)
+                ? "REGISTRATION_DEPENDENCY_MISSING"
+                : "REGISTRATION_DEPENDENCY_INACTIVE",
+              `Registration '${name}' requires '${dependencyName}' to be installed`,
+              dependencyPath(name, dependencyName),
+            ),
+          );
+        } else {
+          if (!satisfies(dependency.manifest.version, range))
+            blockers.push(
+              blocker(
+                "REGISTRATION_DEPENDENCY_INCOMPATIBLE",
+                `Registration '${name}' requires '${dependencyName}' ${range}, candidate ${dependency.manifest.version}`,
+                dependencyPath(name, dependencyName),
+              ),
+            );
+          yield dependencyName;
+        }
+      }
+    },
+    {
+      cycle: (path) =>
+        blockers.push(
+          blocker(
+            "REGISTRATION_CYCLE",
+            `Registration dependency cycle: ${path.join(" -> ")}`,
+            path,
+          ),
+        ),
+    },
+  );
 }
 
 function blocker(

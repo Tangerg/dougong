@@ -126,7 +126,7 @@ it("keeps old Lifetime capabilities during rejected candidate validation", async
   expect(await rejected).toMatchObject({ code: "CONFIG_INVALID" });
   expect(host.status).toBe("running");
   expect(a.status).toBe("running");
-  expect(host.contributions(items).get().get(`${a.id}/old`)).toBe("running");
+  expect(await host.contributions(items).use(`${a.id}/old`, (value) => value)).toBe("running");
   await host.stop();
   await expect(ctx.events.emit(message, "too late")).rejects.toMatchObject({
     code: "LIFETIME_DISPOSED",
@@ -555,3 +555,125 @@ it.each([false, true])(
     expect(candidate.status).toBe("removed");
   },
 );
+
+it.each([false, true])(
+  "retires validation immediately when its revision ends (quarantine: %s)",
+  async (quarantine) => {
+    const entered = Promise.withResolvers<void>();
+    const blocked = Promise.withResolvers<void>();
+    const later = vi.fn<() => { value: null }>(() => ({ value: null }));
+    const host = createHost({
+      installations: [
+        {
+          id: "owner",
+          plugin: definePlugin({
+            name: "owner",
+            setup({ lifetime }) {
+              if (quarantine)
+                lifetime.defer(() => {
+                  throw new Error("cleanup failed");
+                });
+            },
+          }),
+        },
+      ],
+    });
+    await host.start();
+    const change = host.change();
+    for (const [id, validate] of [
+      [
+        "blocked",
+        async () => {
+          entered.resolve();
+          await blocked.promise;
+          return { value: null };
+        },
+      ],
+      ["later", later],
+    ] as const) {
+      change.install(
+        definePlugin({
+          name: id,
+          config: { "~standard": { version: 1, vendor: "test", validate } },
+          setup() {},
+        }),
+        { id, config: null },
+      );
+    }
+    const reason = vi.fn<(error: unknown) => void>();
+    const done = host.plan(change).then(() => {
+      throw new Error("Obsolete plan issued");
+    }, reason);
+    try {
+      await entered.promise;
+      await Promise.allSettled([host.stop()]);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(reason).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ code: quarantine ? "HOST_QUARANTINED" : "PLAN_STALE" }),
+      );
+    } finally {
+      blocked.resolve();
+      await done;
+    }
+    expect(later).not.toHaveBeenCalled();
+  },
+);
+
+it("opens contribution publication before announcing an admitted transition to observers", async () => {
+  const point = extensionPoint<number>("publication/at-ingress");
+  let add!: () => void;
+  const entered = Promise.withResolvers<void>();
+  const finish = Promise.withResolvers<void>();
+  const host = createHost({
+    installations: [
+      {
+        id: "owner",
+        plugin: definePlugin({
+          name: "owner",
+          setup({ contributions }) {
+            add = () => {
+              contributions.add(point, "later", 1);
+            };
+          },
+        }),
+      },
+    ],
+  });
+  await host.start();
+  const view = host.contributions(point);
+  const before = view.get();
+  const change = host.change();
+  change.install(
+    definePlugin({
+      name: "joining",
+      async setup() {
+        entered.resolve();
+        await finish.promise;
+      },
+    }),
+    { id: "joining" },
+  );
+  const plan = await host.plan(change);
+  let added = false;
+  const watching = host.diagnostics.subscribe(() => {
+    if (host.status === "changing" && !added) {
+      added = true;
+      add();
+    }
+  });
+  const applying = host.apply(plan);
+  try {
+    await entered.promise;
+    expect(added).toBe(true);
+    expect(view.get()).toBe(before);
+    await expect(view.use("owner/later", (v) => v)).rejects.toMatchObject({
+      code: "CONTRIBUTION_UNAVAILABLE",
+    });
+  } finally {
+    watching[Symbol.dispose]();
+    finish.resolve();
+    await applying;
+  }
+  expect(view.get()).toEqual(["owner/later"]);
+  await host.stop();
+});

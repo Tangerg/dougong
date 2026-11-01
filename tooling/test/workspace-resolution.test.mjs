@@ -50,3 +50,15 @@ it("derives runtime test resolution from the TypeScript workspace paths", async 
     rmSync(workspace, { recursive: true, force: true });
   }
 });
+
+it("keeps the installed dependency in control of both root and subpath runtime imports", async () => {
+  const config = await loadConfigFromFile(
+    { command: "build", mode: "production" },
+    fileURLToPath(new URL("../../examples/vite.config.ts", import.meta.url)),
+  );
+  const external = config.config.build.rollupOptions.external;
+  const matches = (id) => (typeof external === "function" ? external(id) : external.includes(id));
+  expect(matches("dougong")).toBe(true);
+  expect(matches("dougong/advanced")).toBe(true);
+  expect(matches("dougong-unrelated")).toBe(false);
+});

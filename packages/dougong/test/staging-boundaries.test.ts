@@ -80,7 +80,7 @@ it.each(["listener", "contribution", "emission"])(
     }
     expect(failure).toMatchObject({ code: "LIFETIME_DISPOSED" });
     await closing;
-    expect(view.get().size).toBe(0);
+    expect(view.get().length).toBe(0);
     expect(notified).not.toHaveBeenCalled();
     await otherEvents.emit(notice);
     expect(notified).toHaveBeenCalledOnce();

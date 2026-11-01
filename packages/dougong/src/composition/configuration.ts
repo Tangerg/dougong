@@ -1,4 +1,5 @@
 import type { StandardSchemaV1 } from "@standard-schema/spec";
+import { onAbort } from "../internal/abort.js";
 import { captureDataArray } from "../internal/data-array.js";
 import { ConfigValidationError } from "../contracts/errors.js";
 
@@ -70,9 +71,15 @@ export async function resolvePluginConfig(
   schema: StandardSchemaV1<unknown, unknown> | undefined,
   input: ConfigValue | undefined,
   installationId: string,
+  validity?: AbortSignal,
 ): Promise<{ readonly value: ConfigValue | undefined }> {
+  validity?.throwIfAborted();
   if (!schema) return Object.freeze({ value: input });
-  const result: unknown = await schema["~standard"].validate(input);
+  const response = schema["~standard"].validate(input);
+  const result: unknown = validity
+    ? (await readWhileCurrent(response, validity)).result
+    : await response;
+  validity?.throwIfAborted();
   if (!result || typeof result !== "object") {
     throw new TypeError(
       `Installation '${installationId}' config validator returned a non-object result`,
@@ -99,4 +106,29 @@ export async function resolvePluginConfig(
   }
   const output = (result as { readonly value: unknown }).value;
   return Object.freeze({ value: Object.is(output, input) ? input : captureConfig(output) });
+}
+
+// Losing a revision detaches this plan; a non-cooperative validator may finish on its own.
+// Box its result so the race cannot repeat thenable assimilation on an application value.
+function readWhileCurrent(response: unknown, validity: AbortSignal) {
+  let waiting: PromiseWithResolvers<{ result: unknown }> | undefined = Promise.withResolvers<{
+    result: unknown;
+  }>();
+  const { promise } = waiting;
+  const detach = onAbort(validity, (reason) => {
+    waiting?.reject(reason);
+    waiting = undefined;
+  });
+  void boxValidationResult(response).then(
+    (result) => waiting?.resolve(result),
+    (error) => waiting?.reject(error),
+  );
+  return promise.finally(() => {
+    waiting = undefined;
+    detach();
+  });
+}
+
+async function boxValidationResult(response: unknown) {
+  return { result: await response };
 }

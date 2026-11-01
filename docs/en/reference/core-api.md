@@ -16,6 +16,8 @@ The main `dougong` package is the actual kernel. Its default surface exposes one
 
 A plugin receives a `LifetimeContext` with work and resource registration capabilities. Its `child(label)` returns a `ChildLifetime` the caller may dispose. Only the Engine can stop the entire Instance.
 
+`LifetimeContext.acquire(factory)` resolves to a frozen `{ resource }` receipt with the adopted resource; destructure it to use the resource.
+
 ## Host and installation
 
 `HostOptions` contains `name`, initial `installations`, initial `groups`, logging and error-reporting ports, and shutdown timeout. Installation IDs are unique within a Host. Group IDs are stable identities declared by the application.
@@ -46,7 +48,7 @@ await host.stop();
 
 Host states are `stopped`, `starting`, `running`, `changing`, `stopping` and `quarantined`. Quarantine is terminal for the entire Host, with no in-place recovery. See [Application handling after quarantine](../guide/transactions.md#quarantine) for operation boundaries and replacement preconditions. `Plan.report` is serializable and contains no modules, functions, real configuration payloads or mutable runtime objects. Lifetimes inside `HostSnapshot` are plain data snapshots too.
 
-Subscriptions share `get/subscribe`, do not replay and use standard Disposable cancellation. `ContributionView.use(id, fn)` borrows the contribution owner; `get()` provides a collection snapshot. `EventOperations.on/emit` supports synchronous or asynchronous listeners; emit awaits all results and aggregates failures, borrowing each listener's owner until completion. `ContributionOperations.add` registers owned contributions.
+Subscriptions share `get/subscribe`, do not replay and use standard Disposable cancellation. `ContributionView.use(id, fn)` borrows the contribution owner; `get()` exposes only a frozen, ordered list of IDs. Read metadata and invoke handlers inside `use`. `EventOperations.on/emit` supports synchronous or asynchronous listeners; emit awaits all results and aggregates failures, borrowing each listener's owner until completion. `ContributionOperations.add` registers owned contributions.
 
 `ErrorDetails` carries outcome, phase, stateRevision and optional installation, contract, dependency path and impact. `RecordedFailure` is a bounded diagnostic projection detached from resource graphs; direct callers still receive the cause of the original rejection.
 
@@ -54,7 +56,7 @@ Subscriptions share `get/subscribe`, do not replay and use standard Disposable c
 
 For callers updating from the previous API, replace the removed Host inspect method with `host.diagnostics.get()`. Remove checks of the former ApplyResult outcome field; code after a successful await handles success, while catch handles failures and their structured details. No alias or compatibility adapter is provided.
 
-Host defaults apply when an option is omitted. An explicit null name, installation list or group list is invalid. Configuration capture reads each shared input object once and freezes its result; cycles and excessive nesting still reject. The logger in `ctx.log` exposes standalone callbacks that the plugin may pass to another function. Its disposal belongs to the Instance.
+Host defaults apply when an option is omitted. An explicit null name, installation list or group list is invalid. Configuration capture reads each shared input object once and freezes its result; cycles and excessive nesting still reject. The logger in `ctx.log` exposes standalone callbacks that the plugin may pass to another function. Its disposal belongs to the Instance. Host creation captures each logger method once with its original backend receiver, including the error fallback.
 
 ## Advanced composition primitives
 
@@ -67,6 +69,7 @@ Use `dougong/advanced` for adapters and domain extensions. These primitives expo
 | `SerialQueue` | Run submitted operations in sequence. |
 | `normalizePlainRecord` | Capture the data fields of a plain record. Use `captureConfig` when the input is plugin configuration. |
 | `captureDataArray(input, label)` | Freeze a shallow copy of dense own index data without invoking the input’s methods or iterator. The caller validates the elements. |
+| `captureLogger(logger)` | Capture the four methods and their original receiver once when adopting a logging backend. |
 | `onAbort(signal, callback)` | Observe genuine cancellation once, passing its reason immediately if already aborted. The returned function detaches the callback. Dispatching an event named `abort` does not cancel a scope. |
 
 For future cancellation, the native event must reach the listener. Earlier same-realm code that calls `stopImmediatePropagation()` can suppress that notification; the signal itself remains aborted.

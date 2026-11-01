@@ -121,3 +121,17 @@ it("rejects conflicting edits inside a removed subtree", async () => {
   await expect(host.plan(change)).rejects.toMatchObject({ code: "CHANGE_CONFLICT" });
   expect(host.installation("a")).toBeDefined();
 });
+
+it("constructs a deep child-first group declaration without depending on the JavaScript call stack", async () => {
+  const depth = 10_000;
+  const groups = Array.from({ length: depth }, (_, index) => ({
+    id: String(depth - 1 - index),
+    ...(index === depth - 1 ? {} : { parentId: String(depth - 2 - index) }),
+  }));
+  const host = createHost({ groups });
+  expect(host.group(String(depth - 1))?.parentId).toBe(String(depth - 2));
+  const change = host.change();
+  change.removeGroup(host.group("0")!);
+  await host.apply(await host.plan(change));
+  expect(host.group(String(depth - 1))).toBeUndefined();
+});

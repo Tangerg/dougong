@@ -1,78 +1,30 @@
 #!/usr/bin/env node
 
 import { execFileSync } from "node:child_process";
-import {
-  cpSync,
-  existsSync,
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  realpathSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
+import { cpSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { packageArchiveIn } from "../package-archive.mjs";
-import { x } from "tar";
-import { publishedDirectories } from "../packages.mjs";
+import { candidateOutput, packCandidates, writeVerifiedCandidates } from "./package-candidates.mjs";
+import { installConsumerDependencies } from "./install-dependencies.mjs";
 
 const root = fileURLToPath(new URL("../../", import.meta.url));
 const workspace = mkdtempSync(join(tmpdir(), "dougong-packed-consumer-"));
 const modules = join(workspace, "node_modules");
-const unpacked = new Set();
-const published = new Map(
-  publishedDirectories.map((directory) => {
-    const path = join(root, directory);
-    return [JSON.parse(readFileSync(join(path, "package.json"), "utf8")).name, path];
-  }),
-);
-
-function installedDependency(from, name) {
-  let directory = realpathSync(from);
-  while (true) {
-    const candidate = join(directory, "node_modules", name);
-    if (existsSync(join(candidate, "package.json"))) return realpathSync(candidate);
-    const parent = dirname(directory);
-    if (parent === directory)
-      throw new Error(`Cannot resolve production dependency '${name}' from ${from}`);
-    directory = parent;
-  }
-}
-
-function copyDependency(source) {
-  const manifest = JSON.parse(readFileSync(join(source, "package.json"), "utf8"));
-  if (published.has(manifest.name) || unpacked.has(manifest.name)) return;
-  unpacked.add(manifest.name);
-  const target = join(modules, manifest.name);
-  mkdirSync(dirname(target), { recursive: true });
-  cpSync(source, target, {
-    recursive: true,
-    filter: (path) => !path.slice(source.length).split(/[\\/]/).includes("node_modules"),
-  });
-  for (const dependency of Object.keys(manifest.dependencies ?? {})) {
-    copyDependency(installedDependency(source, dependency));
-  }
-}
-
+const packed = new Map();
 try {
   mkdirSync(modules);
-  for (const [name, directory] of published) {
-    const destination = join(workspace, "archives", name.replaceAll("/", "-"));
-    mkdirSync(destination, { recursive: true });
-    execFileSync("pnpm", ["pack", "--pack-destination", destination], {
-      cwd: directory,
-      stdio: "pipe",
-    });
+  const candidates = packCandidates(root);
+  for (const { name, source, files } of candidates.values()) {
     const target = join(modules, name);
-    mkdirSync(target, { recursive: true });
-    await x({ file: packageArchiveIn(destination), cwd: target, strip: 1 });
-    const manifest = JSON.parse(readFileSync(join(target, "package.json"), "utf8"));
-    for (const dependency of Object.keys(manifest.dependencies ?? {})) {
-      if (!published.has(dependency)) copyDependency(installedDependency(directory, dependency));
+    for (const [file, bytes] of files) {
+      const path = join(target, file);
+      mkdirSync(dirname(path), { recursive: true });
+      writeFileSync(path, bytes, { flag: "wx" });
     }
+    packed.set(source, target);
   }
+  installConsumerDependencies(packed, join(workspace, "dependencies"));
   // An actual second installed copy gives a different module-local dependency collector.
   cpSync(join(modules, "@dougongjs/reactive"), join(modules, "@fixture/reactive-copy"), {
     recursive: true,
@@ -113,6 +65,8 @@ try {
       stdio: "inherit",
     });
   }
+  if (process.env[candidateOutput])
+    writeVerifiedCandidates(process.env[candidateOutput], candidates);
 } finally {
   rmSync(workspace, { recursive: true, force: true });
 }

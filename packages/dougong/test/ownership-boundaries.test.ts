@@ -332,7 +332,7 @@ it("captures ContributionStore identity independently of a mutable input token",
   mutable.id = "owned/changed";
   first[Symbol.dispose]();
   const second = context.contributions.add(original, "second", 2);
-  expect([...host.contributions(original).get().values()]).toEqual([2]);
+  expect(await host.contributions(original).use("owner/second", (value) => [value])).toEqual([2]);
   second[Symbol.dispose]();
   await host.stop();
 });

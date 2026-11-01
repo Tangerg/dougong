@@ -1,21 +1,4 @@
-import { defineConfig } from "vite";
-import dts from "unplugin-dts/vite";
-import { runtimeBaseline } from "../../tooling/runtime-baseline.mjs";
+import { libraryBuild } from "../../tooling/library-build.mjs";
+import manifest from "./package.json" with { type: "json" };
 
-export default defineConfig({
-  plugins: [
-    dts({
-      tsconfigPath: "./tsconfig.json",
-      entryRoot: "src",
-      include: ["src"],
-    }),
-  ],
-  build: {
-    target: runtimeBaseline.buildTargets,
-    lib: {
-      entry: "src/index.ts",
-      formats: ["es"],
-      fileName: "index",
-    },
-  },
-});
+export default libraryBuild(manifest);

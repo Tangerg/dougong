@@ -306,7 +306,7 @@ describe("structured lifetime", () => {
       cause: { message: "setup failed" },
     });
     expect(host.status).toBe("running");
-    expect(view.get().size).toBe(0);
+    expect(view.get().length).toBe(0);
     expect(notified).not.toHaveBeenCalled();
     await emit("after");
     expect(listener).not.toHaveBeenCalled();
@@ -388,9 +388,11 @@ describe("structured lifetime", () => {
     const current = registry.get<string>(token).stage("owner", "item", "new", second);
     second.publish();
     old[Symbol.dispose]();
-    expect([...view.get().values()]).toEqual(["new"]);
+    expect(await Promise.all(view.get().map((id) => view.use(id, (value) => value)))).toEqual([
+      "new",
+    ]);
     current[Symbol.dispose]();
-    expect(view.get().size).toBe(0);
+    expect(view.get().length).toBe(0);
     await second.dispose();
   });
 
@@ -398,7 +400,7 @@ describe("structured lifetime", () => {
     const owner = lifetime();
     const registry = new ContributionRegistry(() => undefined);
     const view = registry.view(extensionPoint("view"), owner);
-    expect(view.get().size).toBe(0);
+    expect(view.get().length).toBe(0);
     await owner.dispose();
     expect(() => view.get()).toThrow("disposed");
     expect(() => view.subscribe(() => undefined)).toThrow("disposed");
@@ -414,7 +416,9 @@ describe("structured lifetime", () => {
     subscription[Symbol.dispose]();
     registry.get<string>(token).stage("owner", "item", "value", owner);
     owner.publish();
-    expect([...view.get().values()]).toEqual(["value"]);
+    expect(await Promise.all(view.get().map((id) => view.use(id, (value) => value)))).toEqual([
+      "value",
+    ]);
     expect(notified).not.toHaveBeenCalled();
     await owner.dispose();
   });
@@ -426,7 +430,7 @@ describe("structured lifetime", () => {
     const view = host.contributions(items);
     const sizes: number[] = [];
     view.subscribe(() => {
-      sizes.push(view.get().size);
+      sizes.push(view.get().length);
     });
     const change = host.change();
     const group = change.group("batch");
@@ -441,7 +445,10 @@ describe("structured lifetime", () => {
         { id, group },
       );
     await host.apply(await host.plan(change));
-    expect([...view.get().values()]).toEqual(["first", "second"]);
+    expect(await Promise.all(view.get().map((id) => view.use(id, (value) => value)))).toEqual([
+      "first",
+      "second",
+    ]);
     expect(sizes).toEqual([2]);
     await host.stop();
   });
@@ -454,10 +461,7 @@ describe("structured lifetime", () => {
     store.stage("owner:1", "nested:2/item", 1, owner);
     store.stage("owner:1/nested:2", "item", 2, owner);
     owner.publish();
-    expect([...store.snapshot().keys()]).toEqual([
-      "owner:1/nested:2%2Fitem",
-      "owner:1%2Fnested:2/item",
-    ]);
+    expect([...store.snapshot()]).toEqual(["owner:1/nested:2%2Fitem", "owner:1%2Fnested:2/item"]);
     await owner.dispose();
   });
 
@@ -467,11 +471,17 @@ describe("structured lifetime", () => {
     const store = registry.get<number | undefined>(extensionPoint("undefined"));
     const contribution = store.stage("owner", "item", undefined, owner);
     owner.publish();
-    expect([...store.snapshot().values()]).toEqual([undefined]);
+    expect(
+      await Promise.all(store.snapshot().map((id) => store.use(id, (value) => value))),
+    ).toEqual([undefined]);
     contribution.update(1);
-    expect([...store.snapshot().values()]).toEqual([1]);
+    expect(
+      await Promise.all(store.snapshot().map((id) => store.use(id, (value) => value))),
+    ).toEqual([1]);
     contribution.update(undefined);
-    expect([...store.snapshot().values()]).toEqual([undefined]);
+    expect(
+      await Promise.all(store.snapshot().map((id) => store.use(id, (value) => value))),
+    ).toEqual([undefined]);
     await owner.dispose();
   });
 
@@ -488,7 +498,9 @@ describe("structured lifetime", () => {
       .scope(owner, "owner", () => undefined)
       .add(token, "kept", "value", { lifetime: child });
     owner.publish();
-    expect([...registry.view<string>(token).get().values()]).toEqual(["value"]);
+    expect(await registry.view<string>(token).use("owner/kept", (value) => [value])).toEqual([
+      "value",
+    ]);
     draining.resolve();
     await closing;
     await owner.dispose();
@@ -503,7 +515,9 @@ describe("structured lifetime", () => {
     owner.publish();
     const child = owner.child("outer").child("inner");
     contributions.add(point, "key", "value", { lifetime: child });
-    expect([...view.get().values()]).toEqual(["value"]);
+    expect(await Promise.all(view.get().map((id) => view.use(id, (value) => value)))).toEqual([
+      "value",
+    ]);
     await owner.dispose();
   });
 
@@ -515,16 +529,16 @@ describe("structured lifetime", () => {
     const view = registry.view<string>(token);
     const sizes: number[] = [];
     view.subscribe(() => {
-      sizes.push(view.get().size);
+      sizes.push(view.get().length);
     });
     contributions.add(token, "root", "1");
     contributions.add(token, "child", "2", { lifetime: owner.child("child") });
     contributions.add(token, "nested", "3", { lifetime: owner.child("outer").child("nested") });
     registry.beginBatch();
     owner.publish();
-    expect(view.get().size).toBe(0);
+    expect(view.get().length).toBe(0);
     registry.endBatch();
-    expect(view.get().size).toBe(3);
+    expect(view.get().length).toBe(3);
     expect(sizes).toEqual([3]);
     await owner.dispose();
   });

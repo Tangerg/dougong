@@ -1,6 +1,10 @@
-import { DougongError } from "../contracts/errors.js";
+import { DougongError, quarantinedHost } from "../contracts/errors.js";
 import type { InstallationGraph } from "./installation-graph.js";
-import type { InstallationDeclaration, InstallationRecord } from "./installation.js";
+import {
+  PendingInstallations,
+  type InstallationDeclaration,
+  type InstallationRecord,
+} from "./installation.js";
 import type { GroupNode } from "./group.js";
 import type { ConfigValue } from "./configuration.js";
 import type { InstallationOrigin } from "./declarations.js";
@@ -74,25 +78,23 @@ function stalePlan(expectedRevision: number, stateRevision: number) {
   });
 }
 
-function pendingProjection(): { status: "pending" | "removed"; readonly origin: undefined } {
-  return { status: "pending", origin: undefined };
-}
-
 export class PlanAuthority {
   readonly #issued = new WeakMap<Plan, "issued" | "consumed">();
   #prepared = new WeakMap<Plan, PreparedTransition>();
-  #pending = pendingProjection();
+  #pending = new PendingInstallations();
+  #validation: AbortController | undefined;
+
+  get validationSignal() {
+    return (this.#validation ??= new AbortController()).signal;
+  }
 
   issue(prepared: PreparedTransition, base: PlanBase): Plan {
     const { report } = prepared;
     if (report.baseStateRevision !== base.revision)
       throw stalePlan(report.baseStateRevision, base.revision);
     const plan = Object.freeze({ report }) as Plan;
-    // A pending handle may outlive its Host. Capture only its revision's inert projection.
-    const pending = this.#pending;
-    const read = () => pending;
     for (const record of prepared.graph.declarations.keys()) {
-      if (!base.graph.declarations.has(record)) record.attach(read);
+      if (!base.graph.declarations.has(record)) this.#pending.attach(record);
     }
     this.#issued.set(plan, "issued");
     this.#prepared.set(plan, prepared);
@@ -118,9 +120,13 @@ export class PlanAuthority {
     this.#prepared.delete(plan);
   }
 
-  invalidate() {
-    this.#pending.status = "removed";
-    this.#pending = pendingProjection();
+  invalidate(revision: number, quarantined: boolean) {
+    this.#validation?.abort(
+      quarantined ? quarantinedHost(revision) : stalePlan(revision - 1, revision),
+    );
+    this.#validation = undefined;
+    this.#pending.retire();
+    this.#pending = new PendingInstallations();
     this.#prepared = new WeakMap();
   }
 }
@@ -151,30 +157,23 @@ export function describeImpact(
   direct: ReadonlyMap<InstallationRecord, ImpactReason["kind"]>,
 ): ReadonlyArray<ImpactReason> {
   const reasons: ImpactReason[] = [];
-  const before = describeBindings(previous);
-  const after = describeBindings(candidate);
-  const affectedIds = new Set([...affected].map((installation) => installation.id));
   for (const installation of affected) {
     const kind = direct.get(installation);
     if (kind) {
       reasons.push(Object.freeze({ installation: installation.id, kind }));
       continue;
     }
-    const contracts = new Set(
-      [...before, ...after]
-        .filter((binding) => binding.installation === installation.id)
-        .map((binding) => binding.contract),
-    );
-    for (const contract of contracts) {
-      const previousProvider = before.find(
-        (binding) => binding.installation === installation.id && binding.contract === contract,
-      )?.provider;
-      const provider = after.find(
-        (binding) => binding.installation === installation.id && binding.contract === contract,
-      )?.provider;
+    // Indirectly affected declarations are unchanged; only their actual providers may have moved.
+    for (const requirement of Object.values(
+      candidate.declarationFor(installation).plugin.requires,
+    )) {
+      if (requirement.kind === "extensionPoint") continue;
+      const contract = (requirement.kind === "optional" ? requirement.service : requirement).id;
+      const previousProvider = previous.providers.get(contract);
+      const provider = candidate.providers.get(contract);
       if (
-        !(previousProvider && affectedIds.has(previousProvider)) &&
-        !(provider && affectedIds.has(provider))
+        !(previousProvider && affected.has(previousProvider)) &&
+        !(provider && affected.has(provider))
       )
         continue;
       reasons.push(
@@ -182,8 +181,8 @@ export function describeImpact(
           installation: installation.id,
           kind: "provider_changed",
           contract,
-          ...(previousProvider === undefined ? {} : { previousProvider }),
-          ...(provider === undefined ? {} : { provider }),
+          ...(previousProvider === undefined ? {} : { previousProvider: previousProvider.id }),
+          ...(provider === undefined ? {} : { provider: provider.id }),
         }),
       );
     }

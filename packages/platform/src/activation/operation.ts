@@ -5,13 +5,25 @@ import type { ActivationPlan } from "./plan.js";
 
 export class ActivationOperation<Reference> {
   readonly #controller = new AbortController();
-  readonly #detach: (() => void) | undefined;
+  #caller: { readonly signal: AbortSignal; readonly detach: () => void } | undefined;
   readonly #completion = Promise.withResolvers<void>();
   readonly plan: ActivationPlan<Reference>;
+  readonly #roles = new Map<
+    RegistrationRecord<Reference>,
+    { readonly revision: number; readonly status: "activating" | "removing" }
+  >();
 
   constructor(plan: ActivationPlan<Reference>, signal: AbortSignal | undefined) {
     this.plan = plan;
-    this.#detach = signal && onAbort(signal, (reason) => this.#controller.abort(reason));
+    for (const { registration, revision } of plan.selections)
+      this.#roles.set(registration, { revision, status: "activating" });
+    for (const { registration, revision } of plan.removals)
+      this.#roles.set(registration, { revision, status: "removing" });
+    if (signal)
+      this.#caller = {
+        signal,
+        detach: onAbort(signal, (reason) => this.#controller.abort(reason)),
+      };
     this.signal.throwIfAborted();
   }
 
@@ -22,18 +34,38 @@ export class ActivationOperation<Reference> {
     return this.#completion.promise;
   }
 
-  contains(registration: RegistrationRecord<Reference>, revision: number) {
-    return [...this.plan.selections, ...this.plan.removals].some(
-      (selection) => selection.registration === registration && selection.revision === revision,
-    );
+  // Same-realm code can suppress delivery of an abort event, but not the caller signal's native state.
+  synchronizeCancellation() {
+    if (!this.#caller || this.signal.aborted) return;
+    try {
+      AbortSignal.prototype.throwIfAborted.call(this.#caller.signal);
+    } catch (reason) {
+      this.#controller.abort(reason);
+    }
+  }
+
+  checkpoint() {
+    this.synchronizeCancellation();
+    this.signal.throwIfAborted();
+  }
+
+  handoff() {
+    this.checkpoint();
+    this.#detachCaller();
+  }
+
+  #detachCaller() {
+    this.#caller?.detach();
+    this.#caller = undefined;
+  }
+
+  statusFor(registration: RegistrationRecord<Reference>, revision: number) {
+    const role = this.#roles.get(registration);
+    return role?.revision === revision ? role.status : undefined;
   }
 
   supersede(registration: RegistrationRecord<Reference>) {
-    if (
-      [...this.plan.selections, ...this.plan.removals].some(
-        (selection) => selection.registration === registration,
-      )
-    ) {
+    if (this.#roles.has(registration)) {
       this.#controller.abort(
         new PlatformError(
           "SELECTION_SUPERSEDED",
@@ -48,7 +80,7 @@ export class ActivationOperation<Reference> {
   }
 
   finish() {
-    this.#detach?.();
+    this.#detachCaller();
     this.#completion.resolve();
   }
 }

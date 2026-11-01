@@ -122,19 +122,18 @@ function artifact(
 
 export async function hmrModuleGraph(): Promise<ExampleResult> {
   let views!: ContributionView<View>;
-  const snapshots: string[] = [];
+  const snapshots: Array<Promise<string>> = [];
+  const labels = async (view: ContributionView<View>, separator: string) =>
+    (await Promise.all(view.get().map((id) => view.use(id, (value) => value.label))))
+      .sort()
+      .join(separator);
   const observer = definePlugin({
     name: "examples.hmr-module-graph.observer",
     requires: { views: VIEWS },
     setup(ctx) {
       views = ctx.deps.views;
       const capture = () => {
-        snapshots.push(
-          [...ctx.deps.views.get().values()]
-            .map((view) => view.label)
-            .sort()
-            .join("+"),
-        );
+        snapshots.push(labels(ctx.deps.views, "+"));
       };
       ctx.deps.views.subscribe(capture);
     },
@@ -168,10 +167,7 @@ export async function hmrModuleGraph(): Promise<ExampleResult> {
     await platform.select(artifact(platform, name, "1.0.0", reference));
   }
   await platform.trigger("startup");
-  const before = [...views.get().values()]
-    .map((view) => view.label)
-    .sort()
-    .join(", ");
+  const before = await labels(views, ", ");
 
   const graph = new ModuleGraph([
     { id: "shared/icons.ts", imports: [] },
@@ -195,14 +191,12 @@ export async function hmrModuleGraph(): Promise<ExampleResult> {
     }
     targets.push(await platform.select(replacement));
   }
+  await Promise.all(snapshots);
   snapshots.length = 0;
   await platform.activate(targets);
 
-  const after = [...views.get().values()]
-    .map((view) => view.label)
-    .sort()
-    .join(", ");
-  const publishedSnapshots = [...snapshots];
+  const after = await labels(views, ", ");
+  const publishedSnapshots = await Promise.all(snapshots);
 
   await platform[asyncDisposeSymbol]();
   await host.stop();

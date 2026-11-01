@@ -15,13 +15,10 @@ export class InstallationGraph {
     readonly contractKinds: ReadonlyMap<string, ContractKind>,
   ) {}
 
-  static build(
-    declarations: ReadonlyMap<InstallationRecord, InstallationDeclaration>,
-    committedKinds: ReadonlyMap<string, ContractKind>,
-  ) {
+  static build(declarations: ReadonlyMap<InstallationRecord, InstallationDeclaration>) {
     // Sort by installation index so activation layers are reproducible across equivalent declarations.
     const installations = [...declarations.keys()].sort((left, right) => left.index - right.index);
-    const contractKinds = new Map(committedKinds);
+    const contractKinds = new Map<string, ContractKind>();
     const providers = collectProviders(declarations, contractKinds);
     const dependencies = connectRequirements(declarations, providers, contractKinds);
     const { order, layers } = sortDependencies(
@@ -157,8 +154,8 @@ function sortDependencies(
     const layer = frontier;
     frontier = [];
     layers.push(layer);
-    order.push(...layer);
     for (const installation of layer) {
+      order.push(installation);
       for (const dependent of dependents.get(installation) ?? []) {
         const next = (indegree.get(dependent) ?? 0) - 1;
         indegree.set(dependent, next);
@@ -168,7 +165,7 @@ function sortDependencies(
   }
 
   if (order.length !== installations.length) {
-    const cycle = findDependencyCycle(installations, dependents);
+    const cycle = findDependencyCycle(dependents, indegree);
     throw new DougongError(
       "SERVICE_CYCLE",
       `Installation dependency cycle: ${cycle.map((installation) => installation.id).join(" -> ")}`,
@@ -183,40 +180,22 @@ function sortDependencies(
   return { order, layers };
 }
 
-// Recover a concrete cycle on failure so diagnostics identify actionable dependency edges.
+// After topological sorting, every remaining node has a remaining predecessor. Following
+// those edges must revisit a node; reverse that segment to report provider → consumer order.
 function findDependencyCycle(
-  installations: ReadonlyArray<InstallationRecord>,
   dependents: ReadonlyMap<InstallationRecord, ReadonlySet<InstallationRecord>>,
+  indegree: ReadonlyMap<InstallationRecord, number>,
 ) {
-  const visited = new Set<InstallationRecord>();
-  const visiting = new Set<InstallationRecord>();
-  const path: InstallationRecord[] = [];
-
-  const visit = (installation: InstallationRecord): InstallationRecord[] | undefined => {
-    visiting.add(installation);
-    path.push(installation);
-
-    for (const dependent of dependents.get(installation) ?? []) {
-      if (visiting.has(dependent)) {
-        const cycleStart = path.indexOf(dependent);
-        return [...path.slice(cycleStart), dependent];
-      }
-      if (visited.has(dependent)) continue;
-      const cycle = visit(dependent);
-      if (cycle) return cycle;
-    }
-
-    path.pop();
-    visiting.delete(installation);
-    visited.add(installation);
-    return undefined;
-  };
-
-  for (const installation of installations) {
-    if (visited.has(installation)) continue;
-    const cycle = visit(installation);
-    if (cycle) return cycle;
+  const predecessor = new Map<InstallationRecord, InstallationRecord>();
+  for (const [provider, consumers] of dependents) {
+    if (!indegree.get(provider)) continue;
+    for (const consumer of consumers) predecessor.set(consumer, provider);
   }
-
-  throw new Error("Dependency graph is cyclic but no cycle path was found");
+  let current = predecessor.keys().next().value!;
+  const visited = new Map<InstallationRecord, number>();
+  while (!visited.has(current)) {
+    visited.set(current, visited.size);
+    current = predecessor.get(current)!;
+  }
+  return [...Array.from(visited.keys()).slice(visited.get(current)!), current].reverse();
 }

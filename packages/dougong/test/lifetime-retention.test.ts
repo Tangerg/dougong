@@ -460,7 +460,10 @@ it("keeps stale Plan reports and pending identities without retaining their plug
     }),
     { id: "validating", config: null },
   );
-  const validation = host.plan(change);
+  const validation = host.plan(change).then(
+    () => undefined,
+    (error: unknown) => error,
+  );
   await entered.promise;
   await host.start();
   try {
@@ -468,7 +471,7 @@ it("keeps stale Plan reports and pending identities without retaining their plug
     expect(reference.deref()).toBeUndefined();
   } finally {
     finish.resolve();
-    await expect(validation).rejects.toMatchObject({ code: "PLAN_STALE" });
+    expect(await validation).toMatchObject({ code: "PLAN_STALE" });
   }
   expect(pending.status).toBe("removed");
   expect(plan.report.operations[0]?.id).toBe("candidate");
@@ -492,3 +495,107 @@ async function retainedCandidate(host: Host) {
   );
   return { plan: await host.plan(change), pending, reference: new WeakRef(payload) };
 }
+
+async function terminalHandles() {
+  const onError = () => undefined;
+  const payload = { calls: 0 };
+  const host = createHost({
+    onError,
+    installations: [
+      {
+        id: "owner",
+        origin: { revision: "v1" },
+        plugin: definePlugin({
+          name: "owner",
+          setup({ lifetime }) {
+            lifetime.defer(() => {
+              throw new Error("cleanup failed");
+            });
+          },
+        }),
+      },
+    ],
+  });
+  await host.start();
+  const owner = host.installation("owner")!;
+  const draft = host.change();
+  const unresolved = draft.install(
+    definePlugin({
+      name: "unused",
+      setup() {
+        payload.calls++;
+      },
+    }),
+    { id: "unused" },
+  );
+  const failed = await host.stop().then(
+    () => false,
+    () => true,
+  );
+  if (!failed || host.status !== "quarantined") throw new Error("Expected terminal quarantine");
+  return {
+    owner,
+    draft,
+    unresolved,
+    reporter: new WeakRef(onError),
+    payload: new WeakRef(payload),
+  };
+}
+
+it("a quarantined Installation or pre-quarantine draft cannot retain or advance execution", async () => {
+  const fixture = await terminalHandles();
+  await collect([fixture.reporter, fixture.payload]);
+  expect(fixture.reporter.deref()).toBeUndefined();
+  expect(fixture.payload.deref()).toBeUndefined();
+  expect(fixture.owner.status).toBe("quarantined");
+  expect(fixture.owner.origin).toEqual({ revision: "v1" });
+  expect(fixture.unresolved.status).toBe("removed");
+  expect(() => fixture.draft.group("late")).toThrowError(
+    expect.objectContaining({ code: "HOST_QUARANTINED" }),
+  );
+});
+
+function stalledValidation(entered: () => void, finish: Promise<void>) {
+  return definePlugin({
+    name: "stalled",
+    config: {
+      "~standard": {
+        version: 1,
+        vendor: "test",
+        async validate() {
+          entered();
+          await finish;
+          return { value: null };
+        },
+      },
+    },
+    setup() {},
+  });
+}
+
+async function obsoleteValidation(finish: Promise<void>) {
+  const onError = () => undefined;
+  const host = createHost({ onError });
+  const change = host.change();
+  const entered = Promise.withResolvers<void>();
+  change.install(stalledValidation(entered.resolve, finish), { id: "stalled", config: null });
+  const planning = host.plan(change).then(
+    () => "issued",
+    (error: unknown) => (error instanceof Error ? error.message : "unknown"),
+  );
+  await entered.promise;
+  await host.start();
+  return { planning, reporter: new WeakRef(onError) };
+}
+
+it("a stalled validator cannot retain a Host once its revision has ended", async () => {
+  const finish = Promise.withResolvers<void>();
+  const fixture = await obsoleteValidation(finish.promise);
+  try {
+    await collect([fixture.reporter]);
+    expect(fixture.reporter.deref()).toBeUndefined();
+  } finally {
+    finish.resolve();
+    await fixture.planning;
+  }
+});

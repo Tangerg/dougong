@@ -41,7 +41,7 @@ export interface LifetimeContext {
   readonly spawn: <T>(task: BackgroundTask<T>) => Task<T>;
   readonly acquire: <T extends Resource>(
     factory: (signal: AbortSignal) => Awaitable<T>,
-  ) => Promise<T>;
+  ) => Promise<{ readonly resource: T }>;
   readonly interrupt: (callback: Cleanup) => Disposable;
 }
 
@@ -106,7 +106,7 @@ class CleanupRecord {
     const cleanup = this.#cleanup;
     if (!cleanup) return Promise.resolve();
     const completion = Promise.withResolvers<void>();
-    this.#completion = completion.promise;
+    this.#completion = Object.freeze(completion.promise);
     void Promise.resolve()
       .then(cleanup)
       .then(
@@ -163,15 +163,13 @@ class PublicationRecord {
   }
 }
 
-class TaskRecord<T> implements Task<T> {
-  readonly result: Promise<T>;
+class TaskRecord<T> {
+  readonly handle: Task<T>;
   #controller: AbortController | undefined;
-  #detachAbort: (() => void) | undefined;
   #detach: (() => void) | undefined;
-  #completion: Promise<void> | undefined;
+  readonly settled: Promise<void>;
 
   constructor(
-    parentSignal: AbortSignal,
     task: BackgroundTask<T>,
     report: ((error: unknown) => void) | undefined,
     detach: () => void,
@@ -179,7 +177,6 @@ class TaskRecord<T> implements Task<T> {
     const controller = new AbortController();
     this.#controller = controller;
     this.#detach = detach;
-    this.#detachAbort = onAbort(parentSignal, (reason) => controller.abort(reason));
     let reporter = report;
     const failed = (error: unknown) => {
       if (!reporter) return;
@@ -195,7 +192,7 @@ class TaskRecord<T> implements Task<T> {
     };
     // Classify a synchronous throw before disposal can overtake it. The public promise
     // adopts the returned value itself, so an application thenable is resolved only once.
-    this.result = Promise.resolve().then<T>(() => {
+    const result = Promise.resolve().then<T>(() => {
       try {
         return task(controller.signal);
       } catch (error) {
@@ -203,36 +200,37 @@ class TaskRecord<T> implements Task<T> {
         throw error;
       }
     });
-    void this.result.then(
-      () => this.#settle(),
-      (error: unknown) => {
-        failed(error);
-        this.#settle();
-      },
+    this.settled = Object.freeze(
+      result.then(
+        () => this.#settle(),
+        (error: unknown) => {
+          failed(error);
+          this.#settle();
+        },
+      ),
     );
-    Object.freeze(this);
+    this.handle = Object.freeze({
+      result,
+      [asyncDisposeSymbol]: this.#dispose.bind(this),
+    });
   }
 
   #settle() {
     this.#controller = undefined;
-    this.#detachAbort?.();
-    this.#detachAbort = undefined;
     const detach = this.#detach;
     this.#detach = undefined;
     detach?.();
   }
 
-  [asyncDisposeSymbol](): Promise<void> {
-    if (this.#completion) return this.#completion;
-    const completion = this.result.then(
-      () => undefined,
-      () => undefined,
-    );
-    this.#completion = completion;
-    this.#controller?.abort(disposalReason);
-    this.#detachAbort?.();
-    this.#detachAbort = undefined;
-    return completion;
+  #dispose() {
+    this.cancel(disposalReason);
+    return this.settled;
+  }
+
+  cancel(reason: unknown) {
+    const controller = this.#controller;
+    this.#controller = undefined;
+    controller?.abort(reason);
   }
 }
 
@@ -246,7 +244,7 @@ export class Lifetime {
   readonly #interrupts = new Set<CleanupRecord>();
   readonly #publications = new Set<PublicationRecord>();
   readonly #tasks = new Set<TaskRecord<unknown>>();
-  readonly #acquisitions = new Set<Promise<unknown>>();
+  readonly #acquisitions = new Set<Promise<void>>();
   readonly #shutdownTimeoutMs: number | undefined;
   #report: ((error: unknown) => void) | undefined;
   #changed: (() => void) | undefined;
@@ -264,21 +262,16 @@ export class Lifetime {
     validateLabel(options.label);
     if (typeof options.report !== "function")
       throw new TypeError("Lifetime error reporter must be a function");
-    if (
-      options.shutdownTimeoutMs !== undefined &&
-      (!Number.isFinite(options.shutdownTimeoutMs) || options.shutdownTimeoutMs <= 0)
-    ) {
-      throw new TypeError("shutdownTimeoutMs must be a positive finite number");
-    }
     this.#label = options.label;
     this.#report = options.report;
     this.#changed = options.changed;
-    this.#shutdownTimeoutMs = options.shutdownTimeoutMs;
+    this.#shutdownTimeoutMs = shutdownTimeout(options.shutdownTimeoutMs);
     this.#visibility = ownership?.visibility ?? new Visibility();
     this.#detachFromParent = ownership?.detach;
     if (options.parentSignal) {
       this.#detachParentAbort = onAbort(options.parentSignal, (reason) => {
-        this.#cancellation.abort?.(reason);
+        this.block();
+        this.#cancelTree(reason);
       });
     }
   }
@@ -310,14 +303,24 @@ export class Lifetime {
     this.#requireActive();
     if (context === undefined) return this;
     const owner = lifetimeAuthorities.get(context);
-    if (!owner || !this.#contains(owner))
+    if (!owner || !this.#treeContains(owner))
       throw new TypeError("Lifetime owner must belong to the current scope tree");
     owner.#requireActive();
     return owner;
   }
 
-  #contains(owner: Lifetime): boolean {
-    return this === owner || [...this.#children].some((child) => child.#contains(owner));
+  *#tree(): IterableIterator<Lifetime> {
+    const stack: Lifetime[] = [this];
+    while (stack.length) {
+      const scope = stack.pop()!;
+      yield scope;
+      for (const child of [...scope.#children].reverse()) stack.push(child);
+    }
+  }
+
+  #treeContains(owner: Lifetime): boolean {
+    for (const scope of this.#tree()) if (scope === owner) return true;
+    return false;
   }
 
   get signal() {
@@ -333,10 +336,21 @@ export class Lifetime {
     return this.#visibility.published;
   }
   get busy(): boolean {
-    return this.#foreground > 0 || [...this.#children].some((child) => child.busy);
+    for (const scope of this.#tree()) if (scope.#foreground > 0) return true;
+    return false;
   }
 
   snapshot(): LifetimeSnapshot {
+    const snapshots = new Map<Lifetime, LifetimeSnapshot>();
+    for (const scope of [...this.#tree()].reverse())
+      snapshots.set(
+        scope,
+        scope.#snapshot([...scope.#children].map((child) => snapshots.get(child)!)),
+      );
+    return snapshots.get(this)!;
+  }
+
+  #snapshot(children: LifetimeSnapshot[]): LifetimeSnapshot {
     const unresolved: UnresolvedObligation[] = [];
     const add = (id: number, kind: ObligationKind, error: RecordedFailure | undefined) => {
       if (error) unresolved.push(Object.freeze({ id, kind, error: error.snapshot }));
@@ -355,7 +369,7 @@ export class Lifetime {
       publications: this.#publications.size,
       foreground: this.#foreground,
       unresolved: Object.freeze(unresolved),
-      children: Object.freeze([...this.#children].map((child) => child.snapshot())),
+      children: Object.freeze(children),
     });
   }
 
@@ -394,9 +408,8 @@ export class Lifetime {
     const child = new Lifetime(
       {
         label,
-        report: (error) => this.#reportError(error),
-        changed: () => this.#changed?.(),
-        parentSignal: this.signal,
+        report: this.#report!,
+        ...(this.#changed && { changed: this.#changed }),
         ...(this.#shutdownTimeoutMs === undefined
           ? {}
           : { shutdownTimeoutMs: this.#shutdownTimeoutMs }),
@@ -421,7 +434,6 @@ export class Lifetime {
     if (typeof task !== "function") throw new TypeError("Background task must be a function");
     let record: TaskRecord<T>;
     record = new TaskRecord(
-      this.signal,
       task,
       (error) => this.#reportError(error),
       () => {
@@ -431,23 +443,25 @@ export class Lifetime {
     );
     this.#tasks.add(record as TaskRecord<unknown>);
     this.#changed?.();
-    return record;
+    return record.handle;
   }
 
   prepare<T>(task: BackgroundTask<T>): Promise<T> {
     this.#requireActive();
     if (typeof task !== "function") throw new TypeError("Preparation must be a function");
     let record: TaskRecord<T>;
-    record = new TaskRecord(this.signal, task, undefined, () => {
+    record = new TaskRecord(task, undefined, () => {
       this.#tasks.delete(record as TaskRecord<unknown>);
       this.#changed?.();
     });
     this.#tasks.add(record as TaskRecord<unknown>);
     this.#changed?.();
-    return record.result;
+    return record.handle.result;
   }
 
-  acquire<T extends Resource>(factory: (signal: AbortSignal) => Awaitable<T>): Promise<T> {
+  acquire<T extends Resource>(
+    factory: (signal: AbortSignal) => Awaitable<T>,
+  ): Promise<{ readonly resource: T }> {
     this.#requireActive();
     if (typeof factory !== "function") throw new TypeError("Acquisition must be a function");
     const completion = Promise.resolve()
@@ -459,15 +473,17 @@ export class Lifetime {
           await record.dispose();
           throw reason;
         }
-        return resource;
+        // Deliver the adopted identity as data; resolving another Promise with it could call its then property again.
+        return Object.freeze({ resource });
       });
-    this.#acquisitions.add(completion);
-    this.#changed?.();
     const detach = () => {
-      this.#acquisitions.delete(completion);
+      this.#acquisitions.delete(join);
       this.#changed?.();
     };
-    void completion.then(detach, detach);
+    // Shutdown joins its own settlement reaction, never an application-overridable result.
+    const join = completion.then(detach, detach);
+    this.#acquisitions.add(join);
+    this.#changed?.();
     return completion;
   }
 
@@ -508,17 +524,19 @@ export class Lifetime {
 
   seal() {
     if (this.busy) throw new DougongError("BUSY", "Lifetime has in-flight foreground work");
-    if (this.#phase !== "active") return;
-    this.#sealTree();
+    this.block();
   }
 
   block() {
-    this.#sealTree();
+    for (const scope of this.#tree()) if (scope.#phase === "active") scope.#phase = "sealed";
   }
 
-  #sealTree() {
-    if (this.#phase === "active") this.#phase = "sealed";
-    for (const child of this.#children) child.#sealTree();
+  #cancelTree(reason: unknown) {
+    // The owner broadcasts over its records. A listener on a public signal may stop DOM event propagation.
+    for (const scope of this.#tree()) {
+      scope.#cancellation.abort?.(reason);
+      for (const task of scope.#tasks) task.cancel(reason);
+    }
   }
 
   publish() {
@@ -527,12 +545,8 @@ export class Lifetime {
       throw new TypeError("Only the root Lifetime may publish declarations");
     if (this.#visibility.published) return;
     this.#visibility.published = true;
-    this.#publishTree();
-  }
-
-  #publishTree() {
-    for (const record of this.#publications) record.publication.publish();
-    for (const child of this.#children) child.#publishTree();
+    for (const scope of this.#tree())
+      for (const record of scope.#publications) record.publication.publish();
   }
 
   detachStartupSignal() {
@@ -548,63 +562,68 @@ export class Lifetime {
     } catch (error) {
       return Promise.reject(error);
     }
-    const completion = Promise.withResolvers<void>();
-    this.#completion = completion.promise;
-    const shutdown = this.#shutdown();
-    this.#shutdownWork = shutdown;
-    let timeout: ReturnType<typeof setTimeout> | undefined;
-    if (this.#shutdownTimeoutMs !== undefined) {
-      timeout = setTimeout(() => {
-        const failure = new DougongError(
-          "SHUTDOWN_TIMEOUT",
-          "Lifetime shutdown did not complete before its deadline",
-        );
-        this.#timeoutFailure = new RecordedFailure(failure);
-        this.#phase = "quarantined";
-        this.#changed?.();
-        completion.reject(failure);
-      }, this.#shutdownTimeoutMs);
-    }
-    void shutdown.then(
-      () => {
-        if (timeout !== undefined) clearTimeout(timeout);
-        this.#timeoutFailure = undefined;
-        completion.resolve();
-      },
-      (error) => {
-        if (timeout !== undefined) clearTimeout(timeout);
-        completion.reject(error);
-      },
-    );
-    return completion.promise;
-  }
-
-  async #shutdown() {
-    this.#phase = "disposing";
+    const entering = [...this.#tree()].filter((scope) => !scope.#completion);
     const errors: unknown[] = [];
+    // Reserve every real join before withdrawal or cancellation can reenter a child or its parent.
+    for (let i = entering.length - 1; i >= 0; i--) {
+      const scope = entering[i]!;
+      scope.#beginShutdown(scope === this ? errors : []);
+    }
     try {
       batchSnapshotNotifications(() => {
+        for (const scope of entering) scope.#withdraw();
         this.#changed?.();
-        this.#withdrawTree();
       });
     } catch (error) {
       errors.push(error);
     }
+    this.#cancelTree(disposalReason);
+    return this.#completion!;
+  }
+
+  #beginShutdown(errors: unknown[]) {
+    this.#phase = "disposing";
+    this.detachStartupSignal();
+    const work = Promise.resolve().then(() => this.#finishShutdown(errors));
+    this.#shutdownWork = work;
+    if (this.#shutdownTimeoutMs === undefined) {
+      this.#completion = Object.freeze(work);
+      return;
+    }
+    const completion = Promise.withResolvers<void>();
+    this.#completion = Object.freeze(completion.promise);
+    // A nested deadline can expire without a direct caller waiting on the child receipt.
+    void completion.promise.catch(() => undefined);
+    const timeout = setTimeout(() => {
+      const failure = new DougongError(
+        "SHUTDOWN_TIMEOUT",
+        "Lifetime shutdown did not complete before its deadline",
+      );
+      this.#timeoutFailure = new RecordedFailure(failure);
+      this.#phase = "quarantined";
+      this.#changed?.();
+      completion.reject(failure);
+    }, this.#shutdownTimeoutMs);
+    void work.then(
+      () => {
+        clearTimeout(timeout);
+        completion.resolve();
+      },
+      (error) => {
+        clearTimeout(timeout);
+        completion.reject(error);
+      },
+    );
+  }
+
+  async #finishShutdown(errors: unknown[]) {
     for (const record of this.#publications) {
       if (record.failure) errors.push(record.failure.reason);
     }
-    this.#cancellation.abort?.(disposalReason);
-    this.detachStartupSignal();
-    const children = Promise.allSettled(
-      [...this.#children].reverse().map((child) => {
-        const completion = child.dispose();
-        void completion.catch(() => undefined);
-        // A child's deadline ends its caller's wait, not its use of parent-owned resources.
-        return child.#shutdownWork ?? completion;
-      }),
-    );
+    // A child's deadline ends its caller's wait, not its use of parent-owned resources.
+    const children = Promise.allSettled([...this.#children].map((child) => child.#shutdownWork!));
     await this.#releaseRecords(this.#interrupts, errors);
-    const tasks = [...this.#tasks].map((task) => task[asyncDisposeSymbol]());
+    const tasks = [...this.#tasks].map((task) => task.settled);
     await Promise.all(tasks);
     await Promise.allSettled([...this.#acquisitions]);
     const childResults = await children;
@@ -612,6 +631,7 @@ export class Lifetime {
     if (childResults.every((result) => result.status === "fulfilled")) {
       await this.#releaseRecords(this.#cleanups, errors);
     }
+    this.#timeoutFailure = undefined;
     if (errors.length) {
       this.#phase = "quarantined";
       this.#changed?.();
@@ -629,13 +649,12 @@ export class Lifetime {
     this.#report = undefined;
   }
 
-  #withdrawTree() {
+  #withdraw() {
     for (const record of [...this.#publications].reverse()) {
       if (record.withdraw()) this.#publications.delete(record);
       // A publication may detach before its withdrawal fails; the unfinished obligation still belongs here.
       else this.#publications.add(record);
     }
-    for (const child of this.#children) child.#withdrawTree();
   }
 
   async #releaseRecords(records: Set<CleanupRecord>, errors: unknown[]) {
@@ -667,8 +686,8 @@ export class Lifetime {
   }
 
   #reportError(error: unknown) {
-    if (this.#report)
-      assertSynchronous(this.#report(error), "Lifetime error reporters must be synchronous");
+    const report = this.#report;
+    if (report) assertSynchronous(report(error), "Lifetime error reporters must be synchronous");
   }
 
   #requireActive() {
@@ -676,6 +695,22 @@ export class Lifetime {
       throw new DougongError("LIFETIME_DISPOSED", "Lifetime is closed to new work");
     }
   }
+}
+
+// Native timers use a signed 32-bit millisecond delay; overflow can expire almost immediately.
+const maximumTimerDelay = 2 ** 31 - 1;
+export function shutdownTimeout(value: unknown): number | undefined {
+  if (value === undefined) return;
+  if (
+    typeof value !== "number" ||
+    !Number.isFinite(value) ||
+    value <= 0 ||
+    value > maximumTimerDelay
+  )
+    throw new TypeError(
+      `shutdownTimeoutMs must be a positive finite number no greater than ${maximumTimerDelay}`,
+    );
+  return value;
 }
 
 function validateLabel(label: string) {

@@ -1,6 +1,8 @@
 import {
   createHost,
+  DougongError,
   definePlugin,
+  extensionPoint,
   describePlugin,
   service,
   type ChildLifetime,
@@ -17,6 +19,7 @@ function assert(condition: unknown, message: string): asserts condition {
 }
 
 const GREETING = service<{ greet(name: string): string }>("consumer/greeting");
+const ACTIONS = extensionPoint<() => string>("consumer/actions");
 const REMOTE = service<{ value: string }>("consumer/remote");
 let owner!: LifetimeContext;
 let released = 0;
@@ -24,7 +27,8 @@ let setups = 0;
 const greeting = definePlugin({
   name: "consumer.greeting",
   provides: { greeting: GREETING },
-  setup({ lifetime }) {
+  setup({ lifetime, contributions }) {
+    contributions.add(ACTIONS, "hello", () => "hello");
     setups++;
     owner = lifetime;
     lifetime.use({
@@ -51,8 +55,31 @@ assert(
 const host = createHost({ installations: [{ id: "greeting", plugin: greeting }] });
 await host.start();
 assert(!(Symbol.asyncDispose in owner), "Plugin root can bypass Engine shutdown");
+const actions = host.contributions(ACTIONS);
+const ids: readonly string[] = actions.get();
+assert(
+  Object.isFrozen(ids) && ids.length === 1,
+  "Contribution discovery must enumerate frozen IDs",
+);
+assert(
+  (await actions.use(ids[0], (run) => run())) === "hello",
+  "Cannot borrow a listed contribution",
+);
 const child: ChildLifetime = owner.child("consumer-work");
+let childReleases = 0;
+const connection = {
+  name: "connection",
+  [Symbol.dispose]() {
+    childReleases++;
+  },
+};
+const receipt = await child.acquire(() => connection);
+assert(
+  Object.isFrozen(receipt) && receipt.resource === connection,
+  "Acquisition delivered a different resource than the owner adopted",
+);
 await child[Symbol.asyncDispose]();
+assert(childReleases === 1, "Acquired resource did not follow its child Lifetime");
 assert(
   (await host.use(GREETING, (value) => value.greet("consumer"))) === "Hello, consumer",
   "Packed core cannot provide a borrowed service",
@@ -79,11 +106,21 @@ const remote = definePlugin({
     return { remote: { value: deps.greeting.greet("remote") } };
   },
 });
+const nextRemote = definePlugin({
+  name: remote.name,
+  provides: { remote: REMOTE },
+  setup: () => ({ remote: { value: "replacement" } }),
+});
 const platform = createPlatform({
   id: "consumer-delivery",
   host,
   apiVersion: "1.0.0",
-  loader: new MemoryLoader(new Map([["module", { default: remote }]])),
+  loader: new MemoryLoader<string>(
+    new Map<string, unknown>([
+      ["module", { default: remote }],
+      ["next", { default: nextRemote }],
+    ]),
+  ),
 });
 const selected = await platform.select(
   platform.catalog.add({
@@ -106,6 +143,41 @@ assert(
 assert(selected.activeOrigin?.revision === "remote-content-1", "Execution origin did not commit");
 
 assert(platform.registrations()[0] === selected, "Registration enumeration lost selected identity");
+// Selection belongs to Platform. An outstanding Core borrow must keep its committed origin and value together.
+const next = platform.catalog.add({
+  revision: "remote-content-2",
+  manifest: { name: remote.name, version: "2.0.0" },
+  reference: "next",
+});
+const held = Promise.withResolvers<void>();
+const using = host.use(REMOTE, async (value) => {
+  await held.promise;
+  return value.value;
+});
+try {
+  assert((await platform.select(next)) === selected, "Reselection changed registration identity");
+  const [attempt] = await Promise.allSettled([platform.activate([selected])]);
+  assert(
+    attempt.status === "rejected" &&
+      attempt.reason instanceof DougongError &&
+      attempt.reason.code === "HOST_BUSY",
+    "Platform replaced a borrowed Core generation",
+  );
+  assert(
+    selected.activeOrigin?.revision === "remote-content-1",
+    "Rejected activation advanced active origin",
+  );
+} finally {
+  held.resolve();
+}
+assert((await using) === "Hello, remote", "Rejected replacement changed a borrowed instance");
+await platform.activate([selected]);
+const currentOrigin = () => selected.activeOrigin?.revision;
+assert(
+  currentOrigin() === next.revision &&
+    (await host.use(REMOTE, (value) => value.value)) === "replacement",
+  "Committed service and delivery origin diverged",
+);
 const change = host.change();
 assert(!("take" in change), "Internal draft control escaped the Host");
 const probe = definePlugin({ name: "consumer.probe", setup() {} });

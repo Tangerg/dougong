@@ -14,11 +14,17 @@ import {
 } from "node:fs";
 import { createInterface } from "node:readline/promises";
 import { tmpdir } from "node:os";
-import { basename, dirname, join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { valid } from "semver";
 import { packageArchiveIn, readPackageFiles } from "../package-archive.mjs";
-import { packageEntrypoints, publishedDirectories } from "../packages.mjs";
+import { packageName, publishedDirectories } from "../packages.mjs";
+import {
+  candidateOutput,
+  differingFile,
+  readVerifiedCandidates,
+  verifyManifest,
+} from "../consumer/package-candidates.mjs";
 
 function fail(message) {
   console.error(`\n✗ ${message}\n`);
@@ -111,14 +117,10 @@ const otp = values.otp;
 if (otp !== undefined && !otp.trim()) fail("--otp must be a non-empty code");
 
 const PACKAGES = publishedDirectories.map((dir) => {
-  const { name } = readManifest(dir);
-  if (typeof name !== "string" || !name || name !== name.trim()) {
-    fail(`${dir}/package.json must declare a non-empty trimmed package name`);
-  }
-  return { dir, name };
+  return { dir, name: packageName(readManifest(dir).name) };
 });
-const packageNames = new Set(PACKAGES.map(({ name }) => name));
-if (packageNames.size !== PACKAGES.length) fail("Release package names must be unique");
+if (new Set(PACKAGES.map(({ name }) => name)).size !== PACKAGES.length)
+  fail("Release package names must be unique");
 const manifestFiles = PACKAGES.map(({ dir }) => manifestPath(dir));
 
 const current = readManifest(PACKAGES[0].dir).version;
@@ -136,8 +138,9 @@ if (capture("git", ["status", "--porcelain", "--untracked-files=all"])) {
 }
 
 run("git", ["fetch", "--quiet", "origin", "main"]);
-const ahead = capture("git", ["rev-list", "--count", "origin/main..HEAD"]);
-const behind = capture("git", ["rev-list", "--count", "HEAD..origin/main"]);
+const remoteMain = capture("git", ["rev-parse", "FETCH_HEAD^{commit}"]);
+const ahead = capture("git", ["rev-list", "--count", remoteMain + "..HEAD"]);
+const behind = capture("git", ["rev-list", "--count", "HEAD.." + remoteMain]);
 if (behind !== "0") fail(`local main is ${behind} commit(s) behind origin/main`);
 
 // Git owns the release record; a separate recovery marker could disagree with the actual commit.
@@ -161,8 +164,7 @@ function isReleaseCommit(commit, parent) {
 }
 
 const head = capture("git", ["rev-parse", "HEAD"]);
-const pendingReleaseCommit =
-  ahead === "1" && isReleaseCommit(head, capture("git", ["rev-parse", "origin/main"]));
+const pendingReleaseCommit = ahead === "1" && isReleaseCommit(head, remoteMain);
 if (ahead !== "0" && !pendingReleaseCommit) {
   fail(`local main is ${ahead} commit(s) ahead of origin/main; push first`);
 }
@@ -177,6 +179,11 @@ if (
 ) {
   fail(`tag ${tag} already exists but does not record this release`);
 }
+// Fetching main need not fetch its tags. A remote reservation must be checked before the first upload.
+const tagRef = `refs/tags/${tag}`;
+const remoteTag = capture("git", ["ls-remote", "--refs", "origin", tagRef]);
+if (remoteTag && (!hasTag || remoteTag !== capture("git", ["rev-parse", tagRef]) + "\t" + tagRef))
+  fail(`origin already has a different release tag ${tag}; inspect it before publishing`);
 console.log(
   `  main is clean${pendingReleaseCommit ? "; resuming its release record" : " and equals origin/main"} at ${head}`,
 );
@@ -228,9 +235,6 @@ if (alreadyPublished.size) {
 } else {
   console.log(`  ${version} is unused on the registry`);
 }
-
-step("Running the full gate (pnpm check)");
-run("pnpm", ["check"]);
 
 function atReleaseSource() {
   return (
@@ -305,14 +309,22 @@ for (const { dir, name } of PACKAGES) {
   console.log(`  ${name} → ${version}`);
 }
 
-step("Packing and inspecting tarballs");
+step("Running the full gate (pnpm check) on the release versions");
 
 const stage = mkdtempSync(join(tmpdir(), "dougong-release-"));
 let keepStage = false;
 process.once("exit", () => {
   if (!keepStage) rmSync(stage, { recursive: true, force: true });
 });
-const candidates = new Map();
+run("pnpm", ["check"], { env: { ...process.env, [candidateOutput]: stage } });
+assertPublicationInputs("accept verified packages");
+const pathsOutsideManifests = [".", ...PACKAGES.map(({ dir }) => `:(exclude)${dir}/package.json`)];
+if (
+  capture("git", ["status", "--porcelain", "--untracked-files=all", "--", ...pathsOutsideManifests])
+)
+  fail("release source changed while checking; refusing to publish");
+const candidates = readVerifiedCandidates(stage);
+const versions = new Map(PACKAGES.map(({ name }) => [name, version]));
 
 function verifyRegistryContents(name, candidateFiles) {
   const downloaded = mkdtempSync(join(stage, "registry-"));
@@ -321,15 +333,11 @@ function verifyRegistryContents(name, candidateFiles) {
   });
   const publishedFiles = readPackageFiles(packageArchiveIn(downloaded));
   rmSync(downloaded, { recursive: true, force: true });
-  for (const file of new Set([...publishedFiles.keys(), ...candidateFiles.keys()])) {
-    const publishedContents = publishedFiles.get(file);
-    const candidateContents = candidateFiles.get(file);
-    if (!publishedContents || !candidateContents || !publishedContents.equals(candidateContents))
-      fail(
-        `${name}@${version} is published but its ${file} differs from this build; ` +
-          `release a new version instead of resuming`,
-      );
-  }
+  const file = differingFile(candidateFiles, publishedFiles);
+  if (file !== undefined)
+    fail(
+      `${name}@${version} is published but its ${file} differs from this build; release a new version instead of resuming`,
+    );
 }
 
 function writeCandidate(candidate, directory) {
@@ -339,69 +347,12 @@ function writeCandidate(candidate, directory) {
 }
 
 for (const { dir, name } of PACKAGES) {
-  const packed = mkdtempSync(join(stage, "pack-"));
-  execFileSync("pnpm", ["pack", "--pack-destination", packed], {
-    cwd: resolve(dir),
-    stdio: "pipe",
-  });
-  const archive = packageArchiveIn(packed);
-  const bytes = readFileSync(archive);
-  const candidateFiles = readPackageFiles(archive, bytes);
-  candidates.set(name, { filename: basename(archive), bytes, files: candidateFiles });
-  rmSync(packed, { recursive: true, force: true });
-  for (const required of ["package.json", "README.md", "LICENSE"]) {
-    if (!candidateFiles.has(required)) fail(`${name}: tarball is missing ${required}`);
-  }
-
-  const packedManifest = JSON.parse(candidateFiles.get("package.json"));
-  if (packedManifest.name !== name) {
-    fail(`${name}: tarball declares name ${packedManifest.name}`);
-  }
-  if (packedManifest.version !== version) {
-    fail(`${name}: tarball declares version ${packedManifest.version}`);
-  }
-  const declared = JSON.parse(originalManifests.get(dir));
-  if (packedManifest.type !== declared.type)
-    fail(`${name}: tarball declares type ${packedManifest.type}, expected ${declared.type}`);
-  // Conditional export order participates in module resolution, so compare it as published.
-  if (JSON.stringify(packedManifest.exports) !== JSON.stringify(declared.exports))
-    fail(`${name}: tarball exports differ from the declared package entrypoints`);
-  const declaredDependencies = declared.dependencies ?? {};
-  const expectedDependencies = new Map(
-    Object.entries(declaredDependencies).map(([dependency, range]) => [
-      dependency,
-      packageNames.has(dependency) ? version : range,
-    ]),
+  const { files: candidateFiles, bytes } = candidates.get(dir);
+  verifyManifest(
+    JSON.parse(versionedManifest(originalManifests.get(dir))),
+    JSON.parse(candidateFiles.get("package.json")),
+    versions,
   );
-  const packedDependencies = packedManifest.dependencies ?? {};
-  for (const dependency of new Set([
-    ...expectedDependencies.keys(),
-    ...Object.keys(packedDependencies),
-  ])) {
-    const range = packedDependencies[dependency];
-    const expected = expectedDependencies.get(dependency);
-    if (typeof range === "string" && range.startsWith("workspace:")) {
-      fail(`${name}: tarball still depends on ${dependency}@${range}`);
-    }
-    if (range !== expected) {
-      fail(
-        `${name}: tarball declares ${dependency}@${range ?? "(missing)"}, expected ${expected ?? "(absent)"}`,
-      );
-    }
-  }
-  for (const { types, module } of packageEntrypoints(declared)) {
-    for (const target of [module, types]) {
-      if (!candidateFiles.has(target)) fail(`${name}: tarball is missing ${target}`);
-    }
-  }
-  for (const [file, bytes] of candidateFiles) {
-    if (!file.startsWith("dist/") || !/\.(?:js|d\.ts)$/.test(file)) continue;
-    const contents = bytes.toString("utf8");
-    for (const forbidden of ["@dougong/", "/Users/", "workspace:", "src/index.ts"]) {
-      if (contents.includes(forbidden)) fail(`${name}: ${file} contains '${forbidden}'`);
-    }
-  }
-
   if (alreadyPublished.has(name)) {
     verifyRegistryContents(name, candidateFiles);
     console.log(`  ${name.padEnd(22)} ${"skip".padStart(7)}     already published, contents match`);
@@ -409,12 +360,11 @@ for (const { dir, name } of PACKAGES) {
   }
 
   const size = (bytes.byteLength / 1024).toFixed(1);
-  console.log(`  ${name.padEnd(22)} ${size.padStart(7)} KB  ${packedManifest.version}`);
+  console.log(`  ${name.padEnd(22)} ${size.padStart(7)} KB  ${version}`);
 }
 
 if (dryRun) {
   if (!restoreManifests()) fail("Checkout moved; inspect manifests before resuming");
-  for (const candidate of candidates.values()) writeCandidate(candidate, stage);
   keepStage = true;
   step("Dry run complete");
   console.log("  every check passed; no package was published, tagged or pushed");
@@ -464,13 +414,13 @@ function assertPublicationInputs(action) {
 }
 
 const published = [];
-for (const { name } of PACKAGES) {
+for (const { dir, name } of PACKAGES) {
   if (alreadyPublished.has(name)) {
     console.log(`  · ${name}@${version} already published, skipped`);
     continue;
   }
   assertPublicationInputs("publish " + name);
-  const candidate = candidates.get(name);
+  const candidate = candidates.get(dir);
   const upload = writeCandidate(candidate, mkdtempSync(join(stage, "upload-")));
   const publishArgs = ["publish", upload, "--access", "public"];
   if (otp !== undefined) publishArgs.push(`--otp=${otp}`);

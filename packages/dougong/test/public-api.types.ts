@@ -76,6 +76,9 @@ expectTypeOf<
 expectTypeOf<
   core.Contribution<Entity> extends core.Contribution<User> ? true : false
 >().toEqualTypeOf<true>();
+expectTypeOf<ReturnType<core.ContributionView<User>["get"]>>().toEqualTypeOf<
+  ReadonlyArray<string>
+>();
 expectTypeOf<
   core.ContributionView<User> extends core.ContributionView<Entity> ? true : false
 >().toEqualTypeOf<true>();

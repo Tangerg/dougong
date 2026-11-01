@@ -106,6 +106,7 @@
       "SerialQueue",
       "normalizePlainRecord",
       "captureDataArray",
+      "captureLogger",
       "onAbort",
       "batchSnapshotNotifications"
     ],

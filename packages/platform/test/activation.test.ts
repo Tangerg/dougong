@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import { createHost, definePlugin, service, type AnyPlugin } from "dougong";
 import { createPlatform, MemoryLoader, type Platform } from "../src";
+import { ActivationPlan } from "../src/activation/plan";
+import { RegistrationRecord } from "../src/catalog/registration";
 import { add, deferred, emptyPlugin, fixture, select, VALUE, valuePlugin } from "./fixtures";
 
 describe("activation compilation", () => {
@@ -516,4 +518,47 @@ describe("activation compilation", () => {
     expect(registration.error?.snapshot).toMatchObject({ code: "ACTIVATION_FAILED" });
     await platform[Symbol.asyncDispose]();
   });
+});
+
+it("plans deep delivery closures without consuming the JS call stack or copying every ancestor path", () => {
+  const records = new Map<string, RegistrationRecord<string>>();
+  const count = 9000;
+  for (let i = 0; i < count; i++) {
+    const name = String(i);
+    records.set(
+      name,
+      new RegistrationRecord(
+        "deep",
+        {
+          revision: "one",
+          config: undefined,
+          reference: name,
+          manifest: {
+            name,
+            version: "1.0.0",
+            apiVersion: "*",
+            activation: [],
+            permissions: [],
+            dependencies: i + 1 === count ? {} : { [String(i + 1)]: "*" },
+          },
+        },
+        { installation: () => undefined, operation: () => undefined },
+      ),
+    );
+  }
+  const root = records.get("0")!;
+  const plan = new ActivationPlan(records, [root]);
+  expect(plan.report.blockers).toEqual([]);
+  expect(plan.selections).toHaveLength(count);
+  expect(plan.selections[0]?.registration.name).toBe(String(count - 1));
+  expect(plan.selections.at(-1)?.registration).toBe(root);
+  const last = records.get(String(count - 1))!;
+  const artifact = last.selectedArtifact;
+  last.select({
+    ...artifact,
+    manifest: { ...artifact.manifest, dependencies: { [String(count - 2)]: "*" } },
+  });
+  expect(new ActivationPlan(records, [root]).report.blockers[0]?.dependencyPath).toEqual(
+    [count - 1, count - 2, count - 1].map(String),
+  );
 });

@@ -2,7 +2,7 @@ import {
   asyncDisposeSymbol,
   disposeSymbol,
   isError,
-  isLogger,
+  RecordedFailure,
   type AnyPlugin,
   type ApplyResult,
   type Disposable,
@@ -13,6 +13,7 @@ import {
 } from "dougong";
 import {
   captureDataArray,
+  captureLogger,
   normalizePlainRecord,
   ReadonlyMapSnapshot,
   SerialQueue,
@@ -20,7 +21,7 @@ import {
 } from "dougong/advanced";
 import { PermissionSet, type Authorizer } from "../admission/permissions.js";
 import { artifactOrigin, describeArtifact, type Artifact } from "../artifacts/artifact.js";
-import { isConcreteVersion } from "../artifacts/manifest.js";
+import { isConcreteVersion, isRegistrationIdPart } from "../artifacts/manifest.js";
 import { ArtifactCatalog, type Catalog } from "../catalog/catalog.js";
 import {
   RegistrationRecord,
@@ -125,15 +126,15 @@ class PlatformImpl<Reference> implements Platform<Reference> {
   readonly #viewBinding: { synchronize: (() => void) | undefined };
   #hostSnapshot: unknown;
   #projection: PlatformSnapshot;
-  #executing = false;
+  #executing: ActivationOperation<Reference> | "disposal" | undefined;
   #subscription: Disposable | undefined;
   #state: PlatformState;
 
   constructor(options: PlatformOptions<Reference>) {
     const declaration = normalizePlainRecord(options, "Platform options", { fields: optionFields });
     const { id, host, group, apiVersion, loader, authorizer, logger } = declaration;
-    if (typeof id !== "string" || !id || id.trim() !== id)
-      throw new TypeError("Platform id must be a non-empty trimmed string");
+    if (!isRegistrationIdPart(id))
+      throw new TypeError("Platform id must be a non-empty trimmed Unicode identifier");
     if (typeof apiVersion !== "string" || !isConcreteVersion(apiVersion))
       throw new TypeError("Platform apiVersion must be a semantic version");
     if (
@@ -154,8 +155,7 @@ class PlatformImpl<Reference> implements Platform<Reference> {
     const authorize = policy?.authorize;
     if (typeof authorize !== "function")
       throw new TypeError("Platform authorizer must implement authorize()");
-    if (logger !== undefined && !isLogger(logger))
-      throw new TypeError("Platform logger must implement debug/info/warn/error");
+    const log = captureLogger(logger === undefined ? console : logger);
 
     this.id = id;
     this.apiVersion = apiVersion;
@@ -167,26 +167,28 @@ class PlatformImpl<Reference> implements Platform<Reference> {
     this.#modules = new LoadedModules({
       loader: { load: load.bind(loader) },
       authorizer: admission,
-      assertPlacement: () => this.#assertPlacement(),
+      assertPlacement: () => {
+        // Each shared load keeps running only while it still has a live activation waiter.
+        for (const operation of this.#operations) operation.synchronizeCancellation();
+        this.#assertPlacement();
+      },
     });
     this.#registrationPort = {
       installation: (installationId) => this.#ports().host.installation(installationId),
       operation: (registration, revision) => {
+        if (this.#executing === "disposal") return "removing";
+        // The command actually driving Core takes precedence over requests still preparing.
+        const executing = this.#executing?.statusFor(registration, revision);
+        if (executing) return executing;
         for (const operation of this.#operations) {
-          if (
-            operation.plan.removals.some(
-              (selection) =>
-                selection.registration === registration && selection.revision === revision,
-            )
-          )
-            return "removing";
-          if (operation.contains(registration, revision)) return "activating";
+          const status = operation.statusFor(registration, revision);
+          if (status) return status;
         }
         return undefined;
       },
     };
     this.#projection = this.#snapshot();
-    this.#publisher = new SnapshotPublisher(() => this.#projection, reporter(logger ?? console));
+    this.#publisher = new SnapshotPublisher(() => this.#projection, reporter(log));
     this.#hostSnapshot = host.diagnostics.get();
     const binding = { synchronize: (() => this.#synchronize()) as (() => void) | undefined };
     this.#viewBinding = binding;
@@ -203,7 +205,7 @@ class PlatformImpl<Reference> implements Platform<Reference> {
     return Object.freeze([...this.#registrations.values()].map((record) => record.facade));
   }
 
-  readonly select = (artifact: Artifact<Reference>) => {
+  readonly select = async (artifact: Artifact<Reference>) => {
     this.#assertActive();
     this.#catalog.assertAvailable(artifact);
     return this.#admit(() => {
@@ -244,18 +246,40 @@ class PlatformImpl<Reference> implements Platform<Reference> {
     options: ActivationOptions<Reference> = {},
   ) {
     this.#assertActive();
-    const roots = this.#resolveAll(registrations);
+    return this.#activate(this.#resolveAll(registrations), options);
+  }
+
+  async trigger(event: string, options: ActivationOptions<Reference> = {}) {
+    this.#assertActive();
+    if (typeof event !== "string" || !event || event.trim() !== event)
+      throw new TypeError("Activation event must be a non-empty trimmed string");
+    return this.#activate(event, options);
+  }
+
+  async #activate(
+    target: ReadonlyArray<RegistrationRecord<Reference>> | string,
+    options: ActivationOptions<Reference>,
+  ) {
     const declaration = normalizePlainRecord(options, "Activation options", {
       fields: activationOptionFields,
     });
     const signal = declaration.signal;
     const removing = this.#resolveRemoval(declaration.remove);
     if (signal !== undefined) AbortSignal.prototype.throwIfAborted.call(signal);
-    const operation = await this.#admit(() => this.#beginActivation(roots, removing, signal));
+    const { roots, operation } = await this.#admit(() => {
+      // Resolve an event against the same admitted selections whose revisions the Plan captures.
+      const roots =
+        typeof target === "string"
+          ? [...this.#registrations.values()].filter((registration) =>
+              registration.selectedArtifact.manifest.activation.includes(target),
+            )
+          : target;
+      return { roots, operation: this.#beginActivation(roots, removing, signal) };
+    });
     try {
       const loaded = new Map<Artifact<Reference>, AnyPlugin>();
       for (const selection of operation.plan.selections) {
-        operation.signal.throwIfAborted();
+        operation.checkpoint();
         selection.registration.assertCurrent(selection);
         if (selection.registration.actionFor(selection.artifact) !== "reuse") {
           loaded.set(
@@ -264,13 +288,19 @@ class PlatformImpl<Reference> implements Platform<Reference> {
           );
         }
       }
-      return await this.#execute(() => this.#commitActivation(operation, roots, removing, loaded));
+      return await this.#execute(operation, () =>
+        this.#commitActivation(operation, roots, removing, loaded),
+      );
     } catch (error) {
-      if (operation.signal.aborted && Object.is(error, operation.signal.reason)) throw error;
+      operation.checkpoint();
       const failure = normalizeActivationFailure(error);
+      let recorded: RecordedFailure | undefined;
       for (const selection of operation.plan.selections) {
         if (selection.registration.actionFor(selection.artifact) !== "reuse") {
-          selection.registration.fail(selection.revision, failure);
+          selection.registration.fail(
+            selection.revision,
+            (recorded ??= new RecordedFailure(failure)),
+          );
         }
       }
       throw failure;
@@ -279,19 +309,6 @@ class PlatformImpl<Reference> implements Platform<Reference> {
       operation.finish();
       this.#publish();
     }
-  }
-
-  trigger(event: string, options: ActivationOptions<Reference> = {}) {
-    this.#assertActive();
-    if (typeof event !== "string" || !event || event.trim() !== event)
-      throw new TypeError("Activation event must be a non-empty trimmed string");
-    const registrations = [...this.#registrations.values()].filter((registration) =>
-      registration.selectedArtifact.manifest.activation.includes(event),
-    );
-    return this.activate(
-      registrations.map((registration) => registration.facade),
-      options,
-    );
   }
 
   remove(...registrations: ReadonlyArray<Registration<Reference>>) {
@@ -305,7 +322,7 @@ class PlatformImpl<Reference> implements Platform<Reference> {
     if (state.phase === "disposing") return state.completion;
     const operations = [...this.#operations];
     const completion = Promise.all(operations.map((operation) => operation.settled)).then(() =>
-      this.#execute(() => this.#release()),
+      this.#execute("disposal", () => this.#release()),
     );
     this.#state = { phase: "disposing", ports: state.ports, completion };
     for (const operation of operations) operation.cancel();
@@ -341,7 +358,7 @@ class PlatformImpl<Reference> implements Platform<Reference> {
   ): Promise<ApplyResult | undefined> {
     this.#assertActive();
     if (roots.length) this.#assertPlacement();
-    operation.signal.throwIfAborted();
+    operation.checkpoint();
     operation.plan.assertCurrent();
     const candidate = new ActivationPlan(this.#registrations, roots, removing);
     candidate.assertValid();
@@ -384,18 +401,23 @@ class PlatformImpl<Reference> implements Platform<Reference> {
           }),
         );
     }
-    const plan = await new Preparation(() => host.plan(change)).wait(operation.signal);
+    const plan = await Preparation.waitFor(() => host.plan(change), operation.signal);
     for (const selection of pending) {
-      operation.signal.throwIfAborted();
-      await new Preparation((signal) =>
-        authorizer.authorize(
-          Object.freeze({ artifact: describeArtifact(selection.artifact), operation: "activate" }),
-          signal,
-        ),
-      ).wait(operation.signal);
+      operation.checkpoint();
+      await Preparation.waitFor(
+        (signal) =>
+          authorizer.authorize(
+            Object.freeze({
+              artifact: describeArtifact(selection.artifact),
+              operation: "activate",
+            }),
+            signal,
+          ),
+        operation.signal,
+      );
     }
-    operation.signal.throwIfAborted();
     operation.plan.assertCurrent();
+    operation.handoff();
     const result = await host.apply(plan);
     this.#commitRemovals(removing);
     for (const selection of candidate.selections)
@@ -513,13 +535,15 @@ class PlatformImpl<Reference> implements Platform<Reference> {
     });
   }
 
-  #execute<T>(command: () => Promise<T>) {
+  #execute<T>(owner: ActivationOperation<Reference> | "disposal", command: () => Promise<T>) {
     return this.#queue.run(async () => {
-      this.#executing = true;
+      this.#executing = owner;
       try {
+        this.#publish();
         return await command();
       } finally {
-        this.#executing = false;
+        this.#executing = undefined;
+        this.#publish();
       }
     });
   }

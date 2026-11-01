@@ -6,7 +6,9 @@ export interface Loader<Reference> {
 export class ImportLoader implements Loader<string | URL> {
   readonly load = async (reference: string | URL, signal: AbortSignal): Promise<unknown> => {
     AbortSignal.prototype.throwIfAborted.call(signal);
-    const module = await import(/* @vite-ignore */ String(reference));
+    const specifier =
+      typeof reference === "string" ? reference : URL.prototype.toString.call(reference);
+    const module = await import(/* @vite-ignore */ specifier);
     AbortSignal.prototype.throwIfAborted.call(signal);
     return module;
   };

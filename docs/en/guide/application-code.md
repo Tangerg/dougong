@@ -14,13 +14,13 @@ Borrow the owner when invoking executable contributions:
 
 ```ts
 const commands = host.contributions(COMMANDS);
-const id = commands.get().keys().next().value;
+const id = commands.get()[0];
 if (id !== undefined) {
   await commands.use(id, (command) => command.run());
 }
 ```
 
-`get()` returns an immutable collection snapshot for enumeration and rendering. `use` is the execution boundary; reading a snapshot does not grant indefinite execution authority. While a Host transition holds publication open, `get()` keeps the last published map. Adding or updating an entry makes that ID unavailable to `use` (`CONTRIBUTION_UNAVAILABLE`) until its new value is published. An unchanged entry whose owner is still serving remains callable. A plugin can pass its contribution’s `update` function on its own; it always targets that entry and rejects after disposal.
+`get()` returns a frozen array of owner-qualified IDs in publication order. Holding a snapshot never retains a handler. To migrate code that used `get().values()` or read a map entry, enumerate the IDs and use `await commands.use(id, command => command.title)` (or project another data field) to render. Borrow the value again when invoking it. `use` borrows the current published entry and returns a rejected Promise if unavailable. Changed or replaced values publish a fresh snapshot even when the IDs are unchanged. While a Host transition is pending, the snapshot stays on the last publication and changed entries are unavailable until published.
 
 `host.diagnostics.get()` is the sole entrypoint for reading a stable Host snapshot. Subscriptions do not replay immediately; notifications carry no payload, so read through `get()` in the callback. Unsubscribe with `subscription[Symbol.dispose]()`. Bounded `RecordedFailure` diagnostics avoid retaining arbitrary plugin resource graphs through exceptions.
 

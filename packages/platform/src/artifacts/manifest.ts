@@ -13,6 +13,20 @@ const identifier = z
     message: "cannot start or end with whitespace",
   });
 
+// Both components of an Installation ID are URI encoded; malformed UTF-16 cannot identify a Registration.
+export function isRegistrationIdPart(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    value.length !== 0 &&
+    value.trim() === value &&
+    value.isWellFormed()
+  );
+}
+
+const registrationName = z
+  .string()
+  .refine(isRegistrationIdPart, "must be a non-empty trimmed Unicode identifier");
+
 const versionRange = identifier.refine(
   (range) => validRange(range) !== null,
   "must be a valid semantic version range",
@@ -20,12 +34,12 @@ const versionRange = identifier.refine(
 
 const manifestSchema = z
   .object({
-    name: identifier,
+    name: registrationName,
     version: identifier.refine(isConcreteVersion, "must be a valid semantic version"),
     apiVersion: versionRange.default("*"),
     activation: z.array(identifier).default(["startup"]),
     permissions: z.array(identifier).default([]),
-    dependencies: z.record(identifier, versionRange).default({}),
+    dependencies: z.record(registrationName, versionRange).default({}),
   })
   .strict();
 

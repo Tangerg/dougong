@@ -29,6 +29,8 @@ type Dependency = {
 };
 
 // Synchronous collection avoids adding tracking context to every read; restore it before the calculation returns.
+// A write is the only event that can invalidate a pure calculation, even when its graph is unobserved.
+let writeVersion = 0;
 let batchDepth = 0;
 let flushing = false;
 let propagating = false;
@@ -198,6 +200,7 @@ class SignalNode<T> implements ReactiveNode {
     }
     if (Object.is(this.#value, value)) return;
     this.#value = value;
+    writeVersion++;
     this.#version++;
     publish(this.#listeners);
   }
@@ -213,6 +216,7 @@ class ComputedNode<T> implements ReactiveNode {
   readonly #listeners = new Set<ListenerSlot>();
   readonly #dependencies = new Map<ReadonlySignal<unknown>, Dependency>();
   #result: ComputedResult<T> | undefined;
+  #checkedAt = -1;
   #evaluating = false;
   #dirty = true;
   #version = 0;
@@ -305,7 +309,14 @@ class ComputedNode<T> implements ReactiveNode {
 
   #refresh() {
     const current = this.#result;
-    if (current && !this.#dirty && !this.#dependenciesChanged()) return;
+    if (
+      current &&
+      !this.#dirty &&
+      (this.#checkedAt === writeVersion || !this.#dependenciesChanged())
+    ) {
+      this.#checkedAt = writeVersion;
+      return;
+    }
     this.#dirty = true;
 
     const sources = new Set<ReadonlySignal<unknown>>();
@@ -321,6 +332,7 @@ class ComputedNode<T> implements ReactiveNode {
       this.#version++;
     }
     this.#result = next;
+    this.#checkedAt = writeVersion;
     this.#dirty = false;
     if (this.#listeners.size) this.#attachDependencies();
   }

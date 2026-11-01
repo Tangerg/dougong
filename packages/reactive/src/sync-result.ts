@@ -4,7 +4,10 @@ export function assertSynchronous(value: unknown, message: string): void {
   if (!pending) return;
 
   // Observe thenable rejection as well as throwing synchronously so invalid callbacks cannot create unhandled failures.
-  void pending.catch(() => undefined);
+  void pending.then(
+    () => undefined,
+    () => undefined,
+  );
   throw new TypeError(message);
 }
 
@@ -13,7 +16,13 @@ export function captureThenable(value: unknown): Promise<unknown> | undefined {
   if (value === null || (typeof value !== "object" && typeof value !== "function")) return;
   const then = (value as { readonly then?: unknown }).then;
   if (typeof then !== "function") return;
-  return Promise.resolve().then(
-    () => new Promise<unknown>((resolve, reject) => Reflect.apply(then, value, [resolve, reject])),
-  );
+  const result = Promise.withResolvers<unknown>();
+  queueMicrotask(() => {
+    try {
+      Reflect.apply(then, value, [result.resolve, result.reject]);
+    } catch (error) {
+      result.reject(error);
+    }
+  });
+  return result.promise;
 }

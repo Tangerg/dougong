@@ -2,7 +2,8 @@ export class SerialQueue {
   #tail: Promise<void> = Promise.resolve();
 
   get settled() {
-    return this.#tail;
+    // A caller may decorate its Promise; it must never replace the queue's scheduling methods.
+    return this.#tail.then(() => undefined);
   }
 
   run<T>(operation: () => T | PromiseLike<T>): Promise<T> {

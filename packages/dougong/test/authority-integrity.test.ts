@@ -88,7 +88,7 @@ it("validates a candidate's own staged Contract kind even after a competing dura
     cause: { code: "CONTRACT_CONFLICT" },
   });
   expect(host.status).toBe("running");
-  expect(view.get().size).toBe(0);
+  expect(view.get().length).toBe(0);
   await host.stop();
 });
 
@@ -187,4 +187,127 @@ it("gives application callbacks only their explicit context", async () => {
   expect(receivers.length).toBeGreaterThan(1);
   expect(receivers.every((receiver) => receiver === undefined)).toBe(true);
   await host.stop();
+});
+
+it("rechecks durable Contract kinds before issuing a Plan after asynchronous validation", async () => {
+  const host = createHost();
+  const entered = Promise.withResolvers<void>();
+  const resumed = Promise.withResolvers<void>();
+  const shared = service<number>("issue/kind");
+  const change = host.change();
+  const candidate = change.install(
+    definePlugin({
+      name: "claim",
+      config: {
+        "~standard": {
+          version: 1,
+          vendor: "fixture",
+          async validate() {
+            entered.resolve();
+            await resumed.promise;
+            return { value: null };
+          },
+        },
+      },
+      provides: { shared },
+      setup: () => ({ shared: 1 }),
+    }),
+    { id: "claim", config: null },
+  );
+  const planning = host.plan(change);
+  await entered.promise;
+  host.contributions(extensionPoint(shared.id));
+  resumed.resolve();
+  await expect(planning).rejects.toMatchObject({ code: "CONTRACT_CONFLICT" });
+  expect(candidate.status).toBe("removed");
+  expect(host.stateRevision).toBe(0);
+});
+
+it.each(["start", "change"] as const)(
+  "restores %s when a staged Contract loses admission before publication",
+  async (command) => {
+    const token = event<void>("commit/kind");
+    const entered = Promise.withResolvers<void>();
+    const resumed = Promise.withResolvers<void>();
+    const released = vi.fn<() => void>();
+    const plugin = definePlugin({
+      name: "candidate",
+      async setup({ events, lifetime }) {
+        events.on(token, () => undefined);
+        lifetime.defer(released);
+        entered.resolve();
+        await resumed.promise;
+      },
+    });
+    const host = createHost({
+      installations: [{ id: "old", plugin: definePlugin({ name: "old", setup() {} }) }],
+    });
+    const old = host.installation("old");
+    if (command === "change") await host.start();
+    const change = host.change();
+    change.install(plugin, { id: "candidate" });
+    const plan = await host.plan(change);
+    if (command === "start") await host.apply(plan);
+    const executing = command === "start" ? host.start() : host.apply(plan);
+    await entered.promise;
+    host.contributions(extensionPoint(token.id));
+    resumed.resolve();
+    await expect(executing).rejects.toMatchObject({
+      code: "TRANSITION_FAILED",
+      cause: { code: "CONTRACT_CONFLICT" },
+      details: { outcome: "restored", phase: "prepare" },
+    });
+    expect(host.status).toBe(command === "start" ? "stopped" : "running");
+    expect(host.installation("old")).toBe(old);
+    expect(released).toHaveBeenCalledTimes(1);
+    await host.stop();
+  },
+);
+
+it("adopts logger methods once, preserving the backend receiver for both plugin and Host errors", async () => {
+  const calls: string[] = [];
+  let reads = 0;
+  const logger = {
+    debug() {},
+    warn() {},
+    get info() {
+      reads++;
+      return function (this: object) {
+        expect(this).toBe(logger);
+        calls.push("info");
+      };
+    },
+    error() {
+      calls.push("error");
+    },
+  };
+  const host = createHost({
+    logger,
+    installations: [
+      {
+        id: "logging",
+        plugin: definePlugin({
+          name: "logging",
+          setup({ log, lifetime }) {
+            log.info("message");
+            lifetime.spawn(() => {
+              throw new Error("task");
+            });
+          },
+        }),
+      },
+    ],
+  });
+  Object.defineProperty(logger, "info", {
+    value() {
+      calls.push("replaced");
+    },
+  });
+  logger.error = () => {
+    calls.push("replaced");
+  };
+  await host.start();
+  await host.stop();
+  expect(reads).toBe(1);
+  expect(calls).toEqual(["info", "error"]);
 });

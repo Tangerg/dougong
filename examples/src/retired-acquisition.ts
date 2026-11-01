@@ -13,20 +13,24 @@ async function handoff<T>(
   generation: Destination,
   operations: Operations,
   signal: AbortSignal,
+  destination: AbortSignal,
   start: () => PromiseLike<T>,
   dispose: (value: T) => unknown,
 ): Promise<AcquisitionResult<T>> {
-  if (signal.aborted || generation.signal.aborted) return { status: "retired" };
+  const retired = () =>
+    Reflect.get(AbortSignal.prototype, "aborted", signal) === true ||
+    Reflect.get(AbortSignal.prototype, "aborted", destination) === true;
+  if (retired()) return { status: "retired" };
 
   // Reserve before starting: shutdown may seal both owners before a non-cooperative factory returns.
   let reclaim: (() => unknown) | undefined;
   const reservation = operations.defer(() => reclaim?.());
   let result: AcquisitionResult<T> = { status: "retired" };
   try {
-    if (!signal.aborted && !generation.signal.aborted) {
+    if (!retired()) {
       const value = await start();
       reclaim = () => dispose(value);
-      if (!generation.signal.aborted) {
+      if (!retired()) {
         generation.defer(reclaim);
         reclaim = undefined;
         result = { status: "acquired", value };
@@ -50,10 +54,11 @@ export function acquireForLifetime<T>(
   start: () => PromiseLike<T>,
   dispose: (value: T) => unknown,
 ): Promise<AcquisitionResult<T>> {
-  return abandonOnAbort(generation.signal, () => {
+  const destination = generation.signal;
+  return abandonOnAbort(destination, () => {
     const operation = operations.spawn(async (signal) => {
       try {
-        return await handoff(generation, operations, signal, start, dispose);
+        return await handoff(generation, operations, signal, destination, start, dispose);
       } catch (cause) {
         // An external AbortError is not cancellation requested by this Task.
         throw new Error("External resource operation failed", { cause });

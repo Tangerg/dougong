@@ -34,3 +34,21 @@ it.each(["batch", "computed", "subscriber"] as const)(
     subscription?.[Symbol.dispose]();
   },
 );
+
+it("observes asynchronous misuse without adopting its fulfilled payload a second time", async () => {
+  let reads = 0;
+  const payload = new Proxy(
+    {},
+    {
+      get(target, key, receiver) {
+        if (key === "then") reads++;
+        return Reflect.get(target, key, receiver);
+      },
+    },
+  );
+  const then = (resolve: (value: object) => void) => resolve(payload);
+  const result = new Proxy({}, { get: (_target, key) => (key === "then" ? then : undefined) });
+  expect(() => batch(() => result)).toThrow("Reactive batches must be synchronous");
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  expect(reads).toBe(1);
+});

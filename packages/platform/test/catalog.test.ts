@@ -42,10 +42,10 @@ describe("Catalog and selection ownership", () => {
     const first = fixture().platform;
     const second = fixture().platform;
     const artifact = add(first, "sample", "one");
-    expect(() => second.select(artifact)).toThrow(
+    await expect(second.select(artifact)).rejects.toThrow(
       expect.objectContaining({ code: "ARTIFACT_UNAVAILABLE" }),
     );
-    expect(() => first.select({ ...artifact })).toThrow(
+    await expect(first.select({ ...artifact })).rejects.toThrow(
       expect.objectContaining({ code: "ARTIFACT_UNAVAILABLE" }),
     );
     expect(() => second.catalog.remove(artifact)).toThrow(
@@ -68,7 +68,7 @@ describe("Catalog and selection ownership", () => {
     const revoked = Proxy.revocable({}, {});
     revoked.revoke();
     for (const artifact of [forged, revoked.proxy, undefined]) {
-      expect(() => platform.select(artifact as never)).toThrow(
+      await expect(platform.select(artifact as never)).rejects.toThrow(
         expect.objectContaining({ code: "ARTIFACT_UNAVAILABLE" }),
       );
     }

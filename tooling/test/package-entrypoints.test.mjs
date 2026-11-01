@@ -27,3 +27,13 @@ it("requires literal entrypoints so both tools can check the complete set of shi
     }),
   ).toThrow("invalid public subpath");
 });
+
+it("rejects a target Node will not resolve even if its file is present", () => {
+  expect(() =>
+    packageEntrypoints({
+      name: "fixture",
+      type: "module",
+      exports: { ".": { ...root, import: "./dist/NODE_MODULES/impl.js" } },
+    }),
+  ).toThrow("package-relative");
+});

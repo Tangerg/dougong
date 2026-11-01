@@ -6,8 +6,8 @@ import { DougongError } from "./errors.js";
 export class ContractRegistry {
   readonly #kinds = new Map<string, ContractKind>();
 
-  get kinds(): ReadonlyMap<string, ContractKind> {
-    return this.#kinds;
+  assertKinds(kinds: ReadonlyMap<string, ContractKind>) {
+    for (const [id, kind] of kinds) this.assertCompatible({ id, kind });
   }
 
   assertCompatible(contract: ContractIdentity) {
@@ -23,7 +23,7 @@ export class ContractRegistry {
   }
 
   commit(kinds: ReadonlyMap<string, ContractKind>) {
-    for (const [id, kind] of kinds) this.assertCompatible({ id, kind });
+    this.assertKinds(kinds);
     for (const [id, kind] of kinds) this.#kinds.set(id, kind);
   }
 }
@@ -57,8 +57,7 @@ export class ContractRegistryWriter {
     }
 
     state.registry.assertCompatible(contract);
-    if (state.registry.kinds.has(contract.id)) assertCompatibleKind(state.pending, contract);
-    else rememberContractKind(state.pending, contract);
+    rememberContractKind(state.pending, contract);
   }
 
   commit() {

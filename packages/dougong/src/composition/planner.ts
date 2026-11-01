@@ -1,5 +1,5 @@
 import { DougongError } from "../contracts/errors.js";
-import type { ContractKind } from "../contracts/contracts.js";
+import type { ContractRegistry } from "../contracts/contract-registry.js";
 import { InstallationGraph } from "./installation-graph.js";
 import { resolvePluginConfig, type ConfigValue } from "./configuration.js";
 import type { ChangeOperation } from "./change-set.js";
@@ -26,7 +26,8 @@ export async function compileTransition(
   current: CompositionState,
   operations: ReadonlyArray<ChangeOperation>,
   intent: TransitionIntent,
-  kinds: ReadonlyMap<string, ContractKind>,
+  contracts: ContractRegistry,
+  validity?: AbortSignal,
 ): Promise<PreparedTransition> {
   const declarations = new Map(current.graph.declarations);
   const groups = new Map(current.groups);
@@ -119,7 +120,8 @@ export async function compileTransition(
     }
   }
   assertGroups(groups, declarations);
-  const graph = InstallationGraph.build(declarations, kinds);
+  const graph = InstallationGraph.build(declarations);
+  contracts.assertKinds(graph.contractKinds);
   const affected =
     intent === "change"
       ? current.graph.affectedByTransitionTo(graph, changed)
@@ -135,7 +137,12 @@ export async function compileTransition(
     else if (intent === "start" || changed.has(record)) {
       configs.set(
         record,
-        await resolvePluginConfig(declaration.plugin.config, declaration.config, record.id),
+        await resolvePluginConfig(
+          declaration.plugin.config,
+          declaration.config,
+          record.id,
+          validity,
+        ),
       );
     }
   }
@@ -193,21 +200,15 @@ export async function compileTransition(
   });
 }
 
-export function assertGroups(
+function assertGroups(
   groups: ReadonlyMap<string, GroupNode>,
   declarations: ReadonlyMap<InstallationRecord, InstallationDeclaration>,
 ) {
   for (const group of groups.values()) {
-    const visited = new Set([group]);
-    let parent = group.parent;
-    while (parent !== undefined) {
-      if (visited.has(parent))
-        throw new DougongError("GROUP_CYCLE", "Group ownership must be acyclic");
-      visited.add(parent);
-      if (groups.get(parent.id) !== parent)
-        throw new DougongError("GROUP_MISSING", "Group parent is not committed: " + parent.id);
-      parent = parent.parent;
-    }
+    // Every Group is created with an existing immutable parent. Membership of the direct edge suffices.
+    const parent = group.parent;
+    if (parent && groups.get(parent.id) !== parent)
+      throw new DougongError("GROUP_MISSING", "Group parent is not committed: " + parent.id);
   }
   for (const record of declarations.keys()) {
     if (record.group && groups.get(record.group.id) !== record.group)

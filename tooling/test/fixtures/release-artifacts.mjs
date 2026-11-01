@@ -8,7 +8,12 @@ import {
   renameSync,
   writeFileSync,
 } from "node:fs";
-import { basename, dirname, join } from "node:path";
+import { basename, join } from "node:path";
+import {
+  candidateOutput,
+  packCandidates,
+  writeVerifiedCandidates,
+} from "../../consumer/package-candidates.mjs";
 import { installCommandFixture } from "../release-command-fixture.mjs";
 
 const workspace = process.cwd();
@@ -38,6 +43,15 @@ installCommandFixture((name, args, options, nativeSpawn) => {
       const result = nativeSpawn(git, args, { cwd: workspace, stdio: "pipe" });
       if (result.status !== 0) throw new Error("Concurrent Git fixture failed: " + result.stderr);
     };
+    if (
+      race === "build-before-pack" &&
+      name === "pnpm" &&
+      args[0] === "pack" &&
+      basename(options.cwd) === "dougong"
+    ) {
+      writeFileSync(join(options.cwd, "dist/index.js"), "export const notTheTestedBuild = true;");
+      injected = true;
+    }
     if (name === "npm" && args[0] === "publish") {
       if (race === "stage") {
         writeFileSync(join(workspace, "other.txt"), "owned by another operation\n");
@@ -65,6 +79,15 @@ installCommandFixture((name, args, options, nativeSpawn) => {
     }
     if (race === "tag-head" && name === "git" && args[0] === "tag" && args.includes("-a")) {
       runGit("commit", "--allow-empty", "-m", "Concurrent commit before tag");
+      injected = true;
+    }
+    if (race === "remote-tag-at-push" && name === "git" && args[0] === "push") {
+      const tagRef = args.at(-1).split(":")[1];
+      const original = nativeSpawn(git, ["rev-parse", "origin/main"], {
+        cwd: workspace,
+        encoding: "utf8",
+      }).stdout.trim();
+      runGit("-C", join(workspace, "remote.git"), "update-ref", tagRef, original);
       injected = true;
     }
     if (race === "push-refs" && name === "git" && args[0] === "push") {
@@ -102,23 +125,41 @@ installCommandFixture((name, args, options, nativeSpawn) => {
       return { status: 0, stdout: args.includes("--abbrev-ref") ? "main" : "a".repeat(40) };
     }
     if (args[0] === "rev-list") return { status: 0, stdout: "0" };
-    if (["status", "fetch"].includes(args[0]) || (args[0] === "tag" && args[1] === "--list")) {
+    if (
+      ["status", "fetch", "ls-remote"].includes(args[0]) ||
+      (args[0] === "tag" && args[1] === "--list")
+    ) {
       return { status: 0 };
     }
     process.exit(99);
   }
 
-  if (name === "pnpm" && args.length === 1 && args[0] === "check") return { status: 0 };
+  if (name === "pnpm" && args.length === 1 && args[0] === "check") {
+    appendFileSync(
+      join(workspace, "commands.jsonl"),
+      JSON.stringify({
+        command: "gate-versions",
+        args: ["reactive", "dougong", "platform"].map(
+          (dir) =>
+            JSON.parse(readFileSync(join(workspace, "packages", dir, "package.json"))).version,
+        ),
+      }) + "\n",
+    );
+    const output = options.env?.[candidateOutput];
+    if (output) {
+      writeVerifiedCandidates(output, packCandidates(workspace));
+      writeFileSync(join(workspace, "release-stage"), output);
+      if (race === "alter-receipt")
+        writeFileSync(join(output, "reactive", "reactive.tgz"), "wrong bytes");
+    }
+    return { status: 0 };
+  }
 
   if (args[0] === "pack" && (name === "pnpm" || name === "npm")) {
     const stage = args[args.indexOf("--pack-destination") + 1];
     let source;
     if (name === "pnpm") {
       if (args.length !== 3 || args[1] !== "--pack-destination") process.exit(99);
-      writeFileSync(
-        join(workspace, "release-stage"),
-        basename(stage).startsWith("pack-") ? dirname(stage) : stage,
-      );
       if (process.env.DOUGONG_RELEASE_REAL_PNPM) {
         return nativeSpawn(process.execPath, [process.env.DOUGONG_RELEASE_REAL_PNPM, ...args], {
           ...options,
@@ -129,6 +170,7 @@ installCommandFixture((name, args, options, nativeSpawn) => {
       source = join(stage, `pack__${basename(options.cwd)}`);
       mkdirSync(source);
       cpSync(options.cwd, join(source, "package"), { recursive: true });
+      if (race === "undeclared-file") writeFileSync(join(source, "package/binding.gyp"), "{}");
       const manifestPath = join(source, "package/package.json");
       const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
       if (basename(options.cwd) === "dougong") {

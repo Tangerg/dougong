@@ -5,48 +5,80 @@ interface Waiter<T> {
   reject: (reason: unknown) => void;
 }
 
-export class Preparation<T> {
-  readonly #controller = new AbortController();
-  readonly result: Promise<T>;
-  #waiters: Set<Waiter<T>> | undefined = new Set();
+type PreparationState<T> =
+  | { readonly controller: AbortController; readonly waiters: Set<Waiter<T>> }
+  | "settled"
+  | "cancelled";
 
-  constructor(run: (signal: AbortSignal) => T | PromiseLike<T>) {
-    this.result = Promise.resolve().then(() => {
-      AbortSignal.prototype.throwIfAborted.call(this.#controller.signal);
-      return run(this.#controller.signal);
-    });
+export class Preparation<T> {
+  #state: PreparationState<T>;
+  readonly result: Promise<T>;
+
+  private constructor(result: Promise<T>, controller: AbortController) {
+    this.#state = { controller, waiters: new Set() };
+    this.result = result;
     // One reaction per preparation; a cancelled waiter detaches even when external work never settles.
-    void this.result.then(
+    void result.then(
       (value) => this.#settle((waiter) => waiter.resolve(value)),
       (error) => this.#settle((waiter) => waiter.reject(error)),
     );
   }
 
+  static start<T>(run: (signal: AbortSignal) => T | PromiseLike<T>) {
+    const controller = new AbortController();
+    return new Preparation(
+      Promise.resolve().then(() => {
+        AbortSignal.prototype.throwIfAborted.call(controller.signal);
+        return run(controller.signal);
+      }),
+      controller,
+    );
+  }
+
+  // The adapter receives its own signal, never the private signal that detaches its waiter.
+  static waitFor<T>(
+    run: (signal: AbortSignal) => T | PromiseLike<T>,
+    parent: AbortSignal,
+  ): Promise<T> {
+    const controller = new AbortController();
+    const work = Promise.withResolvers<T>();
+    const waiter = new Preparation(work.promise, controller).wait(parent);
+    try {
+      work.resolve(run(controller.signal));
+    } catch (error) {
+      work.reject(error);
+    }
+    return waiter;
+  }
+
   get cancelled() {
-    // External preparation code receives this signal, not authority to replace its state.
-    return Reflect.get(AbortSignal.prototype, "aborted", this.#controller.signal) as boolean;
+    return this.#state === "cancelled";
   }
 
   wait(signal: AbortSignal): Promise<T> {
     AbortSignal.prototype.throwIfAborted.call(signal);
-    AbortSignal.prototype.throwIfAborted.call(this.#controller.signal);
-    const waiters = this.#waiters;
-    if (!waiters) return this.result;
+    const state = this.#state;
+    if (state === "settled") return this.result;
+    if (state === "cancelled") throw new TypeError("Cannot join a cancelled preparation");
     const { promise, resolve, reject } = Promise.withResolvers<T>();
     const waiter = { resolve, reject };
-    waiters.add(waiter);
+    state.waiters.add(waiter);
     const detach = onAbort(signal, (reason) => {
-      if (!waiters.delete(waiter)) return;
-      if (!waiters.size) this.#controller.abort();
+      if (!state.waiters.delete(waiter)) return;
+      if (!state.waiters.size) {
+        this.#state = "cancelled";
+        state.controller.abort();
+      }
       reject(reason);
     });
     return promise.finally(detach);
   }
 
   #settle(complete: (waiter: Waiter<T>) => void) {
-    const waiters = this.#waiters!;
-    this.#waiters = undefined;
-    for (const waiter of waiters) complete(waiter);
-    waiters.clear();
+    const state = this.#state;
+    if (typeof state === "string") return;
+    this.#state = "settled";
+    for (const waiter of state.waiters) complete(waiter);
+    state.waiters.clear();
   }
 }

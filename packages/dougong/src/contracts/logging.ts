@@ -8,13 +8,27 @@ export interface Logger {
   readonly error: (message: unknown, ...details: unknown[]) => void;
 }
 
+export function captureLogger(value: unknown): Logger {
+  if (!value || (typeof value !== "object" && typeof value !== "function"))
+    throw new TypeError("Logger must implement debug/info/warn/error");
+  const capture = (level: keyof Logger): Logger[typeof level] => {
+    const method = (value as Partial<Logger>)[level];
+    if (typeof method !== "function")
+      throw new TypeError("Logger must implement debug/info/warn/error");
+    return (...args) => Reflect.apply(method, value, args);
+  };
+  return Object.freeze({
+    debug: capture("debug"),
+    info: capture("info"),
+    warn: capture("warn"),
+    error: capture("error"),
+  });
+}
+
 export function isLogger(value: unknown): value is Logger {
-  if (!value || (typeof value !== "object" && typeof value !== "function")) return false;
   try {
-    const candidate = value as Partial<Logger>;
-    return [candidate.debug, candidate.info, candidate.warn, candidate.error].every(
-      (method) => typeof method === "function",
-    );
+    captureLogger(value);
+    return true;
   } catch {
     return false;
   }

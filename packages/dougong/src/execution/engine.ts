@@ -1,5 +1,11 @@
+import { shutdownTimeout } from "../lifetime/lifetime.js";
 import { ContractRegistry } from "../contracts/contract-registry.js";
-import { DougongError, RecordedFailure, type ErrorSnapshot } from "../contracts/errors.js";
+import {
+  DougongError,
+  quarantinedHost,
+  RecordedFailure,
+  type ErrorSnapshot,
+} from "../contracts/errors.js";
 import {
   normalizeRequirement,
   normalizeContract,
@@ -7,7 +13,7 @@ import {
   type OptionalService,
   type ExtensionPoint,
 } from "../contracts/contracts.js";
-import { isLogger, type Logger } from "../contracts/logging.js";
+import { captureLogger, type Logger } from "../contracts/logging.js";
 import { EventHub } from "../events/event-hub.js";
 import { ContributionRegistry } from "../contributions/contribution-store.js";
 import { SnapshotPublisher, batchSnapshotNotifications } from "../observation/snapshot-view.js";
@@ -15,17 +21,17 @@ import { SerialQueue } from "../internal/serial-queue.js";
 import { captureDataArray } from "../internal/data-array.js";
 import { normalizePlainRecord } from "../internal/record.js";
 import {
-  ChangeSetDraft,
+  ChangeSets,
   assertId,
   captureOrigin,
   type ChangeOperation,
 } from "../composition/change-set.js";
 import { InstallationRecord, type InstallationDeclaration } from "../composition/installation.js";
 import { InstallationGraph } from "../composition/installation-graph.js";
-import { GroupNode } from "../composition/group.js";
+import { buildInitialGroups, GroupNode } from "../composition/group.js";
 import { captureConfig } from "../composition/configuration.js";
 import { normalizePlugin } from "../composition/plugin.js";
-import { compileTransition, assertGroups, type CompositionState } from "../composition/planner.js";
+import { compileTransition, type CompositionState } from "../composition/planner.js";
 import {
   PlanAuthority,
   describeBindings,
@@ -89,7 +95,7 @@ export class Engine {
   readonly #contributions: ContributionRegistry;
   readonly #commands = new SerialQueue();
   readonly #plans = new PlanAuthority();
-  readonly #drafts = new WeakMap<ChangeSet, ChangeSetDraft>();
+  readonly #drafts = new ChangeSets();
   readonly #installations = new WeakMap<object, InstallationRecord>();
   readonly #groups = new WeakMap<object, GroupNode>();
   readonly #publisher: SnapshotPublisher<HostSnapshot>;
@@ -112,26 +118,16 @@ export class Engine {
     const name = input.name === undefined ? "host" : input.name;
     assertId(name, "Host name");
     this.name = name;
-    if (input.logger !== undefined && !isLogger(input.logger))
-      throw new TypeError("Host logger is invalid");
     if (input.onError !== undefined && typeof input.onError !== "function")
       throw new TypeError("Host onError must be a function");
-    if (
-      input.shutdownTimeoutMs !== undefined &&
-      (typeof input.shutdownTimeoutMs !== "number" ||
-        !Number.isFinite(input.shutdownTimeoutMs) ||
-        input.shutdownTimeoutMs <= 0)
-    ) {
-      throw new TypeError("Host shutdownTimeoutMs must be positive");
-    }
-    this.#logger = (input.logger ?? console) as Logger;
+
+    this.#logger = captureLogger(input.logger === undefined ? console : input.logger);
     this.#onError = (input.onError ?? ((error: unknown) => this.#logger.error(error))) as (
       error: unknown,
     ) => Awaitable<void>;
-    this.#shutdownTimeoutMs = input.shutdownTimeoutMs as number | undefined;
+    this.#shutdownTimeoutMs = shutdownTimeout(input.shutdownTimeoutMs);
     this.#contributions = new ContributionRegistry((error) => this.#report(error));
     const declarations = new Map<InstallationRecord, InstallationDeclaration>();
-    const groups = new Map<string, GroupNode>();
     const initialGroups = captureDataArray(
       input.groups === undefined ? [] : input.groups,
       "Initial Groups",
@@ -151,25 +147,7 @@ export class Engine {
         throw new DougongError("GROUP_CONFLICT", "Duplicate initial Group: " + group.id);
       groupParents.set(group.id, group.parentId as string | undefined);
     }
-    const building = new Set<string>();
-    const resolveGroup = (id: string): GroupNode => {
-      const existing = groups.get(id);
-      if (existing) return existing;
-      if (!groupParents.has(id))
-        throw new DougongError("GROUP_MISSING", "Initial Group is missing: " + id);
-      if (building.has(id))
-        throw new DougongError("GROUP_CYCLE", "Group ownership must be acyclic");
-      building.add(id);
-      const parentId = groupParents.get(id);
-      const group = this.#createGroup(
-        id,
-        parentId === undefined ? undefined : resolveGroup(parentId),
-      );
-      groups.set(id, group);
-      building.delete(id);
-      return group;
-    };
-    for (const id of groupParents.keys()) resolveGroup(id);
+    const groups = buildInitialGroups(groupParents, (id, parent) => this.#createGroup(id, parent));
     const ids = new Set<string>();
     for (const raw of initialInstallations) {
       const initial = normalizePlainRecord(raw, "Initial Installation", {
@@ -183,10 +161,11 @@ export class Engine {
           "Duplicate initial Installation: " + initial.id,
         );
       ids.add(initial.id);
-      const record = this.#createInstallation(
-        initial.id,
-        initial.groupId === undefined ? undefined : resolveGroup(initial.groupId as string),
-      );
+      const group =
+        initial.groupId === undefined ? undefined : groups.get(initial.groupId as string);
+      if (initial.groupId !== undefined && !group)
+        throw new DougongError("GROUP_MISSING", "Initial Group is missing: " + initial.groupId);
+      const record = this.#createInstallation(initial.id, group);
       declarations.set(
         record,
         Object.freeze({
@@ -196,11 +175,10 @@ export class Engine {
         }),
       );
     }
-    assertGroups(groups, declarations);
     this.#state = Object.freeze({
       revision: 0,
       groups,
-      graph: InstallationGraph.build(declarations, this.#contracts.kinds),
+      graph: InstallationGraph.build(declarations),
       configs: new Map(),
       phase: "stopped",
       instances: new Map(),
@@ -242,7 +220,7 @@ export class Engine {
 
   change(): ChangeSet {
     this.#assertHealthy();
-    const draft = new ChangeSetDraft({
+    return this.#drafts.create({
       create: (id, group) => this.#createInstallation(id, group),
       resolve: (handle) => this.#resolveInstallation(handle),
       createGroup: (id, parent) => this.#createGroup(id, parent),
@@ -252,24 +230,22 @@ export class Engine {
         return group;
       },
     });
-    this.#drafts.set(draft.handle, draft);
-    return draft.handle;
   }
 
   async plan(change: ChangeSet): Promise<Plan> {
     this.#assertHealthy();
-    const draft = this.#drafts.get(change);
-    if (!draft) throw new DougongError("CHANGE_FOREIGN", "ChangeSet belongs to another Host");
-    this.#drafts.delete(change);
-    const operations = draft.take();
+    const operations = this.#drafts.take(change);
+    const validity = this.#plans.validationSignal;
     try {
       const prepared = await compileTransition(
         this.#state,
         operations,
         "change",
-        this.#contracts.kinds,
+        this.#contracts,
+        validity,
       );
-      this.#assertHealthy();
+      validity.throwIfAborted();
+      this.#contracts.assertKinds(prepared.graph.contractKinds);
       return this.#plans.issue(prepared, this.#state);
     } catch (error) {
       this.#discardPending(operations);
@@ -344,7 +320,7 @@ export class Engine {
         this.#notify();
       }
       try {
-        const prepared = await compileTransition(this.#state, [], intent, this.#contracts.kinds);
+        const prepared = await compileTransition(this.#state, [], intent, this.#contracts);
         return await this.#execute(this.#plans.issue(prepared, this.#state));
       } finally {
         if (this.#transition) {
@@ -395,8 +371,9 @@ export class Engine {
             : "changing",
       affected: prepared.affected,
     };
-    this.#notify();
+    // Diagnostics observers may register new contributions synchronously at transition ingress.
     this.#contributions.beginBatch();
+    this.#notify();
     try {
       if (previous.phase === "stopped" && prepared.report.intent !== "start") {
         writer.commit();
@@ -424,6 +401,8 @@ export class Engine {
         await this.#prepare(prepared, retained, candidates, writer, failures);
         for (const instance of candidates.values())
           AbortSignal.prototype.throwIfAborted.call(instance.lifetime.signal);
+        // A concurrent durable claim can still reject this candidate without publishing anything.
+        writer.commit();
         failures.seal();
       } catch (error) {
         writer.discard();
@@ -470,7 +449,6 @@ export class Engine {
       }
       for (const [record, instance] of candidates) retained.set(record, instance);
       try {
-        writer.commit();
         this.#commit(prepared, retained, "running", candidates);
       } catch (error) {
         writer.discard();
@@ -636,7 +614,14 @@ export class Engine {
 
   #advance(next: Omit<CommittedState, "revision">) {
     this.#state = Object.freeze({ ...next, revision: this.#state.revision + 1 });
-    this.#plans.invalidate();
+    const quarantined = next.phase === "quarantined";
+    this.#plans.invalidate(this.#state.revision, quarantined);
+    if (quarantined) {
+      this.#drafts.close(this.#state.revision);
+      for (const [record, declaration] of next.graph.declarations) {
+        record.detach({ status: "quarantined", origin: declaration.origin });
+      }
+    }
   }
 
   async #quarantine(
@@ -749,10 +734,7 @@ export class Engine {
   }
 
   #assertHealthy() {
-    if (this.#state.phase === "quarantined")
-      throw new DougongError("HOST_QUARANTINED", "Host execution is permanently quarantined", {
-        details: { outcome: "quarantined", stateRevision: this.#state.revision },
-      });
+    if (this.#state.phase === "quarantined") throw quarantinedHost(this.#state.revision);
   }
 
   #busyTransition() {

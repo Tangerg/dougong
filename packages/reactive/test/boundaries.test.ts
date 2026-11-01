@@ -1,5 +1,5 @@
 import { expect, it } from "vitest";
-import { batch, computed, signal } from "../src";
+import { batch, computed, signal, type ReadonlySignal } from "../src";
 
 it("does not visit subscriptions created during the same publication", () => {
   const source = signal(0);
@@ -200,4 +200,32 @@ it("rejects a failed computed's public subscription even while an indirect subsc
   input.set(true);
   expect(safe.get()).toBe(1);
   expect(unexpected).toBe(0);
+});
+
+it("validates shared branches once per source write while preserving lazy values and errors", () => {
+  const input = signal(1);
+  const unrelated = signal(0);
+  let reads = 0;
+  let tip: ReadonlySignal<number> = computed(() => {
+    reads++;
+    const value = input.get();
+    if (value < 0) throw new Error("negative input");
+    return value;
+  });
+  // Twenty-four diamonds have only 73 derived nodes but millions of paths to the input.
+  for (let level = 0; level < 24; level++) {
+    const previous = tip;
+    const a = computed(() => previous.get());
+    const b = computed(() => previous.get());
+    tip = computed(() => a.get() + b.get());
+  }
+  expect(tip.get()).toBe(2 ** 24);
+  unrelated.set(1);
+  expect(tip.get()).toBe(2 ** 24);
+  expect(reads).toBe(1);
+  input.set(-1);
+  expect(() => tip.get()).toThrow("negative input");
+  input.set(2);
+  expect(tip.get()).toBe(2 ** 25);
+  expect(reads).toBe(3);
 });

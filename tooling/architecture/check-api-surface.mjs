@@ -3,51 +3,18 @@
 
 import PACKAGES from "./public-api.json" with { type: "json" };
 import { pathToFileURL } from "node:url";
-import { createRequire } from "node:module";
+import ts from "typescript";
+import { declarationSurface } from "./declaration-surface.mjs";
 import { existsSync, globSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
+import { isDeepStrictEqual } from "node:util";
+import { loadConfigFromFile } from "vite";
 import { retiredVocabulary } from "./vocabulary.mjs";
 import { packageEntrypoints, publishedDirectories } from "../packages.mjs";
 import { architectureRules } from "./rules.mjs";
 import { developmentEngines, runtimeBaseline } from "../runtime-baseline.mjs";
 
-const ts = createRequire(import.meta.url)("typescript");
 const retiredIdentifiers = new Set(retiredVocabulary);
-
-function surfaceOf(distPath) {
-  const file = resolve(distPath);
-  const program = ts.createProgram([file], {
-    noEmit: true,
-    skipLibCheck: true,
-    target: ts.ScriptTarget.ES2022,
-    module: ts.ModuleKind.ESNext,
-    moduleResolution: ts.ModuleResolutionKind.Bundler,
-    strict: true,
-  });
-  const checker = program.getTypeChecker();
-  const source = program.getSourceFile(file);
-  if (!source) throw new Error(`Cannot read ${distPath}`);
-  const moduleSymbol = checker.getSymbolAtLocation(source);
-  if (!moduleSymbol) throw new Error(`${distPath} is not a module`);
-
-  const values = new Set();
-  const types = new Set();
-  const retired = new Set();
-  for (const exported of checker.getExportsOfModule(moduleSymbol)) {
-    const symbol =
-      exported.flags & ts.SymbolFlags.Alias ? checker.getAliasedSymbol(exported) : exported;
-    // Classify classes as values so type and value allowlists stay disjoint.
-    if (symbol.flags & ts.SymbolFlags.Value) values.add(exported.name);
-    else if (symbol.flags & ts.SymbolFlags.Type) types.add(exported.name);
-    else throw new Error(`${distPath} exports '${exported.name}' with no value or type meaning`);
-  }
-  const visit = (node) => {
-    if (ts.isIdentifier(node) && retiredIdentifiers.has(node.text)) retired.add(node.text);
-    ts.forEachChild(node, visit);
-  };
-  visit(source);
-  return { values: [...values].sort(), types: [...types].sort(), retired: [...retired].sort() };
-}
 
 function difference(actual, expected) {
   const expectedSet = new Set(expected);
@@ -78,15 +45,12 @@ for (const manifestPath of ["package.json", ...publishedManifestPaths]) {
 }
 for (const directory of [...publishedDirectories, "examples"]) {
   const configPath = `${directory}/vite.config.ts`;
-  const config = readFileSync(configPath, "utf8");
-  const relativeBaseline =
-    directory === "examples"
-      ? "../tooling/runtime-baseline.mjs"
-      : "../../tooling/runtime-baseline.mjs";
-  if (
-    !config.includes(relativeBaseline) ||
-    !config.includes("target: runtimeBaseline.buildTargets")
-  ) {
+  const config = await loadConfigFromFile(
+    { command: "build", mode: "production" },
+    resolve(configPath),
+    resolve(directory),
+  );
+  if (!isDeepStrictEqual(config?.config.build?.target, runtimeBaseline.buildTargets)) {
     failures.push(`${configPath}: emitted syntax does not use the shared runtime baseline`);
   }
 }
@@ -106,7 +70,7 @@ for (const directory of publishedDirectories) {
       for (const name of missing) failures.push(`${specifier}: missing runtime export '${name}'`);
     }
     if (existsSync(resolve(directory, types)))
-      surfaces.set(specifier, surfaceOf(resolve(directory, types)));
+      surfaces.set(specifier, declarationSurface(resolve(directory, types)));
   }
 }
 for (const name of Object.keys(PACKAGES)) {
@@ -124,6 +88,10 @@ for (const file of publishedDirectories.flatMap((directory) =>
     ts.ScriptKind.TS,
   );
   const visit = (node) => {
+    if (ts.isIdentifier(node) && retiredIdentifiers.has(node.text))
+      failures.push(
+        `${file}: retired identifier '${node.text}' appears in its declaration surface`,
+      );
     if (node.kind === ts.SyntaxKind.AnyKeyword) {
       const line = source.getLineAndCharacterOfPosition(node.getStart(source)).line + 1;
       failures.push(`${file}:${line}: declaration surface contains an any type`);
@@ -146,10 +114,6 @@ for (const [name, spec] of Object.entries(PACKAGES)) {
       for (const item of added) failures.push(`${name}: undeclared ${kind} export '${item}'`);
       for (const item of missing) failures.push(`${name}: missing ${kind} export '${item}'`);
     }
-  }
-
-  for (const item of surface.retired) {
-    failures.push(`${name}: retired identifier '${item}' appears in its declaration surface`);
   }
 }
 

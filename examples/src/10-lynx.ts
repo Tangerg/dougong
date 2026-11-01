@@ -26,7 +26,7 @@ interface Panel {
   readonly title: string;
 }
 interface CommandCatalog {
-  list(): ReadonlyArray<{ readonly id: string; readonly title: string }>;
+  list(): Promise<ReadonlyArray<ActionDeclaration>>;
   run(id: string): Promise<string>;
 }
 
@@ -39,12 +39,14 @@ const workspaceState = (workspace: string) =>
 const MAIN_WORKSPACE = workspaceState("main");
 
 // Business command identity belongs to this catalog; Core owns only contribution identity.
-function commandEntry(commands: ContributionView<Command>, id: string) {
-  const matches = [...commands.get()].filter(([, command]) => command.id === id);
-  if (matches.length > 1) throw new TypeError(`Duplicate command '${id}'`);
-  const match = matches[0];
-  if (!match) throw new Error(`Command '${id}' is unavailable`);
-  return match[0];
+function commandEntries(commands: ContributionView<Command>) {
+  return Promise.all(
+    commands
+      .get()
+      .map((entry) =>
+        commands.use(entry, ({ id, title }) => ({ entry, action: Object.freeze({ id, title }) })),
+      ),
+  );
 }
 
 function explorerPlugin(title: string, relativePath: string) {
@@ -77,14 +79,20 @@ export async function lynxScenario(): Promise<ExampleResult> {
     setup({ deps }) {
       return {
         catalog: {
-          list: () =>
-            Object.freeze(
-              [...deps.commands.get().values()].map(({ id, title }) =>
-                Object.freeze({ id, title }),
-              ),
-            ),
-          run: (id: string) =>
-            deps.commands.use(commandEntry(deps.commands, id), (command) => command.run()),
+          list: async () =>
+            Object.freeze((await commandEntries(deps.commands)).map(({ action }) => action)),
+          async run(id: string) {
+            const matches = (await commandEntries(deps.commands)).filter(
+              ({ action }) => action.id === id,
+            );
+            if (matches.length > 1) throw new TypeError(`Duplicate command '${id}'`);
+            const match = matches[0];
+            if (!match) throw new Error(`Command '${id}' is unavailable`);
+            return deps.commands.use(match.entry, (command) => {
+              if (command.id !== id) throw new Error(`Command '${id}' changed before invocation`);
+              return command.run();
+            });
+          },
         },
       };
     },
@@ -137,13 +145,18 @@ export async function lynxScenario(): Promise<ExampleResult> {
       reference,
     });
   const explorer = await platform.select(artifact("1.0.0", "explorer-v1"));
-  const before = await host.use(COMMAND_CATALOG, (commands) => commands.list().length);
+  const before = await host.use(
+    COMMAND_CATALOG,
+    async (commands) => (await commands.list()).length,
+  );
   await platform.trigger(actionActivation(openExplorer));
   const firstOutput = await host.use(COMMAND_CATALOG, (commands) => commands.run(openExplorer.id));
   await platform.select(artifact("1.1.0", "explorer-v2"));
   await platform.activate([explorer]);
   const secondOutput = await host.use(COMMAND_CATALOG, (commands) => commands.run(openExplorer.id));
-  const panelTitle = [...workspacePanels.get().values()][0]?.title;
+  const panel = workspacePanels.get()[0];
+  const panelTitle =
+    panel === undefined ? undefined : await workspacePanels.use(panel, (value) => value.title);
 
   await platform[asyncDisposeSymbol]();
   const workspace = host.group("workspace-main");
@@ -151,7 +164,10 @@ export async function lynxScenario(): Promise<ExampleResult> {
   const remove = host.change();
   remove.removeGroup(workspace);
   await host.apply(await host.plan(remove));
-  const remainingCommands = await host.use(COMMAND_CATALOG, (commands) => commands.list().length);
+  const remainingCommands = await host.use(
+    COMMAND_CATALOG,
+    async (commands) => (await commands.list()).length,
+  );
   let workspaceViewDisposed = false;
   try {
     workspacePanels.get();

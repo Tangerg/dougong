@@ -43,4 +43,28 @@ describe("SerialQueue", () => {
     await expect(settled).resolves.toBeUndefined();
     expect(trace).toEqual(["first:start", "first:end", "second"]);
   });
+  it("does not give the settlement observer control of subsequent commands", async () => {
+    const queue = new SerialQueue();
+    const blocked = Promise.withResolvers<void>();
+    const trace: string[] = [];
+    const first = queue.run(async () => {
+      await blocked.promise;
+      trace.push("first");
+    });
+    const observed = queue.settled;
+    Object.defineProperty(observed, "constructor", {
+      get() {
+        throw new Error("caller-owned observer");
+      },
+    });
+    try {
+      const second = queue.run(() => trace.push("second"));
+      blocked.resolve();
+      await second;
+      expect(trace).toEqual(["first", "second"]);
+    } finally {
+      blocked.resolve();
+      await first;
+    }
+  });
 });

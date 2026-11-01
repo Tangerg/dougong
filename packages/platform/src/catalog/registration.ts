@@ -1,4 +1,4 @@
-import { RecordedFailure, type Installation } from "dougong";
+import type { RecordedFailure, Installation } from "dougong";
 import {
   describeArtifact,
   matchesArtifact,
@@ -207,10 +207,10 @@ export class RegistrationRecord<Reference> {
     }
   }
 
-  fail(revision: number, error: unknown) {
+  fail(revision: number, error: RecordedFailure) {
     const state = this.#state;
     if (state.phase === "selected" && state.revision === revision) {
-      this.#state = { ...state, error: new RecordedFailure(error) };
+      this.#state = { ...state, error };
     }
   }
 

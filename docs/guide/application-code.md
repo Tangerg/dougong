@@ -14,13 +14,13 @@ const answer = await host.use(SEARCH, async (search) => {
 
 ```ts
 const commands = host.contributions(COMMANDS);
-const id = commands.get().keys().next().value;
+const id = commands.get()[0];
 if (id !== undefined) {
   await commands.use(id, (command) => command.run());
 }
 ```
 
-`get()` 返回不可变集合快照，适合枚举与渲染；`use` 是执行边界。不要将读取快照当作无限期运行权限。如果 Host 正在切换、发布尚未结束，`get()` 保持上次发布的集合。新增或更新的条目在新值发布前不能通过 `use` 执行（`CONTRIBUTION_UNAVAILABLE`）；没有变化且所有者仍在服务的条目照常可用。插件可以单独传递其贡献的 `update` 函数；它始终更新原条目，条目释放后调用会抛错。
+`get()` 返回按发布顺序排列的冻结 ID 数组，每个 ID 都包含所有者标识。保留快照不会保留处理函数。原来用 `get().values()` 或按键取值的代码，应枚举这些 ID，通过 `await commands.use(id, command => command.title)` 等借用投影展示字段，执行时再借用当前值。`use` 借用当前已发布的条目，不可用时返回 rejected Promise。条目的值更新或被替换，即使 ID 不变，也发布新的快照。Host 切换期间，快照停在上一次发布，发生变化的条目直到发布才能借用。
 
 `host.diagnostics.get()` 是读取 Host 稳定快照的唯一入口。订阅不会立即重放，通知没有载荷，回调中调用 `get()` 读取。取消订阅使用 `subscription[Symbol.dispose]()`。错误诊断使用有界的 `RecordedFailure`，不保留插件异常里的任意资源图。
 

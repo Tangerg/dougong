@@ -1,4 +1,4 @@
-// Claims, entries, views and subscriptions keep a store alive independently; release requires all four to end.
+// A store stays reachable while claims, views or subscriptions can still use it.
 
 import {
   normalizeContract,
@@ -8,7 +8,6 @@ import {
 } from "../contracts/contracts.js";
 import { DougongError } from "../contracts/errors.js";
 import type { Lifetime, LifetimeOwnership } from "../lifetime/lifetime.js";
-import { ReadonlyMapSnapshot } from "../observation/readonly-map.js";
 import {
   disposeSymbol,
   type Disposable,
@@ -25,7 +24,7 @@ export interface Contribution<T> extends Disposable {
   readonly update: (value: T) => void;
 }
 
-export interface ContributionView<T> extends SnapshotView<ReadonlyMap<string, T>> {
+export interface ContributionView<T> extends SnapshotView<ReadonlyArray<string>> {
   use<R>(id: string, callback: (value: T) => Awaitable<R>): Promise<R>;
 }
 
@@ -42,8 +41,8 @@ type ExtensionPointIdentity = Extract<Requirement, { readonly kind: "extensionPo
 
 interface ContributionViewBinding<T> {
   readonly store: ContributionStore<T>;
-  readonly own: (resource: Disposable) => () => void;
-  readonly owner: Lifetime | undefined;
+  readonly own?: (resource: Disposable) => () => void;
+  readonly owner?: Lifetime;
 }
 
 interface ContributionViewState<T> {
@@ -52,7 +51,7 @@ interface ContributionViewState<T> {
 
 class ContributionViewHandle<T> implements ContributionView<T> {
   readonly #state: ContributionViewState<T>;
-  readonly get: () => ReadonlyMap<string, T>;
+  readonly get: () => ReadonlyArray<string>;
   readonly subscribe: (listener: () => void) => Disposable;
   readonly use: <R>(id: string, callback: (value: T) => Awaitable<R>) => Promise<R>;
 
@@ -60,7 +59,13 @@ class ContributionViewHandle<T> implements ContributionView<T> {
     this.#state = state;
     this.get = () => this.#read();
     this.subscribe = (listener) => this.#subscribe(listener);
-    this.use = (id, callback) => this.#requireBinding().store.use(id, callback);
+    this.use = (id, callback) => {
+      try {
+        return this.#requireBinding().store.use(id, callback);
+      } catch (error) {
+        return Promise.reject(error);
+      }
+    };
     Object.freeze(this);
   }
 
@@ -138,13 +143,6 @@ class ContributionRecord<T> implements Publication {
     state.store.publishClaim(this.#id, this);
   }
 
-  get value() {
-    const state = this.#state;
-    if (state.phase === "disposed")
-      throw new TypeError(`Contribution '${this.#id}' has been disposed`);
-    return state.value;
-  }
-
   use<R>(callback: (value: T) => Awaitable<R>): Promise<R> {
     const state = this.#state;
     if (state.phase === "disposed")
@@ -184,11 +182,11 @@ export class ContributionStore<T> {
     string,
     { readonly contribution: ContributionRecord<T>; phase: "staged" | "pending" | "published" }
   >();
-  readonly #publisher: SnapshotPublisher<ReadonlyMap<string, T>>;
-  #snapshot: ReadonlyMap<string, T> = new ReadonlyMapSnapshot();
+  readonly #publisher: SnapshotPublisher<ReadonlyArray<string>>;
+  #snapshot: ReadonlyArray<string> = Object.freeze([]);
   #views = 0;
   #subscriptions = 0;
-  #retainedByHost = false;
+  #hostView: ContributionView<T> | undefined;
   #released = false;
 
   constructor(
@@ -201,7 +199,13 @@ export class ContributionStore<T> {
     this.#publisher = new SnapshotPublisher(() => this.#snapshot, report);
   }
 
-  stage(installationId: string, key: string, value: T, owner: Lifetime): Contribution<T> {
+  stage(
+    installationId: string,
+    key: string,
+    value: T,
+    owner: Lifetime,
+    remember?: () => void,
+  ): Contribution<T> {
     // A failed claim can create a zero-reference store without a lease to release it.
     try {
       validateKey(key);
@@ -210,6 +214,7 @@ export class ContributionStore<T> {
         throw new TypeError(`Duplicate contribution '${id}'`);
       }
       return owner.stage((detach) => {
+        remember?.();
         const contribution = new ContributionRecord(this, id, value, owner, detach);
         this.#claims.set(id, { contribution, phase: "staged" });
         return contribution;
@@ -222,7 +227,9 @@ export class ContributionStore<T> {
 
   view(own: (resource: Disposable) => () => void, owner?: Lifetime): ContributionView<T> {
     this.#views++;
-    const state: ContributionViewState<T> = { binding: { store: this, own, owner } };
+    const state: ContributionViewState<T> = {
+      binding: { store: this, own, ...(owner && { owner }) },
+    };
     let releaseView: (() => void) | undefined;
     const lease = new ContributionViewLease(state, () => {
       const release = releaseView;
@@ -247,12 +254,7 @@ export class ContributionStore<T> {
 
   // Host-owned views pin the store because application code has no Lifetime from which to lease one.
   hostView(): ContributionView<T> {
-    this.#retainedByHost = true;
-    return Object.freeze({
-      get: this.#publisher.view.get,
-      subscribe: this.#publisher.view.subscribe,
-      use: <R>(id: string, callback: (value: T) => Awaitable<R>) => this.use(id, callback),
-    });
+    return (this.#hostView ??= new ContributionViewHandle<T>({ binding: { store: this } }));
   }
 
   use<R>(id: string, callback: (value: T) => Awaitable<R>): Promise<R> {
@@ -268,11 +270,12 @@ export class ContributionStore<T> {
     return this.#publisher.view.get();
   }
 
-  subscribe(listener: () => void, own: (resource: Disposable) => () => void) {
+  subscribe(listener: () => void, own?: (resource: Disposable) => () => void) {
     if (typeof listener !== "function") {
       throw new TypeError("Contribution subscriber must be a function");
     }
     const publisherSubscription = this.#publisher.view.subscribe(listener);
+    if (!own) return publisherSubscription;
     this.#subscriptions++;
     let releaseFromOwner: (() => void) | undefined;
     const subscription = new ContributionSubscription(publisherSubscription, () => {
@@ -323,25 +326,18 @@ export class ContributionStore<T> {
     }
   }
 
-  // Snapshot equality includes entry order: reordered values can change consumer selection.
   publishSnapshot() {
-    const nextEntries: Array<readonly [string, T]> = [];
-    for (const [key, claim] of this.#claims) {
+    const ids: string[] = [];
+    let changed = false;
+    for (const [id, claim] of this.#claims) {
       if (claim.phase === "staged") continue;
-      nextEntries.push([key, claim.contribution.value]);
-      // Executable access starts at the same publication boundary as the visible value.
+      if (claim.phase === "pending" || this.#snapshot[ids.length] !== id) changed = true;
+      ids.push(id);
       claim.phase = "published";
     }
-    const previousEntries = this.#snapshot.entries();
-    const unchanged =
-      nextEntries.length === this.#snapshot.size &&
-      nextEntries.every(([key, value]) => {
-        const previous = previousEntries.next().value;
-        return previous !== undefined && previous[0] === key && Object.is(previous[1], value);
-      });
-    if (unchanged) return;
-
-    this.#snapshot = new ReadonlyMapSnapshot(nextEntries);
+    if (!changed && ids.length === this.#snapshot.length) return;
+    // A snapshot may outlive the generation. Only the store lends its executable values.
+    this.#snapshot = Object.freeze(ids);
     this.#publisher.invalidate();
   }
 
@@ -357,7 +353,7 @@ export class ContributionStore<T> {
   #notifyIfUnused() {
     if (
       this.#released ||
-      this.#retainedByHost ||
+      this.#hostView ||
       this.#claims.size ||
       this.#subscriptions ||
       this.#views
@@ -548,7 +544,8 @@ class ContributionScope implements ContributionOperations {
     }
     const identity = normalizeContract(token, "extensionPoint");
     const owner = binding.owner.resolveOwner(options?.lifetime);
-    binding.remember(identity);
-    return binding.registry.get<T>(identity).stage(binding.installationId, key, value, owner);
+    return binding.registry
+      .get<T>(identity)
+      .stage(binding.installationId, key, value, owner, () => binding.remember(identity));
   }
 }

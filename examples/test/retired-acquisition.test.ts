@@ -171,6 +171,35 @@ describe("resource acquisition with explicit waiter retirement", () => {
     },
   );
 
+  it("reclaims late work if the operations owner retires while its destination stays open", async () => {
+    const { host, generation, operations } = await createFixture();
+    const started = Promise.withResolvers<void>();
+    const factory = Promise.withResolvers<object>();
+    const resource = {};
+    const release = vi.fn<(resource: object) => void>();
+    const result = acquireForLifetime(
+      generation,
+      operations,
+      () => {
+        started.resolve();
+        return factory.promise;
+      },
+      release,
+    );
+    try {
+      await started.promise;
+      const draining = operations[Symbol.asyncDispose]();
+      factory.resolve(resource);
+      await expect(result).resolves.toEqual({ status: "retired" });
+      await draining;
+      expect(release).toHaveBeenCalledExactlyOnceWith(resource);
+      expect(generation.signal.aborted).toBe(false);
+    } finally {
+      factory.resolve(resource);
+      await host.stop();
+    }
+  });
+
   it("registers ownership before delivery and cleans a resource retired during that handoff", async () => {
     const { host, generation, operations, report } = await createFixture();
     const started = Promise.withResolvers<void>();

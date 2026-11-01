@@ -52,3 +52,71 @@ async function createDetachedViews() {
   await platform[Symbol.asyncDispose]();
   return { registration, diagnostics, subscription, snapshot, references };
 }
+
+it.each(["admission", "module"] as const)(
+  "terminal Platform releases its artifact and ports despite abandoned %s that never settles",
+  async (phase) => {
+    const pending = Promise.withResolvers<never>();
+    const refs = await abandonPreparation(phase, pending.promise);
+    const forceGc = (globalThis as typeof globalThis & { gc?: () => void }).gc;
+    if (!forceGc) throw new TypeError("Retention tests require Node.js --expose-gc");
+    for (let pass = 0; pass < 8 && Object.values(refs).some((ref) => ref.deref()); pass++) {
+      await nextTurn();
+      forceGc();
+    }
+    expect(
+      Object.fromEntries(Object.entries(refs).map(([k, v]) => [k, v.deref() === undefined])),
+    ).toEqual({
+      reference: true,
+      loader: true,
+      host: true,
+      platform: true,
+    });
+    pending.reject(new Error("late"));
+  },
+);
+
+async function abandonPreparation(phase: "admission" | "module", pending: Promise<never>) {
+  const entered = Promise.withResolvers<void>();
+  const stall = () => {
+    entered.resolve();
+    return pending;
+  };
+  const host = createHost();
+  const loader = {
+    load(_reference: object, signal: AbortSignal) {
+      signal.addEventListener("abort", (event) => event.stopImmediatePropagation());
+      return stall();
+    },
+  };
+  const reference = {};
+  const platform = createPlatform({
+    id: "retention",
+    apiVersion: "1.0.0",
+    host,
+    loader,
+    authorizer: {
+      authorize(_request, signal) {
+        signal.addEventListener("abort", (event) => event.stopImmediatePropagation());
+        return phase === "admission" ? stall() : undefined;
+      },
+    },
+  });
+  const chosen = await platform.select(
+    platform.catalog.add({
+      revision: "v1",
+      manifest: { name: "example", version: "1.0.0" },
+      reference,
+    }),
+  );
+  const activation = platform.activate([chosen]).catch(() => undefined);
+  await entered.promise;
+  await platform[Symbol.asyncDispose]();
+  await activation;
+  return {
+    reference: new WeakRef(reference),
+    loader: new WeakRef(loader),
+    host: new WeakRef(host),
+    platform: new WeakRef(platform),
+  };
+}

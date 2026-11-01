@@ -251,3 +251,29 @@ it("validates cycles in retained committed origins as well as the selected closu
   await platform.activate([next], { remove: [existing] });
   await platform[Symbol.asyncDispose]();
 });
+
+it("records one immutable diagnostic for selections rejected by the same atomic activation", async () => {
+  const message = vi.fn<() => string>(() => "access denied");
+  const failure = Object.defineProperties(new Error(), {
+    message: { get: message },
+    stack: { value: "policy" },
+  });
+  const platform = createPlatform({
+    id: "batch",
+    host: createHost(),
+    apiVersion: "1.0.0",
+    loader: { load: emptyPlugin },
+    authorizer: {
+      authorize() {
+        throw failure;
+      },
+    },
+  });
+  const first = await select(platform, "first", "first");
+  const second = await select(platform, "second", "second");
+  await expect(platform.activate([first, second])).rejects.toBe(failure);
+  expect(first.error?.message).toBe("access denied");
+  expect(second.error).toBe(first.error);
+  expect(message).toHaveBeenCalledTimes(1);
+  await platform[Symbol.asyncDispose]();
+});

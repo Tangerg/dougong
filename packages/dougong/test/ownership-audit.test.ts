@@ -26,7 +26,9 @@ it("publishes committed Host availability only with the matching contribution sn
     revision = snapshot.stateRevision;
     readings.push(
       host.use(value, (current) => {
-        observations.push([current, contributions.get().get(`${installation.id}/value`)]);
+        return contributions.use(`${installation.id}/value`, (entry) => {
+          observations.push([current, entry]);
+        });
       }),
     );
   });

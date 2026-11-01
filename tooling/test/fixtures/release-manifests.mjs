@@ -13,18 +13,16 @@ const target = join(
 );
 const read = fs.readFileSync;
 const write = fs.writeFileSync;
-let gateFinished = false;
 let writes = 0;
 
 fs.readFileSync = (path, ...args) => {
-  if (failure === "read" && path === target && gateFinished) {
+  if (failure === "read" && path === target && !args.length) {
     throw new Error("fixture manifest read failure");
   }
   return read(path, ...args);
 };
 fs.writeFileSync = (path, contents, ...args) => {
   if (
-    gateFinished &&
     basename(path) === "package.json" &&
     dirname(dirname(path)) === dirname(target) &&
     basename(dirname(path)).startsWith(".release-manifest-")
@@ -48,7 +46,10 @@ installCommandFixture((name, args) => {
       return { status: 0, stdout: args.includes("--abbrev-ref") ? "main" : "a".repeat(40) };
     }
     if (args[0] === "rev-list") return { status: 0, stdout: "0" };
-    if (["status", "fetch"].includes(args[0]) || (args[0] === "tag" && args[1] === "--list")) {
+    if (
+      ["status", "fetch", "ls-remote"].includes(args[0]) ||
+      (args[0] === "tag" && args[1] === "--list")
+    ) {
       return { status: 0 };
     }
     process.exit(99);
@@ -59,15 +60,9 @@ installCommandFixture((name, args) => {
   }
 
   if (name === "pnpm") {
-    if (args.length === 1 && args[0] === "check") gateFinished = true;
-    else if (args[0] === "pack") {
-      fs.writeFileSync(
-        join(workspace, "release-stage"),
-        args[args.indexOf("--pack-destination") + 1],
-      );
-      return { status: 1 };
-    } else process.exit(99);
-    return { status: 0 };
+    if (args.length !== 1 || args[0] !== "check") process.exit(99);
+    fs.writeFileSync(join(workspace, "release-stage"), join(workspace, "test-pack"));
+    return { status: 1 };
   }
   process.exit(99);
 });

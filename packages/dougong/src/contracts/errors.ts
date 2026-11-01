@@ -41,6 +41,12 @@ export class DougongError<Code extends string = string> extends Error {
   }
 }
 
+export function quarantinedHost(revision: number) {
+  return new DougongError("HOST_QUARANTINED", "Host execution is permanently quarantined", {
+    details: { outcome: "quarantined", stateRevision: revision },
+  });
+}
+
 export interface ErrorSnapshot {
   readonly name: string;
   readonly message: string;

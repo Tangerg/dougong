@@ -501,12 +501,12 @@ describe("Host execution", () => {
       { id: "item" },
     );
     await host.apply(await host.plan(change));
-    expect([...view.get().values()]).toEqual([1]);
+    expect(await Promise.all(view.get().map((id) => view.use(id, (value) => value)))).toEqual([1]);
     expect(starts).toHaveBeenCalledOnce();
     const remove = host.change();
     remove.remove(installed);
     await host.apply(await host.plan(remove));
-    expect(view.get().size).toBe(0);
+    expect(view.get().length).toBe(0);
     await host.stop();
   });
 
@@ -613,4 +613,30 @@ describe("Host execution", () => {
     });
     await expect(host.start()).rejects.toMatchObject({ details: { outcome: "restored" } });
   });
+});
+
+it("reports the concrete Service cycle even in a dependency graph deeper than the call stack", () => {
+  const count = 8_000;
+  const tokens = Array.from({ length: count }, (_, i) => service<void>(`chain/${i}`));
+  const installations = tokens.map((token, i) => ({
+    id: String(i),
+    plugin: definePlugin({
+      name: String(i),
+      provides: { token },
+      requires: { previous: tokens[(i + count - 1) % count]! },
+      setup: () => ({ token: undefined }),
+    }),
+  }));
+  let reason: unknown;
+  try {
+    createHost({ installations });
+  } catch (error) {
+    reason = error;
+  }
+  expect(reason).toMatchObject({ code: "SERVICE_CYCLE" });
+  const path = (reason as { details: { dependencyPath: readonly string[] } }).details
+    .dependencyPath;
+  expect(path).toHaveLength(count + 1);
+  expect(path[0]).toBe(path[count]);
+  expect(Number(path[1])).toBe((Number(path[0]) + 1) % count);
 });

@@ -15,6 +15,21 @@ export interface InstallationProjection {
   readonly origin: InstallationOrigin | undefined;
 }
 
+// Pending identities share only an inert status cell, never the Host or a candidate declaration.
+export class PendingInstallations {
+  readonly #projection: { status: "pending" | "removed"; origin: undefined } = {
+    status: "pending",
+    origin: undefined,
+  };
+  attach(installation: InstallationRecord) {
+    const projection = this.#projection;
+    installation.attach(() => projection);
+  }
+  retire() {
+    this.#projection.status = "removed";
+  }
+}
+
 export class InstallationRecord {
   readonly facade: Installation;
   #read: (() => InstallationProjection) | undefined;

@@ -194,6 +194,33 @@ describe("loaders and permission policy", () => {
     await expect(loader.load(source, controller.signal)).rejects.toBe(controller.signal.reason);
   });
 
+  it("rejects identities that cannot be encoded in an Installation ID at declaration", () => {
+    const invalid = "part-\ud800";
+    expect(() => defineManifest({ name: invalid, version: "1.0.0" })).toThrow(
+      expect.objectContaining({ code: "MANIFEST_INVALID" }),
+    );
+    expect(() =>
+      defineManifest({ name: "root", version: "1.0.0", dependencies: { [invalid]: "*" } }),
+    ).toThrow(expect.objectContaining({ code: "MANIFEST_INVALID" }));
+    expect(() =>
+      createPlatform({
+        id: invalid,
+        host: createHost(),
+        apiVersion: "1.0.0",
+        loader: new MemoryLoader(new Map()),
+      }),
+    ).toThrow(TypeError);
+  });
+
+  it("imports the URL itself without executing a supplied coercion method", async () => {
+    const reference = new URL("data:text/javascript,export default 817");
+    const substitute = vi.fn<() => string>(() => "data:text/javascript,export default 0");
+    Object.defineProperty(reference, Symbol.toPrimitive, { value: substitute });
+    const result = await new ImportLoader().load(reference, new AbortController().signal);
+    expect(substitute).not.toHaveBeenCalled();
+    expect((result as { default: number }).default).toBe(817);
+  });
+
   it("captures grants and exposes owned denied-permission data", () => {
     const grants = ["read"];
     const policy = new PermissionSet(grants);

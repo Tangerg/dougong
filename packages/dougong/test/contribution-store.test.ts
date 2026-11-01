@@ -33,7 +33,7 @@ describe("ContributionStore invariants", () => {
     expect(() => store.removeContribution("owner/item", foreign as never)).toThrow(
       "not the current claim",
     );
-    expect(store.snapshot().get("owner/item")).toBe(1);
+    expect(await store.use("owner/item", (value) => value)).toBe(1);
     await lifetime.dispose();
   });
 
@@ -42,13 +42,13 @@ describe("ContributionStore invariants", () => {
     const lifetime = owner();
     const contribution = store.stage("owner", "item", 1, lifetime);
     contribution.update(2);
-    expect(store.snapshot().size).toBe(0);
+    expect(store.snapshot().length).toBe(0);
     lifetime.publish();
-    expect(store.snapshot().get("owner/item")).toBe(2);
+    expect(await store.use("owner/item", (value) => value)).toBe(2);
     contribution.update(1);
-    expect(store.snapshot().get("owner/item")).toBe(1);
+    expect(await store.use("owner/item", (value) => value)).toBe(1);
     lifetime.publish();
-    expect(store.snapshot().get("owner/item")).toBe(1);
+    expect(await store.use("owner/item", (value) => value)).toBe(1);
     await lifetime.dispose();
   });
 
@@ -94,7 +94,7 @@ describe("ContributionStore invariants", () => {
       () => () => undefined,
     );
     lifetime.publish();
-    expect(store.snapshot().size).toBe(0);
+    expect(store.snapshot().length).toBe(0);
     expect(releases).toBe(1);
     subscription[Symbol.dispose]();
     expect(releases).toBe(1);
@@ -120,7 +120,7 @@ describe("ContributionStore invariants", () => {
     expect(() => lifetime.publish()).toThrow(AggregateError);
     subscription[Symbol.dispose]();
     contribution.update(2);
-    expect(store.snapshot().get("owner/item")).toBe(2);
+    expect(await store.use("owner/item", (value) => value)).toBe(2);
     await lifetime.dispose();
   });
 
@@ -148,8 +148,8 @@ describe("ContributionStore invariants", () => {
     registry.beginBatch();
     lifetime.publish();
     expect(() => registry.endBatch()).toThrow(AggregateError);
-    expect(firstStore.snapshot().get("owner/item")).toBe(1);
-    expect(secondStore.snapshot().get("owner/item")).toBe(2);
+    expect(await firstStore.use("owner/item", (value) => value)).toBe(1);
+    expect(await secondStore.use("owner/item", (value) => value)).toBe(2);
     firstSubscription[Symbol.dispose]();
     secondSubscription[Symbol.dispose]();
     await lifetime.dispose();
@@ -166,13 +166,13 @@ describe("ContributionStore invariants", () => {
     const before = view.get();
     const seen: string[][] = [];
     const subscription = view.subscribe(() => {
-      seen.push([...view.get().keys()]);
+      seen.push([...view.get()]);
     });
     registry.beginBatch();
     first[Symbol.dispose]();
     store.stage("owner", "first", 1, lifetime);
     registry.endBatch();
-    expect([...view.get().keys()]).toEqual(["owner/second", "owner/first"]);
+    expect([...view.get()]).toEqual(["owner/second", "owner/first"]);
     expect(view.get()).not.toBe(before);
     expect(seen).toEqual([["owner/second", "owner/first"]]);
     subscription[Symbol.dispose]();

@@ -38,4 +38,6 @@ The architecture guard resolves Contract factory symbols, including named aliase
 
 The expected public API lives in `tooling/architecture/public-api.json`. Source checks, emitted declarations and all four ESM entrypoints use the same budget.
 
-Release captures the one regular archive produced for each package and uploads the bytes it inspected. For both a new upload and a resumed version, the registry archive must contain the same files and bytes before the release proceeds.
+For a release, the full gate runs on the requested versions. The packed consumer and the release use the same archives: the consumer records their hashes only after the isolated application passes. After the remaining checks finish, release verifies those hashes, the source manifests, the fetched Git commit and the remote tag before the first upload. Existing and new registry versions must match the verified file names and contents before Git records the release.
+
+Each published manifest lists the literal files or directories to ship. Packing must preserve those files, including additional assets outside `dist/`, and cannot introduce other files or metadata. Workspace dependency ranges are resolved to the versions under test; package-manager authoring data and packaging hooks need not ship. The ESM build derives external dependencies and subpaths from each package’s manifest. The declaration check uses TypeScript’s module namespace to distinguish a constructor from a type-only re-export of the same class.
