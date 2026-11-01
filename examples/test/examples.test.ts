@@ -84,7 +84,7 @@ describe("the learning path", () => {
     expect(facts.get("11")).toContain("running service remained 'hello-v1'");
 
     expect(facts.get("12")).toContain(
-      "Affected Registrations were examples.hmr-module-graph.outline, examples.hmr-module-graph.search",
+      "Affected Registrations were examples.hot-module-replacement.outline, examples.hot-module-replacement.search",
     );
     expect(facts.get("12")).toContain("saw 1 committed snapshot for two Registration updates");
   });
@@ -109,17 +109,17 @@ describe("the startup benchmark", () => {
 
 describe("the command entries", () => {
   it("stay executable and print the path in stages", async () => {
-    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const consoleLog = vi.spyOn(console, "log").mockImplementation(() => undefined);
 
     await import("../src/run");
-    const printed = log.mock.calls.map(([message]) => String(message));
+    const printed = consoleLog.mock.calls.map(([message]) => String(message));
     expect(printed.some((line) => line.includes("Stage 1 · Atoms"))).toBe(true);
     expect(printed.some((line) => line.includes("Stage 3 · Applications"))).toBe(true);
     expect(printed.some((line) => line.includes("12  Module-graph invalidation"))).toBe(true);
 
-    log.mockClear();
+    consoleLog.mockClear();
     await import("../src/benchmark");
-    expect(log).toHaveBeenCalledWith(expect.stringContaining("independent topology:"));
-    expect(log).toHaveBeenCalledWith(expect.stringContaining("dependency chain:"));
+    expect(consoleLog).toHaveBeenCalledWith(expect.stringContaining("independent topology:"));
+    expect(consoleLog).toHaveBeenCalledWith(expect.stringContaining("dependency chain:"));
   });
 });

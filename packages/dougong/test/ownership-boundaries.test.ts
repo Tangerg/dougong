@@ -18,8 +18,8 @@ it.each(["historical failure", "prototype", "constructor"])(
           id: "failure",
           plugin: definePlugin({
             name: "owned.previous-cleanup-failure",
-            setup(ctx) {
-              ctx.lifetime.defer(() => {
+            setup(context) {
+              context.lifetime.defer(() => {
                 throw new Error("previous cleanup failed");
               });
               throw new Error("previous setup failed");
@@ -79,8 +79,8 @@ it("withdraws setup resources after an inaccessible non-Error rejection", async 
   const installation = change.install(
     definePlugin({
       name: "owned.inaccessible-rejection",
-      setup(ctx) {
-        ctx.lifetime.defer(released);
+      setup(context) {
+        context.lifetime.defer(released);
         throw reason.proxy;
       },
     }),
@@ -113,8 +113,8 @@ it("preserves an inaccessible Task rejection that occurs after cancellation", as
         id: "owner",
         plugin: definePlugin({
           name: "owned.inaccessible-task",
-          setup(ctx) {
-            task = ctx.lifetime.spawn(async (signal) => {
+          setup(context) {
+            task = context.lifetime.spawn(async (signal) => {
               signal.addEventListener("abort", () => aborted.resolve(), { once: true });
               entered.resolve();
               await completion.promise;
@@ -175,8 +175,8 @@ it("keeps committed membership and revision behind a parent removal transaction"
         groupId: "child",
         plugin: definePlugin({
           name: "owned.child",
-          setup(ctx) {
-            ctx.lifetime.defer(async () => {
+          setup(context) {
+            context.lifetime.defer(async () => {
               entered.resolve();
               await resume.promise;
             });
@@ -218,8 +218,8 @@ it("includes empty descendants in an explicitly planned subtree removal", async 
         groupId: "parent",
         plugin: definePlugin({
           name: "owned.parent",
-          setup(ctx) {
-            ctx.lifetime.defer(async () => {
+          setup(context) {
+            context.lifetime.defer(async () => {
               entered.resolve();
               await resume.promise;
             });
@@ -278,7 +278,7 @@ it.each([false, true])(
       plugin: definePlugin({
         name: "owned.provider",
         provides: { value: nextService },
-        config: {
+        configuration: {
           "~standard": {
             version: 1,
             vendor: "test",
@@ -291,7 +291,7 @@ it.each([false, true])(
         },
         setup: () => ({ value: 2 }),
       }),
-      config: undefined,
+      configuration: undefined,
     });
     const planning = host.plan(change).catch((error: unknown) => error);
     await entered.promise;
@@ -302,7 +302,7 @@ it.each([false, true])(
     expect(snapshots.at(-1) ?? snapshot).toBe(snapshot);
     expect(host.status).toBe("running");
     resume.resolve();
-    expect(await planning).toMatchObject({ code: "CONFIG_INVALID" });
+    expect(await planning).toMatchObject({ code: "CONFIGURATION_INVALID" });
     expect(host.stateRevision).toBe(revision);
     expect(await host.use(oldService, (value) => value)).toBe(1);
     subscription?.[Symbol.dispose]();
@@ -313,25 +313,25 @@ it.each([false, true])(
 it("captures ContributionStore identity independently of a mutable input token", async () => {
   const original = extensionPoint<number>("owned/items");
   const mutable = { ...original };
-  let context!: PluginContext<{}>;
+  let retainedContext!: PluginContext<{}>;
   const host = createHost({
     installations: [
       {
         id: "owner",
         plugin: definePlugin({
           name: "owned.contributor",
-          setup(ctx) {
-            context = ctx;
+          setup(context) {
+            retainedContext = context;
           },
         }),
       },
     ],
   });
   await host.start();
-  const first = context.contributions.add(mutable, "first", 1);
+  const first = retainedContext.contributions.add(mutable, "first", 1);
   mutable.id = "owned/changed";
   first[Symbol.dispose]();
-  const second = context.contributions.add(original, "second", 2);
+  const second = retainedContext.contributions.add(original, "second", 2);
   expect(await host.contributions(original).use("owner/second", (value) => [value])).toEqual([2]);
   second[Symbol.dispose]();
   await host.stop();
@@ -345,8 +345,8 @@ it("preserves independent sibling failures even when one is an AbortError", asyn
       id: `failure-${index}`,
       plugin: definePlugin({
         name: `owned.failure.${index}`,
-        setup(ctx) {
-          aborted.push(ctx.lifetime.signal.aborted);
+        setup(context) {
+          aborted.push(context.lifetime.signal.aborted);
           throw failure;
         },
       }),
@@ -371,8 +371,8 @@ it("reports a synchronous Task failure even when disposal overtakes its result r
         id: "owner",
         plugin: definePlugin({
           name: "owned.task",
-          setup(ctx) {
-            task = ctx.lifetime.spawn((signal) => {
+          setup(context) {
+            task = context.lifetime.spawn((signal) => {
               expect(signal.aborted).toBe(false);
               entered.resolve();
               throw failure;

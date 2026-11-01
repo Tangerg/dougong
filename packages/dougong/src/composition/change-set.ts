@@ -1,5 +1,5 @@
 import { DougongError, quarantinedHost } from "../contracts/errors.js";
-import { captureConfig, type ConfigValue } from "./configuration.js";
+import { captureConfiguration, type ConfigurationValue } from "./configuration.js";
 import { normalizePlugin, type AnyPlugin, type NormalizedPlugin } from "./plugin.js";
 import { normalizePlainRecord } from "../internal/record.js";
 import type {
@@ -30,7 +30,7 @@ export type ChangeOperation =
       readonly installation: InstallationRecord;
       readonly update: Readonly<{
         plugin?: NormalizedPlugin;
-        config?: ConfigValue | undefined;
+        configuration?: ConfigurationValue | undefined;
         origin?: InstallationOrigin | undefined;
       }>;
     }
@@ -112,29 +112,35 @@ class ChangeSetDraft {
     Object.freeze(this);
   }
 
-  install<P extends AnyPlugin>(plugin: P, options: InstallationOptions<P>): Installation<P> {
+  install<Declaration extends AnyPlugin>(
+    plugin: Declaration,
+    options: InstallationOptions<Declaration>,
+  ): Installation<Declaration> {
     const { port } = this.#requireOpen();
     const input = normalizePlainRecord(options, "Installation options", {
-      fields: new Set(["id", "config", "origin", "group"]),
+      fields: new Set(["id", "configuration", "origin", "group"]),
     });
     assertId(input.id, "Installation id");
     const group = input.group === undefined ? undefined : port.resolveGroup(input.group as object);
-    const declaration = captureInstallationDeclaration(plugin, input.config, input.origin);
+    const declaration = captureInstallationDeclaration(plugin, input.configuration, input.origin);
     this.#requireOpen();
     const installation = port.create(input.id, group);
     this.#stage(installation, { kind: "install", installation, declaration });
-    return installation.facade as unknown as Installation<P>;
+    return installation.facade as unknown as Installation<Declaration>;
   }
 
-  update<P extends AnyPlugin>(installation: Installation<P>, update: InstallationUpdate<P>) {
+  update<Declaration extends AnyPlugin>(
+    installation: Installation<Declaration>,
+    update: InstallationUpdate<Declaration>,
+  ) {
     const { port } = this.#requireOpen();
     const input = normalizePlainRecord(update, "Installation update", {
-      fields: new Set(["plugin", "config", "origin"]),
+      fields: new Set(["plugin", "configuration", "origin"]),
     });
     const hasPlugin = Object.hasOwn(input, "plugin");
-    const hasConfig = Object.hasOwn(input, "config");
-    if (!hasPlugin && !hasConfig)
-      throw new TypeError("Installation update requires plugin or config");
+    const hasConfiguration = Object.hasOwn(input, "configuration");
+    if (!hasPlugin && !hasConfiguration)
+      throw new TypeError("Installation update requires plugin or configuration");
     if (!hasPlugin && Object.hasOwn(input, "origin"))
       throw new TypeError("Origin can only change with its Plugin");
     const replacement = {
@@ -144,7 +150,7 @@ class ChangeSetDraft {
             origin: captureOrigin(input.origin),
           }
         : {}),
-      ...(hasConfig ? { config: captureConfig(input.config) } : {}),
+      ...(hasConfiguration ? { configuration: captureConfiguration(input.configuration) } : {}),
     };
     const record = port.resolve(installation);
     this.#stage(record, {
@@ -154,7 +160,7 @@ class ChangeSetDraft {
     });
   }
 
-  remove<P extends AnyPlugin>(installation: Installation<P>) {
+  remove<Declaration extends AnyPlugin>(installation: Installation<Declaration>) {
     const record = this.#requireOpen().port.resolve(installation);
     this.#stage(record, { kind: "remove", installation: record });
   }

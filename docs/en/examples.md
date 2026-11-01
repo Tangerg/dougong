@@ -28,4 +28,4 @@ All examples live in root-level `examples/src` and consume public package entryp
 - 11 · Declarative deployment
 - 12 · Module-graph invalidation
 
-The application chapters preserve domain ownership: Planet borrows contributions during asynchronous resolution; Lynx exposes declarative command metadata and invokes handlers through owner borrowing; deployment combines additions, updates and removals into one Core Plan; HMR supplies its own import graph and submits one affected activation set.
+The application chapters preserve domain ownership: Planet borrows contributions during asynchronous resolution; Lynx exposes declarative command metadata and invokes handlers through owner borrowing; deployment combines additions, updates and removals into one Core Plan; the hot module replacement adapter supplies its own import graph and submits one affected activation set.

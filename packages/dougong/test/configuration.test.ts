@@ -1,6 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 import type { StandardSchemaV1 } from "@standard-schema/spec";
-import { ConfigValidationError, captureConfig, createHost, definePlugin } from "../src/index";
+import {
+  ConfigurationValidationError,
+  captureConfiguration,
+  createHost,
+  definePlugin,
+} from "../src/index";
 
 function schemaReturning(result: unknown): StandardSchemaV1<unknown, unknown> {
   return {
@@ -12,20 +17,20 @@ function schemaReturning(result: unknown): StandardSchemaV1<unknown, unknown> {
   };
 }
 
-async function startWith(schema: StandardSchemaV1<unknown, unknown>, config: unknown) {
+async function startWith(schema: StandardSchemaV1<unknown, unknown>, configuration: unknown) {
   const plugin = definePlugin({
-    name: "test.config-protocol",
-    config: schema,
+    name: "test.configuration-protocol",
+    configuration: schema,
     setup: () => undefined,
   });
-  const host = createHost({ installations: [{ id: "config", plugin, config }] });
+  const host = createHost({ installations: [{ id: "configuration", plugin, configuration }] });
   return host.start().then(
     () => undefined,
     (error: unknown) => error,
   );
 }
 
-describe("Plugin config validation", () => {
+describe("Plugin configuration validation", () => {
   it.each([
     ["promise", Promise.resolve(1)],
     ["function", () => 1],
@@ -35,47 +40,47 @@ describe("Plugin config validation", () => {
     ["infinity", Infinity],
     ["NaN", NaN],
     ["bigint", 1n],
-    ["symbol", Symbol("config")],
+    ["symbol", Symbol("configuration")],
     ["sparse array", Array(2)],
     ["undefined array item", [undefined]],
     ["symbol key", { [Symbol("key")]: 1 }],
     ["hidden property", Object.defineProperty({}, "secret", { value: 1 })],
-  ])("rejects %s outside the immutable config value domain", (_label, value) => {
-    expect(() => captureConfig(value)).toThrow(TypeError);
+  ])("rejects %s outside the immutable configuration value domain", (_label, value) => {
+    expect(() => captureConfiguration(value)).toThrow(TypeError);
   });
 
   it("copies records and dense arrays without retaining caller mutation", () => {
     const input = { values: [1, { enabled: true }], optional: undefined };
-    const captured = captureConfig(input);
+    const captured = captureConfiguration(input);
     input.values[0] = 9;
     expect(captured).toEqual({ values: [1, { enabled: true }] });
     expect(Object.isFrozen(captured)).toBe(true);
     expect(Object.isFrozen((captured as { values: unknown }).values)).toBe(true);
-    expect(captureConfig(undefined)).toBeUndefined();
-    expect(captureConfig(null)).toBeNull();
-    expect(captureConfig("text")).toBe("text");
-    expect(captureConfig(false)).toBe(false);
+    expect(captureConfiguration(undefined)).toBeUndefined();
+    expect(captureConfiguration(null)).toBeNull();
+    expect(captureConfiguration("text")).toBe("text");
+    expect(captureConfiguration(false)).toBe(false);
   });
 
   it("rejects accessors without executing them", () => {
     const getter = vi.fn<() => number>(() => 1);
     const input = Object.defineProperty({}, "port", { enumerable: true, get: getter });
-    expect(() => captureConfig(input)).toThrow(/data properties/);
+    expect(() => captureConfiguration(input)).toThrow(/data properties/);
     expect(getter).not.toHaveBeenCalled();
     const array = Object.defineProperty([1], "0", { get: getter });
-    expect(() => captureConfig(array)).toThrow(/data properties/);
+    expect(() => captureConfiguration(array)).toThrow(/data properties/);
     expect(getter).not.toHaveBeenCalled();
   });
 
   it("rejects cycles and excessive depth but permits shared data", () => {
     const cyclic: Record<string, unknown> = {};
     cyclic.self = cyclic;
-    expect(() => captureConfig(cyclic)).toThrow(/Circular config/);
+    expect(() => captureConfiguration(cyclic)).toThrow(/Circular configuration/);
     let nested: unknown = null;
-    for (let i = 0; i < 66; i++) nested = { child: nested };
-    expect(() => captureConfig(nested)).toThrow(/nesting depth/);
+    for (let depth = 0; depth < 66; depth++) nested = { child: nested };
+    expect(() => captureConfiguration(nested)).toThrow(/nesting depth/);
     const shared = { enabled: true };
-    expect(captureConfig({ left: shared, right: shared })).toEqual({
+    expect(captureConfiguration({ left: shared, right: shared })).toEqual({
       left: shared,
       right: shared,
     });
@@ -83,10 +88,10 @@ describe("Plugin config validation", () => {
 
   it("rejects unsupported input before planning can execute setup", () => {
     const setup = vi.fn<() => undefined>(() => undefined);
-    const plugin = definePlugin<unknown>({ name: "config", setup });
+    const plugin = definePlugin<unknown>({ name: "configuration", setup });
     expect(() =>
       createHost({
-        installations: [{ id: "config", plugin, config: Promise.resolve(1) }],
+        installations: [{ id: "configuration", plugin, configuration: Promise.resolve(1) }],
       }),
     ).toThrow(/plain records/);
     expect(setup).not.toHaveBeenCalled();
@@ -106,7 +111,7 @@ describe("Plugin config validation", () => {
 
     expect(failure).toBeInstanceOf(TypeError);
     expect(failure).toMatchObject({
-      message: "Installation 'config' config validator returned a non-object result",
+      message: "Installation 'configuration' configuration validator returned a non-object result",
     });
   });
 
@@ -115,7 +120,7 @@ describe("Plugin config validation", () => {
 
     expect(failure).toBeInstanceOf(TypeError);
     expect(failure).toMatchObject({
-      message: "Installation 'config' config validator returned non-array issues",
+      message: "Installation 'configuration' configuration validator returned non-array issues",
     });
   });
 
@@ -124,28 +129,29 @@ describe("Plugin config validation", () => {
 
     expect(failure).toBeInstanceOf(TypeError);
     expect(failure).toMatchObject({
-      message: "Installation 'config' config validator returned neither value nor issues",
+      message:
+        "Installation 'configuration' configuration validator returned neither value nor issues",
     });
   });
 
   it("treats an explicitly empty issue list as a rejection, not a success", async () => {
     const failure = await startWith(schemaReturning({ issues: [] }), 1);
 
-    expect(failure).toBeInstanceOf(ConfigValidationError);
-    expect(failure).toMatchObject({ code: "CONFIG_INVALID", issues: [] });
+    expect(failure).toBeInstanceOf(ConfigurationValidationError);
+    expect(failure).toMatchObject({ code: "CONFIGURATION_INVALID", issues: [] });
   });
 
   it("passes the resolved value through rather than the caller's input", async () => {
     let received: unknown;
     const plugin = definePlugin({
-      name: "test.config-transform",
-      config: schemaReturning({ value: { port: 8080 } }),
-      setup: (_ctx, config) => {
-        received = config;
+      name: "test.configuration-transform",
+      configuration: schemaReturning({ value: { port: 8080 } }),
+      setup: (_context, configuration) => {
+        received = configuration;
       },
     });
     const host = createHost({
-      installations: [{ id: "config", plugin, config: { port: "8080" } }],
+      installations: [{ id: "configuration", plugin, configuration: { port: "8080" } }],
     });
     await host.start();
 
@@ -155,7 +161,7 @@ describe("Plugin config validation", () => {
 
   it("copies validation issues so a retained error cannot be edited afterwards", () => {
     const issues = [{ message: "port is required", path: ["port"] }];
-    const error = new ConfigValidationError(issues);
+    const error = new ConfigurationValidationError(issues);
 
     issues[0] = { message: "rewritten", path: [] };
 
@@ -165,21 +171,25 @@ describe("Plugin config validation", () => {
   });
 
   it("rejects issue shapes that could not be reported to a caller", () => {
-    expect(() => new ConfigValidationError({} as never)).toThrowError(
-      new TypeError("Config validation issues must be an array"),
+    expect(() => new ConfigurationValidationError({} as never)).toThrowError(
+      new TypeError("Configuration validation issues must be an array"),
     );
-    expect(() => new ConfigValidationError([null] as never)).toThrowError(
-      new TypeError("Config validation issue at index 0 must be an object"),
+    expect(() => new ConfigurationValidationError([null] as never)).toThrowError(
+      new TypeError("Configuration validation issue at index 0 must be an object"),
     );
-    expect(() => new ConfigValidationError([{ message: 1 }] as never)).toThrowError(
-      new TypeError("Config validation issue at index 0 message must be a string"),
+    expect(() => new ConfigurationValidationError([{ message: 1 }] as never)).toThrowError(
+      new TypeError("Configuration validation issue at index 0 message must be a string"),
     );
     expect(
-      () => new ConfigValidationError([{ message: "bad", path: "port" }] as never),
-    ).toThrowError(new TypeError("Config validation issue at index 0 path must be an array"));
-    expect(() => new ConfigValidationError([{ message: "bad", path: [{}] }] as never)).toThrowError(
+      () => new ConfigurationValidationError([{ message: "bad", path: "port" }] as never),
+    ).toThrowError(
+      new TypeError("Configuration validation issue at index 0 path must be an array"),
+    );
+    expect(
+      () => new ConfigurationValidationError([{ message: "bad", path: [{}] }] as never),
+    ).toThrowError(
       new TypeError(
-        "Config validation issue at index 0 path segment 0 must contain a property key",
+        "Configuration validation issue at index 0 path segment 0 must contain a property key",
       ),
     );
   });

@@ -18,7 +18,7 @@ export interface InstanceEnvironment {
   readonly contributions: ContributionRegistry;
   readonly contracts: ContractRegistryWriter;
   readonly startupSignal: AbortSignal;
-  readonly shutdownTimeoutMs: number | undefined;
+  readonly shutdownTimeoutMilliseconds: number | undefined;
 }
 
 export class Instance {
@@ -36,15 +36,15 @@ export class Instance {
       report: environment.report,
       changed: environment.changed,
       parentSignal: environment.startupSignal,
-      ...(environment.shutdownTimeoutMs === undefined
+      ...(environment.shutdownTimeoutMilliseconds === undefined
         ? {}
-        : { shutdownTimeoutMs: environment.shutdownTimeoutMs }),
+        : { shutdownTimeoutMilliseconds: environment.shutdownTimeoutMilliseconds }),
     });
   }
 
-  async prepare(deps: Readonly<Record<string, unknown>>, config: unknown) {
+  async prepare(dependencies: Readonly<Record<string, unknown>>, configuration: unknown) {
     const environment = this.environment;
-    const meta = Object.freeze({
+    const metadata = Object.freeze({
       hostName: environment.hostName,
       installationId: this.installation.id,
       pluginName: this.declaration.plugin.name,
@@ -52,7 +52,7 @@ export class Instance {
       groupId: this.installation.groupId,
     });
     const context: InstanceContext = Object.freeze({
-      deps,
+      dependencies,
       lifetime: this.lifetime.handle,
       events: environment.events.scope(this.lifetime, (token) =>
         environment.contracts.remember(token),
@@ -60,11 +60,11 @@ export class Instance {
       contributions: environment.contributions.scope(this.lifetime, this.installation.id, (token) =>
         environment.contracts.remember(token),
       ),
-      meta,
-      log: this.lifetime.use(new ScopedLogger(environment.logger, meta)).handle,
+      metadata,
+      logger: this.lifetime.use(new ScopedLogger(environment.logger, metadata)).handle,
     });
     const { setup } = this.declaration.plugin;
-    const output = await this.lifetime.prepare(() => setup(context, config));
+    const output = await this.lifetime.prepare(() => setup(context, configuration));
     AbortSignal.prototype.throwIfAborted.call(this.lifetime.signal);
     const entries = Object.entries(this.declaration.plugin.provides);
     if (!entries.length) {
@@ -92,7 +92,7 @@ export class Instance {
     return this.#services.get(serviceId);
   }
 
-  use<T, R>(serviceId: string, callback: (value: T) => Awaitable<R>) {
+  use<T, Result>(serviceId: string, callback: (value: T) => Awaitable<Result>) {
     return this.lifetime.borrow(() => callback(this.read(serviceId) as T));
   }
 

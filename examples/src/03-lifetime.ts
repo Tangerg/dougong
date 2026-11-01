@@ -7,22 +7,22 @@ export async function lifetimeOwnership(): Promise<ExampleResult> {
 
   const editorPlugin = definePlugin({
     name: "examples.lifetime.editor",
-    setup(ctx) {
+    setup(context) {
       // The window depends on the index, so teardown must close the window first.
       trace.push("open:index");
-      ctx.lifetime.defer(() => trace.push("close:index"));
+      context.lifetime.defer(() => trace.push("close:index"));
       trace.push("open:window");
-      ctx.lifetime.defer(() => trace.push("close:window"));
+      context.lifetime.defer(() => trace.push("close:window"));
 
       trace.push("open:session");
-      session = ctx.lifetime.child("session");
+      session = context.lifetime.child("session");
       session.defer(() => trace.push("close:session"));
       session.spawn(async (signal) => {
         await whenAborted(signal);
         trace.push("cancel:session-watcher");
       });
 
-      ctx.lifetime.spawn(async (signal) => {
+      context.lifetime.spawn(async (signal) => {
         await whenAborted(signal);
         trace.push("cancel:editor-watcher");
       });

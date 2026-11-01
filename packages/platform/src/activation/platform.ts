@@ -2,7 +2,7 @@ import {
   asyncDisposeSymbol,
   disposeSymbol,
   isError,
-  RecordedFailure,
+  type RecordedFailure,
   type AnyPlugin,
   type ApplyResult,
   type Disposable,
@@ -12,6 +12,7 @@ import {
   type SnapshotView,
 } from "dougong";
 import {
+  batchSnapshotNotifications,
   captureDataArray,
   captureLogger,
   normalizePlainRecord,
@@ -20,7 +21,12 @@ import {
   SnapshotPublisher,
 } from "dougong/advanced";
 import { PermissionSet, type Authorizer } from "../admission/permissions.js";
-import { artifactOrigin, describeArtifact, type Artifact } from "../artifacts/artifact.js";
+import {
+  artifactOrigin,
+  describeArtifact,
+  type Artifact,
+  type ArtifactDescriptor,
+} from "../artifacts/artifact.js";
 import { isConcreteVersion, isRegistrationIdPart } from "../artifacts/manifest.js";
 import { ArtifactCatalog, type Catalog } from "../catalog/catalog.js";
 import {
@@ -29,7 +35,7 @@ import {
   type Registration,
   type RegistrationSnapshot,
 } from "../catalog/registration.js";
-import { PlatformError } from "../errors.js";
+import { PlatformError, recordPlatformFailure } from "../errors.js";
 import type { Loader } from "../loaders/loader.js";
 import { LoadedModules } from "./loading.js";
 import { ActivationOperation } from "./operation.js";
@@ -110,7 +116,7 @@ const optionFields = new Set([
 const activationOptionFields = new Set(["signal", "remove"]);
 const previewOptionFields = new Set(["remove"]);
 
-class PlatformImpl<Reference> implements Platform<Reference> {
+class DeliveryPlatform<Reference> implements Platform<Reference> {
   readonly id: string;
   readonly apiVersion: string;
   readonly catalog: Catalog<Reference>;
@@ -155,7 +161,7 @@ class PlatformImpl<Reference> implements Platform<Reference> {
     const authorize = policy?.authorize;
     if (typeof authorize !== "function")
       throw new TypeError("Platform authorizer must implement authorize()");
-    const log = captureLogger(logger === undefined ? console : logger);
+    const capturedLogger = captureLogger(logger === undefined ? console : logger);
 
     this.id = id;
     this.apiVersion = apiVersion;
@@ -186,7 +192,7 @@ class PlatformImpl<Reference> implements Platform<Reference> {
       },
     };
     this.#projection = this.#snapshot();
-    this.#publisher = new SnapshotPublisher(() => this.#projection, reporter(log));
+    this.#publisher = new SnapshotPublisher(() => this.#projection, reporter(capturedLogger));
     this.#hostSnapshot = host.diagnostics.get();
     const binding = { synchronize: (() => this.#synchronize()) as (() => void) | undefined };
     this.#viewBinding = binding;
@@ -212,14 +218,14 @@ class PlatformImpl<Reference> implements Platform<Reference> {
       let registration = this.#registrations.get(artifact.manifest.name);
       if (registration) {
         if (registration.select(artifact)) {
-          for (const operation of this.#operations) operation.supersede(registration);
+          this.#supersede([registration]);
         }
       } else {
         registration = new RegistrationRecord(this.id, artifact, this.#registrationPort);
         this.#registrations.set(registration.name, registration);
         this.#handles.set(registration.facade, registration);
+        this.#publish();
       }
-      this.#publish();
       return registration.facade;
     });
   };
@@ -297,7 +303,7 @@ class PlatformImpl<Reference> implements Platform<Reference> {
         if (selection.registration.actionFor(selection.artifact) !== "reuse") {
           selection.registration.fail(
             selection.revision,
-            (recorded ??= new RecordedFailure(failure)),
+            (recorded ??= recordPlatformFailure(failure)),
           );
         }
       }
@@ -323,8 +329,9 @@ class PlatformImpl<Reference> implements Platform<Reference> {
       this.#execute("disposal", () => this.#release()),
     );
     this.#state = { phase: "disposing", ports: state.ports, completion };
-    for (const operation of operations) operation.cancel();
-    this.#publish();
+    this.#publishBeforeCancellation(() => {
+      for (const operation of operations) operation.cancel();
+    });
     return completion;
   }
 
@@ -364,13 +371,9 @@ class PlatformImpl<Reference> implements Platform<Reference> {
     const pending = candidate.selections.filter(
       (selection) => selection.registration.actionFor(selection.artifact) !== "reuse",
     );
-    const removedInstallations = removing.flatMap((registration) =>
-      registration.installation ? [registration.installation] : [],
-    );
+    const removedInstallations = ownedInstallations(removing);
     if (!pending.length && !removedInstallations.length) {
-      this.#commitRemovals(removing);
-      for (const selection of candidate.selections)
-        selection.registration.clearFailure(selection.revision);
+      this.#commitSelections(candidate);
       return undefined;
     }
     const change = host.change();
@@ -382,33 +385,39 @@ class PlatformImpl<Reference> implements Platform<Reference> {
           "ACTIVATION_STALE",
           `Installation '${selection.registration.id}' changed during loading; activation must be planned again`,
         );
-      const options = {
-        plugin,
-        config: selection.artifact.config,
+      const declaration = {
+        configuration: selection.artifact.configuration,
         origin: artifactOrigin(this.id, selection.artifact),
       };
       const installation = selection.registration.installation;
-      if (installation) change.update(installation, options);
+      if (installation) change.update(installation, { plugin, ...declaration });
       else
         selection.registration.bindInstallation(
           change.install(plugin, {
             id: selection.registration.id,
-            config: selection.artifact.config,
-            origin: options.origin,
+            ...declaration,
             ...(group ? { group } : {}),
           }),
         );
     }
-    const plan = await Preparation.waitFor(() => host.plan(change), operation.signal);
-    for (const selection of pending) {
+    const plan = await Preparation.waitFor((signal) => host.plan(change, signal), operation.signal);
+    const admission = new Map<string, ArtifactDescriptor>(
+      pending.map(({ registration, artifact }) => [registration.id, artifact]),
+    );
+    // A binding change can restart a committed Artifact whose selected revision was never requested.
+    const preparing = new Set(plan.report.prepareOrder);
+    for (const registration of this.#registrations.values()) {
+      if (preparing.has(registration.id) && !admission.has(registration.id)) {
+        const origin = registration.activeOrigin;
+        if (origin) admission.set(registration.id, origin);
+      }
+    }
+    for (const artifact of admission.values()) {
       operation.checkpoint();
       await Preparation.waitFor(
         (signal) =>
           authorizer.authorize(
-            Object.freeze({
-              artifact: describeArtifact(selection.artifact),
-              operation: "activate",
-            }),
+            Object.freeze({ artifact: describeArtifact(artifact), operation: "activate" }),
             signal,
           ),
         operation.signal,
@@ -417,18 +426,14 @@ class PlatformImpl<Reference> implements Platform<Reference> {
     operation.plan.assertCurrent();
     operation.handoff();
     const result = await host.apply(plan);
-    this.#commitRemovals(removing);
-    for (const selection of candidate.selections)
-      selection.registration.clearFailure(selection.revision);
+    this.#commitSelections(candidate);
     return result;
   }
 
   async #removeInstallations(
     registrations: ReadonlyArray<RegistrationRecord<Reference>>,
   ): Promise<ApplyResult | undefined> {
-    const installations = registrations.flatMap((registration) =>
-      registration.installation ? [registration.installation] : [],
-    );
+    const installations = ownedInstallations(registrations);
     if (!installations.length) return undefined;
     const host = this.#ports().host;
     const change = host.change();
@@ -462,12 +467,34 @@ class PlatformImpl<Reference> implements Platform<Reference> {
     }
   }
 
+  #commitSelections(plan: ActivationPlan<Reference>) {
+    for (const selection of plan.selections)
+      selection.registration.clearFailure(selection.revision);
+    const removed = plan.removals.map(({ registration }) => registration);
+    this.#commitRemovals(removed);
+    if (removed.length) this.#supersede(removed);
+  }
+
   #commitRemovals(registrations: ReadonlyArray<RegistrationRecord<Reference>>) {
     for (const registration of registrations) {
       this.#registrations.delete(registration.name);
       registration.remove();
-      for (const operation of this.#operations) operation.supersede(registration);
     }
+  }
+
+  #supersede(registrations: ReadonlyArray<RegistrationRecord<Reference>>) {
+    this.#publishBeforeCancellation(() => {
+      for (const registration of registrations)
+        for (const operation of this.#operations) operation.supersede(registration);
+    });
+  }
+
+  #publishBeforeCancellation(cancel: () => void) {
+    // Abort dispatch can synchronously read both the live owner and its diagnostic projection.
+    batchSnapshotNotifications(() => {
+      this.#publish();
+      cancel();
+    });
   }
 
   #resolveRemoval(registrations: ReadonlyArray<Registration<Reference>> | undefined) {
@@ -584,10 +611,16 @@ class PlatformImpl<Reference> implements Platform<Reference> {
   }
 }
 
+function ownedInstallations<Reference>(
+  registrations: ReadonlyArray<RegistrationRecord<Reference>>,
+) {
+  return registrations.flatMap(({ installation }) => (installation ? [installation] : []));
+}
+
 export function createPlatform<Reference>(
   options: PlatformOptions<Reference>,
 ): Platform<Reference> {
-  return new PlatformImpl(options);
+  return new DeliveryPlatform(options);
 }
 
 // A retained view must not capture its owner's constructor scope after the binding is detached.

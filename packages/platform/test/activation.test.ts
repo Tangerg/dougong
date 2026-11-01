@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { createHost, definePlugin, service, type AnyPlugin } from "dougong";
+import { createHost, definePlugin, optional, service, type AnyPlugin } from "dougong";
 import { createPlatform, MemoryLoader, type Platform } from "../src";
 import { ActivationPlan } from "../src/activation/plan";
 import { RegistrationRecord } from "../src/catalog/registration";
@@ -41,27 +41,27 @@ describe("activation compilation", () => {
   });
 
   it("loads a dependency closure and commits all installations once", async () => {
-    const DEP = service<{ value: number }>("platform-test/dependency");
+    const COUNTER = service<{ value: number }>("platform-test/dependency");
     const order: string[] = [];
-    const dependency = definePlugin({
-      name: "dep",
-      provides: { dep: DEP },
+    const dependencyPlugin = definePlugin({
+      name: "dependency",
+      provides: { counter: COUNTER },
       setup() {
-        order.push("setup:dep");
-        return { dep: { value: 4 } };
+        order.push("setup:dependency");
+        return { counter: { value: 4 } };
       },
     });
     const root = definePlugin({
       name: "root",
-      requires: { dep: DEP },
+      requires: { counter: COUNTER },
       provides: { value: VALUE },
-      setup({ deps }) {
+      setup({ dependencies }) {
         order.push("setup:root");
-        return { value: { value: deps.dep.value + 1 } };
+        return { value: { value: dependencies.counter.value + 1 } };
       },
     });
     const modules = new Map<string, AnyPlugin>([
-      ["dep", dependency],
+      ["dependency", dependencyPlugin],
       ["root", root],
     ]);
     const host = createHost();
@@ -76,15 +76,17 @@ describe("activation compilation", () => {
         },
       },
     });
-    const dep = await select(platform, "dep", "dep");
-    const registration = await select(platform, "root", "root", { dependencies: { dep: "^1" } });
+    const dependency = await select(platform, "dependency", "dependency");
+    const registration = await select(platform, "root", "root", {
+      dependencies: { dependency: "^1" },
+    });
     await host.start();
     const before = host.stateRevision;
     await platform.activate([registration]);
     expect(host.stateRevision).toBe(before + 1);
-    expect(order).toEqual(["load:dep", "load:root", "setup:dep", "setup:root"]);
+    expect(order).toEqual(["load:dependency", "load:root", "setup:dependency", "setup:root"]);
     expect(await host.use(VALUE, (value) => value.value)).toBe(5);
-    expect(dep.status).toBe("installed");
+    expect(dependency.status).toBe("installed");
     expect(platform.preview([registration]).selections.map((item) => item.action)).toEqual([
       "reuse",
       "reuse",
@@ -104,17 +106,19 @@ describe("activation compilation", () => {
     });
     const { host, platform } = fixture(
       new Map([
-        ["dep", emptyPlugin("dep")],
+        ["dependency", emptyPlugin("dependency")],
         ["root", root],
       ]),
     );
-    const dep = await select(platform, "dep", "dep");
-    const registration = await select(platform, "root", "root", { dependencies: { dep: "*" } });
+    const dependency = await select(platform, "dependency", "dependency");
+    const registration = await select(platform, "root", "root", {
+      dependencies: { dependency: "*" },
+    });
     await host.start();
     await expect(platform.activate([registration])).rejects.toMatchObject({
       code: "TRANSITION_FAILED",
     });
-    expect(host.installation(dep.id)).toBeUndefined();
+    expect(host.installation(dependency.id)).toBeUndefined();
     expect(host.installation(registration.id)).toBeUndefined();
     expect(registration.status).toBe("failed");
     expect(registration.error).toBeDefined();
@@ -150,21 +154,23 @@ describe("activation compilation", () => {
     });
     const { host, platform } = fixture(
       new Map([
-        ["dep", emptyPlugin("dep")],
+        ["dependency", emptyPlugin("dependency")],
         ["root", root],
       ]),
     );
-    const dep = await select(platform, "dep", "dep");
-    const registration = await select(platform, "root", "root", { dependencies: { dep: "*" } });
+    const dependency = await select(platform, "dependency", "dependency");
+    const registration = await select(platform, "root", "root", {
+      dependencies: { dependency: "*" },
+    });
     await host.start();
-    await platform.activate([dep]);
-    const installation = dep.installation;
+    await platform.activate([dependency]);
+    const installation = dependency.installation;
     await expect(platform.activate([registration])).rejects.toMatchObject({
       code: "TRANSITION_FAILED",
     });
-    expect(dep.installation).toBe(installation);
-    expect(dep.status).toBe("installed");
-    expect(dep.error).toBeUndefined();
+    expect(dependency.installation).toBe(installation);
+    expect(dependency.status).toBe("installed");
+    expect(dependency.error).toBeUndefined();
     expect(registration.status).toBe("failed");
     await platform[Symbol.asyncDispose]();
     await host.stop();
@@ -178,21 +184,38 @@ describe("activation compilation", () => {
         throw new Error("new setup failed");
       },
     });
-    const { host, platform } = fixture(
-      new Map([
-        ["one", valuePlugin("sample", 1)],
-        ["two", broken],
-      ]),
-    );
+    const host = createHost();
+    const admitted: string[] = [];
+    let permitted = "1.0.0";
+    const platform = createPlatform({
+      id: "restore",
+      host,
+      apiVersion: "1.0.0",
+      loader: new MemoryLoader(
+        new Map([
+          ["one", { default: valuePlugin("sample", 1) }],
+          ["two", { default: broken }],
+        ]),
+      ),
+      authorizer: {
+        authorize({ operation, artifact }) {
+          if (operation !== "activate") return;
+          admitted.push(artifact.revision);
+          if (artifact.revision !== permitted) throw new Error("denied");
+        },
+      },
+    });
     const registration = await select(platform, "sample", "one");
     await host.start();
     await platform.activate([registration]);
     const installation = registration.installation;
     const next = add(platform, "sample", "two", "2.0.0");
+    permitted = next.revision;
     await platform.select(next);
     await expect(platform.activate([registration])).rejects.toMatchObject({
       code: "TRANSITION_FAILED",
     });
+    expect(admitted).toEqual(["1.0.0", "2.0.0"]);
     expect(registration.selectedArtifact.manifest.version).toBe("2.0.0");
     expect(registration.activeOrigin?.manifest.version).toBe("1.0.0");
     expect(registration.installation).toBe(installation);
@@ -240,32 +263,34 @@ describe("activation compilation", () => {
 
   it("validates the final manifest dependency graph for batch version upgrades", async () => {
     const modules = new Map([
-      ["dep1", emptyPlugin("dep")],
-      ["dep2", emptyPlugin("dep")],
+      ["dependency-first", emptyPlugin("dependency")],
+      ["dependency-second", emptyPlugin("dependency")],
       ["consumer1", emptyPlugin("consumer")],
       ["consumer2", emptyPlugin("consumer")],
     ]);
     const { host, platform } = fixture(modules);
-    const dep = await select(platform, "dep", "dep1");
+    const dependency = await select(platform, "dependency", "dependency-first");
     const consumer = await select(platform, "consumer", "consumer1", {
-      dependencies: { dep: "^1" },
+      dependencies: { dependency: "^1" },
     });
     await host.start();
     await platform.activate([consumer]);
-    await platform.select(add(platform, "dep", "dep2", "2.0.0"));
-    expect(platform.preview([dep]).blockers[0]?.code).toBe("REGISTRATION_DEPENDENCY_INCOMPATIBLE");
-    await expect(platform.activate([dep])).rejects.toMatchObject({
+    await platform.select(add(platform, "dependency", "dependency-second", "2.0.0"));
+    expect(platform.preview([dependency]).blockers[0]?.code).toBe(
+      "REGISTRATION_DEPENDENCY_INCOMPATIBLE",
+    );
+    await expect(platform.activate([dependency])).rejects.toMatchObject({
       code: "REGISTRATION_DEPENDENCY_INCOMPATIBLE",
     });
     await platform.select(
       add(platform, "consumer", "consumer2", "2.0.0", {
-        manifest: { name: "consumer", version: "2.0.0", dependencies: { dep: "^2" } },
+        manifest: { name: "consumer", version: "2.0.0", dependencies: { dependency: "^2" } },
       }),
     );
     const before = host.stateRevision;
     await platform.activate([consumer]);
     expect(host.stateRevision).toBe(before + 1);
-    expect(dep.activeOrigin?.manifest.version).toBe("2.0.0");
+    expect(dependency.activeOrigin?.manifest.version).toBe("2.0.0");
     expect(consumer.activeOrigin?.manifest.version).toBe("2.0.0");
     await platform[Symbol.asyncDispose]();
     await host.stop();
@@ -301,18 +326,20 @@ describe("activation compilation", () => {
       apiVersion: "1.0.0",
       loader: { load },
     });
-    const dep = await select(platform, "dep", "dep");
-    const consumer = await select(platform, "consumer", "consumer", { dependencies: { dep: "*" } });
-    await expect(platform.activate([consumer], { remove: [dep] })).rejects.toMatchObject({
+    const dependency = await select(platform, "dependency", "dependency");
+    const consumer = await select(platform, "consumer", "consumer", {
+      dependencies: { dependency: "*" },
+    });
+    await expect(platform.activate([consumer], { remove: [dependency] })).rejects.toMatchObject({
       code: "REGISTRATION_DEPENDENCY_MISSING",
       details: {
         outcome: "rejected",
         phase: "artifact_planning",
-        dependencyPath: ["consumer", "dep"],
+        dependencyPath: ["consumer", "dependency"],
       },
     });
     expect(load).not.toHaveBeenCalled();
-    expect(dep.status).toBe("selected");
+    expect(dependency.status).toBe("selected");
     await platform[Symbol.asyncDispose]();
   });
 
@@ -333,16 +360,16 @@ describe("activation compilation", () => {
   it("reports selected closure and unchanged consumer blockers together", async () => {
     const { platform } = fixture(
       new Map([
-        ["dep", emptyPlugin("dep")],
+        ["dependency", emptyPlugin("dependency")],
         ["consumer", emptyPlugin("consumer")],
       ]),
     );
-    const dependency = await select(platform, "dep", "dep");
+    const dependency = await select(platform, "dependency", "dependency");
     const consumer = await select(platform, "consumer", "consumer", {
-      dependencies: { dep: "^1" },
+      dependencies: { dependency: "^1" },
     });
     await platform.activate([consumer]);
-    await platform.select(add(platform, "dep", "dep", "2.0.0"));
+    await platform.select(add(platform, "dependency", "dependency", "2.0.0"));
     const next = await select(platform, "next", "next", { dependencies: { absent: "*" } });
     const report = platform.preview([dependency, next]);
     expect(report.blockers.map((item) => item.code)).toEqual([
@@ -386,7 +413,7 @@ describe("activation compilation", () => {
       loader: {
         async load(reference: string) {
           loaded.push(reference);
-          if (reference === "dep") {
+          if (reference === "dependency") {
             entered.resolve();
             await release.promise;
           }
@@ -394,15 +421,15 @@ describe("activation compilation", () => {
         },
       },
     });
-    const dep = await select(platform, "dep", "dep");
-    const root = await select(platform, "root", "root", { dependencies: { dep: "*" } });
+    const dependency = await select(platform, "dependency", "dependency");
+    const root = await select(platform, "root", "root", { dependencies: { dependency: "*" } });
     const activation = platform.activate([root]);
     await entered.promise;
     allowed = false;
     release.resolve();
     await expect(activation).rejects.toThrow("revoked");
-    expect(loaded).toEqual(["dep"]);
-    expect(host.installation(dep.id)).toBeUndefined();
+    expect(loaded).toEqual(["dependency"]);
+    expect(host.installation(dependency.id)).toBeUndefined();
     expect(host.installation(root.id)).toBeUndefined();
     await platform[Symbol.asyncDispose]();
   });
@@ -435,6 +462,66 @@ describe("activation compilation", () => {
     expect(operations).toEqual(["load", "activate", "activate"]);
     await platform[Symbol.asyncDispose]();
   });
+
+  it.each(["update", "remove"] as const)(
+    "authorizes the committed consumer revision before a provider %s restarts it",
+    async (command) => {
+      const host = createHost();
+      const setup = vi.fn<() => void>();
+      const consumer = definePlugin({
+        name: "consumer",
+        requires: { value: optional(VALUE) },
+        setup,
+      });
+      const modules = new Map<string, unknown>([
+        ["provider1", { default: valuePlugin("provider", 1) }],
+        ["provider2", { default: valuePlugin("provider", 2) }],
+        ["consumer1", { default: consumer }],
+      ]);
+      const admitted: string[] = [];
+      let deny = false;
+      const platform = createPlatform({
+        id: "rebind",
+        host,
+        apiVersion: "1.0.0",
+        loader: new MemoryLoader(modules),
+        authorizer: {
+          authorize({ operation, artifact }) {
+            if (operation !== "activate") return;
+            admitted.push(artifact.manifest.name + "/" + artifact.revision);
+            if (deny && artifact.manifest.name === "consumer") throw new Error("consumer denied");
+          },
+        },
+      });
+      const provider = await select(platform, "provider", "provider1");
+      const registration = await select(platform, "consumer", "consumer1");
+      await host.start();
+      await platform.activate([provider, registration]);
+      await platform.select(add(platform, "consumer", "consumer2", "2.0.0"));
+      await platform.select(add(platform, "provider", "provider2", "2.0.0"));
+      const change = () =>
+        command === "update" ? platform.activate([provider]) : platform.remove(provider);
+      try {
+        admitted.length = 0;
+        deny = true;
+        const before = host.stateRevision;
+        await expect(change()).rejects.toThrow("consumer denied");
+        expect(admitted).toEqual(
+          command === "update" ? ["provider/2.0.0", "consumer/1.0.0"] : ["consumer/1.0.0"],
+        );
+        expect(host.stateRevision).toBe(before);
+        expect(setup).toHaveBeenCalledTimes(1);
+        expect(await host.use(VALUE, (value) => value.value)).toBe(1);
+        deny = false;
+        await change();
+        expect(setup).toHaveBeenCalledTimes(2);
+        expect(registration.activeOrigin?.revision).toBe("1.0.0");
+      } finally {
+        await platform[Symbol.asyncDispose]();
+        await host.stop();
+      }
+    },
+  );
 
   it.each([
     null,
@@ -523,15 +610,15 @@ describe("activation compilation", () => {
 it("plans deep delivery closures without consuming the JS call stack or copying every ancestor path", () => {
   const records = new Map<string, RegistrationRecord<string>>();
   const count = 9000;
-  for (let i = 0; i < count; i++) {
-    const name = String(i);
+  for (let index = 0; index < count; index++) {
+    const name = String(index);
     records.set(
       name,
       new RegistrationRecord(
         "deep",
         {
           revision: "one",
-          config: undefined,
+          configuration: undefined,
           reference: name,
           manifest: {
             name,
@@ -539,7 +626,7 @@ it("plans deep delivery closures without consuming the JS call stack or copying 
             apiVersion: "*",
             activation: [],
             permissions: [],
-            dependencies: i + 1 === count ? {} : { [String(i + 1)]: "*" },
+            dependencies: index + 1 === count ? {} : { [String(index + 1)]: "*" },
           },
         },
         { installation: () => undefined, operation: () => undefined },

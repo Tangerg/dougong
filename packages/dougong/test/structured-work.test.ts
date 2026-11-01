@@ -4,13 +4,15 @@ import { Lifetime } from "../src/lifetime/lifetime";
 import { EventHub } from "../src/events/event-hub";
 import { ContributionRegistry } from "../src/contributions/contribution-store";
 
-function lifetime(options: { shutdownTimeoutMs?: number; report?: (error: unknown) => void } = {}) {
+function lifetime(
+  options: { shutdownTimeoutMilliseconds?: number; report?: (error: unknown) => void } = {},
+) {
   return new Lifetime({
     label: "test",
     report: options.report ?? (() => undefined),
-    ...(options.shutdownTimeoutMs === undefined
+    ...(options.shutdownTimeoutMilliseconds === undefined
       ? {}
-      : { shutdownTimeoutMs: options.shutdownTimeoutMs }),
+      : { shutdownTimeoutMilliseconds: options.shutdownTimeoutMilliseconds }),
   });
 }
 
@@ -248,7 +250,7 @@ describe("structured work boundaries", () => {
 
   it("interrupts blocking IO before joining tasks and finally releases resources", async () => {
     const owner = lifetime();
-    const io = Promise.withResolvers<void>();
+    const blockedOperation = Promise.withResolvers<void>();
     const started = Promise.withResolvers<void>();
     const trace: string[] = [];
     owner.signal.addEventListener(
@@ -260,14 +262,14 @@ describe("structured work boundaries", () => {
     );
     owner.interrupt(() => {
       trace.push("interrupt");
-      io.resolve();
+      blockedOperation.resolve();
     });
     owner.defer(() => {
       trace.push("release");
     });
     owner.spawn(async () => {
       started.resolve();
-      await io.promise;
+      await blockedOperation.promise;
       trace.push("joined");
     });
     await started.promise;
@@ -277,19 +279,19 @@ describe("structured work boundaries", () => {
 
   it("starts every interruption before waiting for any of them to release blocked work", async () => {
     const owner = lifetime();
-    const io = Promise.withResolvers<void>();
+    const blockedOperation = Promise.withResolvers<void>();
     const finalCleanup = vi.fn<() => void>();
     owner.defer(finalCleanup);
-    const task = owner.spawn(() => io.promise);
-    const interruptIo = vi.fn<() => void>(io.resolve);
-    owner.interrupt(interruptIo);
+    const task = owner.spawn(() => blockedOperation.promise);
+    const interruptOperation = vi.fn<() => void>(blockedOperation.resolve);
+    owner.interrupt(interruptOperation);
     owner.interrupt(() => task.result);
     const closing = owner.dispose();
     try {
       await new Promise<void>((resolve) => setImmediate(resolve));
-      expect(interruptIo).toHaveBeenCalledOnce();
+      expect(interruptOperation).toHaveBeenCalledOnce();
     } finally {
-      io.resolve();
+      blockedOperation.resolve();
       await closing;
     }
     expect(finalCleanup).toHaveBeenCalledOnce();
@@ -439,7 +441,7 @@ describe("structured work boundaries", () => {
   });
 
   it("keeps parent resources until a timed out child actually finishes", async () => {
-    const owner = lifetime({ shutdownTimeoutMs: 10 });
+    const owner = lifetime({ shutdownTimeoutMilliseconds: 10 });
     const child = owner.child("pending-child");
     const pending = Promise.withResolvers<void>();
     let released = false;
@@ -479,7 +481,7 @@ describe("structured work boundaries", () => {
   });
 
   it("quarantines a timed out shutdown while retaining pending work", async () => {
-    const owner = lifetime({ shutdownTimeoutMs: 10 });
+    const owner = lifetime({ shutdownTimeoutMilliseconds: 10 });
     const pending = Promise.withResolvers<void>();
     const task = owner.spawn(() => pending.promise);
     const stopping = owner.dispose();

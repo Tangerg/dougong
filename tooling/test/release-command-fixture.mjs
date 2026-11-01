@@ -5,10 +5,16 @@ import { syncBuiltinESMExports } from "node:module";
 // Keep one isolated release process; simulated commands must not boot another runtime per call.
 export function installCommandFixture(handle) {
   const nativeSpawn = childProcess.spawnSync;
-  childProcess.spawnSync = (command, args, options = {}) => {
-    const cwd = options.cwd ?? process.cwd();
-    if (!statSync(cwd).isDirectory()) throw new TypeError(`Command cwd is not a directory: ${cwd}`);
-    const response = handle(command, args, { ...options, cwd }, nativeSpawn);
+  childProcess.spawnSync = (command, commandArguments, options = {}) => {
+    const workingDirectory = options.cwd ?? process.cwd();
+    if (!statSync(workingDirectory).isDirectory())
+      throw new TypeError(`Working directory path is not a directory: ${workingDirectory}`);
+    const response = handle(
+      command,
+      commandArguments,
+      { ...options, cwd: workingDirectory },
+      nativeSpawn,
+    );
     if (
       !response ||
       (response.error || response.signal
@@ -39,11 +45,11 @@ export function installCommandFixture(handle) {
     }
     return result;
   };
-  childProcess.execFileSync = (command, args, options = {}) => {
-    const result = childProcess.spawnSync(command, args, options);
+  childProcess.execFileSync = (command, commandArguments, options = {}) => {
+    const result = childProcess.spawnSync(command, commandArguments, options);
     if (result.error) throw result.error;
     if (result.status !== 0) {
-      const failure = `Command failed: ${command} ${args.join(" ")}`;
+      const failure = `Command failed: ${command} ${commandArguments.join(" ")}`;
       const message = result.stderr?.length ? `${failure}\n${result.stderr}` : failure;
       throw Object.assign(new Error(message), result);
     }

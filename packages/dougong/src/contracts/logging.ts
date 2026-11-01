@@ -1,5 +1,5 @@
 import { DougongError } from "./errors.js";
-import { assertSynchronous } from "../internal/sync-result.js";
+import { assertSynchronous } from "../internal/synchronous-result.js";
 import { disposeSymbol, type Disposable } from "./resource.js";
 export interface Logger {
   readonly debug: (message: unknown, ...details: unknown[]) => void;
@@ -15,7 +15,7 @@ export function captureLogger(value: unknown): Logger {
     const method = (value as Partial<Logger>)[level];
     if (typeof method !== "function")
       throw new TypeError("Logger must implement debug/info/warn/error");
-    return (...args) => Reflect.apply(method, value, args);
+    return (...messageArguments) => Reflect.apply(method, value, messageArguments);
   };
   return Object.freeze({
     debug: capture("debug"),
@@ -42,10 +42,10 @@ export class ScopedLogger implements Disposable {
     error: (message, ...details) => this.#write("error", message, details),
   });
   #binding:
-    { readonly logger: Logger; readonly meta: Readonly<Record<string, unknown>> } | undefined;
+    { readonly logger: Logger; readonly metadata: Readonly<Record<string, unknown>> } | undefined;
 
-  constructor(logger: Logger, meta: Readonly<Record<string, unknown>>) {
-    this.#binding = { logger, meta };
+  constructor(logger: Logger, metadata: Readonly<Record<string, unknown>>) {
+    this.#binding = { logger, metadata };
   }
 
   [disposeSymbol]() {
@@ -56,7 +56,7 @@ export class ScopedLogger implements Disposable {
     const binding = this.#binding;
     if (!binding) throw new DougongError("LIFETIME_DISPOSED", "Logger scope has ended");
     assertSynchronous(
-      binding.logger[level](message, binding.meta, ...details),
+      binding.logger[level](message, binding.metadata, ...details),
       "Logger methods must be synchronous",
     );
   }

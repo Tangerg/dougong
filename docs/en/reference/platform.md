@@ -31,7 +31,9 @@ Platform states are `active/disposing/disposed`. Registration states are `select
 
 `ActivationPreview.deferred` explicitly contains admission, module_validation, configuration_validation, core_binding and setup. Preview is not proof that runtime validation passed. Activation captures selection revision and Artifact identity and rechecks after preparation; stale work cannot overwrite a newer selection.
 
-Manifest dependencies describe delivery relationships; Plugin requires describe actual capability binding. A bundler/HMR adapter owns the import graph, which cannot be guessed from either of those graphs. Example 12 submits the bundler's affected set as one activation plan.
+Manifest dependencies describe delivery relationships; Plugin requires describe actual capability binding. A bundler’s hot module replacement adapter owns the import graph, which cannot be guessed from either of those graphs. Example 12 submits the bundler's affected set as one activation plan.
+
+Before submitting a Core Plan, Platform requests activation admission for direct installations and updates. If the Plan restarts another Artifact owned by this Platform, admission uses its committed origin. Denial leaves the entire change unapplied. Once Core accepts the plan, rollback can run setup again for previously committed revisions using their prior admission. Direct Host commands and commands from other Platforms operate outside this Platform’s admission hook.
 
 Platform captures the Loader and Authorizer methods once during construction, preserving their receivers. Loader is structural. ImportLoader uses same-realm dynamic import; MemoryLoader supports testing and controlled module tables. PermissionSet implements Authorizer with a declared permission set and provides no operating-system isolation.
 

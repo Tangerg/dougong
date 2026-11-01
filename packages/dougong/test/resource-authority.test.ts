@@ -7,7 +7,7 @@ import { Lifetime } from "../src/lifetime/lifetime";
 
 it("does not grant Event listeners the hub, root Lifetime, or detach authority as their receiver", async () => {
   const notice = event<void>("authority/notice");
-  let context!: PluginContext<{}>;
+  let retainedContext!: PluginContext<{}>;
   let receiver: unknown = null;
   const host = createHost({
     installations: [
@@ -15,9 +15,9 @@ it("does not grant Event listeners the hub, root Lifetime, or detach authority a
         id: "owner",
         plugin: definePlugin({
           name: "owner",
-          setup(ctx) {
-            context = ctx;
-            ctx.events.on(notice, function (this: unknown) {
+          setup(context) {
+            retainedContext = context;
+            context.events.on(notice, function (this: unknown) {
               receiver = this;
             });
           },
@@ -27,7 +27,7 @@ it("does not grant Event listeners the hub, root Lifetime, or detach authority a
   });
   try {
     await host.start();
-    await context.events.emit(notice);
+    await retainedContext.events.emit(notice);
     expect(receiver).toBeUndefined();
   } finally {
     await host.stop();
@@ -109,15 +109,15 @@ it("publishes executable contribution values at the same boundary as their colle
   const point = extensionPoint<() => number>("authority/actions");
   const gate = Promise.withResolvers<void>();
   const entered = Promise.withResolvers<void>();
-  let context!: PluginContext<{}>;
+  let retainedContext!: PluginContext<{}>;
   const host = createHost({
     installations: [
       {
         id: "owner",
         plugin: definePlugin({
           name: "owner",
-          setup(ctx) {
-            context = ctx;
+          setup(context) {
+            retainedContext = context;
           },
         }),
       },
@@ -138,13 +138,13 @@ it("publishes executable contribution values at the same boundary as their colle
     }),
     { id: "slow" },
   );
-  const existing = context.contributions.add(point, "existing", first);
-  context.contributions.add(point, "stable", first);
+  const existing = retainedContext.contributions.add(point, "existing", first);
+  retainedContext.contributions.add(point, "stable", first);
   const updating = host.apply(await host.plan(change));
   await entered.promise;
   try {
     existing.update(next);
-    context.contributions.add(point, "new", next);
+    retainedContext.contributions.add(point, "new", next);
     expect(view.get()).toEqual(["owner/existing", "owner/stable"]);
     const unavailable = { code: "CONTRIBUTION_UNAVAILABLE" };
     for (const id of ["owner/existing", "owner/new"])
@@ -191,17 +191,17 @@ it("binds a detached public contribution updater to its original entry", async (
 
 it("isolates listener ownership across retired Lifetime signals", async () => {
   const lifetime = new Lifetime({ label: "root", report() {} });
-  const a = lifetime.child("a");
-  const b = lifetime.child("b");
+  const firstChild = lifetime.child("a");
+  const secondChild = lifetime.child("b");
   await lifetime.dispose();
   const listener = vi.fn<() => void>();
-  const retired = a.signal;
+  const retired = firstChild.signal;
   retired.addEventListener("abort", listener);
   try {
     expect(retired.aborted).toBe(true);
-    expect(a.signal).toBe(retired);
-    expect(b.signal).not.toBe(retired);
-    b.signal.dispatchEvent(new Event("abort"));
+    expect(firstChild.signal).toBe(retired);
+    expect(secondChild.signal).not.toBe(retired);
+    secondChild.signal.dispatchEvent(new Event("abort"));
     expect(listener).not.toHaveBeenCalled();
   } finally {
     retired.removeEventListener("abort", listener);
@@ -318,15 +318,15 @@ it("leaves unrelated listeners intact even when a native registration hook throw
 
 it("retains only ordered IDs in a snapshot when an executable contribution is replaced or removed", async () => {
   const token = extensionPoint<() => string>("authority/snapshot");
-  let context!: PluginContext<{}>;
+  let retainedContext!: PluginContext<{}>;
   const host = createHost({
     installations: [
       {
         id: "owner",
         plugin: definePlugin({
           name: "owner",
-          setup(ctx) {
-            context = ctx;
+          setup(context) {
+            retainedContext = context;
           },
         }),
       },
@@ -335,7 +335,7 @@ it("retains only ordered IDs in a snapshot when an executable contribution is re
   await host.start();
   const view = host.contributions(token);
   const run = () => "first";
-  const entry = context.contributions.add(token, "run", run);
+  const entry = retainedContext.contributions.add(token, "run", run);
   const before = view.get();
   entry.update(run);
   expect(view.get()).toBe(before);
@@ -392,15 +392,15 @@ it.each(["task", "acquisition"] as const)(
 it.each(["event", "contribution"] as const)(
   "does not reserve a contract kind when an invalid %s registration is rejected",
   async (kind) => {
-    let context!: PluginContext<{}>;
+    let retainedContext!: PluginContext<{}>;
     const host = createHost({
       installations: [
         {
           id: "owner",
           plugin: definePlugin({
             name: "owner",
-            setup(ctx) {
-              context = ctx;
+            setup(context) {
+              retainedContext = context;
             },
           }),
         },
@@ -413,12 +413,12 @@ it.each(["event", "contribution"] as const)(
     try {
       const invalid =
         kind === "event"
-          ? () => context.events.on(notice, null as never)
-          : () => context.contributions.add(commands, "", 0);
+          ? () => retainedContext.events.on(notice, null as never)
+          : () => retainedContext.contributions.add(commands, "", 0);
       const valid =
         kind === "event"
-          ? () => context.contributions.add(commands, "entry", 1)
-          : () => context.events.on(notice, () => undefined);
+          ? () => retainedContext.contributions.add(commands, "entry", 1)
+          : () => retainedContext.events.on(notice, () => undefined);
       expect(invalid).toThrow(TypeError);
       expect(valid).not.toThrow();
     } finally {
@@ -467,9 +467,11 @@ it.each(["deferred cleanup", "child"] as const)(
 
 it("rejects shutdown delays that native timers would overflow instead of expiring almost immediately", () => {
   const limit = 2 ** 31 - 1;
-  expect(() => createHost({ shutdownTimeoutMs: limit + 1 })).toThrow(/shutdownTimeoutMs/);
+  expect(() => createHost({ shutdownTimeoutMilliseconds: limit + 1 })).toThrow(
+    /shutdownTimeoutMilliseconds/,
+  );
   expect(
-    () => new Lifetime({ label: "invalid", report() {}, shutdownTimeoutMs: limit + 1 }),
-  ).toThrow(/shutdownTimeoutMs/);
-  expect(createHost({ shutdownTimeoutMs: limit }).status).toBe("stopped");
+    () => new Lifetime({ label: "invalid", report() {}, shutdownTimeoutMilliseconds: limit + 1 }),
+  ).toThrow(/shutdownTimeoutMilliseconds/);
+  expect(createHost({ shutdownTimeoutMilliseconds: limit }).status).toBe("stopped");
 });

@@ -9,7 +9,7 @@ it("keeps quarantine terminal after its last pending release finishes", async ()
   const value = service<number>("terminal/value");
   const setup = vi.fn<() => void>();
   const host = createHost({
-    shutdownTimeoutMs: 10,
+    shutdownTimeoutMilliseconds: 10,
     installations: [
       {
         id: "owner",

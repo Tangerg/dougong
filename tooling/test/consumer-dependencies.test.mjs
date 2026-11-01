@@ -11,7 +11,7 @@ it.each(["actual", "aliased"])(
     const fixture = mkdtempSync(join(tmpdir(), "dougong-consumer-dependencies-"));
     const checkout = join(fixture, "checkout");
     const consumer = join(fixture, "consumer");
-    const root = join(consumer, "node_modules", "app");
+    const root = join(consumer, "node_modules", "application");
     function writePackage(directory, name, dependencies, body, extra = {}) {
       mkdirSync(directory, { recursive: true });
       writeFileSync(
@@ -21,10 +21,10 @@ it.each(["actual", "aliased"])(
       writeFileSync(join(directory, "index.js"), body);
     }
     try {
-      for (const dir of [checkout, root])
+      for (const directory of [checkout, root])
         writePackage(
-          dir,
-          "app",
+          directory,
+          "application",
           { left: "*", right: "*" },
           "module.exports = [require('left'), require('right')];",
         );
@@ -33,15 +33,15 @@ it.each(["actual", "aliased"])(
         ["left", "v1"],
         ["right", "v2"],
       ]) {
-        const dir = join(modules, parent);
+        const directory = join(modules, parent);
         writePackage(
-          dir,
+          directory,
           parent,
           { [request]: request === "actual" ? version : `npm:actual@${version}`, shared: "*" },
           `module.exports = { version: require('${request}'), shared: require('shared') };`,
         );
         writePackage(
-          join(dir, "node_modules", request),
+          join(directory, "node_modules", request),
           "actual",
           {},
           `module.exports = '${version}';`,

@@ -31,7 +31,9 @@ Platform 状态为 `active/disposing/disposed`。Registration 状态为 `selecte
 
 `ActivationPreview.deferred` 明确包含 admission、module_validation、configuration_validation、core_binding、setup。预览不是运行验证通过的凭证。activate 捕获选择版本与 Artifact 身份，准备完成后再次核对，过期结果不能覆盖新选择。
 
-Manifest dependencies 负责发行依赖；Plugin requires 负责真实能力绑定。动态导入图属于 bundler/HMR 适配器，不能从这两个图猜测。示例 12 展示将 bundler 影响集合提交为一笔激活计划。
+Manifest dependencies 负责发行依赖；Plugin requires 负责真实能力绑定。动态导入图属于 打包器的模块热替换适配器，不能从这两个图猜测。示例 12 展示将 bundler 影响集合提交为一笔激活计划。
+
+提交 Core Plan 前，Platform 会为直接安装和更新的 Artifact 请求激活授权。如果该 Plan 还会重启本 Platform 拥有的其他 Artifact，授权使用其已提交的来源。任何一次拒绝都会阻止整笔变更。Core 接手计划后，如果需要回滚，可能沿用已提交版本原先的准入结果并再次执行其 setup。直接调用 Host 或经其他 Platform 提交的命令也不经过这个 Platform 的准入。
 
 Platform 构造时捕获 Loader 和 Authorizer 的方法，并保留各自的接收对象。Loader 是结构协议；ImportLoader 用同一 realm 的动态导入，MemoryLoader 适合测试与受控模块表。PermissionSet 是声明权限集合的 Authorizer 实现，不提供操作系统隔离。
 

@@ -1,5 +1,5 @@
 import { expect, it, vi } from "vitest";
-import { batch, computed, signal } from "../src";
+import { batch, bridge, computed, observe, signal, type ObservationOwner } from "../src";
 
 it.each(["batch", "computed", "subscriber"] as const)(
   "observes the thenable captured at the %s boundary",
@@ -52,3 +52,40 @@ it("observes asynchronous misuse without adopting its fulfilled payload a second
   await new Promise<void>((resolve) => setImmediate(resolve));
   expect(reads).toBe(1);
 });
+
+it.each(["subscription", "bridge cleanup", "observation cleanup", "child", "drain"] as const)(
+  "observes an asynchronous %s factory rejected by the synchronous attachment boundary",
+  async (boundary) => {
+    const rejection = new Error("factory failed");
+    const observeRejection = vi.fn<(_resolve: unknown, reject: (error: unknown) => void) => void>(
+      (_resolve: unknown, reject: (error: unknown) => void) => reject(rejection),
+    );
+    const invalid = new Proxy(
+      {},
+      { get: (_target, key) => (key === "then" ? observeRejection : undefined) },
+    ) as never;
+    const resource = { async [Symbol.asyncDispose]() {} };
+    const owner: ObservationOwner = {
+      defer: (dispose) =>
+        boundary.endsWith("cleanup")
+          ? invalid
+          : {
+              async [Symbol.asyncDispose]() {
+                await dispose();
+              },
+            },
+      child: () => (boundary === "child" ? invalid : resource),
+      spawn: () => invalid,
+    };
+    const source = {
+      get: () => 1,
+      subscribe: () => (boundary === "subscription" ? invalid : { [Symbol.dispose]() {} }),
+    };
+    expect(() => {
+      if (boundary === "bridge cleanup" || boundary === "subscription") bridge(owner, source);
+      else observe(owner, source, () => {});
+    }).toThrow(TypeError);
+    await Promise.resolve();
+    expect(observeRejection).toHaveBeenCalledOnce();
+  },
+);

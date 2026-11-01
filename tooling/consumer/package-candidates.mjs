@@ -43,11 +43,13 @@ function declaredFiles(source, manifest) {
   const files = new Map();
   function visit(path) {
     const entry = lstatSync(path, { throwIfNoEntry: false });
-    if (entry?.isDirectory()) {
+    if (!entry)
+      throw new Error(`${manifest.name}: missing ${relative(source, path)} in the package source`);
+    if (entry.isDirectory()) {
       for (const name of readdirSync(path)) visit(join(path, name));
-    } else if (entry?.isFile()) {
+    } else if (entry.isFile()) {
       files.set(relative(source, path).split(/[/\\]/).join("/"), readFileSync(path));
-    } else if (entry) {
+    } else {
       throw new Error(`Package entry '${relative(source, path)}' must be a regular file`);
     }
   }
@@ -123,16 +125,16 @@ export function verifyManifest(declared, packed, versions) {
 }
 
 export function packCandidates(root) {
-  const sources = publishedDirectories.map((dir) => {
-    const source = resolve(root, dir);
+  const sources = publishedDirectories.map((packageDirectory) => {
+    const source = resolve(root, packageDirectory);
     const manifest = JSON.parse(readFileSync(join(source, "package.json"), "utf8"));
     packageName(manifest.name);
-    return { dir, source, manifest, expected: declaredFiles(source, manifest) };
+    return { packageDirectory, source, manifest, expected: declaredFiles(source, manifest) };
   });
   const versions = new Map(sources.map(({ manifest }) => [manifest.name, manifest.version]));
   if (versions.size !== sources.length) throw new Error("Workspace package names must be unique");
   const candidates = new Map();
-  for (const { dir, source, manifest, expected } of sources) {
+  for (const { packageDirectory, source, manifest, expected } of sources) {
     const packed = mkdtempSync(join(tmpdir(), "dougong-pack-"));
     try {
       execFileSync("pnpm", ["pack", "--pack-destination", packed], { cwd: source, stdio: "pipe" });
@@ -163,7 +165,7 @@ export function packCandidates(root) {
           if (contents.includes(forbidden))
             throw new Error(`${manifest.name}: ${file} contains '${forbidden}'`);
       }
-      candidates.set(dir, {
+      candidates.set(packageDirectory, {
         name: manifest.name,
         source,
         files,
@@ -181,11 +183,11 @@ const digest = (bytes) => createHash("sha512").update(bytes).digest("hex");
 
 export function writeVerifiedCandidates(output, candidates) {
   const receipts = {};
-  for (const [dir, { filename, bytes }] of candidates) {
-    const directory = join(output, basename(dir));
+  for (const [packageDirectory, { filename, bytes }] of candidates) {
+    const directory = join(output, basename(packageDirectory));
     mkdirSync(directory);
     writeFileSync(join(directory, filename), bytes, { flag: "wx" });
-    receipts[dir] = digest(bytes);
+    receipts[packageDirectory] = digest(bytes);
   }
   // A completed receipt means every candidate passed as a set, even when the gate runs in another process.
   writeFileSync(join(output, "verified.json"), JSON.stringify(receipts), { flag: "wx" });
@@ -194,12 +196,15 @@ export function writeVerifiedCandidates(output, candidates) {
 export function readVerifiedCandidates(output) {
   const receipts = JSON.parse(readFileSync(join(output, "verified.json"), "utf8"));
   return new Map(
-    publishedDirectories.map((dir) => {
-      const archive = packageArchiveIn(join(output, basename(dir)));
+    publishedDirectories.map((packageDirectory) => {
+      const archive = packageArchiveIn(join(output, basename(packageDirectory)));
       const bytes = readFileSync(archive);
-      if (digest(bytes) !== receipts[dir])
-        throw new Error(`${dir}: archive changed after consumer verification`);
-      return [dir, { filename: basename(archive), bytes, files: readPackageFiles(archive, bytes) }];
+      if (digest(bytes) !== receipts[packageDirectory])
+        throw new Error(`${packageDirectory}: archive changed after consumer verification`);
+      return [
+        packageDirectory,
+        { filename: basename(archive), bytes, files: readPackageFiles(archive, bytes) },
+      ];
     }),
   );
 }

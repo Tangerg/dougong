@@ -205,3 +205,39 @@ it("rejects a private runtime port redirected into non-runtime workspace files",
   expect(result.output).toContain("[ownership.module]");
   expect(result.output).toContain("runtime/undeclared.d.mts");
 });
+
+it("checks NodeNext TypeScript modules reachable from portable source", () => {
+  const result = runGuard("check-layers.mjs", (workspace) => {
+    const directory = join(workspace, "packages/reactive/src");
+    appendFileSync(join(directory, "index.ts"), '\nexport { read } from "./source.mjs";\n');
+    writeFileSync(join(directory, "source.mts"), 'export { readFile as read } from "node:fs";\n');
+  });
+  expect(result.status).toBe(1);
+  expect(result.output).toContain("source.mts:1: [runtime.portable]");
+});
+
+it("checks project-authored names without treating data and foreign keys as declarations", () => {
+  const result = runGuard("check-layers.mjs", (workspace) => {
+    writeFileSync(
+      join(workspace, "packages/reactive/src/names.ts"),
+      [
+        'export interface Options { readonly ["deps"]: string }',
+        "export class Owner { #cachedDeps = 0 }",
+        "export function read(ctx: Record<string, string>) {",
+        "  const { deps: dependencies } = ctx;",
+        "  const shutdownTimeoutMs = 5;",
+        "  const fn = () => ctx.fn;",
+        '  return [ctx.deps, dependencies, "deps", fn(), import.meta.url, ctx.config, ctx.publishConfig, shutdownTimeoutMs];',
+        "}",
+      ].join("\n"),
+    );
+  });
+  const violations = result.output.split("\n").filter((line) => line.includes("names.ts:"));
+  expect(violations).toHaveLength(5);
+  expect(violations.join("\n")).toContain("Declaration 'deps'");
+  expect(violations.join("\n")).toContain("Declaration '#cachedDeps'");
+  expect(violations.join("\n")).toContain("Declaration 'ctx'");
+  expect(violations.join("\n")).toContain("Declaration 'fn'");
+  expect(violations.join("\n")).toContain("Declaration 'shutdownTimeoutMs'");
+  expect(result.status).toBe(1);
+});

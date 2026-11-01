@@ -63,8 +63,8 @@ export async function planetScenario(): Promise<ExampleResult> {
   });
   const localSource = definePlugin({
     name: "examples.planet.source.local",
-    setup(ctx) {
-      ctx.contributions.add(MEDIA_SOURCES, "local", {
+    setup(context) {
+      context.contributions.add(MEDIA_SOURCES, "local", {
         id: "local",
         score: () => 10,
         async resolve(query, signal) {
@@ -78,35 +78,37 @@ export async function planetScenario(): Promise<ExampleResult> {
     name: "examples.planet.player",
     requires: { audio: AUDIO_OUTPUT, sources: MEDIA_SOURCES },
     provides: { player: PLAYER },
-    setup(ctx) {
+    setup(context) {
       playerStarts++;
       const current = signal<Track | undefined>(undefined);
-      let playback = ctx.lifetime.child("playback");
+      let playback = context.lifetime.child("playback");
 
       return {
         player: {
           current: computed(() => current.get()),
           async play(query: string) {
             const previous = playback;
-            const currentPlayback = ctx.lifetime.child("playback");
+            const currentPlayback = context.lifetime.child("playback");
             playback = currentPlayback;
             await previous[asyncDisposeSymbol]();
             let selected: { id: string; score: number } | undefined;
-            for (const id of ctx.deps.sources.get()) {
-              const score = await ctx.deps.sources.use(id, (source) => source.score(query));
+            for (const id of context.dependencies.sources.get()) {
+              const score = await context.dependencies.sources.use(id, (source) =>
+                source.score(query),
+              );
               if (!selected || score > selected.score) selected = { id, score };
             }
             if (!selected) throw new Error("No media source is available");
-            const track = await ctx.deps.sources.use(selected.id, async (source) => {
+            const track = await context.dependencies.sources.use(selected.id, async (source) => {
               const uri = await source.resolve(query, currentPlayback.signal);
               currentPlayback.signal.throwIfAborted();
-              await ctx.deps.audio.play(uri, currentPlayback.signal);
+              await context.dependencies.audio.play(uri, currentPlayback.signal);
               return Object.freeze({ query, uri, source: source.id });
             });
             // An external output can finish after the next playback has taken ownership.
             currentPlayback.signal.throwIfAborted();
             current.set(track);
-            await ctx.events.emit(TRACK_CHANGED, track);
+            await context.events.emit(TRACK_CHANGED, track);
           },
         },
       };
@@ -114,25 +116,25 @@ export async function planetScenario(): Promise<ExampleResult> {
   });
   const historyPlugin = definePlugin({
     name: "examples.planet.history",
-    setup(ctx) {
-      ctx.events.on(TRACK_CHANGED, (track) => history.push(track));
+    setup(context) {
+      context.events.on(TRACK_CHANGED, (track) => history.push(track));
     },
   });
   const shellPlugin = definePlugin({
     name: "examples.planet.shell",
     requires: { player: PLAYER },
-    setup(ctx) {
+    setup(context) {
       const synchronize = () => {
-        const track = ctx.deps.player.current.get();
+        const track = context.dependencies.player.current.get();
         if (track) shellTracks.push(`${track.source}:${track.query}`);
       };
-      ctx.lifetime.use(ctx.deps.player.current.subscribe(synchronize));
+      context.lifetime.use(context.dependencies.player.current.subscribe(synchronize));
     },
   });
   const remoteSource = definePlugin({
     name: "examples.planet.source.remote",
-    setup(ctx) {
-      ctx.contributions.add(MEDIA_SOURCES, "remote", {
+    setup(context) {
+      context.contributions.add(MEDIA_SOURCES, "remote", {
         id: "remote",
         score: () => 100,
         async resolve(query, signal) {

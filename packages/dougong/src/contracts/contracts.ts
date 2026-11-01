@@ -20,8 +20,8 @@ interface ContractBrand {
   readonly [contractBrand]: true;
 }
 
-interface Contract<T, K extends ContractKind> extends ContractIdentity, ContractBrand {
-  readonly kind: K;
+interface Contract<T, Kind extends ContractKind> extends ContractIdentity, ContractBrand {
+  readonly kind: Kind;
   readonly [contractValueSlot]: ContractValueSlot<T>;
 }
 
@@ -67,9 +67,9 @@ function isValidContractId(id: unknown): id is string {
   return typeof id === "string" && id.length > 0 && id === id.trim();
 }
 
-function contract<T, K extends ContractKind>(kind: K, id: string): Contract<T, K> {
+function contract<T, Kind extends ContractKind>(kind: Kind, id: string): Contract<T, Kind> {
   validateId("Contract", id);
-  return Object.freeze({ id, kind }) as Contract<T, K>;
+  return Object.freeze({ id, kind }) as Contract<T, Kind>;
 }
 
 function readDataProperty(value: object, key: string): unknown {

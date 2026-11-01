@@ -111,7 +111,7 @@ it.each(["validation", "admission", "setup", "release"] as const)(
     };
     const plugin = definePlugin({
       name: "sample",
-      config: {
+      configuration: {
         "~standard": {
           version: 1,
           vendor: "test",
@@ -208,12 +208,12 @@ it("detaches an aborted caller while a different caller still waits on a shared 
 });
 
 async function expectCollected(references: ReadonlyArray<WeakRef<object>>) {
-  const forceGc = globalThis.gc;
-  if (!forceGc) throw new TypeError("Retention tests require Node.js --expose-gc");
+  const collectGarbage = globalThis.gc;
+  if (!collectGarbage) throw new TypeError("Retention tests require Node.js --expose-gc");
   for (let pass = 0; pass < 8 && references.some((reference) => reference.deref()); pass++) {
     await nextTurn();
-    forceGc();
-    forceGc();
+    collectGarbage();
+    collectGarbage();
   }
   expect(references.map((reference) => reference.deref() === undefined)).toEqual(
     references.map(() => true),

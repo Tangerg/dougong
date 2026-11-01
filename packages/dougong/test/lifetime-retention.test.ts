@@ -224,16 +224,16 @@ async function retainedHandle(kind: (typeof HANDLE_KINDS)[number]) {
   const plugin = definePlugin({
     name: "retained",
     requires: { values: point },
-    setup(ctx) {
+    setup(context) {
       const cleanupPayload = payload("cleanup payload");
       handles.set(
         "cleanup",
-        ctx.lifetime.defer(() => {
+        context.lifetime.defer(() => {
           void cleanupPayload;
         }),
       );
       const childPayload = payload("child payload");
-      const child = ctx.lifetime.child("child");
+      const child = context.lifetime.child("child");
       child.signal.addEventListener("abort", () => {
         void childPayload;
       });
@@ -243,33 +243,33 @@ async function retainedHandle(kind: (typeof HANDLE_KINDS)[number]) {
       handles.set("child", child);
       handles.set(
         "contribution",
-        ctx.contributions.add(point, "payload", payload("contribution payload")),
+        context.contributions.add(point, "payload", payload("contribution payload")),
       );
       const listenerPayload = payload("listener payload");
       handles.set(
         "listener",
-        ctx.events.on(notice, () => {
+        context.events.on(notice, () => {
           void listenerPayload;
         }),
       );
       const subscriberPayload = payload("subscriber payload");
       handles.set(
         "subscription",
-        ctx.deps.values.subscribe(() => {
+        context.dependencies.values.subscribe(() => {
           void subscriberPayload;
         }),
       );
       const taskPayload = payload("task payload");
-      const task = ctx.lifetime.spawn((signal) => {
+      const task = context.lifetime.spawn((signal) => {
         signal.addEventListener("abort", () => {
           void taskPayload;
         });
       });
       handles.set("task", task);
-      handles.set("view", ctx.deps.values);
-      handles.set("logger", ctx.log);
-      handles.set("events", ctx.events);
-      handles.set("contributions", ctx.contributions);
+      handles.set("view", context.dependencies.values);
+      handles.set("logger", context.logger);
+      handles.set("events", context.events);
+      handles.set("contributions", context.contributions);
     },
   });
   const loggerPayload = payload("logger payload");
@@ -445,7 +445,7 @@ it("keeps stale Plan reports and pending identities without retaining their plug
   change.install(
     definePlugin({
       name: "validating",
-      config: {
+      configuration: {
         "~standard": {
           version: 1,
           vendor: "test",
@@ -458,7 +458,7 @@ it("keeps stale Plan reports and pending identities without retaining their plug
       },
       setup() {},
     }),
-    { id: "validating", config: null },
+    { id: "validating", configuration: null },
   );
   const validation = host.plan(change).then(
     () => undefined,
@@ -558,7 +558,7 @@ it("a quarantined Installation or pre-quarantine draft cannot retain or advance 
 function stalledValidation(entered: () => void, finish: Promise<void>) {
   return definePlugin({
     name: "stalled",
-    config: {
+    configuration: {
       "~standard": {
         version: 1,
         vendor: "test",
@@ -578,7 +578,10 @@ async function obsoleteValidation(finish: Promise<void>) {
   const host = createHost({ onError });
   const change = host.change();
   const entered = Promise.withResolvers<void>();
-  change.install(stalledValidation(entered.resolve, finish), { id: "stalled", config: null });
+  change.install(stalledValidation(entered.resolve, finish), {
+    id: "stalled",
+    configuration: null,
+  });
   const planning = host.plan(change).then(
     () => "issued",
     (error: unknown) => (error instanceof Error ? error.message : "unknown"),

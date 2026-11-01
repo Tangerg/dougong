@@ -20,9 +20,9 @@ it.each(["left", "right"])(
     const declaration = (value: number) =>
       definePlugin({
         name: "boundary.commit",
-        setup(ctx) {
-          ctx.contributions.add(left, "value", value);
-          ctx.contributions.add(right, "value", value * 2);
+        setup(context) {
+          context.contributions.add(left, "value", value);
+          context.contributions.add(right, "value", value * 2);
           if (value < 0) throw new Error("activation failed");
         },
       });
@@ -95,10 +95,10 @@ it("keeps an entered event callback borrowed until it settles before closing its
         id: "owner",
         plugin: definePlugin({
           name: "boundary.queued-event",
-          setup(ctx) {
-            child = ctx.lifetime.child("child");
-            ctx.events.on(notice, listener, { lifetime: child });
-            emit = () => ctx.events.emit(notice);
+          setup(context) {
+            child = context.lifetime.child("child");
+            context.events.on(notice, listener, { lifetime: child });
+            emit = () => context.events.emit(notice);
           },
         }),
       },
@@ -127,8 +127,8 @@ it("closes incoming subscriptions before diagnostics can reenter shutdown", asyn
         id: "source",
         plugin: definePlugin({
           name: "boundary.source",
-          setup(ctx) {
-            item = ctx.contributions.add(items, "value", 0);
+          setup(context) {
+            item = context.contributions.add(items, "value", 0);
           },
         }),
       },
@@ -137,9 +137,9 @@ it("closes incoming subscriptions before diagnostics can reenter shutdown", asyn
         plugin: definePlugin({
           name: "boundary.reader",
           requires: { items },
-          setup(ctx) {
-            ctx.events.on(notice, () => undefined);
-            ctx.deps.items.subscribe(listener);
+          setup(context) {
+            context.events.on(notice, () => undefined);
+            context.dependencies.items.subscribe(listener);
           },
         }),
       },
@@ -176,11 +176,11 @@ it("closes all descendant event entrances before cancellation and while tasks se
         id: "owner",
         plugin: definePlugin({
           name: "boundary.owner",
-          setup(ctx) {
-            parent = ctx.lifetime.child("parent");
+          setup(context) {
+            parent = context.lifetime.child("parent");
             child = parent.child("child").child("grandchild");
-            ctx.events.on(ping, heard, { lifetime: child });
-            ctx.contributions.add(items, "item", 1, { lifetime: child });
+            context.events.on(ping, heard, { lifetime: child });
+            context.contributions.add(items, "item", 1, { lifetime: child });
             parent.spawn((signal) => {
               signal.addEventListener(
                 "abort",
@@ -199,8 +199,8 @@ it("closes all descendant event entrances before cancellation and while tasks se
         id: "emitter",
         plugin: definePlugin({
           name: "boundary.emitter",
-          setup(ctx) {
-            emit = () => ctx.events.emit(ping);
+          setup(context) {
+            emit = () => context.events.emit(ping);
           },
         }),
       },
@@ -252,8 +252,8 @@ it("owns frozen Contract identities after normalizing structural declarations", 
       value: mutable as ReturnType<typeof service<number>>,
       maybe: optionalToken as ReturnType<typeof optional<number>>,
     },
-    setup(ctx) {
-      received = [ctx.deps.value, ctx.deps.maybe];
+    setup(context) {
+      received = [context.dependencies.value, context.dependencies.maybe];
     },
   });
   mutable.id = "mutated";

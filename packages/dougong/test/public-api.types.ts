@@ -3,7 +3,9 @@ import { expectTypeOf } from "vitest";
 import * as core from "dougong";
 import { normalizePlainRecord, type SnapshotPublisher } from "dougong/advanced";
 
-expectTypeOf<ConstructorParameters<typeof core.RecordedFailure>>().toEqualTypeOf<[unknown]>();
+expectTypeOf<ConstructorParameters<typeof core.RecordedFailure>>().toEqualTypeOf<
+  [error: unknown, fields?: ReadonlyArray<string>]
+>();
 expectTypeOf<typeof core.isError>().toEqualTypeOf<(value: unknown) => value is Error>();
 
 const capturedDeclaration = normalizePlainRecord(
@@ -92,14 +94,14 @@ expectTypeOf<
   SnapshotPublisher<Entity> extends SnapshotPublisher<User> ? true : false
 >().toEqualTypeOf<false>();
 
-const CONFIG = core.service<string>("surface/config");
+const CONFIGURATION = core.service<string>("surface/configuration");
 const configured = core.definePlugin({
   name: "surface.configured",
-  requires: { config: CONFIG },
-  setup(ctx) {
-    expectTypeOf(ctx.deps.config).toEqualTypeOf<string>();
+  requires: { configuration: CONFIGURATION },
+  setup(context) {
+    expectTypeOf(context.dependencies.configuration).toEqualTypeOf<string>();
     // @ts-expect-error Dependencies have their own explicit namespace.
-    void ctx.config;
+    void context.configuration;
   },
 });
 const plugins: readonly core.AnyPlugin[] = [configured];
@@ -116,9 +118,9 @@ const schema: StandardSchemaV1<string, number> = {
   },
 };
 const parsed = core.definePlugin({
-  name: "surface.parsed-config",
-  config: schema,
-  setup(_ctx, value) {
+  name: "surface.parsed-configuration",
+  configuration: schema,
+  setup(_context, value) {
     void value.toFixed();
   },
 });
@@ -145,23 +147,23 @@ const verifyInstallationTypes = (
   // @ts-expect-error Schema input is required.
   change.install(parsed, { id: "parsed" });
   // @ts-expect-error Schema input is string, not its transformed number output.
-  change.install(parsed, { id: "parsed", config: 42 });
+  change.install(parsed, { id: "parsed", configuration: 42 });
 
-  const precise = change.install(parsed, { id: "parsed", config: "42" });
-  change.update(precise, { config: "43" });
+  const precise = change.install(parsed, { id: "parsed", configuration: "42" });
+  change.update(precise, { configuration: "43" });
   // @ts-expect-error Updates preserve the Installation declaration's input type.
-  change.update(precise, { config: 43 });
+  change.update(precise, { configuration: 43 });
   // @ts-expect-error Read-only identities cannot independently change committed state.
-  precise.update({ config: "44" });
+  precise.update({ configuration: "44" });
   // @ts-expect-error Origin cannot be advanced separately from its implementation.
-  change.update(precise, { config: "44", origin: { revision: "new" } });
+  change.update(precise, { configuration: "44", origin: { revision: "new" } });
   change.update(precise, { plugin: parsed, origin: { revision: "new" } });
 
-  const installation = change.install(erased, { id: "erased", config: undefined });
+  const installation = change.install(erased, { id: "erased", configuration: undefined });
   change.update(installation, { plugin: erased });
   change.remove(installation);
-  expectTypeOf(host.use(CONFIG, (value) => value.length)).toEqualTypeOf<Promise<number>>();
-  expectTypeOf(host.use(core.optional(CONFIG), (value) => value?.length)).toEqualTypeOf<
+  expectTypeOf(host.use(CONFIGURATION, (value) => value.length)).toEqualTypeOf<Promise<number>>();
+  expectTypeOf(host.use(core.optional(CONFIGURATION), (value) => value?.length)).toEqualTypeOf<
     Promise<number | undefined>
   >();
   expectTypeOf(host.plan(change)).toEqualTypeOf<Promise<core.Plan>>();
@@ -221,16 +223,16 @@ const descriptiveSchema: StandardSchemaV1<string, number> & StandardJSONSchemaV1
 };
 const descriptive = core.definePlugin({
   name: "surface.descriptive",
-  config: descriptiveSchema,
-  setup(_ctx, config) {
-    expectTypeOf(config).toEqualTypeOf<number>();
+  configuration: descriptiveSchema,
+  setup(_context, configuration) {
+    expectTypeOf(configuration).toEqualTypeOf<number>();
   },
 });
 const description = core.describePlugin(descriptive);
 expectTypeOf(description).toEqualTypeOf<core.PluginDescriptor>();
-if (description.config.status === "available") {
-  expectTypeOf(description.config.target).toEqualTypeOf<StandardJSONSchemaV1.Target>();
-  expectTypeOf(description.config.input).toEqualTypeOf<
-    Readonly<Record<string, core.ConfigValue>>
+if (description.configuration.status === "available") {
+  expectTypeOf(description.configuration.target).toEqualTypeOf<StandardJSONSchemaV1.Target>();
+  expectTypeOf(description.configuration.input).toEqualTypeOf<
+    Readonly<Record<string, core.ConfigurationValue>>
   >();
 }

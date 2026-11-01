@@ -62,7 +62,7 @@ describe("selection and activation races", () => {
       loader: {
         async load(reference: string, signal: AbortSignal) {
           loaded.push(reference);
-          if (reference === "dep") {
+          if (reference === "dependency") {
             entered.resolve();
             await release.promise;
             signal.throwIfAborted();
@@ -71,9 +71,11 @@ describe("selection and activation races", () => {
         },
       },
     });
-    const dep = await select(platform, "dep", "dep");
-    const first = await select(platform, "first", "first", { dependencies: { dep: "*" } });
-    const second = await select(platform, "second", "second", { dependencies: { dep: "*" } });
+    const dependency = await select(platform, "dependency", "dependency");
+    const first = await select(platform, "first", "first", { dependencies: { dependency: "*" } });
+    const second = await select(platform, "second", "second", {
+      dependencies: { dependency: "*" },
+    });
     const controller = new AbortController();
     const firstRun = platform.activate([first], { signal: controller.signal });
     const firstResult = firstRun.catch((error: unknown) => error);
@@ -84,8 +86,8 @@ describe("selection and activation races", () => {
     expect(await firstResult).toBe(controller.signal.reason);
     release.resolve();
     await secondRun;
-    expect(loaded.filter((reference) => reference === "dep")).toHaveLength(1);
-    expect(dep.status).toBe("installed");
+    expect(loaded.filter((reference) => reference === "dependency")).toHaveLength(1);
+    expect(dependency.status).toBe("installed");
     expect(second.status).toBe("installed");
     expect(host.installation(first.id)).toBeUndefined();
     await platform[Symbol.asyncDispose]();
@@ -319,7 +321,7 @@ describe("selection and activation races", () => {
     const entered = deferred();
     const host = createHost();
     const modules = new Map<string, AnyPlugin>([
-      ["dep", emptyPlugin("dep")],
+      ["dependency", emptyPlugin("dependency")],
       ["root", emptyPlugin("root")],
     ]);
     const platform = createPlatform({
@@ -336,20 +338,20 @@ describe("selection and activation races", () => {
         },
       },
     });
-    const dep = await select(platform, "dep", "dep");
-    const root = await select(platform, "root", "root", { dependencies: { dep: "*" } });
-    await platform.activate([dep]);
+    const dependency = await select(platform, "dependency", "dependency");
+    const root = await select(platform, "root", "root", { dependencies: { dependency: "*" } });
+    await platform.activate([dependency]);
     const activation = platform.activate([root]);
     const result = activation.catch((error: unknown) => error);
     await entered.promise;
     const change = host.change();
-    change.update(dep.installation!, { plugin: emptyPlugin("dep") });
+    change.update(dependency.installation!, { plugin: emptyPlugin("dependency") });
     await host.apply(await host.plan(change));
     gate.resolve();
     expect(await result).toMatchObject({ code: "ACTIVATION_STALE" });
-    expect(dep.activeOrigin).toBeUndefined();
+    expect(dependency.activeOrigin).toBeUndefined();
     await platform.activate([root]);
-    expect(dep.activeOrigin?.revision).toBe("1.0.0");
+    expect(dependency.activeOrigin?.revision).toBe("1.0.0");
     await platform[Symbol.asyncDispose]();
   });
 });
@@ -403,7 +405,7 @@ it("withdraws a loaded activation while another activation owns the Core handoff
   const controller = new AbortController();
   const attempt = platform
     .activate([queued], { signal: controller.signal })
-    .catch((e: unknown) => e);
+    .catch((reason: unknown) => reason);
   await loading.promise;
   const applying = platform.activate([first]);
   await admissionEntered.promise;
@@ -421,3 +423,57 @@ it("withdraws a loaded activation while another activation owns the Core handoff
     await platform[Symbol.asyncDispose]();
   }
 });
+
+it.each(["select", "remove", "dispose"] as const)(
+  "commits the full %s projection before calling a superseded loader's cancellation handler",
+  async (command) => {
+    const entered = deferred();
+    const blocked = deferred<never>();
+    const observed: unknown[] = [];
+    const platform = createPlatform({
+      id: "projection",
+      host: createHost(),
+      apiVersion: "1.0.0",
+      loader: {
+        load(_reference: string, signal: AbortSignal) {
+          signal.addEventListener("abort", () => {
+            const snapshot = platform.diagnostics.get();
+            observed.push({
+              status: snapshot.status,
+              live: platform
+                .registrations()
+                .map((registration) => registration.selectedArtifact.revision),
+              projected: [...snapshot.registrations.values()].map(
+                (registration) => registration.selectedArtifact.revision,
+              ),
+            });
+          });
+          entered.resolve();
+          return blocked.promise;
+        },
+      },
+    });
+    const first = await select(platform, "a", "a");
+    const second = await select(platform, "b", "b");
+    const attempt = platform.activate([first]).catch((error: unknown) => error);
+    try {
+      await entered.promise;
+      if (command === "select") await platform.select(add(platform, "a", "updated", "2.0.0"));
+      else if (command === "remove") await platform.remove(first, second);
+      else await platform[Symbol.asyncDispose]();
+      await attempt;
+      const revisions =
+        command === "remove" ? [] : [command === "select" ? "2.0.0" : "1.0.0", "1.0.0"];
+      expect(observed).toEqual([
+        {
+          status: command === "dispose" ? "disposing" : "active",
+          live: revisions,
+          projected: revisions,
+        },
+      ]);
+    } finally {
+      blocked.reject(new Error("loader finished late"));
+      await platform[Symbol.asyncDispose]();
+    }
+  },
+);

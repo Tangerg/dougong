@@ -15,12 +15,12 @@ const preload = fileURLToPath(new URL("./fixtures/release-preflight.mjs", import
 async function runRelease(
   response,
   names = ["@dougongjs/reactive", "dougong", "@dougongjs/platform"],
-  releaseArgs = [version, "--dry-run"],
+  releaseArguments = [version, "--dry-run"],
 ) {
   const workspace = mkdtempSync(join(tmpdir(), "dougong-release-test-"));
   try {
-    const bin = join(workspace, "bin");
-    mkdirSync(bin);
+    const executableDirectory = join(workspace, "bin");
+    mkdirSync(executableDirectory);
     for (const [index, directory] of ["reactive", "dougong", "platform"].entries()) {
       const path = join(workspace, "packages", directory);
       mkdirSync(path, { recursive: true });
@@ -31,9 +31,9 @@ async function runRelease(
     }
     writeFileSync(join(workspace, "queries.json"), "[]");
     writeFileSync(join(workspace, "response.json"), JSON.stringify(response));
-    const result = await executeRelease(["--import", preload, release, ...releaseArgs], {
+    const result = await executeRelease(["--import", preload, release, ...releaseArguments], {
       cwd: workspace,
-      env: { ...process.env, PATH: bin },
+      env: { ...process.env, PATH: executableDirectory },
     });
     return {
       ...result,
@@ -92,39 +92,47 @@ it.each([
 });
 
 it.each([
-  { args: [version, "--dryrun", "--yes"], error: "--dryrun" },
-  { args: [version, "--dry-run", "--yess"], error: "--yess" },
-  { args: [version, "0.7.3", "--dry-run"], error: "usage:" },
-  { args: [version, "--dry-run", "--otp"], error: "--otp" },
-  { args: [version, "--dry-run", "--otp="], error: "--otp" },
-  { args: [version, "--dry-run", "--otp=   "], error: "--otp" },
-  { args: [version, "--dry-run", "--dry-run"], error: "specified once" },
-  { args: [version, "--dry-run", "--yes", "--yes"], error: "specified once" },
+  { commandArguments: ["0.7.2-alpha.1", "--dry-run"], error: "--tag" },
+  { commandArguments: [version, "--tag="], error: "dist-tag" },
+  { commandArguments: [version, "--tag=1.x"], error: "dist-tag" },
+  { commandArguments: [version, "--tag=beta/test"], error: "dist-tag" },
+  { commandArguments: [version, "--tag=beta", "--tag=other"], error: "specified once" },
+  { commandArguments: [version, "--dryrun", "--yes"], error: "--dryrun" },
+  { commandArguments: [version, "--dry-run", "--yess"], error: "--yess" },
+  { commandArguments: [version, "0.7.3", "--dry-run"], error: "usage:" },
+  { commandArguments: [version, "--dry-run", "--otp"], error: "--otp" },
+  { commandArguments: [version, "--dry-run", "--otp="], error: "--otp" },
+  { commandArguments: [version, "--dry-run", "--otp=   "], error: "--otp" },
+  { commandArguments: [version, "--dry-run", "--dry-run"], error: "specified once" },
+  { commandArguments: [version, "--dry-run", "--yes", "--yes"], error: "specified once" },
   {
-    args: [version, "--dry-run", "--otp=123456", "--otp=654321"],
+    commandArguments: [version, "--dry-run", "--otp=123456", "--otp=654321"],
     error: "specified once",
   },
-])("rejects ambiguous or malformed release arguments $args", async ({ args, error }) => {
-  const result = await runRelease(
-    { status: 1, stdout: JSON.stringify({ error: { code: "E404" } }) },
-    undefined,
-    args,
-  );
-  expect(result.status).toBe(1);
-  expect(result.queries).toEqual([]);
-  expect(result.gate).toBeUndefined();
-  expect(result.stderr).toContain(error);
-});
+])(
+  "rejects ambiguous or malformed release arguments $commandArguments",
+  async ({ commandArguments, error }) => {
+    const result = await runRelease(
+      { status: 1, stdout: JSON.stringify({ error: { code: "E404" } }) },
+      undefined,
+      commandArguments,
+    );
+    expect(result.status).toBe(1);
+    expect(result.queries).toEqual([]);
+    expect(result.gate).toBeUndefined();
+    expect(result.stderr).toContain(error);
+  },
+);
 
 it.each([
-  ["0.7.2-alpha.1", "--dry-run"],
+  ["0.7.2-alpha.1", "--tag=next", "--dry-run"],
   ["--otp=123456", "--dry-run", version],
   [version, "--yes", "--dry-run", "--otp=123456"],
-])("accepts canonical release inputs %s", async (...args) => {
+])("accepts canonical release inputs %s", async (...commandArguments) => {
   const result = await runRelease(
     { status: 1, stdout: JSON.stringify({ error: { code: "E404" } }) },
     undefined,
-    args,
+    commandArguments,
   );
   expect(result.status).toBe(1);
   expect(result.gate).toEqual(["check"]);

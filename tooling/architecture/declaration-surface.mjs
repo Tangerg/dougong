@@ -1,21 +1,21 @@
 import { resolve } from "node:path";
-import ts from "typescript";
+import typescript from "typescript";
 
-export function declarationSurface(distPath) {
-  const file = resolve(distPath);
-  const program = ts.createProgram([file], {
+export function declarationSurface(declarationPath) {
+  const file = resolve(declarationPath);
+  const program = typescript.createProgram([file], {
     noEmit: true,
     skipLibCheck: true,
-    target: ts.ScriptTarget.ES2022,
-    module: ts.ModuleKind.ESNext,
-    moduleResolution: ts.ModuleResolutionKind.Bundler,
+    target: typescript.ScriptTarget.ES2022,
+    module: typescript.ModuleKind.ESNext,
+    moduleResolution: typescript.ModuleResolutionKind.Bundler,
     strict: true,
   });
   const checker = program.getTypeChecker();
   const source = program.getSourceFile(file);
-  if (!source) throw new Error(`Cannot read ${distPath}`);
+  if (!source) throw new Error(`Cannot read ${declarationPath}`);
   const moduleSymbol = checker.getSymbolAtLocation(source);
-  if (!moduleSymbol) throw new Error(`${distPath} is not a module`);
+  if (!moduleSymbol) throw new Error(`${declarationPath} is not a module`);
 
   // The namespace type excludes type-only re-exports, including aliases of runtime classes.
   const values = new Set(

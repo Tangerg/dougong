@@ -15,7 +15,7 @@ function storePlugin(name: string, token: Service<WorkspaceStore>, workspace: st
   return definePlugin({
     name,
     provides: { store: token },
-    setup: (_ctx, version: number) => ({ store: { workspace, version } }),
+    setup: (_context, version: number) => ({ store: { workspace, version } }),
   });
 }
 
@@ -23,8 +23,8 @@ function readerPlugin(name: string, token: Service<WorkspaceStore>, trace: strin
   return definePlugin({
     name,
     requires: { store: token },
-    setup({ deps }) {
-      trace.push(`${deps.store.workspace}@${deps.store.version}`);
+    setup({ dependencies }) {
+      trace.push(`${dependencies.store.workspace}@${dependencies.store.version}`);
     },
   });
 }
@@ -37,11 +37,11 @@ export async function contractsAndGroups(): Promise<ExampleResult> {
   const beta = initial.group("beta");
   const alphaProvider = initial.install(
     storePlugin("examples.workspaces.alpha.store", ALPHA_STORE, "alpha"),
-    { id: "alpha-store", group: alpha, config: 1 },
+    { id: "alpha-store", group: alpha, configuration: 1 },
   );
   const betaProvider = initial.install(
     storePlugin("examples.workspaces.beta.store", BETA_STORE, "beta"),
-    { id: "beta-store", group: beta, config: 1 },
+    { id: "beta-store", group: beta, configuration: 1 },
   );
   initial.install(readerPlugin("examples.workspaces.alpha.reader", ALPHA_STORE, trace), {
     id: "alpha-reader",
@@ -58,8 +58,8 @@ export async function contractsAndGroups(): Promise<ExampleResult> {
   const betaWorkspace = await host.use(BETA_STORE, (store) => store.workspace);
   const atStartup = [...trace];
   const change = host.change();
-  change.update(alphaProvider, { config: 2 });
-  change.update(betaProvider, { config: 2 });
+  change.update(alphaProvider, { configuration: 2 });
+  change.update(betaProvider, { configuration: 2 });
   const plan = await host.plan(change);
   await host.apply(plan);
   const versions = `alpha@${await host.use(ALPHA_STORE, (store) => store.version)}, beta@${await host.use(BETA_STORE, (store) => store.version)}`;

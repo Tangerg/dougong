@@ -6,7 +6,7 @@ import {
   extensionPoint,
   optional,
   service,
-  ConfigValidationError,
+  ConfigurationValidationError,
 } from "../src/index.js";
 import { describePlugin } from "../src/composition/plugin-description.js";
 
@@ -33,7 +33,7 @@ it("derives immutable contract descriptions without running setup", () => {
       { alias: "items", id: items.id, kind: "extensionPoint", optional: false },
     ],
     provides: [{ alias: "result", id: result.id }],
-    config: { status: "none" },
+    configuration: { status: "none" },
   });
   expect(setup).not.toHaveBeenCalled();
   expect(JSON.parse(JSON.stringify(descriptor))).toEqual(descriptor);
@@ -42,7 +42,7 @@ it("derives immutable contract descriptions without running setup", () => {
   expect(Object.isFrozen(descriptor.requires[0])).toBe(true);
   expect(Object.isFrozen(descriptor.provides)).toBe(true);
   expect(Object.isFrozen(descriptor.provides[0])).toBe(true);
-  expect(Object.isFrozen(descriptor.config)).toBe(true);
+  expect(Object.isFrozen(descriptor.configuration)).toBe(true);
 });
 
 it("distinguishes a validator without an exporter from a Plugin without configuration", () => {
@@ -51,10 +51,10 @@ it("distinguishes a validator without an exporter from a Plugin without configur
   }));
   const plugin = definePlugin({
     name: "description.validator",
-    config: { "~standard": { version: 1, vendor: "validation-only", validate } },
+    configuration: { "~standard": { version: 1, vendor: "validation-only", validate } },
     setup() {},
   });
-  expect(describePlugin(plugin).config).toEqual({
+  expect(describePlugin(plugin).configuration).toEqual({
     status: "unavailable",
     vendor: "validation-only",
   });
@@ -85,7 +85,7 @@ it("captures standard JSON Schema methods and receivers and only exports on expl
   };
   const plugin = definePlugin({
     name: "description.exporter",
-    config: schema,
+    configuration: schema,
     setup() {},
   });
   expect(calls).toEqual([]);
@@ -96,7 +96,7 @@ it("captures standard JSON Schema methods and receivers and only exports on expl
     throw new Error("replaced output method");
   };
   const descriptor = describePlugin(plugin);
-  expect(descriptor.config).toEqual({
+  expect(descriptor.configuration).toEqual({
     status: "available",
     vendor: "test",
     target: "draft-2020-12",
@@ -109,12 +109,15 @@ it("captures standard JSON Schema methods and receivers and only exports on expl
   ]);
   input.type = "mutated";
   output.minimum = 5;
-  expect(descriptor.config).toMatchObject({ input: { type: "string" }, output: { minimum: 0 } });
-  if (descriptor.config.status !== "available") throw new Error("Expected exported schemas");
-  expect(Object.isFrozen(descriptor.config.input)).toBe(true);
-  expect(Object.isFrozen(descriptor.config.output)).toBe(true);
+  expect(descriptor.configuration).toMatchObject({
+    input: { type: "string" },
+    output: { minimum: 0 },
+  });
+  if (descriptor.configuration.status !== "available") throw new Error("Expected exported schemas");
+  expect(Object.isFrozen(descriptor.configuration.input)).toBe(true);
+  expect(Object.isFrozen(descriptor.configuration.output)).toBe(true);
   expect(JSON.parse(JSON.stringify(descriptor))).toEqual(descriptor);
-  expect(describePlugin(plugin, { jsonSchemaTarget: "draft-07" }).config).toMatchObject({
+  expect(describePlugin(plugin, { jsonSchemaTarget: "draft-07" }).configuration).toMatchObject({
     target: "draft-07",
   });
   expect(calls.slice(-2)).toEqual([
@@ -129,7 +132,7 @@ it("preserves a schema exporter failure instead of claiming the validator is und
   const output = vi.fn<StandardJSONSchemaV1.Converter["output"]>(() => ({}));
   const plugin = definePlugin({
     name: "description.failed-export",
-    config: {
+    configuration: {
       "~standard": {
         version: 1,
         vendor: "test",
@@ -157,18 +160,18 @@ it("keeps schema export separate from Plan validation and execution", async () =
   const schema: StandardSchemaV1<string, number> & StandardJSONSchemaV1<string, number> = {
     "~standard": { version: 1, vendor: "test", validate, jsonSchema: { input, output } },
   };
-  const setup = vi.fn<(config: number) => void>();
+  const setup = vi.fn<(configuration: number) => void>();
   const plugin = definePlugin({
     name: "description.planned",
-    config: schema,
-    setup(_ctx, config) {
-      setup(config);
+    configuration: schema,
+    setup(_context, configuration) {
+      setup(configuration);
     },
   });
   const host = createHost();
   await host.start();
   const change = host.change();
-  change.install(plugin, { id: "configured", config: "42" });
+  change.install(plugin, { id: "configured", configuration: "42" });
   const plan = await host.plan(change);
   expect(validate).toHaveBeenCalledOnce();
   expect(setup).not.toHaveBeenCalled();
@@ -177,7 +180,7 @@ it("keeps schema export separate from Plan validation and execution", async () =
   expect(validate).toHaveBeenCalledOnce();
   expect(input).not.toHaveBeenCalled();
   expect(output).not.toHaveBeenCalled();
-  expect(describePlugin(plugin).config).toMatchObject({ status: "available" });
+  expect(describePlugin(plugin).configuration).toMatchObject({ status: "available" });
   expect(input).toHaveBeenCalledOnce();
   expect(output).toHaveBeenCalledOnce();
   await host.stop();
@@ -186,7 +189,7 @@ it("keeps schema export separate from Plan validation and execution", async () =
 it("rejects a malformed optional JSON Schema protocol at declaration capture", () => {
   const declaration = {
     name: "description.invalid-exporter",
-    config: {
+    configuration: {
       "~standard": {
         version: 1,
         vendor: "test",
@@ -204,7 +207,7 @@ it.each([new Date(0), { type: "string", extension() {} }, []])(
   (value) => {
     const declaration = {
       name: "description.invalid-data",
-      config: {
+      configuration: {
         "~standard": {
           version: 1,
           vendor: "test",
@@ -219,13 +222,13 @@ it.each([new Date(0), { type: "string", extension() {} }, []])(
 );
 
 it("observes an invalid asynchronous exporter rejection", async () => {
-  const failure = new Error("async export failed");
+  const failure = new Error("asynchronous export failed");
   const observe = vi.fn<(resolve: unknown, reject: (error: unknown) => void) => void>(
     (_resolve, reject) => reject(failure),
   );
   const declaration = {
-    name: "description.async-exporter",
-    config: {
+    name: "description.asynchronous-exporter",
+    configuration: {
       "~standard": {
         version: 1,
         vendor: "test",
@@ -258,7 +261,7 @@ it("identifies the failing Installation when a Plan validates several configurat
   const issues = [{ message: "Expected a positive number", path: ["capacity"] }];
   const plugin = definePlugin({
     name: "description.configuration-location",
-    config: {
+    configuration: {
       "~standard": {
         version: 1,
         vendor: "test",
@@ -271,17 +274,17 @@ it("identifies the failing Installation when a Plan validates several configurat
   });
   const host = createHost({
     installations: [
-      { id: "valid", plugin, config: 1 },
-      { id: "invalid", plugin, config: -1 },
+      { id: "valid", plugin, configuration: 1 },
+      { id: "invalid", plugin, configuration: -1 },
     ],
   });
   const change = host.change();
-  change.update(host.installation("valid")!, { config: 2 });
-  change.update(host.installation("invalid")!, { config: -2 });
+  change.update(host.installation("valid")!, { configuration: 2 });
+  change.update(host.installation("invalid")!, { configuration: -2 });
   const failure = await host.plan(change).catch((error: unknown) => error);
-  expect(failure).toBeInstanceOf(ConfigValidationError);
+  expect(failure).toBeInstanceOf(ConfigurationValidationError);
   expect(failure).toMatchObject({
-    code: "CONFIG_INVALID",
+    code: "CONFIGURATION_INVALID",
     details: {
       installation: "invalid",
       phase: "configuration",
@@ -294,9 +297,9 @@ it("identifies the failing Installation when a Plan validates several configurat
   expect(host.stateRevision).toBe(0);
 });
 
-it("keeps ConfigValidationError issues as captured data while accepting structured context", () => {
+it("keeps ConfigurationValidationError issues as captured data while accepting structured context", () => {
   const cause = new Error("validator cause");
-  const failure = new ConfigValidationError([{ message: "Invalid field" }], {
+  const failure = new ConfigurationValidationError([{ message: "Invalid field" }], {
     cause,
     details: { installation: "example", phase: "configuration", outcome: "rejected" },
   });

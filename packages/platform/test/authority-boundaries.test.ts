@@ -70,24 +70,26 @@ it("binds the selectable command to the Platform that issued it", async () => {
 it("reconciles contradictory committed metadata instead of validating dependencies against a fictional reuse", async () => {
   const { host, platform } = fixture(
     new Map([
-      ["dep", valuePlugin("dependency", 2)],
+      ["dependency-module", valuePlugin("dependency", 2)],
       ["root", emptyPlugin("root")],
     ]),
   );
-  const dep = await select(platform, "dependency", "dep", { version: "2.0.0" });
+  const dependency = await select(platform, "dependency", "dependency-module", {
+    version: "2.0.0",
+  });
   const root = await select(platform, "root", "root", { dependencies: { dependency: "^2.0.0" } });
   await host.start();
-  await platform.activate([dep]);
+  await platform.activate([dependency]);
   const change = host.change();
-  change.update(dep.installation!, {
+  change.update(dependency.installation!, {
     plugin: valuePlugin("native", 1),
-    origin: { ...dep.activeOrigin!, manifest: { name: dep.name, version: "1.0.0" } },
+    origin: { ...dependency.activeOrigin!, manifest: { name: dependency.name, version: "1.0.0" } },
   });
   await host.apply(await host.plan(change));
-  expect(dep.activeOrigin?.manifest.version).toBe("1.0.0");
+  expect(dependency.activeOrigin?.manifest.version).toBe("1.0.0");
   expect(platform.preview([root]).selections[0]?.action).toBe("update");
   await platform.activate([root]);
-  expect(dep.activeOrigin?.manifest.version).toBe("2.0.0");
+  expect(dependency.activeOrigin?.manifest.version).toBe("2.0.0");
   expect(await host.use(VALUE, (value) => value.value)).toBe(2);
   await platform[Symbol.asyncDispose]();
   await host.stop();
@@ -297,14 +299,14 @@ it("consumes the input module and permission tables using exactly one iterator l
     signal,
   );
   let tableReads = 0;
-  const table = new Map([["ref", "module"]]);
+  const table = new Map([["reference", "module"]]);
   Object.defineProperty(table, Symbol.iterator, {
     get() {
       if (++tableReads > 1) throw new Error("module iterator changed");
       return Map.prototype[Symbol.iterator];
     },
   });
-  expect(new MemoryLoader(table).load("ref", signal)).toBe("module");
+  expect(new MemoryLoader(table).load("reference", signal)).toBe("module");
 });
 
 it.each(["validation", "admission"] as const)(
@@ -318,7 +320,7 @@ it.each(["validation", "admission"] as const)(
     };
     const plugin = definePlugin({
       name: "pending",
-      config: {
+      configuration: {
         "~standard": {
           version: 1,
           vendor: "test",

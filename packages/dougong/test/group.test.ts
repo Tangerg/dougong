@@ -18,14 +18,14 @@ it("groups installation ownership without creating another capability namespace"
       name: "consumer",
       requires: { serviceA },
       provides: { serviceB },
-      setup: ({ deps }) => ({ serviceB: deps.serviceA + 1 }),
+      setup: ({ dependencies }) => ({ serviceB: dependencies.serviceA + 1 }),
     }),
     { id: "consumer", group: other },
   );
   change.install(definePlugin({ name: "nested", setup() {} }), { id: "nested", group: child });
   await host.apply(await host.plan(change));
   await host.start();
-  expect(await host.use(serviceB, (n) => n)).toBe(2);
+  expect(await host.use(serviceB, (result) => result)).toBe(2);
   const invalid = host.change();
   invalid.removeGroup(parent);
   await expect(host.plan(invalid)).rejects.toMatchObject({ code: "SERVICE_MISSING" });
@@ -117,7 +117,7 @@ it("rejects conflicting edits inside a removed subtree", async () => {
   });
   const change = host.change();
   change.removeGroup(host.group("x")!);
-  change.update(host.installation("a")!, { config: undefined });
+  change.update(host.installation("a")!, { configuration: undefined });
   await expect(host.plan(change)).rejects.toMatchObject({ code: "CHANGE_CONFLICT" });
   expect(host.installation("a")).toBeDefined();
 });

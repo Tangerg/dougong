@@ -29,18 +29,18 @@ export async function extensionAndEvent(): Promise<ExampleResult> {
   const shellPlugin = definePlugin({
     name: "examples.commands.shell",
     requires: { commands: COMMANDS },
-    setup(ctx) {
-      commands = ctx.deps.commands;
-      ctx.events.on(COMMAND_EXECUTED, ({ id }) => executed.push(id));
+    setup(context) {
+      commands = context.dependencies.commands;
+      context.events.on(COMMAND_EXECUTED, ({ id }) => executed.push(id));
     },
   });
 
   const helloPlugin = definePlugin({
     name: "examples.commands.hello",
-    setup(ctx) {
-      contribution = ctx.contributions.add(COMMANDS, "hello", {
+    setup(context) {
+      contribution = context.contributions.add(COMMANDS, "hello", {
         id: "hello",
-        run: () => ctx.events.emit(COMMAND_EXECUTED, { id: "hello" }),
+        run: () => context.events.emit(COMMAND_EXECUTED, { id: "hello" }),
       });
     },
   });

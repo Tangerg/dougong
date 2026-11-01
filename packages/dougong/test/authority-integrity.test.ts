@@ -1,6 +1,6 @@
 import { expect, it, vi } from "vitest";
 import {
-  captureConfig,
+  captureConfiguration,
   createHost,
   definePlugin,
   event,
@@ -15,7 +15,7 @@ it("exposes staging commands without granting access to committed Installation r
   });
   const original = host.installation("original")!;
   const change = host.change();
-  change.update(original, { config: undefined });
+  change.update(original, { configuration: undefined });
   expect("take" in change).toBe(false);
   expect(Object.isFrozen(change)).toBe(true);
   expect(original.status).toBe("stopped");
@@ -95,11 +95,11 @@ it("validates a candidate's own staged Contract kind even after a competing dura
 it("captures an array's own length without invoking a Proxy read that can replace it", () => {
   const value = new Proxy([1, 2], {
     get(target, key, receiver) {
-      if (key === "length") throw new Error("config read an executable length");
+      if (key === "length") throw new Error("configuration read an executable length");
       return Reflect.get(target, key, receiver);
     },
   });
-  expect(captureConfig(value)).toEqual([1, 2]);
+  expect(captureConfiguration(value)).toEqual([1, 2]);
 });
 
 it("captures a shared input node once across all its paths and still enforces the depth limit", () => {
@@ -114,17 +114,17 @@ it("captures a shared input node once across all its paths and still enforces th
       },
     },
   );
-  const captured = captureConfig({ left: shared, right: shared });
+  const captured = captureConfiguration({ left: shared, right: shared });
   expect(captured).toEqual({ left: { value: 1 }, right: { value: 1 } });
   expect(reads).toBe(1);
   let nested: object = shared;
   for (let depth = 0; depth < 63; depth++) nested = { next: nested };
-  expect(() => captureConfig({ first: shared, nested })).toThrow(/nesting depth/);
+  expect(() => captureConfiguration({ first: shared, nested })).toThrow(/nesting depth/);
 });
 
 it("provides callable logging methods without authority to retire the Instance logger", async () => {
   const output = vi.fn<Logger["info"]>();
-  let log!: Logger;
+  let logger!: Logger;
   const host = createHost({
     logger: { debug: output, info: output, warn: output, error: output },
     installations: [
@@ -132,9 +132,9 @@ it("provides callable logging methods without authority to retire the Instance l
         id: "owner",
         plugin: definePlugin({
           name: "logger",
-          setup(ctx) {
-            log = ctx.log;
-            const { info } = log;
+          setup(context) {
+            logger = context.logger;
+            const { info } = logger;
             info("started", 1);
           },
         }),
@@ -147,9 +147,9 @@ it("provides callable logging methods without authority to retire the Instance l
     expect.objectContaining({ installationId: "owner" }),
     1,
   );
-  expect(Symbol.dispose in log).toBe(false);
+  expect(Symbol.dispose in logger).toBe(false);
   await host.stop();
-  expect(() => log.info("late")).toThrowError(
+  expect(() => logger.info("late")).toThrowError(
     expect.objectContaining({ code: "LIFETIME_DISPOSED" }),
   );
 });
@@ -198,7 +198,7 @@ it("rechecks durable Contract kinds before issuing a Plan after asynchronous val
   const candidate = change.install(
     definePlugin({
       name: "claim",
-      config: {
+      configuration: {
         "~standard": {
           version: 1,
           vendor: "fixture",
@@ -212,7 +212,7 @@ it("rechecks durable Contract kinds before issuing a Plan after asynchronous val
       provides: { shared },
       setup: () => ({ shared: 1 }),
     }),
-    { id: "claim", config: null },
+    { id: "claim", configuration: null },
   );
   const planning = host.plan(change);
   await entered.promise;
@@ -288,8 +288,8 @@ it("adopts logger methods once, preserving the backend receiver for both plugin 
         id: "logging",
         plugin: definePlugin({
           name: "logging",
-          setup({ log, lifetime }) {
-            log.info("message");
+          setup({ logger, lifetime }) {
+            logger.info("message");
             lifetime.spawn(() => {
               throw new Error("task");
             });

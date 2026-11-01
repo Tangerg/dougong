@@ -54,7 +54,7 @@ interface PluginSchema<Input, Output> extends StandardSchemaV1<Input, Output> {
   };
 }
 
-export interface InstanceMeta {
+export interface InstanceMetadata {
   readonly hostName: string;
   readonly installationId: string;
   readonly pluginName: string;
@@ -63,55 +63,55 @@ export interface InstanceMeta {
 }
 
 export interface PluginContext<T extends Requirements = Requirements> {
-  readonly deps: ResolvedRequirements<T>;
+  readonly dependencies: ResolvedRequirements<T>;
   readonly lifetime: LifetimeContext;
   readonly events: EventOperations;
   readonly contributions: ContributionOperations;
-  readonly meta: InstanceMeta;
-  readonly log: Logger;
+  readonly metadata: InstanceMetadata;
+  readonly logger: Logger;
 }
 
 export interface Plugin<
-  Config = void,
+  Configuration = void,
   Requires extends Requirements = {},
   Provides extends Provisions = {},
-  ConfigInput = Config,
+  ConfigurationInput = Configuration,
 > {
   readonly name: string;
-  readonly config?: PluginSchema<ConfigInput, Config>;
+  readonly configuration?: PluginSchema<ConfigurationInput, Configuration>;
   readonly requires?: Requires;
   readonly provides?: Provides;
   readonly setup: (
     context: PluginContext<Requires>,
-    config: Config,
+    configuration: Configuration,
   ) => Awaitable<SetupOutput<NoInfer<Provides>>>;
 }
 
 // The uncallable setup signature preserves variance across heterogeneous declarations.
 export interface AnyPlugin {
   readonly name: string;
-  readonly config?: unknown;
+  readonly configuration?: unknown;
   readonly requires?: Requirements;
   readonly provides?: Provisions;
-  readonly setup: (context: never, config: never) => unknown;
+  readonly setup: (context: never, configuration: never) => unknown;
 }
 
-export type InstanceContext = Omit<PluginContext<{}>, "deps"> & {
-  readonly deps: Readonly<Record<string, unknown>>;
+export type InstanceContext = Omit<PluginContext<{}>, "dependencies"> & {
+  readonly dependencies: Readonly<Record<string, unknown>>;
 };
 
 export interface NormalizedPlugin {
   readonly name: string;
-  readonly config?: PluginSchema<unknown, unknown>;
+  readonly configuration?: PluginSchema<unknown, unknown>;
   readonly requires: Requirements;
   readonly provides: Provisions;
   readonly setup: (
     context: InstanceContext,
-    config: unknown,
+    configuration: unknown,
   ) => Awaitable<void | Readonly<Record<string, unknown>>>;
 }
 
-const pluginFields = new Set(["name", "config", "requires", "provides", "setup"]);
+const pluginFields = new Set(["name", "configuration", "requires", "provides", "setup"]);
 
 interface PluginContractDeclaration {
   readonly alias: string;
@@ -121,19 +121,29 @@ interface PluginContractDeclaration {
 
 // NoInfer prevents a caller annotation from widening the inferred setup contract.
 export function definePlugin<
-  Config = void,
+  Configuration = void,
   Requires extends Requirements = {},
   Provides extends Provisions = {},
-  ConfigInput = Config,
+  ConfigurationInput = Configuration,
 >(
-  plugin: Plugin<Config, Requires, Provides, ConfigInput>,
-): Plugin<NoInfer<Config>, NoInfer<Requires>, NoInfer<Provides>, NoInfer<ConfigInput>> {
-  return normalizePluginDeclaration(plugin) as Plugin<Config, Requires, Provides, ConfigInput>;
+  plugin: Plugin<Configuration, Requires, Provides, ConfigurationInput>,
+): Plugin<
+  NoInfer<Configuration>,
+  NoInfer<Requires>,
+  NoInfer<Provides>,
+  NoInfer<ConfigurationInput>
+> {
+  return normalizePluginDeclaration(plugin) as Plugin<
+    Configuration,
+    Requires,
+    Provides,
+    ConfigurationInput
+  >;
 }
 
 function normalizePluginDeclaration(plugin: AnyPlugin): AnyPlugin {
   const declaration = normalizePlainRecord(plugin, "Plugin declaration", { fields: pluginFields });
-  const { name, config, setup } = declaration;
+  const { name, configuration, setup } = declaration;
   if (typeof name !== "string" || !name.trim()) {
     throw new TypeError("Plugin name must be a non-empty string");
   }
@@ -143,7 +153,8 @@ function normalizePluginDeclaration(plugin: AnyPlugin): AnyPlugin {
   if (typeof setup !== "function") {
     throw new TypeError(`Plugin '${name}' must define setup()`);
   }
-  const capturedSchema = config === undefined ? undefined : captureSchema(config, name);
+  const capturedSchema =
+    configuration === undefined ? undefined : captureSchema(configuration, name);
   const declaredRequirements =
     declaration.requires === undefined
       ? undefined
@@ -158,17 +169,21 @@ function normalizePluginDeclaration(plugin: AnyPlugin): AnyPlugin {
 
   return Object.freeze({
     name,
-    ...(capturedSchema === undefined ? {} : { config: capturedSchema }),
+    ...(capturedSchema === undefined ? {} : { configuration: capturedSchema }),
     requires,
     provides,
     setup,
   });
 }
 
+// Composed declarations can reuse our frozen protocol without chaining another validator or exporter.
+const capturedSchemas = new WeakSet<object>();
+
 function captureSchema(value: unknown, name: string): PluginSchema<unknown, unknown> {
   const invalid = () =>
-    new TypeError("Plugin '" + name + "' config must implement Standard Schema V1");
+    new TypeError("Plugin '" + name + "' configuration must implement Standard Schema V1");
   if (!value || (typeof value !== "object" && typeof value !== "function")) throw invalid();
+  if (capturedSchemas.has(value)) return value as PluginSchema<unknown, unknown>;
   const standard = (value as { readonly "~standard"?: unknown })["~standard"];
   if (!standard || typeof standard !== "object") throw invalid();
   const { version, vendor, validate, jsonSchema } = standard as {
@@ -179,10 +194,10 @@ function captureSchema(value: unknown, name: string): PluginSchema<unknown, unkn
   };
   if (version !== 1 || typeof vendor !== "string" || typeof validate !== "function")
     throw invalid();
-  const captured: StandardSchemaV1["~standard"]["validate"] = (...args) =>
-    Reflect.apply(validate, standard, args);
+  const captured: StandardSchemaV1["~standard"]["validate"] = (...validationArguments) =>
+    Reflect.apply(validate, standard, validationArguments);
   const converter = jsonSchema === undefined ? undefined : captureSchemaConverter(jsonSchema, name);
-  return Object.freeze({
+  const schema = Object.freeze({
     "~standard": Object.freeze({
       version: 1 as const,
       vendor,
@@ -190,6 +205,8 @@ function captureSchema(value: unknown, name: string): PluginSchema<unknown, unkn
       ...(converter === undefined ? {} : { jsonSchema: converter }),
     }),
   });
+  capturedSchemas.add(schema);
+  return schema;
 }
 
 function captureSchemaConverter(value: unknown, name: string): StandardJSONSchemaV1.Converter {

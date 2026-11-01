@@ -57,7 +57,7 @@ class ControlledReadable<T> implements Readable<T> {
   }
 }
 
-function logger(): Logger & { error: ReturnType<typeof vi.fn> } {
+function createTestLogger(): Logger & { error: ReturnType<typeof vi.fn> } {
   return {
     debug: vi.fn<Logger["debug"]>(),
     info: vi.fn<Logger["info"]>(),
@@ -276,8 +276,8 @@ describe("observe composition", () => {
     change.install(
       definePlugin({
         name: "observe.cancelled-replacement",
-        setup(ctx) {
-          observe(ctx.lifetime, source, (value, child) => {
+        setup(context) {
+          observe(context.lifetime, source, (value, child) => {
             seen.push(value);
             child.defer(async () => {
               entered.resolve();
@@ -309,8 +309,8 @@ describe("observe composition", () => {
     const installation = change.install(
       definePlugin({
         name: "observe.initial-boundary",
-        setup(ctx) {
-          begin = () => observe(ctx.lifetime, source, (value) => seen.push(value));
+        setup(context) {
+          begin = () => observe(context.lifetime, source, (value) => seen.push(value));
         },
       }),
       { id: "observe.initial-boundary" },
@@ -463,8 +463,8 @@ describe("observe composition", () => {
     });
     const plugin = definePlugin({
       name: "observe.callable-thenable",
-      setup(ctx) {
-        observe(ctx.lifetime, source, (() => thenable) as () => void);
+      setup(context) {
+        observe(context.lifetime, source, (() => thenable) as () => void);
       },
     });
     const host = createHost();
@@ -485,8 +485,8 @@ describe("observe composition", () => {
     const cleanupFailure = new Error("observation cleanup failed");
     const plugin = definePlugin({
       name: "observe.initial-cleanup-failure",
-      setup(ctx) {
-        observe(ctx.lifetime, source, (_value, lifetime) => {
+      setup(context) {
+        observe(context.lifetime, source, (_value, lifetime) => {
           lifetime.defer(() => {
             throw cleanupFailure;
           });
@@ -510,8 +510,8 @@ describe("observe composition", () => {
     const callback = vi.fn<() => void>();
     const plugin = definePlugin({
       name: "observe.subscribe-failure",
-      setup(ctx) {
-        observe(ctx.lifetime, source, callback);
+      setup(context) {
+        observe(context.lifetime, source, callback);
       },
     });
     const host = createHost();
@@ -527,17 +527,17 @@ describe("observe composition", () => {
   it("stops and releases current resources after a read failure", async () => {
     const source = new ControlledReadable(1);
     const trace: string[] = [];
-    const log = logger();
+    const logger = createTestLogger();
     const plugin = definePlugin({
       name: "observe.read-retry",
-      setup(ctx) {
-        observe(ctx.lifetime, source, (value, lifetime) => {
+      setup(context) {
+        observe(context.lifetime, source, (value, lifetime) => {
           trace.push(`start:${value}`);
           lifetime.defer(() => trace.push(`stop:${value}`));
         });
       },
     });
-    const host = createHost({ logger: log });
+    const host = createHost({ logger });
     const change = host.change();
     change.install(plugin, { id: plugin.name });
     await host.apply(await host.plan(change));
@@ -550,7 +550,7 @@ describe("observe composition", () => {
     await tick();
     expect(trace).toEqual(["start:1", "stop:1"]);
     expect(source.subscriptionsDisposed).toBe(1);
-    expect(log.error).toHaveBeenCalledWith(expect.objectContaining({ message: "read failed" }));
+    expect(logger.error).toHaveBeenCalledWith(expect.objectContaining({ message: "read failed" }));
 
     source.notify();
     await tick();
@@ -673,11 +673,11 @@ describe("observe composition", () => {
   it("stops permanently when the previous resources cannot be released", async () => {
     const source = new ControlledReadable(1);
     const trace: string[] = [];
-    const log = logger();
+    const logger = createTestLogger();
     const plugin = definePlugin({
       name: "observe.cleanup-failure",
-      setup(ctx) {
-        observe(ctx.lifetime, source, (value, lifetime) => {
+      setup(context) {
+        observe(context.lifetime, source, (value, lifetime) => {
           trace.push(`start:${value}`);
           lifetime.defer(() => {
             trace.push(`stop:${value}`);
@@ -686,7 +686,7 @@ describe("observe composition", () => {
         });
       },
     });
-    const host = createHost({ logger: log });
+    const host = createHost({ logger });
     const change = host.change();
     change.install(plugin, { id: plugin.name });
     await host.apply(await host.plan(change));
@@ -702,8 +702,8 @@ describe("observe composition", () => {
 
     expect(trace).toEqual(["start:1", "stop:1"]);
     expect(source.subscriptionsDisposed).toBe(1);
-    expect(log.error).toHaveBeenCalledOnce();
-    expect(errorTree(log.error.mock.calls[0]?.[0])).toContainEqual(new Error("defer:1"));
+    expect(logger.error).toHaveBeenCalledOnce();
+    expect(errorTree(logger.error.mock.calls[0]?.[0])).toContainEqual(new Error("defer:1"));
     await expect(host.stop()).rejects.toMatchObject({
       code: "HOST_QUARANTINED",
       details: { outcome: "quarantined" },
@@ -714,12 +714,12 @@ describe("observe composition", () => {
   it("cleans a failed replacement and stops the observation", async () => {
     const source = new ControlledReadable(1);
     const trace: string[] = [];
-    const log = logger();
+    const logger = createTestLogger();
     let fail = true;
     const plugin = definePlugin({
       name: "observe.callback-retry",
-      setup(ctx) {
-        observe(ctx.lifetime, source, (value, lifetime) => {
+      setup(context) {
+        observe(context.lifetime, source, (value, lifetime) => {
           trace.push(`start:${value}`);
           lifetime.defer(() => trace.push(`stop:${value}`));
           if (value === 2 && fail) {
@@ -729,7 +729,7 @@ describe("observe composition", () => {
         });
       },
     });
-    const host = createHost({ logger: log });
+    const host = createHost({ logger });
     const change = host.change();
     change.install(plugin, { id: plugin.name });
     await host.apply(await host.plan(change));
@@ -749,8 +749,8 @@ describe("observe composition", () => {
   });
 
   it("releases source, observer and value after an observation stops", async () => {
-    const forceGc = (globalThis as typeof globalThis & { gc?: () => void }).gc;
-    if (!forceGc) throw new TypeError("Retention tests require Node.js --expose-gc");
+    const forceGarbageCollection = (globalThis as typeof globalThis & { gc?: () => void }).gc;
+    if (!forceGarbageCollection) throw new TypeError("Retention tests require Node.js --expose-gc");
 
     const fixture = await createStoppedObservationRetentionFixture();
     try {
@@ -760,8 +760,8 @@ describe("observe composition", () => {
         pass++
       ) {
         await tick();
-        forceGc();
-        forceGc();
+        forceGarbageCollection();
+        forceGarbageCollection();
       }
 
       for (const [name, reference] of fixture.references) {
@@ -775,13 +775,13 @@ describe("observe composition", () => {
   it("stops when a failed replacement cannot clean its partial resources", async () => {
     const source = new ControlledReadable(1);
     const trace: string[] = [];
-    const log = logger();
+    const logger = createTestLogger();
     const observerFailure = new Error("observer failed");
     const cleanupFailure = new Error("partial cleanup failed");
     const plugin = definePlugin({
       name: "observe.failed-replacement-cleanup",
-      setup(ctx) {
-        observe(ctx.lifetime, source, (value, lifetime) => {
+      setup(context) {
+        observe(context.lifetime, source, (value, lifetime) => {
           trace.push(`start:${value}`);
           lifetime.defer(() => {
             trace.push(`stop:${value}`);
@@ -791,7 +791,7 @@ describe("observe composition", () => {
         });
       },
     });
-    const host = createHost({ logger: log });
+    const host = createHost({ logger });
     const change = host.change();
     change.install(plugin, { id: plugin.name });
     await host.apply(await host.plan(change));
@@ -804,8 +804,8 @@ describe("observe composition", () => {
 
     expect(trace).toEqual(["start:1", "stop:1", "start:2", "stop:2"]);
     expect(source.subscriptionsDisposed).toBe(1);
-    expect(log.error).toHaveBeenCalledOnce();
-    expect(errorTree(log.error.mock.calls[0]?.[0])).toEqual(
+    expect(logger.error).toHaveBeenCalledOnce();
+    expect(errorTree(logger.error.mock.calls[0]?.[0])).toEqual(
       expect.arrayContaining([observerFailure, cleanupFailure]),
     );
     await expect(host.stop()).rejects.toMatchObject({
@@ -829,16 +829,16 @@ async function createStoppedObservationRetentionFixture() {
     source: ControlledReadable<object | undefined> | undefined;
     observer: ((value: object | undefined) => void) | undefined;
   } = { source, observer };
-  const host = createHost({ logger: logger() });
+  const host = createHost({ logger: createTestLogger() });
   const change = host.change();
   change.install(
     definePlugin({
       name: "observe.stopped-retention",
-      setup(ctx) {
+      setup(context) {
         const currentSource = declaration.source;
         const currentObserver = declaration.observer;
         if (!currentSource || !currentObserver) throw new Error("Observation fixture was released");
-        observe(ctx.lifetime, currentSource, currentObserver);
+        observe(context.lifetime, currentSource, currentObserver);
       },
     }),
     { id: "observe.stopped-retention" },
@@ -871,8 +871,8 @@ it("observes only the latest value after asynchronous cleanup completes", async 
   change.install(
     definePlugin({
       name: "observe.latest",
-      setup(ctx) {
-        observe(ctx.lifetime, source, (value, child) => {
+      setup(context) {
+        observe(context.lifetime, source, (value, child) => {
           seen.push(value);
           child.defer(async () => {
             if (value === "A") {
@@ -1179,8 +1179,10 @@ it.each(["bridge", "observe"] as const)(
   async (adapter) => {
     const base = manualOwner(manualLifetime(() => undefined));
     const source = new ControlledReadable(5);
-    function decorated<F extends (...args: never[]) => unknown>(fn: F): F {
-      return Object.assign(fn, { bind: null, call: null });
+    function decorated<Callback extends (...parameters: never[]) => unknown>(
+      callback: Callback,
+    ): Callback {
+      return Object.assign(callback, { bind: null, call: null });
     }
     const owner: ObservationOwner = {
       child: decorated((label) => base.child(label)),
@@ -1255,5 +1257,54 @@ it.each([false, true])(
     }
     expect(source.subscriptionsDisposed).toBe(1);
     expect(foreignMethod).not.toHaveBeenCalled();
+  },
+);
+
+it.each(["child", "read"] as const)(
+  "does not invoke a replacement observer after its %s supplier cancels the task",
+  async (boundary) => {
+    const controller = new AbortController();
+    const input = signal(0);
+    const seen: number[] = [];
+    let released = 0;
+    let drained!: Promise<unknown>;
+    const base = manualOwner(manualLifetime(() => undefined));
+    const owner: ObservationOwner = {
+      ...base,
+      child() {
+        if (released && boundary === "child") controller.abort();
+        return manualLifetime(() => {
+          released++;
+        });
+      },
+      spawn(task) {
+        const result = Promise.resolve(task(controller.signal));
+        drained = result;
+        return {
+          result,
+          async [Symbol.asyncDispose]() {
+            controller.abort();
+            await result;
+          },
+        };
+      },
+    };
+    const source = {
+      get() {
+        if (controller.signal.aborted) throw new Error("Read after cancellation");
+        if (released && boundary === "read") controller.abort();
+        return input.get();
+      },
+      subscribe: input.subscribe,
+    };
+    const handle = observe(owner, source, (value) => seen.push(value));
+    try {
+      input.set(1);
+      await drained;
+      expect(seen).toEqual([0]);
+    } finally {
+      await handle[Symbol.asyncDispose]();
+    }
+    expect(released).toBe(2);
   },
 );

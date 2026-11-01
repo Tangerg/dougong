@@ -17,6 +17,7 @@ import { captureLogger, type Logger } from "../contracts/logging.js";
 import { EventHub } from "../events/event-hub.js";
 import { ContributionRegistry } from "../contributions/contribution-store.js";
 import { SnapshotPublisher, batchSnapshotNotifications } from "../observation/snapshot-view.js";
+import { onAbort } from "../internal/abort.js";
 import { SerialQueue } from "../internal/serial-queue.js";
 import { captureDataArray } from "../internal/data-array.js";
 import { normalizePlainRecord } from "../internal/record.js";
@@ -87,7 +88,7 @@ export class Engine {
   readonly name: string;
   readonly #logger: Logger;
   readonly #onError: (error: unknown) => Awaitable<void>;
-  readonly #shutdownTimeoutMs: number | undefined;
+  readonly #shutdownTimeoutMilliseconds: number | undefined;
   readonly #contracts = new ContractRegistry();
   readonly #events = new EventHub();
   readonly #contributions: ContributionRegistry;
@@ -110,7 +111,7 @@ export class Engine {
         "groups",
         "logger",
         "onError",
-        "shutdownTimeoutMs",
+        "shutdownTimeoutMilliseconds",
       ]),
     });
     const name = input.name === undefined ? "host" : input.name;
@@ -123,7 +124,7 @@ export class Engine {
     this.#onError = (input.onError ?? ((error: unknown) => this.#logger.error(error))) as (
       error: unknown,
     ) => Awaitable<void>;
-    this.#shutdownTimeoutMs = shutdownTimeout(input.shutdownTimeoutMs);
+    this.#shutdownTimeoutMilliseconds = shutdownTimeout(input.shutdownTimeoutMilliseconds);
     this.#contributions = new ContributionRegistry((error) => this.#report(error));
     const declarations = new Map<InstallationRecord, InstallationDeclaration>();
     const initialGroups = captureDataArray(
@@ -149,7 +150,7 @@ export class Engine {
     const ids = new Set<string>();
     for (const raw of initialInstallations) {
       const initial = normalizePlainRecord(raw, "Initial Installation", {
-        fields: new Set(["id", "plugin", "config", "origin", "groupId"]),
+        fields: new Set(["id", "plugin", "configuration", "origin", "groupId"]),
       });
       assertId(initial.id, "Installation id");
       if (initial.groupId !== undefined) assertId(initial.groupId, "Installation Group id");
@@ -161,14 +162,14 @@ export class Engine {
       const record = this.#createInstallation(initial.id, group);
       declarations.set(
         record,
-        captureInstallationDeclaration(initial.plugin, initial.config, initial.origin),
+        captureInstallationDeclaration(initial.plugin, initial.configuration, initial.origin),
       );
     }
     this.#state = Object.freeze({
       revision: 0,
       groups,
       graph: InstallationGraph.build(declarations),
-      configs: new Map(),
+      configurations: new Map(),
       phase: "stopped",
       instances: new Map(),
       unresolved: Object.freeze([]),
@@ -202,9 +203,9 @@ export class Engine {
   }
 
   explain(id: string) {
-    return Object.freeze(
-      describeBindings(this.#state.graph).filter((binding) => binding.installation === id),
-    );
+    const { graph } = this.#state;
+    const installation = graph.byId.get(id);
+    return describeBindings(graph, installation ? [installation] : []);
   }
 
   change(): ChangeSet {
@@ -221,11 +222,21 @@ export class Engine {
     });
   }
 
-  async plan(change: ChangeSet): Promise<Plan> {
+  async plan(change: ChangeSet, signal?: AbortSignal): Promise<Plan> {
     this.#assertHealthy();
     const operations = this.#drafts.take(change);
-    const validity = this.#plans.validationSignal;
+    let validity = this.#plans.validationSignal;
+    let detachCaller: (() => void) | undefined;
+    let detachRevision: (() => void) | undefined;
     try {
+      if (signal !== undefined) {
+        const request = new AbortController();
+        const cancel = (reason: unknown) => request.abort(reason);
+        detachRevision = onAbort(validity, cancel);
+        detachCaller = onAbort(signal, cancel);
+        validity = request.signal;
+        validity.throwIfAborted();
+      }
       const prepared = await compileTransition(
         this.#state,
         operations,
@@ -239,6 +250,9 @@ export class Engine {
     } catch (error) {
       this.#discardPending(operations);
       throw error;
+    } finally {
+      detachRevision?.();
+      detachCaller?.();
     }
   }
 
@@ -254,10 +268,10 @@ export class Engine {
     return this.#lifecycle("stop");
   }
 
-  use<T, R>(
+  use<T, Result>(
     requirement: Service<T> | OptionalService<T>,
-    callback: (value: T | undefined) => Awaitable<R>,
-  ): Promise<R> {
+    callback: (value: T | undefined) => Awaitable<Result>,
+  ): Promise<Result> {
     try {
       if (typeof callback !== "function")
         throw new TypeError("Service callback must be a function");
@@ -278,7 +292,7 @@ export class Engine {
       const instance = this.#state.instances.get(provider);
       if (!instance)
         throw new DougongError("SERVICE_UNAVAILABLE", "Service is not running: " + token.id);
-      return instance.use<T, R>(token.id, callback);
+      return instance.use<T, Result>(token.id, callback);
     } catch (error) {
       return Promise.reject(error);
     }
@@ -461,7 +475,7 @@ export class Engine {
   }
 
   async #prepare(
-    prepared: Pick<PreparedTransition, "graph" | "affected" | "configs">,
+    prepared: Pick<PreparedTransition, "graph" | "affected" | "configurations">,
     retained: ReadonlyMap<InstallationRecord, Instance>,
     candidates: Map<InstallationRecord, Instance>,
     writer: ReturnType<ContractRegistry["writer"]>,
@@ -488,7 +502,7 @@ export class Engine {
             contributions: this.#contributions,
             contracts: writer,
             startupSignal: startup.signal,
-            shutdownTimeoutMs: this.#shutdownTimeoutMs,
+            shutdownTimeoutMilliseconds: this.#shutdownTimeoutMilliseconds,
           });
           candidates.set(record, instance);
           return instance;
@@ -496,24 +510,24 @@ export class Engine {
       try {
         await Promise.all(
           instances.map(async (instance) => {
-            const deps: Record<string, unknown> = Object.create(null);
+            const dependencies: Record<string, unknown> = Object.create(null);
             for (const [alias, requirement] of Object.entries(
               instance.declaration.plugin.requires,
             )) {
               if (requirement.kind === "extensionPoint") {
-                deps[alias] = this.#contributions.view(requirement, instance.lifetime);
+                dependencies[alias] = this.#contributions.view(requirement, instance.lifetime);
                 continue;
               }
               const token = requirement.kind === "optional" ? requirement.service : requirement;
               const provider = prepared.graph.providers.get(token.id);
-              deps[alias] = provider
+              dependencies[alias] = provider
                 ? (candidates.get(provider) ?? retained.get(provider))?.read(token.id)
                 : undefined;
             }
             try {
               await instance.prepare(
-                Object.freeze(deps),
-                prepared.configs.get(instance.installation)?.value,
+                Object.freeze(dependencies),
+                prepared.configurations.get(instance.installation)?.value,
               );
             } catch (error) {
               if (!startup.signal.aborted || !Object.is(error, startup.signal.reason))
@@ -541,7 +555,11 @@ export class Engine {
     const writer = this.#contracts.writer(previous.graph.contractKinds);
     try {
       await this.#prepare(
-        { graph: previous.graph, affected: failed.affected, configs: previous.configs },
+        {
+          graph: previous.graph,
+          affected: failed.affected,
+          configurations: previous.configurations,
+        },
         retained,
         candidates,
         writer,
@@ -585,7 +603,7 @@ export class Engine {
     this.#advance({
       groups: prepared.groups,
       graph: prepared.graph,
-      configs: prepared.configs,
+      configurations: prepared.configurations,
       phase,
       instances,
       unresolved: Object.freeze([]),
@@ -767,7 +785,9 @@ export class Engine {
 
   #discardPending(operations: ReadonlyArray<ChangeOperation>) {
     this.#detachUncommitted(
-      operations.flatMap((op) => (op.kind === "install" ? [op.installation] : [])),
+      operations.flatMap((operation) =>
+        operation.kind === "install" ? [operation.installation] : [],
+      ),
     );
   }
 

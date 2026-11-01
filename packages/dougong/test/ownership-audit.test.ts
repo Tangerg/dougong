@@ -8,8 +8,8 @@ it("publishes committed Host availability only with the matching contribution sn
     definePlugin({
       name: "audit.commit-publication",
       provides: { value },
-      setup(ctx) {
-        ctx.contributions.add(values, "value", current);
+      setup(context) {
+        context.contributions.add(values, "value", current);
         return { value: current };
       },
     });
@@ -50,8 +50,8 @@ it.each(["startup", "change"] as const)(
     const original = definePlugin({ name: "audit.owner", setup() {} });
     const broken = definePlugin({
       name: "audit.owner",
-      setup(ctx) {
-        ctx.lifetime.defer(cleanup);
+      setup(context) {
+        context.lifetime.defer(cleanup);
         throw new Error("audit setup failure");
       },
     });
@@ -92,9 +92,11 @@ it("projects sealed descendants before resource withdrawal can notify observers"
         id: "owner",
         plugin: definePlugin({
           name: "audit.sealed-lifetime",
-          setup(ctx) {
-            ctx.events.on(notice, () => undefined);
-            ctx.events.on(notice, () => undefined, { lifetime: ctx.lifetime.child("child") });
+          setup(context) {
+            context.events.on(notice, () => undefined);
+            context.events.on(notice, () => undefined, {
+              lifetime: context.lifetime.child("child"),
+            });
           },
         }),
       },
@@ -167,7 +169,7 @@ it("keeps dependency and group membership committed while a Plan validates", asy
   change.update(host.installation("provider")!, {
     plugin: definePlugin({
       ...provider,
-      config: {
+      configuration: {
         "~standard": {
           version: 1,
           vendor: "audit",
@@ -249,8 +251,8 @@ it("rejects the stale concurrent removal Plan without releasing one Installation
         id: "owner",
         plugin: definePlugin({
           name: "audit.concurrent-removal",
-          setup(ctx) {
-            ctx.lifetime.defer(cleanup);
+          setup(context) {
+            context.lifetime.defer(cleanup);
           },
         }),
       },

@@ -1,24 +1,24 @@
 import type { StandardSchemaV1 } from "@standard-schema/spec";
 import { onAbort } from "../internal/abort.js";
 import { captureDataArray } from "../internal/data-array.js";
-import { ConfigValidationError } from "../contracts/errors.js";
+import { ConfigurationValidationError } from "../contracts/errors.js";
 
-export type ConfigValue =
+export type ConfigurationValue =
   | null
   | boolean
   | string
   | number
-  | ReadonlyArray<ConfigValue>
-  | { readonly [key: string]: ConfigValue };
+  | ReadonlyArray<ConfigurationValue>
+  | { readonly [key: string]: ConfigurationValue };
 
-const maxConfigDepth = 64;
+const maximumConfigurationDepth = 64;
 
 interface CapturedValue {
-  readonly value: ConfigValue;
+  readonly value: ConfigurationValue;
   readonly height: number;
 }
 
-export function captureConfig(input: unknown): ConfigValue | undefined {
+export function captureConfiguration(input: unknown): ConfigurationValue | undefined {
   const ancestors = new Set<object>();
   const captured = new Map<object, CapturedValue>();
   const visit = (value: unknown, path: string): CapturedValue => {
@@ -26,12 +26,12 @@ export function captureConfig(input: unknown): ConfigValue | undefined {
       return { value, height: 0 };
     if (typeof value === "number" && Number.isFinite(value)) return { value, height: 0 };
     if (typeof value !== "object" || value === null)
-      throw new TypeError(`Unsupported config value at ${path}`);
-    if (ancestors.has(value)) throw new TypeError(`Circular config at ${path}`);
+      throw new TypeError(`Unsupported configuration value at ${path}`);
+    if (ancestors.has(value)) throw new TypeError(`Circular configuration at ${path}`);
     // Shared input is read once; its cached height must still fit every path that reuses it.
     const known = captured.get(value);
-    if (ancestors.size + (known?.height ?? 1) > maxConfigDepth)
-      throw new TypeError("Config exceeds the supported nesting depth");
+    if (ancestors.size + (known?.height ?? 1) > maximumConfigurationDepth)
+      throw new TypeError("Configuration exceeds the supported nesting depth");
     if (known) return known;
     ancestors.add(value);
     let height = 1;
@@ -40,20 +40,23 @@ export function captureConfig(input: unknown): ConfigValue | undefined {
       height = Math.max(height, child.height + 1);
       return child.value;
     };
-    let result: ConfigValue;
+    let result: ConfigurationValue;
     if (Array.isArray(value)) {
-      const items = captureDataArray(value, `Config array at ${path}`);
+      const items = captureDataArray(value, `Configuration array at ${path}`);
       result = Object.freeze(items.map((item, index) => member(item, `${path}[${index}]`)));
     } else {
       const prototype = Object.getPrototypeOf(value);
       if (prototype !== Object.prototype && prototype !== null)
-        throw new TypeError(`Config must contain plain records at ${path}`);
-      const record: Record<string, ConfigValue> = Object.create(null);
+        throw new TypeError(`Configuration must contain plain records at ${path}`);
+      const record: Record<string, ConfigurationValue> = Object.create(null);
       for (const key of Reflect.ownKeys(value)) {
-        if (typeof key !== "string") throw new TypeError(`Config keys must be strings at ${path}`);
+        if (typeof key !== "string")
+          throw new TypeError(`Configuration keys must be strings at ${path}`);
         const field = Object.getOwnPropertyDescriptor(value, key);
         if (!field || !("value" in field) || !field.enumerable)
-          throw new TypeError(`Config must contain enumerable data properties at ${path}.${key}`);
+          throw new TypeError(
+            `Configuration must contain enumerable data properties at ${path}.${key}`,
+          );
         if (field.value !== undefined) record[key] = member(field.value, `${path}.${key}`);
       }
       result = Object.freeze(record);
@@ -63,16 +66,16 @@ export function captureConfig(input: unknown): ConfigValue | undefined {
     captured.set(value, entry);
     return entry;
   };
-  return input === undefined ? undefined : visit(input, "config").value;
+  return input === undefined ? undefined : visit(input, "configuration").value;
 }
 
-// Validator results are untrusted. The envelope separates async validation from Promise-shaped config values.
-export async function resolvePluginConfig(
+// Validator results are untrusted. The envelope separates async validation from Promise-shaped configuration values.
+export async function resolvePluginConfiguration(
   schema: StandardSchemaV1<unknown, unknown> | undefined,
-  input: ConfigValue | undefined,
+  input: ConfigurationValue | undefined,
   installationId: string,
   validity?: AbortSignal,
-): Promise<{ readonly value: ConfigValue | undefined }> {
+): Promise<{ readonly value: ConfigurationValue | undefined }> {
   validity?.throwIfAborted();
   if (!schema) return Object.freeze({ value: input });
   const response = schema["~standard"].validate(input);
@@ -82,7 +85,7 @@ export async function resolvePluginConfig(
   validity?.throwIfAborted();
   if (!result || typeof result !== "object") {
     throw new TypeError(
-      `Installation '${installationId}' config validator returned a non-object result`,
+      `Installation '${installationId}' configuration validator returned a non-object result`,
     );
   }
 
@@ -92,20 +95,20 @@ export async function resolvePluginConfig(
   if (issues !== undefined) {
     if (!Array.isArray(issues)) {
       throw new TypeError(
-        `Installation '${installationId}' config validator returned non-array issues`,
+        `Installation '${installationId}' configuration validator returned non-array issues`,
       );
     }
-    throw new ConfigValidationError(issues as ReadonlyArray<StandardSchemaV1.Issue>, {
+    throw new ConfigurationValidationError(issues as ReadonlyArray<StandardSchemaV1.Issue>, {
       details: { installation: installationId, phase: "configuration", outcome: "rejected" },
     });
   }
   if (!Object.hasOwn(result, "value")) {
     throw new TypeError(
-      `Installation '${installationId}' config validator returned neither value nor issues`,
+      `Installation '${installationId}' configuration validator returned neither value nor issues`,
     );
   }
   const output = (result as { readonly value: unknown }).value;
-  return Object.freeze({ value: Object.is(output, input) ? input : captureConfig(output) });
+  return Object.freeze({ value: Object.is(output, input) ? input : captureConfiguration(output) });
 }
 
 // Losing a revision detaches this plan; a non-cooperative validator may finish on its own.

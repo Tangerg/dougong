@@ -24,11 +24,11 @@ export class ReadonlyMapSnapshot<Key, Value> implements ReadonlyMap<Key, Value> 
 
   forEach(
     callback: (value: Value, key: Key, map: ReadonlyMap<Key, Value>) => void,
-    thisArg?: unknown,
+    receiver?: unknown,
   ) {
     if (typeof callback !== "function")
       throw new TypeError("ReadonlyMapSnapshot callback must be a function");
-    for (const [key, value] of this.#values) Reflect.apply(callback, thisArg, [value, key, this]);
+    for (const [key, value] of this.#values) Reflect.apply(callback, receiver, [value, key, this]);
   }
 
   entries() {

@@ -149,19 +149,19 @@ describe("Platform lifecycle", () => {
   it("refuses to remove a dependency that an installed artifact still requires", async () => {
     const { platform } = fixture(
       new Map([
-        ["dep", emptyPlugin("dep")],
+        ["dependency", emptyPlugin("dependency")],
         ["root", emptyPlugin("root")],
       ]),
     );
-    const dep = await select(platform, "dep", "dep");
-    const root = await select(platform, "root", "root", { dependencies: { dep: "*" } });
+    const dependency = await select(platform, "dependency", "dependency");
+    const root = await select(platform, "root", "root", { dependencies: { dependency: "*" } });
     await platform.activate([root]);
-    await expect(platform.remove(dep)).rejects.toMatchObject({
+    await expect(platform.remove(dependency)).rejects.toMatchObject({
       code: "REGISTRATION_DEPENDENCY_INACTIVE",
     });
-    expect(dep.status).toBe("installed");
-    await platform.remove(dep, root);
-    expect(dep.status).toBe("removed");
+    expect(dependency.status).toBe("installed");
+    await platform.remove(dependency, root);
+    expect(dependency.status).toBe("removed");
     expect(root.status).toBe("removed");
     await platform[Symbol.asyncDispose]();
   });

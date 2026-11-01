@@ -1,22 +1,22 @@
 import type { StandardJSONSchemaV1 } from "@standard-schema/spec";
 import { normalizePlainRecord } from "../internal/record.js";
-import { assertSynchronous } from "../internal/sync-result.js";
-import { captureConfig, type ConfigValue } from "./configuration.js";
+import { assertSynchronous } from "../internal/synchronous-result.js";
+import { captureConfiguration, type ConfigurationValue } from "./configuration.js";
 import { normalizePlugin, type AnyPlugin } from "./plugin.js";
 
 export interface PluginDescriptionOptions {
   readonly jsonSchemaTarget?: StandardJSONSchemaV1.Target;
 }
 
-export type PluginConfigDescriptor =
+export type PluginConfigurationDescriptor =
   | { readonly status: "none" }
   | { readonly status: "unavailable"; readonly vendor: string }
   | {
       readonly status: "available";
       readonly vendor: string;
       readonly target: StandardJSONSchemaV1.Target;
-      readonly input: Readonly<Record<string, ConfigValue>>;
-      readonly output: Readonly<Record<string, ConfigValue>>;
+      readonly input: Readonly<Record<string, ConfigurationValue>>;
+      readonly output: Readonly<Record<string, ConfigurationValue>>;
     };
 
 export interface PluginDescriptor {
@@ -28,7 +28,7 @@ export interface PluginDescriptor {
     readonly optional: boolean;
   }>;
   readonly provides: ReadonlyArray<{ readonly alias: string; readonly id: string }>;
-  readonly config: PluginConfigDescriptor;
+  readonly configuration: PluginConfigurationDescriptor;
 }
 
 const descriptionOptionFields = new Set(["jsonSchemaTarget"]);
@@ -45,14 +45,14 @@ export function describePlugin(
     throw new TypeError("JSON Schema target must be a non-empty trimmed string");
   }
   const declaration = normalizePlugin(plugin);
-  const schema = declaration.config?.["~standard"];
-  let config: PluginConfigDescriptor;
-  if (!schema) config = Object.freeze({ status: "none" });
+  const schema = declaration.configuration?.["~standard"];
+  let configuration: PluginConfigurationDescriptor;
+  if (!schema) configuration = Object.freeze({ status: "none" });
   else if (!schema.jsonSchema)
-    config = Object.freeze({ status: "unavailable", vendor: schema.vendor });
+    configuration = Object.freeze({ status: "unavailable", vendor: schema.vendor });
   else {
     const exportOptions = Object.freeze({ target });
-    config = Object.freeze({
+    configuration = Object.freeze({
       status: "available",
       vendor: schema.vendor,
       target,
@@ -78,15 +78,15 @@ export function describePlugin(
         Object.freeze({ alias, id: token.id }),
       ),
     ),
-    config,
+    configuration,
   });
 }
 
-function captureJSONSchema(value: unknown): Readonly<Record<string, ConfigValue>> {
+function captureJSONSchema(value: unknown): Readonly<Record<string, ConfigurationValue>> {
   assertSynchronous(value, "JSON Schema exporters must be synchronous");
-  const schema = captureConfig(value);
+  const schema = captureConfiguration(value);
   if (schema === null || typeof schema !== "object" || Array.isArray(schema)) {
     throw new TypeError("JSON Schema exporters must return a plain data record");
   }
-  return schema as Readonly<Record<string, ConfigValue>>;
+  return schema as Readonly<Record<string, ConfigurationValue>>;
 }

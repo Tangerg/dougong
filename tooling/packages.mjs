@@ -4,6 +4,16 @@ export const publishedDirectories = Object.freeze([
   "packages/platform",
 ]);
 
+export const abortListenerPort = Object.freeze({
+  specifier: "#abort-listener",
+  packages: Object.freeze(["dougong", "reactive"]),
+  targets: Object.freeze({
+    types: "./runtime/abort-listener.d.mts",
+    node: "./runtime/abort-listener.node.mjs",
+    default: "./runtime/abort-listener.web.mjs",
+  }),
+});
+
 // A package specifier is also a relative node_modules path; scoped names own exactly two components.
 export function packageName(name) {
   if (typeof name !== "string" || !name || name.trim() !== name)

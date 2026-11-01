@@ -1,15 +1,15 @@
 # 生命周期与资源
 
-Lifetime 以组合构成资源树。根由 Instance 创建，插件通过 `child(label)` 创建子所有者。插件通过根视图 `ctx.lifetime` 登记资源和任务；只有 Engine 能停止 Instance。插件不能通过该视图释放整个实例。需要提前结束一组工作时，创建并保存 `child(label)` 返回的 `ChildLifetime`。
+Lifetime 以组合构成资源树。根由 Instance 创建，插件通过 `child(label)` 创建子所有者。插件通过根视图 `context.lifetime` 登记资源和任务；只有 Engine 能停止 Instance。插件不能通过该视图释放整个实例。需要提前结束一组工作时，创建并保存 `child(label)` 返回的 `ChildLifetime`。
 
 | 原子能力 | 承诺 |
 | --- | --- |
 | `use(resource)` | 捕获标准释放方法，成功登记后返回原资源 |
-| `defer(fn)` | 登记最终释放函数，返回可提前释放的句柄 |
+| `defer(cleanup)` | 登记最终释放函数，返回可提前释放的句柄 |
 | `child(label)` | 创建由父树拥有的子 Lifetime |
 | `spawn(task)` | 启动可取消后台任务，Task 提供 `result` |
 | `acquire(factory)` | 创建前登记义务；返回的 Promise 以冻结的 `{ resource }` 回执完成 |
-| `interrupt(fn)` | 登记排空工作之前必须执行的中断操作 |
+| `interrupt(interruptWork)` | 登记排空工作之前必须执行的中断操作 |
 | `signal` | 合作式取消信号 |
 | `child[Symbol.asyncDispose]()` | 提前关闭自己创建的子树，加入同一次退出 |
 
@@ -25,7 +25,7 @@ lifetime.spawn((signal) => connection.readUntilClosed(signal));
 
 清理失败不能宣称已经干净退出。Lifetime 保留失败释放和未完成工作；Host 的 `unresolved` 投影仍被保留的运行代次。子树没有成功退出时，不能释放它仍可使用的父资源；同理，未退出消费者的传递提供者必须保留，独立分支则继续安全清理。正在使用的前台借用也不能被强制销毁。
 
-`shutdownTimeoutMs` 为正数且最多为 2,147,483,647 毫秒（原生计时器上限）；不设置即不限制等待时间。超时只结束等待，不证明底层工作已停止；已经启动的退出可能随后完成，但清理失败不会自动重试。隔离是整个 Host 的终止状态，迟到完成只更新诊断，不恢复服务。AbortSignal 无法强杀任意 JavaScript；硬终止需要实际执行隔离。应用的处置和替换前提见[隔离后的应用处理](./transactions.md#quarantine)。
+`shutdownTimeoutMilliseconds` 为正数且最多为 2,147,483,647 毫秒（原生计时器上限）；不设置即不限制等待时间。超时只结束等待，不证明底层工作已停止；已经启动的退出可能随后完成，但清理失败不会自动重试。隔离是整个 Host 的终止状态，迟到完成只更新诊断，不恢复服务。AbortSignal 无法强杀任意 JavaScript；硬终止需要实际执行隔离。应用的处置和替换前提见[隔离后的应用处理](./transactions.md#quarantine)。
 
 取消以原生 AbortSignal 的状态为准。手动派发名为 `abort` 的事件不会取消子树或任务，也不会使它们错过随后真正的取消。Lifetime 通过自己拥有的任务和子树传播取消；公开信号的监听器阻止事件派发，也不能阻止这些结构化的取消。
 

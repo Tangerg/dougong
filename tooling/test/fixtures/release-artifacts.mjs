@@ -35,24 +35,24 @@ function packageAt(state, reference) {
 
 let injected = false;
 let previousPack;
-installCommandFixture((name, args, options, nativeSpawn) => {
+installCommandFixture((name, commandArguments, options, nativeSpawn) => {
   const race = process.env.DOUGONG_RELEASE_CONCURRENT_EDIT;
   const git = process.env.DOUGONG_RELEASE_REAL_GIT;
   if (race && git && !injected) {
-    const runGit = (...args) => {
-      const result = nativeSpawn(git, args, { cwd: workspace, stdio: "pipe" });
+    const runGit = (...commandArguments) => {
+      const result = nativeSpawn(git, commandArguments, { cwd: workspace, stdio: "pipe" });
       if (result.status !== 0) throw new Error("Concurrent Git fixture failed: " + result.stderr);
     };
     if (
       race === "build-before-pack" &&
       name === "pnpm" &&
-      args[0] === "pack" &&
+      commandArguments[0] === "pack" &&
       basename(options.cwd) === "dougong"
     ) {
       writeFileSync(join(options.cwd, "dist/index.js"), "export const notTheTestedBuild = true;");
       injected = true;
     }
-    if (name === "npm" && args[0] === "publish") {
+    if (name === "npm" && commandArguments[0] === "publish") {
       if (race === "stage") {
         writeFileSync(join(workspace, "other.txt"), "owned by another operation\n");
         runGit("add", "other.txt");
@@ -71,17 +71,22 @@ installCommandFixture((name, args, options, nativeSpawn) => {
     if (
       race === "before-publish" &&
       name === "pnpm" &&
-      args[0] === "pack" &&
+      commandArguments[0] === "pack" &&
       basename(options.cwd) === "platform"
     ) {
       runGit("commit", "--allow-empty", "-m", "Concurrent commit during packing");
       injected = true;
     }
-    if (race === "tag-head" && name === "git" && args[0] === "tag" && args.includes("-a")) {
+    if (
+      race === "tag-head" &&
+      name === "git" &&
+      commandArguments[0] === "tag" &&
+      commandArguments.includes("-a")
+    ) {
       runGit("commit", "--allow-empty", "-m", "Concurrent commit before tag");
       injected = true;
     }
-    if (race === "retag-during-resume" && name === "pnpm" && args[0] === "pack") {
+    if (race === "retag-during-resume" && name === "pnpm" && commandArguments[0] === "pack") {
       const { version } = JSON.parse(readFileSync(join(options.cwd, "package.json"), "utf8"));
       const tag = `v${version}`;
       const existing = nativeSpawn(git, ["tag", "--list", tag], {
@@ -93,11 +98,11 @@ installCommandFixture((name, args, options, nativeSpawn) => {
         injected = true;
       }
     }
-    if (race === "remote-main-at-push" && name === "git" && args[0] === "push") {
+    if (race === "remote-main-at-push" && name === "git" && commandArguments[0] === "push") {
       runGit("-C", join(workspace, "remote.git"), "update-ref", "-d", "refs/heads/main");
       injected = true;
     }
-    if (race === "remote-tag-during-gate" && name === "pnpm" && args[0] === "pack") {
+    if (race === "remote-tag-during-gate" && name === "pnpm" && commandArguments[0] === "pack") {
       const { version } = JSON.parse(readFileSync(join(options.cwd, "package.json"), "utf8"));
       runGit(
         "-C",
@@ -108,16 +113,16 @@ installCommandFixture((name, args, options, nativeSpawn) => {
       );
       injected = true;
     }
-    if (race === "remote-tag-at-push" && name === "git" && args[0] === "push") {
-      const tagRef = args.at(-1).split(":")[1];
+    if (race === "remote-tag-at-push" && name === "git" && commandArguments[0] === "push") {
+      const tagReference = commandArguments.at(-1).split(":")[1];
       const original = nativeSpawn(git, ["rev-parse", "origin/main"], {
         cwd: workspace,
         encoding: "utf8",
       }).stdout.trim();
-      runGit("-C", join(workspace, "remote.git"), "update-ref", tagRef, original);
+      runGit("-C", join(workspace, "remote.git"), "update-ref", tagReference, original);
       injected = true;
     }
-    if (race === "push-refs" && name === "git" && args[0] === "push") {
+    if (race === "push-refs" && name === "git" && commandArguments[0] === "push") {
       const tag =
         "v" + JSON.parse(readFileSync(join(workspace, "packages/dougong/package.json"))).version;
       runGit("commit", "--allow-empty", "-m", "Concurrent commit before push");
@@ -127,48 +132,53 @@ installCommandFixture((name, args, options, nativeSpawn) => {
   }
   const recording =
     name === "git" &&
-    (["add", "commit", "push"].includes(args[0]) || (args[0] === "tag" && args.includes("-a")));
+    (["add", "commit", "push"].includes(commandArguments[0]) ||
+      (commandArguments[0] === "tag" && commandArguments.includes("-a")));
   if (recording || name === "npm" || name === "sleep") {
     appendFileSync(
       join(workspace, "commands.jsonl"),
-      JSON.stringify({ command: name, args }) + "\n",
+      JSON.stringify({ command: name, commandArguments }) + "\n",
     );
   }
   if (name === "git") {
     if (process.env.DOUGONG_RELEASE_REAL_GIT) {
       const interrupt =
-        (recording || (args[0] === "diff" && args.includes("--cached"))) &&
-        args[0] === process.env.DOUGONG_RELEASE_INTERRUPT;
+        (recording || (commandArguments[0] === "diff" && commandArguments.includes("--cached"))) &&
+        commandArguments[0] === process.env.DOUGONG_RELEASE_INTERRUPT;
       if (interrupt && process.env.DOUGONG_RELEASE_INTERRUPT_AFTER !== "true") {
         return { status: 1 };
       }
-      const result = nativeSpawn(process.env.DOUGONG_RELEASE_REAL_GIT, args, {
+      const result = nativeSpawn(process.env.DOUGONG_RELEASE_REAL_GIT, commandArguments, {
         ...options,
         stdio: "pipe",
       });
       return { ...result, status: interrupt ? 1 : result.status };
     }
-    if (args[0] === "rev-parse") {
-      return { status: 0, stdout: args.includes("--abbrev-ref") ? "main" : "a".repeat(40) };
+    if (commandArguments[0] === "rev-parse") {
+      return {
+        status: 0,
+        stdout: commandArguments.includes("--abbrev-ref") ? "main" : "a".repeat(40),
+      };
     }
-    if (args[0] === "rev-list") return { status: 0, stdout: "0" };
+    if (commandArguments[0] === "rev-list") return { status: 0, stdout: "0" };
     if (
-      ["status", "fetch", "ls-remote"].includes(args[0]) ||
-      (args[0] === "tag" && args[1] === "--list")
+      ["status", "fetch", "ls-remote"].includes(commandArguments[0]) ||
+      (commandArguments[0] === "tag" && commandArguments[1] === "--list")
     ) {
       return { status: 0 };
     }
     process.exit(99);
   }
 
-  if (name === "pnpm" && args.length === 1 && args[0] === "check") {
+  if (name === "pnpm" && commandArguments.length === 1 && commandArguments[0] === "check") {
     appendFileSync(
       join(workspace, "commands.jsonl"),
       JSON.stringify({
         command: "gate-versions",
-        args: ["reactive", "dougong", "platform"].map(
-          (dir) =>
-            JSON.parse(readFileSync(join(workspace, "packages", dir, "package.json"))).version,
+        commandArguments: ["reactive", "dougong", "platform"].map(
+          (directory) =>
+            JSON.parse(readFileSync(join(workspace, "packages", directory, "package.json")))
+              .version,
         ),
       }) + "\n",
     );
@@ -182,13 +192,14 @@ installCommandFixture((name, args, options, nativeSpawn) => {
     return { status: 0 };
   }
 
-  if (args[0] === "pack" && (name === "pnpm" || name === "npm")) {
-    const stage = args[args.indexOf("--pack-destination") + 1];
+  if (commandArguments[0] === "pack" && (name === "pnpm" || name === "npm")) {
+    const stage = commandArguments[commandArguments.indexOf("--pack-destination") + 1];
     let source;
     if (name === "pnpm") {
-      if (args.length !== 3 || args[1] !== "--pack-destination") process.exit(99);
+      if (commandArguments.length !== 3 || commandArguments[1] !== "--pack-destination")
+        process.exit(99);
       if (process.env.DOUGONG_RELEASE_REAL_PNPM) {
-        return nativeSpawn(process.env.DOUGONG_RELEASE_REAL_PNPM, args, {
+        return nativeSpawn(process.env.DOUGONG_RELEASE_REAL_PNPM, commandArguments, {
           ...options,
           stdio: "pipe",
           env: { ...process.env, ...options.env, COREPACK_ENABLE_NETWORK: "0" },
@@ -205,8 +216,9 @@ installCommandFixture((name, args, options, nativeSpawn) => {
       }
       writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
     } else {
-      if (args.length !== 4 || args[2] !== "--pack-destination") process.exit(99);
-      source = packageAt("published", args[1]);
+      if (commandArguments.length !== 4 || commandArguments[2] !== "--pack-destination")
+        process.exit(99);
+      source = packageAt("published", commandArguments[1]);
       if (!source) return { status: 1, stderr: "Package version is not published" };
     }
     const archive = join(stage, basename(name === "pnpm" ? options.cwd : source) + ".tgz");
@@ -237,13 +249,16 @@ installCommandFixture((name, args, options, nativeSpawn) => {
     return { status: 0, stdout: archive };
   }
 
-  if (name === "npm" && args[0] === "view") {
-    if (args.length !== 5 || args.slice(2).join(" ") !== "version --prefer-online --json")
+  if (name === "npm" && commandArguments[0] === "view") {
+    if (
+      commandArguments.length !== 5 ||
+      commandArguments.slice(2).join(" ") !== "version --prefer-online --json"
+    )
       process.exit(99);
-    if (visibility === "unreadable" && packageAt("pending", args[1])) {
+    if (visibility === "unreadable" && packageAt("pending", commandArguments[1])) {
       return { status: 1, stdout: JSON.stringify({ error: { code: "E503" } }) };
     }
-    const directory = packageAt("published", args[1]);
+    const directory = packageAt("published", commandArguments[1]);
     if (directory) {
       const manifest = JSON.parse(readFileSync(join(directory, "package/package.json"), "utf8"));
       return { status: 0, stdout: JSON.stringify(manifest.version) };
@@ -251,14 +266,13 @@ installCommandFixture((name, args, options, nativeSpawn) => {
     return { status: 1, stdout: JSON.stringify({ error: { code: "E404" } }) };
   }
 
-  if (name === "npm" && args[0] === "publish") {
-    if (
-      args[2] !== "--access" ||
-      args[3] !== "public" ||
-      !(args.length === 4 || (args.length === 5 && args[4].startsWith("--otp=")))
-    )
+  if (name === "npm" && commandArguments[0] === "publish") {
+    const flags = commandArguments.slice(4);
+    if (flags[0]?.startsWith("--tag=")) flags.shift();
+    if (flags[0]?.startsWith("--otp=")) flags.shift();
+    if (commandArguments[2] !== "--access" || commandArguments[3] !== "public" || flags.length)
       process.exit(99);
-    const inspected = nativeSpawn("tar", ["-xOf", args[1], "package/package.json"], {
+    const inspected = nativeSpawn("tar", ["-xOf", commandArguments[1], "package/package.json"], {
       encoding: "utf8",
     });
     if (inspected.error || inspected.status !== 0) return inspected;
@@ -279,13 +293,15 @@ installCommandFixture((name, args, options, nativeSpawn) => {
     }
     const target = join(workspace, visibility === "immediate" ? "published" : "pending", directory);
     mkdirSync(target, { recursive: true });
-    const extracted = nativeSpawn("tar", ["-xzf", args[1], "-C", target], { stdio: "pipe" });
+    const extracted = nativeSpawn("tar", ["-xzf", commandArguments[1], "-C", target], {
+      stdio: "pipe",
+    });
     if (race === "registry-bytes" && extracted.status === 0)
       writeFileSync(join(target, "package/dist/index.js"), "export const replaced = true;");
     return extracted;
   }
 
-  if (name === "sleep" && args.length === 1 && args[0] === "15") {
+  if (name === "sleep" && commandArguments.length === 1 && commandArguments[0] === "15") {
     if (visibility === "delayed") {
       const pending = join(workspace, "pending");
       mkdirSync(join(workspace, "published"), { recursive: true });
@@ -296,6 +312,6 @@ installCommandFixture((name, args, options, nativeSpawn) => {
     return { status: 0 };
   }
 
-  if (name === "npm" && args[0] === "whoami") return { status: 0, stdout: "fixture" };
+  if (name === "npm" && commandArguments[0] === "whoami") return { status: 0, stdout: "fixture" };
   process.exit(99);
 });

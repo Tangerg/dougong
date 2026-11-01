@@ -1,5 +1,5 @@
 import { assertListener, disposeSymbol, type Disposable, type Readable } from "./protocol.js";
-import { assertSynchronous } from "./sync-result.js";
+import { assertSynchronous } from "./synchronous-result.js";
 
 declare const dougongSignal: unique symbol;
 
@@ -125,14 +125,15 @@ export function batch<T>(callback: () => T): T {
   if (typeof callback !== "function") throw new TypeError("batch() expects a function");
   batchDepth++;
 
-  let outcome: { readonly ok: true; readonly value: T } | { readonly ok: false; error: unknown };
+  let outcome:
+    { readonly succeeded: true; readonly value: T } | { readonly succeeded: false; error: unknown };
 
   try {
     const value = callback();
     assertSynchronous(value, "Reactive batches must be synchronous");
-    outcome = { ok: true, value };
+    outcome = { succeeded: true, value };
   } catch (error) {
-    outcome = { ok: false, error };
+    outcome = { succeeded: false, error };
   } finally {
     batchDepth--;
   }
@@ -141,13 +142,16 @@ export function batch<T>(callback: () => T): T {
     try {
       flushPendingListeners();
     } catch (error) {
-      outcome = outcome.ok
-        ? { ok: false, error }
-        : { ok: false, error: new AggregateError([outcome.error, error], "Reactive batch failed") };
+      outcome = outcome.succeeded
+        ? { succeeded: false, error }
+        : {
+            succeeded: false,
+            error: new AggregateError([outcome.error, error], "Reactive batch failed"),
+          };
     }
   }
 
-  if (!outcome.ok) throw outcome.error;
+  if (!outcome.succeeded) throw outcome.error;
   return outcome.value;
 }
 

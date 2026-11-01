@@ -34,7 +34,7 @@ Group expresses installation ownership and bulk removal. It does not make identi
 
 ## Why dependency references stay stable within a generation
 
-Service dependencies appear in `requires`, and resolved values appear in `ctx.deps`. Each contract has one provider in a Host's composition graph; an absent optional dependency is `undefined`. Replacing a provider rebuilds affected consumers instead of silently switching the implementation behind their existing objects.
+Service dependencies appear in `requires`, and resolved values appear in `context.dependencies`. Each contract has one provider in a Host's composition graph; an absent optional dependency is `undefined`. Replacing a provider rebuilds affected consumers instead of silently switching the implementation behind their existing objects.
 
 This can increase the rebuild scope, but consumers reason about ordinary TypeScript values and functions without a proxy changing its target between calls. The binding graph also supports plan explanation, startup ordering and safe shutdown. Dynamic ExtensionPoint membership is not a static Service dependency edge; executing a contribution borrows its owner instead.
 

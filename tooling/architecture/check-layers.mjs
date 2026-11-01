@@ -3,11 +3,11 @@
 import { readFileSync } from "node:fs";
 import { isBuiltin } from "node:module";
 import { relative, sep } from "node:path";
-import ts from "typescript";
-import { packageEntrypoints, publishedDirectories } from "../packages.mjs";
+import typescript from "typescript";
+import { abortListenerPort, packageEntrypoints, publishedDirectories } from "../packages.mjs";
 import { analyzeDependencies, compilerOptions } from "./analyze-dependencies.mjs";
-import { architectureRules } from "./rules.mjs";
-import { retiredVocabulary } from "./vocabulary.mjs";
+import { architectureRules, sourceExtensions } from "./rules.mjs";
+import { abbreviatedDeclaration, retiredVocabulary } from "./vocabulary.mjs";
 
 const packageDependencies = {
   dougong: new Set(),
@@ -72,11 +72,11 @@ const definitions = new Map();
 const failures = [];
 const options = compilerOptions();
 const graph = (await analyzeDependencies(options)).obj();
-const program = ts.createProgram(Object.keys(graph), options);
+const program = typescript.createProgram(Object.keys(graph), options);
 const checker = program.getTypeChecker();
-const resolution = ts.createModuleResolutionCache(
+const resolution = typescript.createModuleResolutionCache(
   process.cwd(),
-  ts.sys.useCaseSensitiveFileNames ? (file) => file : (file) => file.toLowerCase(),
+  typescript.sys.useCaseSensitiveFileNames ? (file) => file : (file) => file.toLowerCase(),
   options,
 );
 function exportedDeclarations(file, names) {
@@ -96,10 +96,14 @@ const factories = exportedDeclarations("packages/dougong/src/contracts/contracts
 const lifetime = exportedDeclarations("packages/dougong/src/lifetime/lifetime.ts", ["Lifetime"]);
 
 function moduleSpecifier(node) {
-  if (ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) return node.moduleSpecifier;
-  if (ts.isImportTypeNode(node) && ts.isLiteralTypeNode(node.argument))
+  if (typescript.isImportDeclaration(node) || typescript.isExportDeclaration(node))
+    return node.moduleSpecifier;
+  if (typescript.isImportTypeNode(node) && typescript.isLiteralTypeNode(node.argument))
     return node.argument.literal;
-  if (ts.isCallExpression(node) && node.expression.kind === ts.SyntaxKind.ImportKeyword)
+  if (
+    typescript.isCallExpression(node) &&
+    node.expression.kind === typescript.SyntaxKind.ImportKeyword
+  )
     return node.arguments[0];
 }
 
@@ -129,7 +133,7 @@ function violation(file, rule, message, node, source) {
 }
 
 for (const [file, dependencies] of Object.entries(graph)) {
-  if (!file.endsWith(".ts")) continue;
+  if (!sourceExtensions.some((extension) => file.endsWith(`.${extension}`))) continue;
   const source = program.getSourceFile(file);
   const text = source.text;
   const owner = location(file);
@@ -147,9 +151,9 @@ for (const [file, dependencies] of Object.entries(graph)) {
     if (owner.module === "public") {
       for (const statement of source.statements) {
         if (
-          !ts.isExportDeclaration(statement) ||
+          !typescript.isExportDeclaration(statement) ||
           !statement.exportClause ||
-          !ts.isNamedExports(statement.exportClause)
+          !typescript.isNamedExports(statement.exportClause)
         ) {
           violation(
             file,
@@ -190,7 +194,7 @@ for (const [file, dependencies] of Object.entries(graph)) {
 
   const visit = (node) => {
     const literal = moduleSpecifier(node);
-    if (owner && !test && literal && ts.isStringLiteralLike(literal)) {
+    if (owner && !test && literal && typescript.isStringLiteralLike(literal)) {
       const specifier = literal.text;
       if (specifier.startsWith(".") && !/\.(?:js|mjs|cjs|json)$/.test(specifier)) {
         violation(
@@ -211,8 +215,8 @@ for (const [file, dependencies] of Object.entries(graph)) {
         );
       }
       const runtimePort =
-        specifier === "#abort-listener" &&
-        (owner.package === "reactive" || owner.package === "dougong");
+        specifier === abortListenerPort.specifier &&
+        abortListenerPort.packages.includes(owner.package);
       if (owner.package === "reactive" && !specifier.startsWith(".") && !runtimePort) {
         violation(
           file,
@@ -222,11 +226,11 @@ for (const [file, dependencies] of Object.entries(graph)) {
           source,
         );
       }
-      const target = ts.resolveModuleName(
+      const target = typescript.resolveModuleName(
         specifier,
         source.fileName,
         options,
-        ts.sys,
+        typescript.sys,
         resolution,
       ).resolvedModule;
       if (target) {
@@ -234,7 +238,7 @@ for (const [file, dependencies] of Object.entries(graph)) {
         if (
           /^(?:packages\/[^/]+|examples)\/src\//.test(file) &&
           (runtimePort
-            ? targetFile !== `packages/${owner.package}/runtime/abort-listener.d.mts`
+            ? targetFile !== `packages/${owner.package}/${abortListenerPort.targets.types.slice(2)}`
             : !/^(?:packages\/[^/]+|examples)\/src\//.test(targetFile) &&
               !targetFile.split("/").includes("node_modules"))
         )
@@ -259,15 +263,15 @@ for (const [file, dependencies] of Object.entries(graph)) {
         }
       }
     }
-    if (node.kind === ts.SyntaxKind.AnyKeyword)
+    if (node.kind === typescript.SyntaxKind.AnyKeyword)
       violation(file, "types.precise", "explicit any loses contract information", node, source);
-    if (ts.isInterfaceDeclaration(node) && /(?:Port|Control)$/.test(node.name.text)) {
+    if (typescript.isInterfaceDeclaration(node) && /(?:Port|Control)$/.test(node.name.text)) {
       for (const member of node.members)
         if (
-          ts.isMethodSignature(member) ||
-          (ts.isPropertySignature(member) &&
+          typescript.isMethodSignature(member) ||
+          (typescript.isPropertySignature(member) &&
             !member.modifiers?.some(
-              (modifier) => modifier.kind === ts.SyntaxKind.ReadonlyKeyword,
+              (modifier) => modifier.kind === typescript.SyntaxKind.ReadonlyKeyword,
             ) &&
             checker.getNonNullableType(checker.getTypeAtLocation(member)).getCallSignatures()
               .length > 0)
@@ -280,7 +284,7 @@ for (const [file, dependencies] of Object.entries(graph)) {
             source,
           );
     }
-    if (test && !typedAssertions && ts.isIdentifier(node) && node.text === "expectTypeOf")
+    if (test && !typedAssertions && typescript.isIdentifier(node) && node.text === "expectTypeOf")
       violation(
         file,
         "tests.types",
@@ -289,15 +293,20 @@ for (const [file, dependencies] of Object.entries(graph)) {
         source,
       );
     if (owner && !test) {
-      if ((ts.isIdentifier(node) || ts.isStringLiteralLike(node)) && retired.has(node.text))
+      const abbreviated = abbreviatedDeclaration(node);
+      if (abbreviated) violation(file, "vocabulary.current", abbreviated, node, source);
+      if (
+        (typescript.isIdentifier(node) || typescript.isStringLiteralLike(node)) &&
+        retired.has(node.text)
+      )
         violation(file, "vocabulary.current", `retired vocabulary '${node.text}'`, node, source);
       if (
         owner.package !== "examples" &&
-        ts.isCallExpression(node) &&
-        ts.isPropertyAccessExpression(node.expression)
+        typescript.isCallExpression(node) &&
+        typescript.isPropertyAccessExpression(node.expression)
       ) {
         const expression = node.expression;
-        if (ts.isIdentifier(expression.expression)) {
+        if (typescript.isIdentifier(expression.expression)) {
           const base = expression.expression.text;
           if (base === "console")
             violation(
@@ -321,7 +330,7 @@ for (const [file, dependencies] of Object.entries(graph)) {
         }
       }
       if (
-        ts.isNewExpression(node) &&
+        typescript.isNewExpression(node) &&
         lifetime.has(checker.getResolvedSignature(node)?.declaration?.parent) &&
         owner.module !== "lifetime" &&
         owner.module !== "execution"
@@ -333,7 +342,7 @@ for (const [file, dependencies] of Object.entries(graph)) {
           node,
           source,
         );
-      if (ts.isCallExpression(node)) {
+      if (typescript.isCallExpression(node)) {
         const id = node.arguments[0];
         if (id && factories.has(checker.getResolvedSignature(node)?.declaration)) {
           const type = checker.getTypeAtLocation(id);
@@ -352,7 +361,7 @@ for (const [file, dependencies] of Object.entries(graph)) {
         }
       }
     }
-    ts.forEachChild(node, visit);
+    typescript.forEachChild(node, visit);
   };
   visit(source);
 }

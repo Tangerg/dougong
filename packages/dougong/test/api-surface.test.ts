@@ -178,18 +178,15 @@ describe("public API surface", () => {
     });
   });
 
-  it.each(["errors", "denied", "issues"])(
-    "omits an inaccessible diagnostic array (%s)",
-    (field) => {
-      const items = Proxy.revocable([], {});
-      items.revoke();
-      const failure = Object.assign(new Error("original failure"), { [field]: items.proxy });
+  it.each(["errors", "issues"])("omits an inaccessible diagnostic array (%s)", (field) => {
+    const items = Proxy.revocable([], {});
+    items.revoke();
+    const failure = Object.assign(new Error("original failure"), { [field]: items.proxy });
 
-      const snapshot = new core.RecordedFailure(failure).snapshot;
-      expect(snapshot.message).toBe("original failure");
-      expect(snapshot).not.toHaveProperty(field);
-    },
-  );
+    const snapshot = new core.RecordedFailure(failure).snapshot;
+    expect(snapshot.message).toBe("original failure");
+    expect(snapshot).not.toHaveProperty(field);
+  });
 
   it("captures diagnostic array length once through the external field boundary", () => {
     let reads = 0;
@@ -224,16 +221,16 @@ describe("public API surface", () => {
   });
 
   it("bounds diagnostic chains and preserves aggregate causes and validation issues", () => {
-    const config = new core.ConfigValidationError([
+    const configuration = new core.ConfigurationValidationError([
       { message: "expected integer", path: [{ key: "port" }] },
     ]);
-    const aggregate = new AggregateError([config, new TypeError("secondary")], "startup", {
+    const aggregate = new AggregateError([configuration, new TypeError("secondary")], "startup", {
       cause: new Error("root"),
     });
     const snapshot = new core.RecordedFailure(aggregate).snapshot;
     expect(snapshot.cause?.message).toBe("root");
     expect(snapshot.errors?.[0]).toMatchObject({
-      code: "CONFIG_INVALID",
+      code: "CONFIGURATION_INVALID",
       issues: [{ message: "expected integer", path: ["port"] }],
     });
     expect(snapshot.errors?.[1]?.name).toBe("TypeError");
@@ -257,28 +254,75 @@ describe("public API surface", () => {
         message: String(cause),
       });
     }
-    const config = new core.ConfigValidationError([
+    const configuration = new core.ConfigurationValidationError([
       { message: "index", path: [2, Symbol.for("field"), "field", { key: 3 }] },
       { message: "x".repeat(5000), path: Array.from({ length: 20 }, () => "segment") },
       { message: "without path" },
     ]);
-    const snapshot = new core.RecordedFailure(config).snapshot;
+    const snapshot = new core.RecordedFailure(configuration).snapshot;
     expect(snapshot.issues?.[0]?.path).toEqual([2, "Symbol(field)", "field", 3]);
     expect(snapshot.issues?.[1]?.path).toHaveLength(16);
     expect(snapshot.issues?.[1]?.message).toHaveLength(4096);
     expect(snapshot.issues?.[2]).toEqual({ message: "without path" });
     expect(snapshot.truncated).toBe(true);
     let deep = new Error("root");
-    for (let i = 0; i < 10; i++) deep = new Error("parent", { cause: deep });
+    for (let depth = 0; depth < 10; depth++) deep = new Error("parent", { cause: deep });
     let recorded = new core.RecordedFailure(deep).snapshot;
-    for (let i = 0; i < 5; i++) recorded = recorded.cause!;
+    for (let depth = 0; depth < 5; depth++) recorded = recorded.cause!;
     expect(recorded.truncated).toBe(true);
-    const longPermission = Object.assign(new Error("denied"), { denied: ["x".repeat(300)] });
-    const permission = new core.RecordedFailure(longPermission).snapshot;
-    expect(permission.denied?.[0]).toHaveLength(256);
-    expect(permission.truncated).toBe(true);
     const empty = Object.defineProperty(new Error("no stack"), "stack", { value: undefined });
     expect(new core.RecordedFailure(empty).snapshot).not.toHaveProperty("stack");
+  });
+
+  it("captures only selected domain fields and preserves their bounded projection when nested", () => {
+    const tags = ["x".repeat(300), "blue"];
+    const error = Object.assign(new Error("invalid delivery"), {
+      subject: "revision-1",
+      tags,
+      privateResource: { secret: "omitted" },
+    });
+    expect(new core.RecordedFailure(error).snapshot).not.toHaveProperty("fields");
+    const recorded = new core.RecordedFailure(error, ["subject", "tags", "privateResource"]);
+    tags.pop();
+    expect(recorded.snapshot.fields).toEqual({
+      subject: "revision-1",
+      tags: ["x".repeat(256), "blue"],
+    });
+    expect(Object.isFrozen(recorded.snapshot.fields?.tags)).toBe(true);
+    expect(recorded.snapshot.truncated).toBe(true);
+    expect(
+      new core.RecordedFailure(new Error("outer", { cause: recorded })).snapshot.cause,
+    ).toEqual(recorded.snapshot);
+  });
+
+  it("does not execute domain accessors or trust unreadable metadata", () => {
+    const failure = Object.defineProperty(new Error("denied"), "extra", {
+      get() {
+        throw new Error("unexpected getter");
+      },
+    });
+    Object.defineProperty(failure, "code", { value: "TEST" });
+    const value = new Proxy(failure, {
+      getOwnPropertyDescriptor(target, key) {
+        if (key === "blocked") throw new Error("inaccessible");
+        return Reflect.getOwnPropertyDescriptor(target, key);
+      },
+    });
+    expect(new core.RecordedFailure(value, ["extra", "blocked"]).snapshot).toMatchObject({
+      code: "TEST",
+    });
+    expect(new core.RecordedFailure(value, ["extra", "blocked"]).snapshot).not.toHaveProperty(
+      "fields",
+    );
+    expect(() => new core.RecordedFailure(value, Array(9).fill("key"))).toThrow(TypeError);
+  });
+
+  it("marks clipped primitive rejection reasons as truncated", () => {
+    expect(new core.RecordedFailure("x".repeat(5000)).snapshot).toMatchObject({
+      name: "NonError",
+      message: "x".repeat(4096),
+      truncated: true,
+    });
   });
 
   it("validates structured error identity at the JavaScript boundary", () => {
@@ -318,9 +362,9 @@ describe("public API surface", () => {
         },
       },
     );
-    const failure = new core.ConfigValidationError([issue]);
+    const failure = new core.ConfigurationValidationError([issue]);
     expect(failure.issues).toEqual([{ message: "expected value", path: ["original"] }]);
-    expect(failure.message).toBe("Invalid Plugin config:\n  - expected value");
+    expect(failure.message).toBe("Invalid Plugin configuration:\n  - expected value");
   });
 
   it("does not leak orchestrator internals through public objects", async () => {
@@ -338,15 +382,15 @@ describe("public API surface", () => {
     const plugin = core.definePlugin({
       name: "surface.plugin",
       requires: { items: ITEMS },
-      setup(ctx) {
+      setup(context) {
         surfaces = {
-          context: ctx,
-          view: ctx.deps.items,
-          listener: ctx.events.on(NOTICE, () => undefined),
-          contribution: ctx.contributions.add(ITEMS, "item", "value"),
-          cleanup: ctx.lifetime.defer(() => undefined),
-          child: ctx.lifetime.child("surface-child"),
-          task: ctx.lifetime.spawn(() => undefined),
+          context,
+          view: context.dependencies.items,
+          listener: context.events.on(NOTICE, () => undefined),
+          contribution: context.contributions.add(ITEMS, "item", "value"),
+          cleanup: context.lifetime.defer(() => undefined),
+          child: context.lifetime.child("surface-child"),
+          task: context.lifetime.spawn(() => undefined),
         };
       },
     });
@@ -360,11 +404,11 @@ describe("public API surface", () => {
 
     expect(Object.keys(surfaces.context).sort()).toEqual([
       "contributions",
-      "deps",
+      "dependencies",
       "events",
       "lifetime",
-      "log",
-      "meta",
+      "logger",
+      "metadata",
     ]);
     expect(Object.keys(surfaces.view).sort()).toEqual(["get", "subscribe", "use"]);
     expect(Object.keys(surfaces.listener)).toEqual([]);

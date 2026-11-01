@@ -6,7 +6,7 @@ const value = service<number>("plan/value");
 const provider = (number: number) =>
   definePlugin({ name: "provider", provides: { value }, setup: () => ({ value: number }) });
 
-it("explains declaration origins, both binding states and publication order without config values", async () => {
+it("explains declaration origins, both binding states and publication order without configuration values", async () => {
   const consumer = definePlugin({
     name: "consumer",
     requires: { value: optional(value) },
@@ -17,7 +17,7 @@ it("explains declaration origins, both binding states and publication order with
       {
         id: "provider",
         plugin: provider(1),
-        config: { secret: "not-public" },
+        configuration: { secret: "not-public" },
         origin: { revision: "one" },
       },
       { id: "consumer", plugin: consumer },
@@ -99,16 +99,16 @@ it("captures normalized configuration once and consumes only the issuing Host pl
   };
   const plugin = definePlugin({
     name: "configured",
-    config: schema,
+    configuration: schema,
     provides: { value },
-    setup(_ctx, config) {
-      return { value: config.n };
+    setup(_context, configuration) {
+      return { value: configuration.n };
     },
   });
   const host = createHost(),
     other = createHost();
   const change = host.change();
-  change.install(plugin, { id: "configured", config: "3" });
+  change.install(plugin, { id: "configured", configuration: "3" });
   const plan = await host.plan(change);
   expect(validate).toHaveBeenCalledOnce();
   expect(host.installation("configured")).toBeUndefined();
@@ -121,7 +121,7 @@ it("captures normalized configuration once and consumes only the issuing Host pl
   await host.apply(plan);
   await host.start();
   expect(validate).toHaveBeenCalledOnce();
-  expect(await host.use(value, (n) => n)).toBe(3);
+  expect(await host.use(value, (result) => result)).toBe(3);
   await expect(host.apply(plan)).rejects.toMatchObject({ code: "PLAN_CONSUMED" });
   await host.stop();
 });
@@ -148,14 +148,17 @@ it("rejects stale plans before touching resources", async () => {
     second = host.change();
   first.update(host.installation("a")!, { plugin: provider(2) });
   second.update(host.installation("a")!, { plugin: provider(3) });
-  const [a, b] = await Promise.all([host.plan(first), host.plan(second)]);
-  await host.apply(a);
-  await expect(host.apply(b)).rejects.toMatchObject({
+  const [firstPlan, secondPlan] = await Promise.all([host.plan(first), host.plan(second)]);
+  await host.apply(firstPlan);
+  await expect(host.apply(secondPlan)).rejects.toMatchObject({
     code: "PLAN_STALE",
-    details: { expectedRevision: a.report.baseStateRevision, stateRevision: host.stateRevision },
+    details: {
+      expectedRevision: firstPlan.report.baseStateRevision,
+      stateRevision: host.stateRevision,
+    },
   });
   expect(dispose).toHaveBeenCalledOnce();
-  expect(await host.use(value, (n) => n)).toBe(2);
+  expect(await host.use(value, (result) => result)).toBe(2);
   await host.stop();
 });
 
@@ -177,12 +180,12 @@ it("does not execute setup while planning and retains empty change identity", as
   await host.stop();
 });
 
-it("restores using captured config without rerunning its validator", async () => {
+it("restores using captured configuration without rerunning its validator", async () => {
   const validate = vi.fn<() => { value: undefined }>(() => ({ value: undefined }));
   const started: string[] = [];
   const old = definePlugin({
     name: "old",
-    config: { "~standard": { version: 1 as const, vendor: "test", validate } },
+    configuration: { "~standard": { version: 1 as const, vendor: "test", validate } },
     setup() {
       started.push("old");
     },

@@ -6,7 +6,7 @@ import {
   type InstallationRecord,
 } from "./installation.js";
 import type { GroupNode } from "./group.js";
-import type { ConfigValue } from "./configuration.js";
+import type { ConfigurationValue } from "./configuration.js";
 import type { InstallationOrigin } from "./declarations.js";
 
 export type TransitionIntent = "change" | "start" | "stop";
@@ -63,7 +63,10 @@ export interface PreparedTransition {
   readonly groups: ReadonlyMap<string, GroupNode>;
   readonly graph: InstallationGraph;
   readonly affected: ReadonlySet<InstallationRecord>;
-  readonly configs: ReadonlyMap<InstallationRecord, { readonly value: ConfigValue | undefined }>;
+  readonly configurations: ReadonlyMap<
+    InstallationRecord,
+    { readonly value: ConfigurationValue | undefined }
+  >;
   readonly report: PlanReport;
 }
 
@@ -131,9 +134,12 @@ export class PlanAuthority {
   }
 }
 
-export function describeBindings(graph: InstallationGraph): ReadonlyArray<BindingReport> {
+export function describeBindings(
+  graph: InstallationGraph,
+  installations: ReadonlyArray<InstallationRecord> = graph.order,
+): ReadonlyArray<BindingReport> {
   return Object.freeze(
-    graph.order.flatMap((installation) =>
+    installations.flatMap((installation) =>
       Object.values(graph.declarationFor(installation).plugin.requires).flatMap((requirement) => {
         if (requirement.kind === "extensionPoint") return [];
         const token = requirement.kind === "optional" ? requirement.service : requirement;

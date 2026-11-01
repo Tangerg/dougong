@@ -77,9 +77,9 @@ Platform snapshots retain identity and do not notify observers for unrelated Cor
 Module caching follows Artifact reachability. A withdrawn Artifact which is no longer selected
 or otherwise retained does not pin its loaded plugin for the lifetime of the Platform.
 
-Config uses Dougong's captured data protocol. Mutating the caller's input after `catalog.add`
+Configuration uses Dougong's captured data protocol. Mutating the caller's input after `catalog.add`
 cannot change a later activation. Functions and resource instances belong in Service
-contracts, not config.
+contracts, not configuration.
 
 To update, add a new revision, select it, then activate the stable Registration. If setup
 fails and Core restores the previous graph, `selectedArtifact` remains the new target while
@@ -119,7 +119,8 @@ selection cannot install itself. Concurrent loads and activations admitted befor
 configuration validation, authorization, Core application, or disposal cleanup is executing,
 a newly requested select, activate, remove, trigger, or disposal rejects with `PLATFORM_BUSY`.
 This avoids waiting for the user callback that made the request. Wait until the outer
-operation finishes before issuing another command. Preview and reads remain available
+operation finishes before issuing another command. Cancellation callbacks can read the complete
+new selection, removal batch or disposal phase through handles and diagnostics. Preview and reads remain available
 while the Platform is active. A loader must not recursively wait for its own module result.
 
 Cancellation before the Core handoff ends the caller's wait, even for a validator or
@@ -147,12 +148,16 @@ const authorizer = {
 Admission receives the concrete artifact descriptor and either `load` or `activate`.
 `PermissionSet` implements a fixed allow-list of manifest permission names; the default
 policy grants none. Loading checks happen after dependency waits and immediately before the
-Loader is entered. New generations are checked again after Core planning and before apply.
-Cached code is not imported again merely to perform another policy check.
+Loader is entered. Before submitting its plan, Platform authorizes each requested install or
+update and each of its own committed artifacts that Core will restart because a binding changed.
+An indirect restart uses the committed origin, even if a newer revision is selected.
+These checks cover the forward deployment. Once Core starts applying the plan, failed setup can
+reconstruct the previously committed revisions during rollback, using their prior admission.
+Direct Host commands and commands from other Platforms also operate outside this admission hook.
 
 Admission authorizes an attempt. It does not sandbox admitted code or revoke already-started
 same-realm JavaScript. `ImportLoader` preserves native import caching and does not claim
-transitive HMR or cancellation of module evaluation. Use a Loader backed by a real execution
+transitive hot module replacement or cancellation of module evaluation. Use a Loader backed by a real execution
 boundary when stronger execution controls are required.
 
 ## Placement and diagnostics

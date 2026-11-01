@@ -2,7 +2,7 @@
 
 import { valid, validRange } from "semver";
 import { z } from "zod";
-import { captureConfig } from "dougong";
+import { captureConfiguration } from "dougong";
 import { normalizePlainRecord } from "dougong/advanced";
 import { PlatformError } from "../errors.js";
 
@@ -104,8 +104,8 @@ function snapshotManifestDeclaration(input: unknown, createError: (message: stri
     createError,
   });
   const collections = {
-    activation: captureConfig(declaration.activation),
-    permissions: captureConfig(declaration.permissions),
+    activation: captureConfiguration(declaration.activation),
+    permissions: captureConfiguration(declaration.permissions),
   };
   if (declaration.dependencies !== undefined) {
     const dependencies = normalizePlainRecord(declaration.dependencies, "Manifest dependencies", {

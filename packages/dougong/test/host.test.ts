@@ -36,7 +36,7 @@ async function read<T>(host: Host, token: Service<T>) {
 describe("Host execution", () => {
   it("constructs inert declarations, starts in dependency order and stops in reverse", async () => {
     const steps: string[] = [];
-    const a = definePlugin({
+    const valueProvider = definePlugin({
       name: "a",
       provides: { value },
       setup({ lifetime }) {
@@ -47,22 +47,22 @@ describe("Host execution", () => {
         return { value: 4 };
       },
     });
-    const b = definePlugin({
+    const outputProvider = definePlugin({
       name: "b",
       requires: { value },
       provides: { output },
-      setup({ deps, lifetime }) {
+      setup({ dependencies, lifetime }) {
         steps.push("b");
         lifetime.defer(() => {
           steps.push("-b");
         });
-        return { output: deps.value * 2 };
+        return { output: dependencies.value * 2 };
       },
     });
     const host = createHost({
       installations: [
-        { id: "b", plugin: b },
-        { id: "a", plugin: a },
+        { id: "b", plugin: outputProvider },
+        { id: "a", plugin: valueProvider },
       ],
     });
     expect(steps).toEqual([]);
@@ -149,9 +149,9 @@ describe("Host execution", () => {
       name: "consumer",
       requires: { lifetime: value },
       provides: { output },
-      setup({ deps, lifetime }) {
+      setup({ dependencies, lifetime }) {
         expect(lifetime.signal.aborted).toBe(false);
-        return { output: deps.lifetime };
+        return { output: dependencies.lifetime };
       },
     });
     const host = createHost({
@@ -171,9 +171,9 @@ describe("Host execution", () => {
       name: "consumer",
       requires: { value },
       provides: { output },
-      setup({ deps }) {
+      setup({ dependencies }) {
         count.consumer++;
-        return { output: deps.value + 1 };
+        return { output: dependencies.value + 1 };
       },
     });
     const other = definePlugin({
@@ -201,6 +201,8 @@ describe("Host execution", () => {
       provider: "provider",
       previousProvider: "provider",
     });
+    expect(host.explain("missing")).toEqual([]);
+    expect(host.explain("provider")).toEqual([]);
     expect(host.explain("consumer")).toEqual([
       { installation: "consumer", contract: value.id, optional: false, provider: "provider" },
     ]);
@@ -215,8 +217,8 @@ describe("Host execution", () => {
       name: "optional",
       requires: { value: optional(value) },
       provides: { output },
-      setup({ deps }) {
-        return { output: deps.value ?? 0 };
+      setup({ dependencies }) {
+        return { output: dependencies.value ?? 0 };
       },
     });
     const host = createHost({ installations: [{ id: "consumer", plugin: consumer }] });
@@ -230,7 +232,7 @@ describe("Host execution", () => {
     remove.remove(installed);
     await host.apply(await host.plan(remove));
     expect(await read(host, output)).toBe(0);
-    expect(await host.use(optional(value), (v) => v)).toBeUndefined();
+    expect(await host.use(optional(value), (result) => result)).toBeUndefined();
     expect(installed.status).toBe("removed");
     await host.stop();
   });
@@ -249,13 +251,13 @@ describe("Host execution", () => {
         ],
       }),
     ).toThrowError(expect.objectContaining({ code: "SERVICE_CONFLICT" }));
-    const a = definePlugin({
+    const valueProvider = definePlugin({
       name: "a",
       requires: { output },
       provides: { value },
       setup: () => ({ value: 1 }),
     });
-    const b = definePlugin({
+    const outputProvider = definePlugin({
       name: "b",
       requires: { value },
       provides: { output },
@@ -264,8 +266,8 @@ describe("Host execution", () => {
     expect(() =>
       createHost({
         installations: [
-          { id: "a", plugin: a },
-          { id: "b", plugin: b },
+          { id: "a", plugin: valueProvider },
+          { id: "b", plugin: outputProvider },
         ],
       }),
     ).toThrowError(expect.objectContaining({ code: "SERVICE_CYCLE" }));
@@ -523,7 +525,7 @@ describe("Host execution", () => {
     await host.stop();
   });
 
-  it("observes failing async error reporters through the terminal logger", async () => {
+  it("observes failing asynchronous error reporters through the terminal logger", async () => {
     const logger: Logger = { debug() {}, info() {}, warn() {}, error: vi.fn<Logger["error"]>() };
     const host = createHost({
       logger,
@@ -546,7 +548,7 @@ describe("Host execution", () => {
       warn: vi.fn<Logger["warn"]>(),
       error: vi.fn<Logger["error"]>(),
     };
-    let context!: PluginContext<{}>;
+    let retainedContext!: PluginContext<{}>;
     const host = createHost({
       name: "demo",
       logger,
@@ -555,11 +557,11 @@ describe("Host execution", () => {
           id: "a",
           plugin: definePlugin({
             name: "a",
-            setup(ctx) {
-              context = ctx;
+            setup(context) {
+              retainedContext = context;
               for (const level of ["debug", "info", "warn", "error"] as const)
-                ctx.log[level]("ready");
-              ctx.lifetime.defer(() => ctx.log.info("closing"));
+                context.logger[level]("ready");
+              context.lifetime.defer(() => context.logger.info("closing"));
             },
           }),
         },
@@ -573,9 +575,9 @@ describe("Host execution", () => {
       generation: 1,
       groupId: undefined,
     });
-    expect(Object.isFrozen(context.meta)).toBe(true);
+    expect(Object.isFrozen(retainedContext.metadata)).toBe(true);
     await host.stop();
-    expect(() => context.log.info("late")).toThrowError(
+    expect(() => retainedContext.logger.info("late")).toThrowError(
       expect.objectContaining({ code: "LIFETIME_DISPOSED" }),
     );
   });
@@ -585,7 +587,7 @@ describe("Host execution", () => {
     { name: " padded " },
     { logger: {} },
     { onError: 1 },
-    { shutdownTimeoutMs: 0 },
+    { shutdownTimeoutMilliseconds: 0 },
     { groups: {} },
     { installations: {} },
   ])("validates Host input %j", (options) => {
@@ -617,13 +619,13 @@ describe("Host execution", () => {
 
 it("reports the concrete Service cycle even in a dependency graph deeper than the call stack", () => {
   const count = 8_000;
-  const tokens = Array.from({ length: count }, (_, i) => service<void>(`chain/${i}`));
-  const installations = tokens.map((token, i) => ({
-    id: String(i),
+  const tokens = Array.from({ length: count }, (_, index) => service<void>(`chain/${index}`));
+  const installations = tokens.map((token, index) => ({
+    id: String(index),
     plugin: definePlugin({
-      name: String(i),
+      name: String(index),
       provides: { token },
-      requires: { previous: tokens[(i + count - 1) % count]! },
+      requires: { previous: tokens[(index + count - 1) % count]! },
       setup: () => ({ token: undefined }),
     }),
   }));

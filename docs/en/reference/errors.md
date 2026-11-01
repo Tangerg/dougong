@@ -1,6 +1,8 @@
 # Error codes
 
-Failures reject with structured errors. `DougongError` exposes `code`, immutable `details` and an optional original `cause`. `ConfigValidationError` additionally exposes captured Standard Schema issues. `PlatformError` uses `PlatformErrorCode`; `PermissionDeniedError` exposes manifestName and denied permissions.
+Failures reject with structured errors. `DougongError` exposes `code`, immutable `details` and an optional original `cause`. `ConfigurationValidationError` additionally exposes captured Standard Schema issues. `PlatformError` uses `PlatformErrorCode`; `PermissionDeniedError` exposes manifestName and denied permissions.
+
+When migrating Registration diagnostics, read `snapshot.fields?.manifestName` and `snapshot.fields?.denied` in place of the former top-level properties. A caught `PermissionDeniedError` retains its typed fields. To record domain diagnostics, pass up to eight field names of 1 to 256 characters to `new RecordedFailure(error, fieldNames)`. The recorder reads own data properties and captures bounded strings and string arrays.
 
 `details.outcome` distinguishes rejected, restored and quarantined execution. Promise resolution communicates success; `ApplyResult` returns only the state revision and affected installations, without a constant success field. `RecordedFailure` and `ErrorSnapshot` are bounded diagnostic projections, while direct callers receive original failures. Argument and protocol misuse can throw TypeError. Cancellation follows the owning AbortSignal and is not a successful commit.
 
@@ -15,7 +17,7 @@ Failures reject with structured errors. `DougongError` exposes `code`, immutable
 | `BUSY` | The resource owner has foreground borrows and cannot synchronously seal this operation. |
 | `CHANGE_CONFLICT` | A change contains conflicting declaration intent. |
 | `CHANGE_FOREIGN` | The ChangeSet belongs to another Host. |
-| `CONFIG_INVALID` | Standard Schema validation failed; inspect issues and correct the input. |
+| `CONFIGURATION_INVALID` | Standard Schema validation failed; inspect issues and correct the input. |
 | `CONTRACT_CONFLICT` | The same Contract ID was used for incompatible contract kinds. |
 | `CONTRIBUTION_UNAVAILABLE` | The contribution was withdrawn or its owner no longer accepts calls. |
 | `EVENT_BEFORE_COMMIT` | Candidate setup cannot emit externally before commit. |

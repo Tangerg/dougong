@@ -17,18 +17,18 @@ it("does not visit subscriptions created during the same publication", () => {
 it.each([false, true])(
   "drains nested writes without reentering a subscriber (batch=%s)",
   (batched) => {
-    const a = signal(0);
-    const b = signal(0);
+    const source = signal(0);
+    const target = signal(0);
     const trace: string[] = [];
-    a.subscribe(() => {
-      trace.push("a:enter");
-      batch(() => b.set(a.get()));
-      trace.push("a:leave");
+    source.subscribe(() => {
+      trace.push("source:enter");
+      batch(() => target.set(source.get()));
+      trace.push("source:leave");
     });
-    b.subscribe(() => trace.push("b"));
-    if (batched) batch(() => a.set(1));
-    else a.set(1);
-    expect(trace).toEqual(["a:enter", "a:leave", "b"]);
+    target.subscribe(() => trace.push("target"));
+    if (batched) batch(() => source.set(1));
+    else source.set(1);
+    expect(trace).toEqual(["source:enter", "source:leave", "target"]);
   },
 );
 
@@ -215,9 +215,9 @@ it("validates shared branches once per source write while preserving lazy values
   // Twenty-four diamonds have only 73 derived nodes but millions of paths to the input.
   for (let level = 0; level < 24; level++) {
     const previous = tip;
-    const a = computed(() => previous.get());
-    const b = computed(() => previous.get());
-    tip = computed(() => a.get() + b.get());
+    const left = computed(() => previous.get());
+    const right = computed(() => previous.get());
+    tip = computed(() => left.get() + right.get());
   }
   expect(tip.get()).toBe(2 ** 24);
   unrelated.set(1);

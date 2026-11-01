@@ -1,15 +1,15 @@
 # Lifetime and resources
 
-Lifetimes compose into a resource tree. Each Instance creates a root; plugins create child owners through `child(label)`. The root view `ctx.lifetime` registers resources and tasks; only the Engine can stop the Instance. To end a group of operations early, retain the `ChildLifetime` returned by `child(label)`.
+Lifetimes compose into a resource tree. Each Instance creates a root; plugins create child owners through `child(label)`. The root view `context.lifetime` registers resources and tasks; only the Engine can stop the Instance. To end a group of operations early, retain the `ChildLifetime` returned by `child(label)`.
 
 | Primitive | Guarantee |
 | --- | --- |
 | `use(resource)` | Captures the standard disposer and returns the resource after registration |
-| `defer(fn)` | Registers final cleanup and returns an early-disposal handle |
+| `defer(cleanup)` | Registers final cleanup and returns an early-disposal handle |
 | `child(label)` | Creates a child owned by the parent tree |
 | `spawn(task)` | Starts cancellable background work with a Task `result` |
 | `acquire(factory)` | Reserves ownership before creation; resolves to a frozen `{ resource }` receipt |
-| `interrupt(fn)` | Registers an interruption required before draining work |
+| `interrupt(interruptWork)` | Registers an interruption required before draining work |
 | `signal` | Cooperative cancellation |
 | `child[Symbol.asyncDispose]()` | Closes the child subtree you created and joins its single shutdown |
 
@@ -25,7 +25,7 @@ The factory result follows normal Promise resolution. After adoption, `receipt.r
 
 Cleanup failure cannot claim a clean exit. Lifetime retains failed releases and unfinished work, and Host `unresolved` projects retained execution generations. A child that has not exited prevents release of parent resources it may still use. Likewise, an unfinished consumer retains its transitive providers while independent branches continue safe cleanup. A foreground borrow also cannot be forcibly destroyed.
 
-A configured `shutdownTimeoutMs` must be positive and at most 2,147,483,647 ms (the native timer limit); omit it to wait without a deadline. A timeout ends waiting without proving the underlying work stopped. Shutdown already started may finish later, but failed cleanup is not automatically retried. Quarantine is terminal for the whole Host; late completion updates diagnostics without resuming service. AbortSignal cannot forcibly terminate arbitrary JavaScript; that requires a real execution boundary. See [Application handling after quarantine](./transactions.md#quarantine) for incident handling and replacement preconditions.
+A configured `shutdownTimeoutMilliseconds` must be positive and at most 2,147,483,647 ms (the native timer limit); omit it to wait without a deadline. A timeout ends waiting without proving the underlying work stopped. Shutdown already started may finish later, but failed cleanup is not automatically retried. Quarantine is terminal for the whole Host; late completion updates diagnostics without resuming service. AbortSignal cannot forcibly terminate arbitrary JavaScript; that requires a real execution boundary. See [Application handling after quarantine](./transactions.md#quarantine) for incident handling and replacement preconditions.
 
 Only the native AbortSignal state establishes cancellation. Dispatching an event named `abort` does not cancel a child scope or task and does not consume its subscription to genuine cancellation. The Lifetime propagates cancellation directly to its owned tasks and descendants. A public event listener that stops propagation cannot prevent that structural shutdown.
 

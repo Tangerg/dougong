@@ -18,8 +18,8 @@ async function createFixture(options: HostOptions = {}) {
   let owner!: LifetimeContext;
   const plugin = definePlugin({
     name: "examples.retired-acquisition",
-    setup(ctx) {
-      owner = ctx.lifetime.child("application");
+    setup(context) {
+      owner = context.lifetime.child("application");
     },
   });
   const host = createHost({

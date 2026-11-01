@@ -1,6 +1,6 @@
 # 编写插件
 
-`definePlugin` 接受 `name`、可选的 Standard Schema `config`、`requires`、`provides` 与 `setup`。setup 的返回值必须准确匹配提供声明。配置通过 `setup(ctx, config)` 的第二个参数传入。
+`definePlugin` 接受 `name`、可选的 Standard Schema `configuration`、`requires`、`provides` 与 `setup`。setup 的返回值必须准确匹配提供声明。配置通过 `setup(context, configuration)` 的第二个参数传入。
 
 ```ts
 const COMMANDS = extensionPoint<{ title: string; run(): Promise<string> }>("editor/commands");
@@ -9,19 +9,19 @@ const SAVED = event<{ file: string }>("editor/saved");
 const editor = definePlugin({
   name: "editor.main",
   requires: { storage: STORAGE, commands: COMMANDS },
-  setup({ deps, lifetime, events, contributions }) {
+  setup({ dependencies, lifetime, events, contributions }) {
     const session = lifetime.child("session");
     session.defer(() => closeSession());
     events.on(SAVED, ({ file }) => markSaved(file));
     contributions.add(COMMANDS, "save", {
       title: "Save",
-      run: () => deps.storage.save(),
+      run: () => dependencies.storage.save(),
     });
   },
 });
 ```
 
-所有运行资源在获取时交给 Lifetime。标准资源交给 `lifetime.use(resource)`，释放函数交给 `lifetime.defer(fn)`；异步创建标准资源用 `lifetime.acquire(factory)`。声明一个依赖后通过 `ctx.deps.alias` 使用它，避免运行时动态查找隐藏依赖。
+所有运行资源在获取时交给 Lifetime。标准资源交给 `lifetime.use(resource)`，释放函数交给 `lifetime.defer(cleanup)`；异步创建标准资源用 `lifetime.acquire(factory)`。声明一个依赖后通过 `context.dependencies.alias` 使用它，避免运行时动态查找隐藏依赖。
 
 监听与贡献默认属于当前 Instance 的 Lifetime。传入 `{ lifetime: child }` 可将其归属子树。候选 Instance 可以登记监听和贡献，但直到整笔执行提交后才可被外部观察到。候选 setup 内调用 `events.emit` 会失败；将外部事件放在提交后发生的实际业务操作中。
 

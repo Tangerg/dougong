@@ -1,4 +1,4 @@
-import { captureConfig, type ConfigValue } from "dougong";
+import { captureConfiguration, type ConfigurationValue } from "dougong";
 import { normalizePlainRecord } from "dougong/advanced";
 import { satisfies } from "semver";
 import { PlatformError } from "../errors.js";
@@ -8,7 +8,7 @@ export interface ArtifactInput<Reference> {
   readonly revision: string;
   readonly manifest: Manifest | ManifestInput;
   readonly reference: Reference;
-  readonly config?: unknown;
+  readonly configuration?: unknown;
 }
 
 export interface ArtifactDescriptor {
@@ -18,14 +18,14 @@ export interface ArtifactDescriptor {
 
 export interface Artifact<Reference> extends ArtifactDescriptor {
   readonly reference: Reference;
-  readonly config: ConfigValue | undefined;
+  readonly configuration: ConfigurationValue | undefined;
 }
 
-export interface ArtifactOrigin extends Readonly<Record<string, ConfigValue>> {
+export interface ArtifactOrigin extends Readonly<Record<string, ConfigurationValue>> {
   readonly kind: "artifact";
   readonly platformId: string;
   readonly revision: string;
-  readonly manifest: Manifest & Readonly<Record<string, ConfigValue>>;
+  readonly manifest: Manifest & Readonly<Record<string, ConfigurationValue>>;
 }
 
 const descriptors = new WeakMap<ArtifactDescriptor, ArtifactDescriptor>();
@@ -65,7 +65,7 @@ export function matchesArtifact(origin: ArtifactOrigin | undefined, artifact: Ar
 
 const originProjections = new WeakMap<object, ArtifactOrigin>();
 
-const artifactFields = new Set(["revision", "manifest", "reference", "config"]);
+const artifactFields = new Set(["revision", "manifest", "reference", "configuration"]);
 
 export function captureArtifact<Reference>(
   apiVersion: string,
@@ -92,7 +92,7 @@ export function captureArtifact<Reference>(
     revision,
     manifest,
     reference: declaration.reference,
-    config: captureConfig(declaration.config),
+    configuration: captureConfiguration(declaration.configuration),
   });
 }
 
@@ -106,7 +106,7 @@ export function artifactOrigin(platformId: string, artifact: ArtifactDescriptor)
 }
 
 export function readArtifactOrigin(
-  value: Readonly<Record<string, ConfigValue>> | undefined,
+  value: Readonly<Record<string, ConfigurationValue>> | undefined,
   platformId: string,
   name: string,
 ): ArtifactOrigin | undefined {

@@ -4,7 +4,7 @@
 
 ```ts
 const change = host.change();
-change.update(installation, { plugin: nextPlugin, config: nextConfig });
+change.update(installation, { plugin: nextPlugin, configuration: nextConfiguration });
 const plan = await host.plan(change);
 inspectBeforeApplying(plan.report);
 const result = await host.apply(plan);
@@ -14,6 +14,8 @@ console.log(result.stateRevision, result.affectedInstallations);
 规划捕获配置、运行 schema、检查契约与分组、确定绑定、计算受影响闭包，并生成只读 `PlanReport`。规划不会运行 setup、获取插件运行资源或发布监听；schema 验证器是应用代码，应保持无外部副作用。`report` 包含基线版本、操作、前后绑定、来源变化、原因、准备顺序、停止顺序、发布顺序与原子发布承诺。
 
 Plan 只能由签发它的 Host 使用一次。apply 在任何执行副作用之前核对归属、是否已消费和 `stateRevision`。另一个提交或改变运行状态的失败会使旧 Plan 失效。任务计数和通知次数不会使 Plan 失效。
+
+调用 `host.plan(change, signal)` 可以撤回这一次规划。取消后，调用以信号的原始原因拒绝，草案中的待安装项转为 `removed`，同一修订上的其他 Plan 仍然有效。已经签发的 Plan 继续遵守原有的修订和单次使用规则。
 
 Core 只签发可执行的 Plan：声明不成立时，`host.plan()` 直接拒绝，报告不包含永远为空的 blockers 列表。签发后的执行预检如果遇到不可恢复的契约种类冲突，该 Plan 被消费；应修正声明后重新规划。Platform 的数据预览仍可以列出真实阻碍。
 
@@ -70,4 +72,4 @@ Core 只签发可执行的 Plan：声明不成立时，`host.plan()` 直接拒�
 3. 由应用或执行器的真正所有者处理旧边界。若插件运行在可终止的 Worker 或进程中，由其监督者回收执行器，并按外部系统契约核实连接、租约、锁或其他独占资源。若代码仍在同一 realm 且无法证明它已停止，仅创建新 Host 不足以安全接管；应升级到能够回收该执行边界的处理方式。
 4. 在旧边界和需要独占的外部资源得到处理后，从应用保存的声明、配置或 Artifact 选择创建新的 Host。诊断快照不含完整配置和模块，不能当作可执行恢复镜像。
 
-应用对故障后的资源处置负有责任，框架不会重复执行任意清理回调。`shutdownTimeoutMs` 为每个 Lifetime 的退出提供等待预算，不是整个 Host 退出的总时限；顺序清理可能经历多个预算，也不会因此修复资源泄漏。需要独立可用性的功能应事先放在不同 Host；需要强制终止能力时，还必须配套真实的执行隔离。
+应用对故障后的资源处置负有责任，框架不会重复执行任意清理回调。`shutdownTimeoutMilliseconds` 为每个 Lifetime 的退出提供等待预算，不是整个 Host 退出的总时限；顺序清理可能经历多个预算，也不会因此修复资源泄漏。需要独立可用性的功能应事先放在不同 Host；需要强制终止能力时，还必须配套真实的执行隔离。

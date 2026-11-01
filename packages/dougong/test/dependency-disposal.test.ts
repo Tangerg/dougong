@@ -57,11 +57,11 @@ it("releases independent branches while retaining a failed consumer's transitive
           name: "middle",
           requires: { root },
           provides: { middle },
-          setup({ deps, lifetime }) {
+          setup({ dependencies, lifetime }) {
             lifetime.defer(() => {
               released.push("middle");
             });
-            return { middle: deps.root };
+            return { middle: dependencies.root };
           },
         }),
       },
@@ -178,9 +178,9 @@ it("retains the previous optional binding after removal fails and drains unaffec
         plugin: definePlugin({
           name: "consumer",
           requires: { value: optional(value) },
-          setup({ deps, lifetime }) {
+          setup({ dependencies, lifetime }) {
             lifetime.defer(() => {
-              expect(deps.value).toBe(1);
+              expect(dependencies.value).toBe(1);
               throw new Error("old consumer failed");
             });
           },
@@ -214,10 +214,10 @@ it("retains the previous optional binding after removal fails and drains unaffec
 });
 
 it("retains a failed candidate's actual provider generation instead of its previous binding", async () => {
-  const a = service<number>("release/a");
-  const b = service<number>("release/b");
-  const releaseA = vi.fn<() => void>();
-  const releaseB = vi.fn<() => void>();
+  const originalService = service<number>("release/original-provider");
+  const replacementService = service<number>("release/replacement-provider");
+  const releaseOriginalProvider = vi.fn<() => void>();
+  const releaseReplacementProvider = vi.fn<() => void>();
   const releaseOld = vi.fn<() => void>();
   const releaseNew = vi.fn<() => never>(() => {
     throw new Error("new cleanup failed");
@@ -225,24 +225,24 @@ it("retains a failed candidate's actual provider generation instead of its previ
   const host = createHost({
     installations: [
       {
-        id: "a",
+        id: "original-provider",
         plugin: definePlugin({
-          name: "a",
-          provides: { a },
+          name: "original-provider",
+          provides: { originalService },
           setup({ lifetime }) {
-            lifetime.defer(releaseA);
-            return { a: 1 };
+            lifetime.defer(releaseOriginalProvider);
+            return { originalService: 1 };
           },
         }),
       },
       {
-        id: "b",
+        id: "replacement-provider",
         plugin: definePlugin({
-          name: "b",
-          provides: { b },
+          name: "replacement-provider",
+          provides: { replacementService },
           setup({ lifetime }) {
-            lifetime.defer(releaseB);
-            return { b: 2 };
+            lifetime.defer(releaseReplacementProvider);
+            return { replacementService: 2 };
           },
         }),
       },
@@ -250,7 +250,7 @@ it("retains a failed candidate's actual provider generation instead of its previ
         id: "consumer",
         plugin: definePlugin({
           name: "old",
-          requires: { a },
+          requires: { originalService },
           setup({ lifetime }) {
             lifetime.defer(releaseOld);
           },
@@ -263,9 +263,9 @@ it("retains a failed candidate's actual provider generation instead of its previ
   change.update(host.installation("consumer")!, {
     plugin: definePlugin({
       name: "new",
-      requires: { b },
-      setup({ deps, lifetime }) {
-        expect(deps.b).toBe(2);
+      requires: { replacementService },
+      setup({ dependencies, lifetime }) {
+        expect(dependencies.replacementService).toBe(2);
         lifetime.defer(releaseNew);
         throw new Error("new setup failed");
       },
@@ -276,14 +276,14 @@ it("retains a failed candidate's actual provider generation instead of its previ
   });
   expect(releaseOld).toHaveBeenCalledOnce();
   expect(releaseNew).toHaveBeenCalledOnce();
-  expect(releaseA).toHaveBeenCalledOnce();
-  expect(releaseB).not.toHaveBeenCalled();
+  expect(releaseOriginalProvider).toHaveBeenCalledOnce();
+  expect(releaseReplacementProvider).not.toHaveBeenCalled();
   expect(
     host.diagnostics
       .get()
       .unresolved.map(({ installation, generation }) => ({ installation, generation })),
   ).toEqual([
-    { installation: "b", generation: 1 },
+    { installation: "replacement-provider", generation: 1 },
     { installation: "consumer", generation: 2 },
   ]);
 });
@@ -341,34 +341,34 @@ it("drains independent startup candidates after a failed candidate cannot releas
 });
 
 it("uses restored declarations when restoration cleanup retains a dependency", async () => {
-  const a = service<number>("release/restore-a");
-  const b = service<number>("release/restore-b");
-  const releaseA = vi.fn<() => void>();
-  const releaseB = vi.fn<() => void>();
+  const originalService = service<number>("release/restore-original-provider");
+  const replacementService = service<number>("release/restore-replacement-provider");
+  const releaseOriginalProvider = vi.fn<() => void>();
+  const releaseReplacementProvider = vi.fn<() => void>();
   const releaseIndependent = vi.fn<() => void>();
   const restorationFailure = new Error("restored cleanup failed");
   let attempts = 0;
   const host = createHost({
     installations: [
       {
-        id: "a",
+        id: "original-provider",
         plugin: definePlugin({
-          name: "a",
-          provides: { a },
+          name: "original-provider",
+          provides: { originalService },
           setup({ lifetime }) {
-            lifetime.defer(releaseA);
-            return { a: 1 };
+            lifetime.defer(releaseOriginalProvider);
+            return { originalService: 1 };
           },
         }),
       },
       {
-        id: "b",
+        id: "replacement-provider",
         plugin: definePlugin({
-          name: "b",
-          provides: { b },
+          name: "replacement-provider",
+          provides: { replacementService },
           setup({ lifetime }) {
-            lifetime.defer(releaseB);
-            return { b: 2 };
+            lifetime.defer(releaseReplacementProvider);
+            return { replacementService: 2 };
           },
         }),
       },
@@ -385,7 +385,7 @@ it("uses restored declarations when restoration cleanup retains a dependency", a
         id: "consumer",
         plugin: definePlugin({
           name: "old",
-          requires: { a },
+          requires: { originalService },
           setup({ lifetime }) {
             if (++attempts === 1) return;
             lifetime.defer(() => {
@@ -402,7 +402,7 @@ it("uses restored declarations when restoration cleanup retains a dependency", a
   change.update(host.installation("consumer")!, {
     plugin: definePlugin({
       name: "new",
-      requires: { b },
+      requires: { replacementService },
       setup() {
         throw new Error("candidate failed");
       },
@@ -411,15 +411,15 @@ it("uses restored declarations when restoration cleanup retains a dependency", a
   const error = await host.apply(await host.plan(change)).catch((error: unknown) => error);
   expect(error).toMatchObject({ details: { outcome: "quarantined", phase: "restore" } });
   expect(failures(error).filter((cause) => cause === restorationFailure)).toHaveLength(1);
-  expect(releaseA).not.toHaveBeenCalled();
-  expect(releaseB).toHaveBeenCalledOnce();
+  expect(releaseOriginalProvider).not.toHaveBeenCalled();
+  expect(releaseReplacementProvider).toHaveBeenCalledOnce();
   expect(releaseIndependent).toHaveBeenCalledOnce();
   expect(
     host.diagnostics
       .get()
       .unresolved.map(({ installation, generation }) => ({ installation, generation })),
   ).toEqual([
-    { installation: "a", generation: 1 },
+    { installation: "original-provider", generation: 1 },
     { installation: "consumer", generation: 3 },
   ]);
 });
@@ -449,9 +449,9 @@ it("retains a busy unrelated borrower and its providers without deadlocking quar
           name: "consumer",
           requires: { provider },
           provides: { consumer },
-          setup({ deps, lifetime }) {
+          setup({ dependencies, lifetime }) {
             lifetime.defer(releaseConsumer);
-            return { consumer: deps.provider };
+            return { consumer: dependencies.provider };
           },
         }),
       },
@@ -504,7 +504,7 @@ it("retains a timed out consumer while releasing independent work", async () => 
   const resume = Promise.withResolvers<void>();
   let task!: Task;
   const host = createHost({
-    shutdownTimeoutMs: 5,
+    shutdownTimeoutMilliseconds: 5,
     installations: [
       {
         id: "provider",
@@ -615,8 +615,8 @@ it("joins an already running shutdown without retrying it or quarantining succes
         id: "plugin",
         plugin: definePlugin({
           name: "plugin",
-          setup(ctx) {
-            child = ctx.lifetime.child("plugin-owned");
+          setup(context) {
+            child = context.lifetime.child("plugin-owned");
             child.defer(cleanup);
           },
         }),

@@ -63,9 +63,9 @@ async function measureChained(plugins: number, delayMilliseconds: number) {
         name: `examples.benchmark.link-${index}`,
         requires: { previous },
         provides: { value: current },
-        async setup(ctx) {
+        async setup(context) {
           await delay(delayMilliseconds);
-          return { value: ctx.deps.previous + 1 };
+          return { value: context.dependencies.previous + 1 };
         },
       }),
       { id: `link-${index}` },

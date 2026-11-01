@@ -1,4 +1,4 @@
-import { DougongError, type ErrorDetails } from "dougong";
+import { DougongError, RecordedFailure, type ErrorDetails } from "dougong";
 import { captureDataArray } from "dougong/advanced";
 
 export type PlatformErrorCode =
@@ -62,4 +62,11 @@ export class PermissionDeniedError extends PlatformError {
     this.manifestName = manifestName;
     this.denied = immutableDenied;
   }
+}
+
+export function recordPlatformFailure(error: unknown) {
+  return new RecordedFailure(error, [
+    "manifestName",
+    "denied",
+  ] satisfies (keyof PermissionDeniedError)[]);
 }

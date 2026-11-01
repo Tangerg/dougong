@@ -122,11 +122,11 @@ it("drops a withdrawn command and its rejection reason while the queue is stalle
     const references = await withdraw();
     const collect = globalThis.gc;
     if (!collect) throw new Error("Retention tests require --expose-gc");
-    for (let pass = 0; pass < 8 && references.some((ref) => ref.deref()); pass++) {
+    for (let pass = 0; pass < 8 && references.some((reference) => reference.deref()); pass++) {
       await new Promise<void>((resolve) => setImmediate(resolve));
       collect();
     }
-    expect(references.map((ref) => ref.deref())).toEqual([undefined, undefined]);
+    expect(references.map((reference) => reference.deref())).toEqual([undefined, undefined]);
   } finally {
     first.resolve();
     await running;

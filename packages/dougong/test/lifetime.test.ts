@@ -48,7 +48,7 @@ describe("structured lifetime", () => {
       () => undefined,
     );
     const token = extensionPoint<number>("items");
-    const c = contributions.add(token, "a", 1);
+    const contribution = contributions.add(token, "a", 1);
     await ready.promise;
     Object.defineProperties(owner.signal, {
       aborted: { value: false },
@@ -59,7 +59,7 @@ describe("structured lifetime", () => {
       expect(() => owner.handle.defer(() => undefined)).toThrow("closed");
       expect(() => events.on(event("test"), () => undefined)).toThrow("closed");
       expect(() => contributions.add(token, "b", 2)).toThrow("closed");
-      expect(() => c.update(2)).toThrow("closed");
+      expect(() => contribution.update(2)).toThrow("closed");
     } finally {
       finish.resolve();
       const outcome = await Promise.allSettled([acquired]);

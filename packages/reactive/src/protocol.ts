@@ -1,5 +1,5 @@
-import { disposeSymbol } from "./disposal-runtime.js";
-import { assertSynchronous } from "./sync-result.js";
+import { asyncDisposeSymbol, disposeSymbol } from "./disposal-runtime.js";
+import { assertSynchronous } from "./synchronous-result.js";
 
 export {
   assertPromiseRuntime,
@@ -35,12 +35,24 @@ export function captureReadable<T>(source: Readable<T>, operation: string): Read
 export function captureUnsubscribe(subscription: Disposable): () => void {
   const release = subscription?.[disposeSymbol];
   if (typeof release !== "function")
-    throw new TypeError("Readable.subscribe() must return a Disposable");
+    rejectHandle(subscription, "Readable.subscribe() must return a Disposable");
   return () =>
     assertSynchronous(
       Reflect.apply(release, subscription, []),
       "Readable subscriptions must dispose synchronously",
     );
+}
+
+export function captureRelease(value: AsyncDisposable, message: string): () => PromiseLike<void> {
+  const release = value?.[asyncDisposeSymbol];
+  if (typeof release !== "function") rejectHandle(value, message);
+  return () => Reflect.apply(release, value, []);
+}
+
+function rejectHandle(value: unknown, message: string): never {
+  // A misplaced async factory can still reject after its synchronous caller has unwound.
+  assertSynchronous(value, message);
+  throw new TypeError(message);
 }
 
 export function assertListener(listener: unknown): asserts listener is () => void {

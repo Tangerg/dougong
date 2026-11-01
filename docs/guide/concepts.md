@@ -17,7 +17,9 @@
 | Catalog | 已知的不可变 Artifact |
 | Registration | 用户选择的 Artifact 与选择修订 |
 
-`PluginContext.deps` 是已声明依赖的解析结果；`lifetime`、`events`、`contributions` 是各自职责的操作入口。依赖别名不会与框架操作争抢同一个平面。
+`PluginContext.dependencies` 是已声明依赖的解析结果；`lifetime`、`events`、`contributions` 是各自职责的操作入口。依赖别名不会与框架操作争抢同一个平面。
+
+例如，插件声明 `requires: { storage: STORAGE }` 后，setup 可以通过 `context.dependencies.storage` 使用已绑定的服务。当前安装的身份信息在 `context.metadata` 中，日志通过 `context.logger` 写出。
 
 Service 的必需依赖按拓扑装配；`optional(service)` 在没有提供者时为 `undefined`。提供者改变会重建受影响的消费者，以维持代次内引用稳定。ExtensionPoint 允许多个贡献，键由发布所有者限定；消费者自行决定排序与选择策略。
 

@@ -4,7 +4,7 @@ All installation changes follow `ChangeSet → Plan → apply`. `start` and `sto
 
 ```ts
 const change = host.change();
-change.update(installation, { plugin: nextPlugin, config: nextConfig });
+change.update(installation, { plugin: nextPlugin, configuration: nextConfiguration });
 const plan = await host.plan(change);
 inspectBeforeApplying(plan.report);
 const result = await host.apply(plan);
@@ -20,6 +20,8 @@ Core issues executable Plans only: invalid declarations reject during `host.plan
 If another operation commits while schema validation is pending, planning rejects with `PLAN_STALE`; on quarantine it rejects with `HOST_QUARANTINED`. Build a new change against the current Host. An uncommitted Installation in an issued Plan becomes `removed` as soon as that revision ends. Keeping an obsolete Plan for its report does not retain the old executable payload.
 
 Contract kinds belong to the Host registry, so a live plugin or application can claim a kind without a graph commit. Planning checks its graph against those claims before issuing a Plan. If a different kind wins while candidate setup is running, admission rejects before publication: candidate cleanup and restoration follow the same path as a failed setup. A conflict by itself does not quarantine the Host.
+
+Call `host.plan(change, signal)` to withdraw one planning request. Cancellation rejects with the signal’s reason, retires its pending Installations and leaves other Plans at that revision valid. Once issued, a Plan follows its normal revision and single-use rules.
 
 Invalidation ends the waiting `plan()` immediately, even if its validator never settles. No later validator is started for the obsolete change. A validator already running may finish its own external work; that result cannot affect the Host.
 
@@ -70,4 +72,4 @@ Application code at the Host management boundary should:
 3. Have the actual application or executor owner handle the old boundary. For plugins in a terminable Worker or process, its supervisor reclaims the executor and checks connections, leases, locks and other exclusive resources according to the external system's contract. If code remains in the same realm and cannot be proven stopped, merely creating another Host is not safe takeover; escalate to a boundary that can actually be reclaimed.
 4. Once the old boundary and exclusive external resources have been handled, create a new Host from application-owned declarations, configuration or Artifact selection. Diagnostic snapshots omit complete configuration and modules and are not executable recovery images.
 
-Application code owns incident-specific resource handling; the framework does not rerun arbitrary cleanup callbacks. `shutdownTimeoutMs` supplies a shutdown waiting budget per Lifetime, not a total Host deadline; sequential cleanup can encounter several budgets, and none proves leaked resources have stopped. Features requiring independent availability should use separate Hosts; forcible termination also requires actual execution isolation.
+Application code owns incident-specific resource handling; the framework does not rerun arbitrary cleanup callbacks. `shutdownTimeoutMilliseconds` supplies a shutdown waiting budget per Lifetime, not a total Host deadline; sequential cleanup can encounter several budgets, and none proves leaked resources have stopped. Features requiring independent availability should use separate Hosts; forcible termination also requires actual execution isolation.

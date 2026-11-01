@@ -18,3 +18,5 @@ export const architectureRules = new Set([
   "lifetime.owner",
   "contracts.owner",
 ]);
+
+export const sourceExtensions = Object.freeze(["ts", "mts", "cts", "tsx"]);

@@ -18,8 +18,8 @@ const curriculum = [
     id: "05",
     stage: "composition",
     introduces: [
-      "config-schema",
-      "config-validation",
+      "configuration-schema",
+      "configuration-validation",
       "plugin-description",
       "change-set",
       "setup-failure",
@@ -64,7 +64,11 @@ const curriculum = [
   {
     id: "12",
     stage: "applications",
-    introduces: ["module-graph", "invalidation-closure", "multi-registration-hmr"],
+    introduces: [
+      "module-graph",
+      "invalidation-closure",
+      "multi-registration-hot-module-replacement",
+    ],
   },
 ] as const;
 

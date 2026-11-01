@@ -7,12 +7,12 @@
 | 责任 | 导出 |
 | --- | --- |
 | 契约 / Contracts | `service`, `extensionPoint`, `event`, `optional`, `ContractKind`, `ContractValue`, `Service`, `ExtensionPoint`, `Event`, `OptionalService`, `Requirement` |
-| 插件 / Plugins | `definePlugin`, `describePlugin`, `PluginDescriptor`, `PluginConfigDescriptor`, `PluginDescriptionOptions`, `Plugin`, `AnyPlugin`, `PluginContext`, `Requirements`, `Provisions`, `ResolvedRequirement`, `ResolvedRequirements`, `ProvidedServices`, `InstanceMeta` |
-| 安装与计划 / Installation and planning | `ChangeSet`, `Group`, `Installation`, `InstallationOptions`, `InstallationUpdate`, `InstallationOrigin`, `InitialInstallation`, `Plan`, `PlanReport`, `BindingReport`, `ImpactReason`, `PlanOperation`, `DeclarationSnapshot`, `captureConfig`, `ConfigValue` |
+| 插件 / Plugins | `definePlugin`, `describePlugin`, `PluginDescriptor`, `PluginConfigurationDescriptor`, `PluginDescriptionOptions`, `Plugin`, `AnyPlugin`, `PluginContext`, `Requirements`, `Provisions`, `ResolvedRequirement`, `ResolvedRequirements`, `ProvidedServices`, `InstanceMetadata` |
+| 安装与计划 / Installation and planning | `ChangeSet`, `Group`, `Installation`, `InstallationOptions`, `InstallationUpdate`, `InstallationOrigin`, `InitialInstallation`, `Plan`, `PlanReport`, `BindingReport`, `ImpactReason`, `PlanOperation`, `DeclarationSnapshot`, `captureConfiguration`, `ConfigurationValue` |
 | 运行 / Execution | `createHost`, `Host`, `HostOptions`, `ApplyResult`, `HostStatus`, `InstallationState` |
 | 资源 / Resources | `LifetimeContext`, `ChildLifetime`, `LifetimeOwnership`, `Task`, `Cleanup`, `BackgroundTask`, `LifetimePhase`, `LifetimeSnapshot`, `UnresolvedObligation`, `Disposable`, `AsyncDisposable`, `Resource`, `Awaitable`, `disposeSymbol`, `asyncDisposeSymbol` |
 | 事件与贡献 / Events and contributions | `Contribution`, `ContributionView`, `ContributionOperations`, `EventListener`, `EventArguments`, `EventOperations` |
-| 观察与错误 / Observation and errors | `HostSnapshot`, `InstallationSnapshot`, `GroupSnapshot`, `SnapshotView`, `isLogger`, `Logger`, `DougongError`, `ConfigValidationError`, `RecordedFailure`, `isError`, `isCancellationReason`, `ErrorSnapshot`, `ErrorDetails` |
+| 观察与错误 / Observation and errors | `HostSnapshot`, `InstallationSnapshot`, `GroupSnapshot`, `SnapshotView`, `isLogger`, `Logger`, `DougongError`, `ConfigurationValidationError`, `RecordedFailure`, `isError`, `isCancellationReason`, `ErrorSnapshot`, `ErrorDetails` |
 
 插件上下文的 `LifetimeContext` 只授予工作与资源登记能力；`child(label)` 返回可以提前释放的 `ChildLifetime`。关闭整个 Instance 始终经过 Engine。
 
@@ -25,12 +25,12 @@
 ```ts
 const change = host.change();
 const group = change.group("workspace");
-const installation = change.install(plugin, { id: "search", group, config });
+const installation = change.install(plugin, { id: "search", group, configuration });
 await host.apply(await host.plan(change));
 await host.start();
 
 const next = host.change();
-next.update(installation, { config: nextConfig });
+next.update(installation, { configuration: nextConfiguration });
 const plan = await host.plan(next);
 await host.apply(plan);
 
@@ -48,7 +48,7 @@ await host.stop();
 
 Host 状态为 `stopped`、`starting`、`running`、`changing`、`stopping`、`quarantined`。隔离是整个 Host 的终止状态，不提供原地恢复；操作边界与替换前提见[隔离后的应用处理](../guide/transactions.md#quarantine)。`Plan.report` 可序列化，不包含模块、函数、真实配置载荷或可变运行对象。`HostSnapshot` 中 Lifetime 也是普通数据快照。
 
-订阅统一 `get/subscribe`，不重放，使用标准 Disposable 取消。`ContributionView.use(id, fn)` 借用贡献所有者；`get()` 仅给出冻结的有序 ID 数组；读取元数据和调用处理函数都通过 `use`。`EventOperations.on/emit` 支持同步或异步监听，emit 等待所有监听结果并汇总失败；每次监听调用借用其所有者。`ContributionOperations.add` 登记带 owner 的贡献。
+订阅统一 `get/subscribe`，不重放，使用标准 Disposable 取消。`ContributionView.use(id, callback)` 借用贡献所有者；`get()` 仅给出冻结的有序 ID 数组；读取元数据和调用处理函数都通过 `use`。`EventOperations.on/emit` 支持同步或异步监听，emit 等待所有监听结果并汇总失败；每次监听调用借用其所有者。`ContributionOperations.add` 登记带 owner 的贡献。
 
 `ErrorDetails` 给出 outcome、phase、stateRevision 和可选的安装、契约、依赖路径与影响范围。`RecordedFailure` 是有界脱离资源图的诊断投影；原始拒绝的 cause 仍由直接调用者接收。
 
@@ -56,7 +56,7 @@ Host 状态为 `stopped`、`starting`、`running`、`changing`、`stopping`、`q
 
 从上一版 API 更新时，将已删除的 Host inspect 方法替换为 `host.diagnostics.get()`。删除对旧 ApplyResult outcome 字段的判断；await 正常完成后处理成功，catch 中处理失败及结构化 details。不提供别名或兼容适配器。
 
-Host 只在选项缺省时使用默认值；显式传入 null 的名字、安装列表或分组列表会被拒绝。配置捕获只读取共享输入对象一次并冻结结果；循环引用和过深嵌套仍然拒绝。插件可单独传递 `ctx.log` 的日志函数，释放日志作用域的权限归 Instance。Host 创建时一次性捕获日志方法，保留原后端作为接收者；错误兜底同样使用捕获的方法。
+Host 只在选项缺省时使用默认值；显式传入 null 的名字、安装列表或分组列表会被拒绝。配置捕获只读取共享输入对象一次并冻结结果；循环引用和过深嵌套仍然拒绝。插件可单独传递 `context.logger` 的日志函数，释放日志作用域的权限归 Instance。Host 创建时一次性捕获日志方法，保留原后端作为接收者；错误兜底同样使用捕获的方法。
 
 ## 高级组合原语
 
@@ -67,7 +67,7 @@ Host 只在选项缺省时使用默认值；显式传入 null 的名字、安装
 | `SnapshotPublisher`、`ReadonlyMapSnapshot` | 发布快照、提供只读集合。 |
 | `batchSnapshotNotifications` | 在一个同步回调中批量发布。返回 Promise 不能延长此次发布边界。 |
 | `SerialQueue` | 顺序执行提交的操作。传给 `run(operation, signal)` 的信号可立即撤回仍在排队的操作。操作开始后，由它自己决定完成结果。 |
-| `normalizePlainRecord` | 捕获普通记录的数据字段。插件配置请用 `captureConfig`。 |
+| `normalizePlainRecord` | 捕获普通记录的数据字段。插件配置请用 `captureConfiguration`。 |
 | `captureDataArray(input, label)` | 浅拷贝自有的稠密数据索引并冻结数组，不调用输入的方法或迭代器。元素的校验归调用方。 |
 | `captureLogger(logger)` | 接管日志后端时一次捕获四个方法及其原始接收者。 |
 | `onAbort(signal, callback)` | 观察真实取消，回调只接收一次原因；已取消时立即回调。返回的函数用于解除观察。手动派发名为 `abort` 的事件不能取消作用域。 |
@@ -78,6 +78,6 @@ Host 只在选项缺省时使用默认值；显式传入 null 的名字、安装
 
 ## 声明描述与可执行计划
 
-`describePlugin(plugin, { jsonSchemaTarget })` 从 Plugin 的同一声明投影 `PluginDescriptor`，供文档、UI 与代理读取。描述不执行 setup 或 validate，不推测擦除后的 TypeScript 接口。`PluginConfigDescriptor.status` 区分 `none`（无配置）、`unavailable`（有验证器但无 JSON Schema 出口）、`available`（提供标准 JSON Schema 出口）；默认 target 为 `draft-2020-12`。使用 Standard Schema 1.1 的 Standard JSON Schema 协议导出输入与输出描述，无法导出的 schema 如实标记 unavailable。
+`describePlugin(plugin, { jsonSchemaTarget })` 从 Plugin 的同一声明投影 `PluginDescriptor`，供文档、UI 与代理读取。描述不执行 setup 或 validate，不推测擦除后的 TypeScript 接口。`PluginConfigurationDescriptor.status` 区分 `none`（无配置）、`unavailable`（有验证器但无 JSON Schema 出口）、`available`（提供标准 JSON Schema 出口）；默认 target 为 `draft-2020-12`。使用 Standard Schema 1.1 的 Standard JSON Schema 协议导出输入与输出描述，无法导出的 schema 如实标记 unavailable。
 
 `PlanReport.bindings.before/after` 展示绑定前后差异，`prepareOrder`、`stopOrder`、`publishOrder` 分别说明准备、停止与发布顺序。安装类 `PlanOperation` 携带 before/after `DeclarationSnapshot`，其中只含 pluginName 与公开 origin，不含配置载荷；分组操作只描述 id 与 parentId。`ImpactReason.previousProvider` 与 provider 保留提供者变化原因，包括可选依赖的提供者移除。

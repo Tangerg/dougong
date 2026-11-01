@@ -114,8 +114,8 @@ describe("Readable bridge", () => {
   it("releases a subscription returned after reentrant owner disposal", () => {
     let release!: () => unknown;
     const owner = {
-      defer(fn: () => unknown) {
-        release = fn;
+      defer(cleanup: () => unknown) {
+        release = cleanup;
         return { async [Symbol.asyncDispose]() {} };
       },
     };
@@ -476,3 +476,22 @@ it.each(["batch", "subscriber"] as const)(
     expect(withdrawn).not.toHaveBeenCalled();
   },
 );
+
+it("detaches computed dependants even while the application retains a terminal bridge", async () => {
+  const owner = new Owner();
+  const local = bridge(owner, signal(1));
+  function attach() {
+    const dependant = computed(() => local.get());
+    const observer = () => {};
+    dependant.subscribe(observer);
+    return new WeakRef(observer);
+  }
+  const observer = attach();
+  await owner[Symbol.asyncDispose]();
+  for (let pass = 0; pass < 8 && observer.deref(); pass++) {
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    globalThis.gc!();
+  }
+  expect(observer.deref()).toBeUndefined();
+  expect(() => local.get()).toThrow("disposed");
+});

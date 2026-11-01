@@ -31,10 +31,10 @@ interface Invalidation {
   readonly registrations: ReadonlyArray<string>;
 }
 
-const VIEWS = extensionPoint<View>("examples/hmr-module-graph/views");
-const OUTLINE = "examples.hmr-module-graph.outline";
-const SEARCH = "examples.hmr-module-graph.search";
-const THEME = "examples.hmr-module-graph.theme";
+const VIEWS = extensionPoint<View>("examples/hot-module-replacement/views");
+const OUTLINE = "examples.hot-module-replacement.outline";
+const SEARCH = "examples.hot-module-replacement.search";
+const THEME = "examples.hot-module-replacement.theme";
 
 class ModuleGraph {
   readonly #modules: ReadonlyMap<string, Readonly<ModuleDeclaration>>;
@@ -101,8 +101,8 @@ class ModuleGraph {
 function viewPlugin(name: string, key: string, label: string) {
   return definePlugin({
     name,
-    setup(ctx) {
-      ctx.contributions.add(VIEWS, key, { id: key, label });
+    setup(context) {
+      context.contributions.add(VIEWS, key, { id: key, label });
     },
   });
 }
@@ -120,7 +120,7 @@ function artifact(
   });
 }
 
-export async function hmrModuleGraph(): Promise<ExampleResult> {
+export async function hotModuleReplacement(): Promise<ExampleResult> {
   let views!: ContributionView<View>;
   const snapshots: Array<Promise<string>> = [];
   const labels = async (view: ContributionView<View>, separator: string) =>
@@ -128,14 +128,14 @@ export async function hmrModuleGraph(): Promise<ExampleResult> {
       .sort()
       .join(separator);
   const observer = definePlugin({
-    name: "examples.hmr-module-graph.observer",
+    name: "examples.hot-module-replacement.observer",
     requires: { views: VIEWS },
-    setup(ctx) {
-      views = ctx.deps.views;
+    setup(context) {
+      views = context.dependencies.views;
       const capture = () => {
-        snapshots.push(labels(ctx.deps.views, "+"));
+        snapshots.push(labels(context.dependencies.views, "+"));
       };
-      ctx.deps.views.subscribe(capture);
+      context.dependencies.views.subscribe(capture);
     },
   });
 
@@ -148,7 +148,7 @@ export async function hmrModuleGraph(): Promise<ExampleResult> {
     ["theme-v2", { default: viewPlugin(THEME, "theme", "Theme v2") }],
   ]);
   const host = createHost({
-    name: "hmr-module-graph-example",
+    name: "hot-module-replacement-example",
     installations: [{ id: "observer", plugin: observer }],
   });
   await host.start();
@@ -187,7 +187,7 @@ export async function hmrModuleGraph(): Promise<ExampleResult> {
   for (const name of invalidation.registrations) {
     const replacement = replacements.get(name);
     if (!selected.has(name) || !replacement) {
-      throw new TypeError(`HMR plan is incomplete for Registration '${name}'`);
+      throw new TypeError(`Hot module replacement plan is incomplete for Registration '${name}'`);
     }
     targets.push(await platform.select(replacement));
   }
@@ -203,7 +203,8 @@ export async function hmrModuleGraph(): Promise<ExampleResult> {
 
   return exampleResult({
     id: "12",
-    title: "Module-graph invalidation compiled into atomic multi-Registration HMR",
+    title:
+      "Module-graph invalidation compiled into atomic multi-Registration hot module replacement",
     facts: [
       `Before invalidation the application observed ${before}.`,
       `Changing ${invalidation.changed.join(", ")} invalidated ${invalidation.modules.join(" → ")} by walking importers.`,

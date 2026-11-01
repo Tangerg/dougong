@@ -10,8 +10,8 @@ export async function reactiveLifetime(): Promise<ExampleResult> {
 
   const connectionPlugin = definePlugin({
     name: "examples.reactive.connection",
-    setup(ctx) {
-      observe(ctx.lifetime, endpoint, (url, lifetime) => {
+    setup(context) {
+      observe(context.lifetime, endpoint, (url, lifetime) => {
         trace.push(`connect:${url}`);
         lifetime.defer(() => trace.push(`disconnect:${url}`));
       });

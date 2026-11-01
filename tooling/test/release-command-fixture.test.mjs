@@ -28,11 +28,11 @@ it.each([
     import childProcess from "node:child_process";
     import { installCommandFixture } from ${JSON.stringify(fixture)};
     const command = ${missing ? 'process.execPath + "-missing"' : "process.execPath"};
-    const args = ["-e", ${JSON.stringify(source)}];
+    const commandArguments = ["-e", ${JSON.stringify(source)}];
     const options = ${JSON.stringify(options)};
-    const native = childProcess.spawnSync(command, args, options);
+    const native = childProcess.spawnSync(command, commandArguments, options);
     installCommandFixture(() => native);
-    const simulated = childProcess.spawnSync(command, args, options);
+    const simulated = childProcess.spawnSync(command, commandArguments, options);
     const inspect = (result) => ({
       status: result.status,
       signal: result.signal,
@@ -42,7 +42,7 @@ it.each([
     });
     let execution;
     try {
-      execution = { stdout: childProcess.execFileSync(command, args, options) };
+      execution = { stdout: childProcess.execFileSync(command, commandArguments, options) };
     } catch (error) {
       execution = { status: error.status, signal: error.signal, error: error.code };
     }

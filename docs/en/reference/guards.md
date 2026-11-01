@@ -18,7 +18,7 @@
 | `exports.public` | Cross-package imports use formal public entrypoints |
 | `modules.esm` | Relative source imports carry runtime extensions so emitted declarations support NodeNext |
 | `reactive.independent` | Reactive has zero external dependencies |
-| `vocabulary.current` | Retired vocabulary cannot re-enter implementation |
+| `vocabulary.current` | Rejects retired vocabulary and checks project-owned declarations for abbreviated names |
 | `logging.port` | Library logging uses the Logger port |
 | `policy.explicit` | Library policy does not read ambient clocks or entropy |
 | `lifetime.owner` | Lifetime roots belong to execution or an existing tree |
@@ -41,3 +41,5 @@ The expected public API lives in `tooling/architecture/public-api.json`. Source 
 For a release, the full gate runs on the requested versions. The packed consumer and the release use the same archives: the consumer records their hashes only after the isolated application passes. After the remaining checks finish, release verifies those hashes, the source manifests, the fetched Git commit and the remote tag before the first upload. The uploader rechecks the remote branch and tag before each upload. Git records the release only if the remote refs still match the preflight. Existing and new registry versions must match the verified file names and contents before Git records the release.
 
 Each published manifest lists the literal files or directories to ship. Packing must preserve those files, including additional assets outside `dist/`, and cannot introduce other files or metadata. Workspace dependency ranges are resolved to the versions under test; package-manager authoring data and packaging hooks need not ship. The ESM build derives external dependencies and subpaths from each package’s manifest. The declaration check uses TypeScript’s module namespace to distinguish a constructor from a type-only re-export of the same class.
+
+Prereleases require an npm distribution tag for each package. Run `pnpm release 0.7.2-alpha.1 --tag=next --dry-run` to verify, then omit `--dry-run` to publish. The CLI tag overrides each package’s `publishConfig.tag`. Channel names start with an ASCII letter or digit and may include letters, digits, dots, underscores and hyphens. SemVer ranges are reserved. Resume a partial upload with the same tag. Previously published versions are verified by their archive contents.

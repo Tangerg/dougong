@@ -19,8 +19,8 @@ export async function serviceBasics(): Promise<ExampleResult> {
   const greeterPlugin = definePlugin({
     name: "examples.basics.greeter",
     requires: { clock: CLOCK },
-    setup(ctx) {
-      trace.push(`plugin:${ctx.deps.clock.now()}`);
+    setup(context) {
+      trace.push(`plugin:${context.dependencies.clock.now()}`);
     },
   });
 

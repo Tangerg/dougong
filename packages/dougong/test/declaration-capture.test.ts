@@ -1,40 +1,46 @@
 import type { StandardSchemaV1 } from "@standard-schema/spec";
 import { expect, it, vi } from "vitest";
-import { ConfigValidationError, createHost, definePlugin, optional, service } from "../src/index";
+import {
+  ConfigurationValidationError,
+  createHost,
+  definePlugin,
+  optional,
+  service,
+} from "../src/index";
 
 it("captures plugin declarations and configuration before external mutation", async () => {
   const token = service<number>("capture/value");
   const requirements = { input: optional(token) };
-  const config = { port: 1 };
-  const setup = vi.fn<(_context: unknown, _config: unknown) => void>();
+  const configuration = { port: 1 };
+  const setup = vi.fn<(_context: unknown, _configuration: unknown) => void>();
   const plugin = definePlugin({ name: "capture", requires: requirements, setup });
-  const host = createHost({ installations: [{ id: "a", plugin, config }] });
-  config.port = 2;
+  const host = createHost({ installations: [{ id: "a", plugin, configuration }] });
+  configuration.port = 2;
   requirements.input = optional(service<number>("capture/other"));
   await host.start();
-  expect(setup.mock.calls[0]?.[0]).toMatchObject({ deps: { input: undefined } });
+  expect(setup.mock.calls[0]?.[0]).toMatchObject({ dependencies: { input: undefined } });
   expect(setup.mock.calls[0]?.[1]).toEqual({ port: 1 });
   await host.stop();
 });
 
-it("captures update config when staged and validator output when planned", async () => {
+it("captures update configuration when staged and validator output when planned", async () => {
   const seen: unknown[] = [];
   const output = { value: 1 };
   const plugin = definePlugin({
     name: "capture",
-    config: {
+    configuration: {
       "~standard": { version: 1 as const, vendor: "test", validate: () => ({ value: output }) },
     },
-    setup(_ctx, config) {
-      seen.push(config);
+    setup(_context, configuration) {
+      seen.push(configuration);
     },
   });
-  const host = createHost({ installations: [{ id: "a", plugin, config: { input: 1 } }] });
+  const host = createHost({ installations: [{ id: "a", plugin, configuration: { input: 1 } }] });
   await host.start();
-  const config = { input: 2 };
+  const configuration = { input: 2 };
   const change = host.change();
-  change.update(host.installation("a")!, { config });
-  config.input = 3;
+  change.update(host.installation("a")!, { configuration });
+  configuration.input = 3;
   const plan = await host.plan(change);
   output.value = 9;
   await host.apply(plan);
@@ -43,12 +49,12 @@ it("captures update config when staged and validator output when planned", async
   await host.stop();
 });
 
-it("replaces source atomically with implementation and preserves it for config-only updates", async () => {
+it("replaces source atomically with implementation and preserves it for configuration-only updates", async () => {
   const plugin = definePlugin({ name: "a", setup() {} });
   const host = createHost({ installations: [{ id: "a", plugin, origin: { version: "1" } }] });
   const id = host.installation("a")!;
   const first = host.change();
-  first.update(id, { config: { x: 1 } });
+  first.update(id, { configuration: { x: 1 } });
   await host.apply(await host.plan(first));
   expect(id.origin).toEqual({ version: "1" });
   const second = host.change();
@@ -95,7 +101,7 @@ it("rejects executable array fields without substituting fabricated declarations
     expect(() => createHost({ [key]: array })).toThrow(/dense/);
   }
   const issues = Object.assign([{ message: "real" }], { [Symbol.iterator]: iterator });
-  expect(() => new ConfigValidationError(issues)).toThrow(/dense/);
+  expect(() => new ConfigurationValidationError(issues)).toThrow(/dense/);
   expect(iterator).not.toHaveBeenCalled();
 });
 
@@ -108,11 +114,11 @@ it("preserves Standard Schema options and method identity through capture", () =
   const standard = { version: 1 as const, vendor: "test", validate };
   const plugin = definePlugin({
     name: "validation.options",
-    config: { "~standard": standard },
+    configuration: { "~standard": standard },
     setup() {},
   });
   const options = { libraryOptions: { mode: "strict" } };
-  expect(plugin.config!["~standard"].validate(null, options)).toEqual({ value: "strict" });
+  expect(plugin.configuration!["~standard"].validate(null, options)).toEqual({ value: "strict" });
   expect(validate.mock.contexts).toEqual([standard]);
   expect(validate).toHaveBeenCalledExactlyOnceWith(null, options);
 });

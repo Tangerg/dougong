@@ -1,7 +1,7 @@
 import { DougongError } from "../contracts/errors.js";
 import type { ContractRegistry } from "../contracts/contract-registry.js";
 import { InstallationGraph } from "./installation-graph.js";
-import { resolvePluginConfig, type ConfigValue } from "./configuration.js";
+import { resolvePluginConfiguration, type ConfigurationValue } from "./configuration.js";
 import type { ChangeOperation } from "./change-set.js";
 import type { GroupNode } from "./group.js";
 import {
@@ -23,7 +23,10 @@ export interface CompositionState {
   readonly revision: number;
   readonly groups: ReadonlyMap<string, GroupNode>;
   readonly graph: InstallationGraph;
-  readonly configs: ReadonlyMap<InstallationRecord, { readonly value: ConfigValue | undefined }>;
+  readonly configurations: ReadonlyMap<
+    InstallationRecord,
+    { readonly value: ConfigurationValue | undefined }
+  >;
 }
 
 export async function compileTransition(
@@ -71,7 +74,9 @@ export async function compileTransition(
           record,
           Object.freeze({
             plugin: replacement.plugin ?? previous.plugin,
-            config: Object.hasOwn(replacement, "config") ? replacement.config : previous.config,
+            configuration: Object.hasOwn(replacement, "configuration")
+              ? replacement.configuration
+              : previous.configuration,
             origin: changedPlugin ? replacement.origin : previous.origin,
           }),
         );
@@ -122,19 +127,22 @@ export async function compileTransition(
     intent === "change"
       ? current.graph.affectedByTransitionTo(graph, [...direct.keys()])
       : new Set(graph.order);
-  const configs = new Map<InstallationRecord, { readonly value: ConfigValue | undefined }>();
+  const configurations = new Map<
+    InstallationRecord,
+    { readonly value: ConfigurationValue | undefined }
+  >();
   for (const [record, declaration] of declarations) {
     const cached =
       current.graph.declarations.get(record) === declaration
-        ? current.configs.get(record)
+        ? current.configurations.get(record)
         : undefined;
-    if (cached) configs.set(record, cached);
+    if (cached) configurations.set(record, cached);
     else if (intent === "start" || direct.has(record)) {
-      configs.set(
+      configurations.set(
         record,
-        await resolvePluginConfig(
-          declaration.plugin.config,
-          declaration.config,
+        await resolvePluginConfiguration(
+          declaration.plugin.configuration,
+          declaration.configuration,
           record.id,
           validity,
         ),
@@ -191,7 +199,7 @@ export async function compileTransition(
     groups,
     graph,
     affected,
-    configs,
+    configurations,
     report,
   });
 }

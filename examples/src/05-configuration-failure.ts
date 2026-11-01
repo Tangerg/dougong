@@ -1,5 +1,11 @@
 import type { StandardSchemaV1 } from "@standard-schema/spec";
-import { ConfigValidationError, createHost, definePlugin, describePlugin, service } from "dougong";
+import {
+  ConfigurationValidationError,
+  createHost,
+  definePlugin,
+  describePlugin,
+  service,
+} from "dougong";
 import { exampleResult, failureMessage, type ExampleResult } from "./example.js";
 
 interface Cache {
@@ -14,20 +20,20 @@ interface CacheOptions {
   readonly capacity?: number;
 }
 
-interface CacheConfig {
+interface CacheConfiguration {
   readonly capacity: number;
 }
 
-const CACHE = service<Cache>("examples/config/cache");
-const AUDIT = service<Audit>("examples/config/audit");
+const CACHE = service<Cache>("examples/configuration/cache");
+const AUDIT = service<Audit>("examples/configuration/audit");
 
-const cacheConfig: StandardSchemaV1<CacheOptions, CacheConfig> = {
+const cacheConfigurationSchema: StandardSchemaV1<CacheOptions, CacheConfiguration> = {
   "~standard": {
     version: 1,
     vendor: "dougong-examples",
     validate(value) {
       if (value !== undefined && (typeof value !== "object" || value === null)) {
-        return { issues: [{ message: "cache config must be an object" }] };
+        return { issues: [{ message: "cache configuration must be an object" }] };
       }
       const capacity = value && "capacity" in value ? value.capacity : 64;
       if (typeof capacity !== "number" || !Number.isInteger(capacity) || capacity < 1) {
@@ -40,18 +46,18 @@ const cacheConfig: StandardSchemaV1<CacheOptions, CacheConfig> = {
   },
 };
 
-export async function configAndFailure(): Promise<ExampleResult> {
+export async function configurationAndFailure(): Promise<ExampleResult> {
   let cacheStarts = 0;
   let auditStarts = 0;
   let auditReleases = 0;
 
   const cachePlugin = definePlugin({
-    name: "examples.config.cache",
-    config: cacheConfig,
+    name: "examples.configuration.cache",
+    configuration: cacheConfigurationSchema,
     provides: { cache: CACHE },
-    setup: (_ctx, config) => {
+    setup: (_context, configuration) => {
       cacheStarts++;
-      return { cache: { capacity: config.capacity } };
+      return { cache: { capacity: configuration.capacity } };
     },
   });
 
@@ -60,29 +66,29 @@ export async function configAndFailure(): Promise<ExampleResult> {
   const startsAfterDescription = cacheStarts;
 
   const auditPlugin = definePlugin({
-    name: "examples.config.audit",
+    name: "examples.configuration.audit",
     requires: { cache: CACHE },
     provides: { audit: AUDIT },
-    setup(ctx) {
+    setup(context) {
       auditStarts++;
-      ctx.lifetime.defer(() => auditReleases++);
-      return { audit: { entries: ctx.deps.cache.capacity } };
+      context.lifetime.defer(() => auditReleases++);
+      return { audit: { entries: context.dependencies.cache.capacity } };
     },
   });
 
   const exporterPlugin = definePlugin({
-    name: "examples.config.exporter",
+    name: "examples.configuration.exporter",
     requires: { audit: AUDIT },
     setup() {
       throw new Error("exporter could not open its socket");
     },
   });
 
-  const host = createHost({ name: "config-failure" });
+  const host = createHost({ name: "configuration-failure" });
   const initial = host.change();
   const cacheInstallation = initial.install(cachePlugin, {
     id: "cache",
-    config: { capacity: 128 },
+    configuration: { capacity: 128 },
   });
   await host.apply(await host.plan(initial));
   await host.start();
@@ -91,13 +97,13 @@ export async function configAndFailure(): Promise<ExampleResult> {
   let issues: ReadonlyArray<string> = [];
   try {
     const invalid = host.change();
-    invalid.update(cacheInstallation, { config: { capacity: 0 } });
+    invalid.update(cacheInstallation, { configuration: { capacity: 0 } });
     await host.apply(await host.plan(invalid));
   } catch (error) {
-    if (!(error instanceof ConfigValidationError)) throw error;
+    if (!(error instanceof ConfigurationValidationError)) throw error;
     issues = error.issues.map((issue) => issue.message);
   }
-  const afterInvalidConfig = await host.use(CACHE, (cache) => cache.capacity);
+  const afterInvalidConfiguration = await host.use(CACHE, (cache) => cache.capacity);
 
   const change = host.change();
   change.install(auditPlugin, { id: "audit" });
@@ -123,10 +129,10 @@ export async function configAndFailure(): Promise<ExampleResult> {
     id: "05",
     title: "A rejected declaration and a failed setup",
     facts: [
-      `The declaration produced ${serializedDescription.length} bytes of JSON for docs and agents, configuration schema '${descriptor.config.status}', with ${startsAfterDescription} setup calls.`,
+      `The declaration produced ${serializedDescription.length} bytes of JSON for docs and agents, configuration schema '${descriptor.configuration.status}', with ${startsAfterDescription} setup calls.`,
       `The schema applied its default and the caller's override: capacity ${running}.`,
       `The invalid update was rejected with ${issues.join("; ")}, before any Instance stopped.`,
-      `The running cache never moved: capacity ${afterInvalidConfig} → ${afterRollback}.`,
+      `The running cache never moved: capacity ${afterInvalidConfiguration} → ${afterRollback}.`,
       `The failing commit rejected with '${rejection}'; the audit Instance started ${auditStarts} time and was released ${auditReleases} time.`,
       `Rollback is undone work, not skipped work — AUDIT published = ${auditPublished}, Host status '${status}'.`,
     ],

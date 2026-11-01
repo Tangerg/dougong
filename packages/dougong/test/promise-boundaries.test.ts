@@ -6,7 +6,7 @@ import { captureDisposer } from "../src/contracts/resource";
 it.each(["object", "function"] as const)(
   "observes the captured %s thenable after rejecting an asynchronous synchronous disposer",
   async (kind) => {
-    const failure = new Error("async cleanup failed");
+    const failure = new Error("asynchronous cleanup failed");
     const observe = vi.fn<(resolve: unknown, reject: (error: unknown) => void) => void>(
       (_resolve, reject) => reject(failure),
     );
@@ -30,7 +30,7 @@ it.each(["object", "function"] as const)(
 it.each(["object", "function"] as const)(
   "observes the captured %s thenable from a snapshot subscriber",
   async (kind) => {
-    const failure = new Error("async subscriber failed");
+    const failure = new Error("asynchronous subscriber failed");
     const observe = vi.fn<(resolve: unknown, reject: (error: unknown) => void) => void>(
       (_resolve, reject) => reject(failure),
     );

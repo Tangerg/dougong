@@ -33,7 +33,7 @@ it("rejects a target Node will not resolve even if its file is present", () => {
     packageEntrypoints({
       name: "fixture",
       type: "module",
-      exports: { ".": { ...root, import: "./dist/NODE_MODULES/impl.js" } },
+      exports: { ".": { ...root, import: "./dist/NODE_MODULES/implementation.js" } },
     }),
   ).toThrow("package-relative");
 });

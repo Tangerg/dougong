@@ -3,24 +3,26 @@
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { defineConfig } from "vitest/config";
-import tsconfig from "./tsconfig.base.json" with { type: "json" };
+import typeScriptConfiguration from "./tsconfig.base.json" with { type: "json" };
 
 const sourceRoot = fileURLToPath(new URL("./", import.meta.url));
-const aliases = Object.entries(tsconfig.compilerOptions.paths).map(([specifier, targets]) => {
-  const [target] = targets;
-  if (
-    specifier.includes("*") ||
-    targets.length !== 1 ||
-    typeof target !== "string" ||
-    target.includes("*")
-  ) {
-    throw new TypeError("Workspace test paths must have an exact specifier and one exact target");
-  }
-  return {
-    find: new RegExp(`^${specifier.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`),
-    replacement: resolve(sourceRoot, tsconfig.compilerOptions.baseUrl, target),
-  };
-});
+const aliases = Object.entries(typeScriptConfiguration.compilerOptions.paths).map(
+  ([specifier, targets]) => {
+    const [target] = targets;
+    if (
+      specifier.includes("*") ||
+      targets.length !== 1 ||
+      typeof target !== "string" ||
+      target.includes("*")
+    ) {
+      throw new TypeError("Workspace test paths must have an exact specifier and one exact target");
+    }
+    return {
+      find: new RegExp(`^${specifier.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`),
+      replacement: resolve(sourceRoot, typeScriptConfiguration.compilerOptions.baseUrl, target),
+    };
+  },
+);
 
 export default defineConfig({
   // Resolve through TypeScript paths so tests cannot drift to stale dist artifacts.

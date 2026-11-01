@@ -19,8 +19,8 @@ export async function lazyPlatform(): Promise<ExampleResult> {
   const shell = definePlugin({
     name: "examples.platform.shell",
     requires: { commands: COMMANDS },
-    setup({ deps }) {
-      commands = deps.commands;
+    setup({ dependencies }) {
+      commands = dependencies.commands;
     },
   });
   const active = definePlugin({

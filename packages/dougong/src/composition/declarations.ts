@@ -1,7 +1,7 @@
 import type { AnyPlugin, Plugin } from "./plugin.js";
-import type { ConfigValue } from "./configuration.js";
+import type { ConfigurationValue } from "./configuration.js";
 import type { InstallationState } from "../contracts/status.js";
-export type InstallationOrigin = Readonly<Record<string, ConfigValue>>;
+export type InstallationOrigin = Readonly<Record<string, ConfigurationValue>>;
 
 declare const installationBrand: unique symbol;
 declare const groupBrand: unique symbol;
@@ -20,25 +20,41 @@ export interface Group {
   readonly parentId: string | undefined;
 }
 
-type InputOf<P extends AnyPlugin> =
-  P extends Plugin<infer _C, infer _R, infer _P, infer I> ? I : unknown;
+type ConfigurationInputOf<Declaration extends AnyPlugin> =
+  Declaration extends Plugin<infer _Configuration, infer _Requires, infer _Provides, infer Input>
+    ? Input
+    : unknown;
 
-export type InstallationOptions<P extends AnyPlugin = AnyPlugin> = {
+export type InstallationOptions<Declaration extends AnyPlugin = AnyPlugin> = {
   readonly id: string;
   readonly group?: Group;
   readonly origin?: InstallationOrigin;
-} & ([InputOf<P>] extends [void]
-  ? { readonly config?: InputOf<P> }
-  : { readonly config: InputOf<P> });
+} & ([ConfigurationInputOf<Declaration>] extends [void]
+  ? { readonly configuration?: ConfigurationInputOf<Declaration> }
+  : { readonly configuration: ConfigurationInputOf<Declaration> });
 
-export type InstallationUpdate<P extends AnyPlugin = AnyPlugin> =
-  | { readonly plugin: P; readonly config?: InputOf<P>; readonly origin?: InstallationOrigin }
-  | { readonly plugin?: never; readonly config: InputOf<P>; readonly origin?: never };
+export type InstallationUpdate<Declaration extends AnyPlugin = AnyPlugin> =
+  | {
+      readonly plugin: Declaration;
+      readonly configuration?: ConfigurationInputOf<Declaration>;
+      readonly origin?: InstallationOrigin;
+    }
+  | {
+      readonly plugin?: never;
+      readonly configuration: ConfigurationInputOf<Declaration>;
+      readonly origin?: never;
+    };
 
 export interface ChangeSet {
-  install<P extends AnyPlugin>(plugin: P, options: InstallationOptions<P>): Installation<P>;
-  update<P extends AnyPlugin>(installation: Installation<P>, update: InstallationUpdate<P>): void;
-  remove<P extends AnyPlugin>(installation: Installation<P>): void;
+  install<Declaration extends AnyPlugin>(
+    plugin: Declaration,
+    options: InstallationOptions<Declaration>,
+  ): Installation<Declaration>;
+  update<Declaration extends AnyPlugin>(
+    installation: Installation<Declaration>,
+    update: InstallationUpdate<Declaration>,
+  ): void;
+  remove<Declaration extends AnyPlugin>(installation: Installation<Declaration>): void;
   group(id: string, parent?: Group): Group;
   removeGroup(group: Group): void;
 }
@@ -46,7 +62,7 @@ export interface ChangeSet {
 export interface InitialInstallation {
   readonly id: string;
   readonly plugin: AnyPlugin;
-  readonly config?: unknown;
+  readonly configuration?: unknown;
   readonly origin?: InstallationOrigin;
   readonly groupId?: string;
 }

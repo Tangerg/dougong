@@ -5,9 +5,9 @@ The TypeScript plugin composition kernel. This package owns contracts, declarati
 ```ts
 import { createHost, definePlugin, service } from "dougong";
 
-const GREETER = service<{ greet(name: string): string }>("app/greeter");
+const GREETER = service<{ greet(name: string): string }>("application/greeter");
 const greeter = definePlugin({
-  name: "app.greeter",
+  name: "application.greeter",
   provides: { greeter: GREETER },
   setup() {
     return { greeter: { greet: (name) => `Hello, ${name}` } };
@@ -15,7 +15,7 @@ const greeter = definePlugin({
 });
 
 const host = createHost({
-  name: "app",
+  name: "application",
   installations: [{ id: "greeter", plugin: greeter }],
 });
 await host.start();
@@ -23,7 +23,7 @@ const message = await host.use(GREETER, (service) => service.greet("Dougong"));
 await host[Symbol.asyncDispose]();
 ```
 
-Use `host.change()`, `host.plan(change)` and `host.apply(plan)` for changes. Services and executable contributions are borrowed with `host.use` and `ContributionView.use`. Standard resources belong to `ctx.lifetime`; context dependencies live under `ctx.deps`.
+Use `host.change()`, `host.plan(change)` and `host.apply(plan)` for changes. Services and executable contributions are borrowed with `host.use` and `ContributionView.use`. Standard resources belong to `context.lifetime`; context dependencies live under `context.dependencies`.
 
 Read and observe execution through `host.diagnostics.get()` and `host.diagnostics.subscribe()`. Successful transitions resolve with the state revision and affected installations; failures reject. Cleanup failure retains dependent resources while releasing independently safe branches. It quarantines the whole Host permanently: creating a replacement does not dispose old resources. Follow the [quarantine procedure](https://tangerg.github.io/dougong/en/guide/transactions#quarantine) before takeover.
 

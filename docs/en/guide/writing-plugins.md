@@ -1,6 +1,6 @@
 # Writing plugins
 
-`definePlugin` accepts `name`, an optional Standard Schema `config`, `requires`, `provides` and `setup`. The setup result must match the declared provisions. Configuration is the second argument of `setup(ctx, config)`.
+`definePlugin` accepts `name`, an optional Standard Schema `configuration`, `requires`, `provides` and `setup`. The setup result must match the declared provisions. Configuration is the second argument of `setup(context, configuration)`.
 
 ```ts
 const COMMANDS = extensionPoint<{ title: string; run(): Promise<string> }>("editor/commands");
@@ -9,19 +9,19 @@ const SAVED = event<{ file: string }>("editor/saved");
 const editor = definePlugin({
   name: "editor.main",
   requires: { storage: STORAGE, commands: COMMANDS },
-  setup({ deps, lifetime, events, contributions }) {
+  setup({ dependencies, lifetime, events, contributions }) {
     const session = lifetime.child("session");
     session.defer(() => closeSession());
     events.on(SAVED, ({ file }) => markSaved(file));
     contributions.add(COMMANDS, "save", {
       title: "Save",
-      run: () => deps.storage.save(),
+      run: () => dependencies.storage.save(),
     });
   },
 });
 ```
 
-Register ownership as resources are acquired. Pass standard resources to `lifetime.use(resource)`, cleanup functions to `lifetime.defer(fn)`, and asynchronous standard-resource factories to `lifetime.acquire(factory)`. Consume declared dependencies through `ctx.deps.alias` so the assembly graph captures real dependencies.
+Register ownership as resources are acquired. Pass standard resources to `lifetime.use(resource)`, cleanup functions to `lifetime.defer(cleanup)`, and asynchronous standard-resource factories to `lifetime.acquire(factory)`. Consume declared dependencies through `context.dependencies.alias` so the assembly graph captures real dependencies.
 
 Listeners and contributions belong to the current Instance's Lifetime by default. Pass `{ lifetime: child }` to assign a child owner. Candidate Instances can register both, but neither becomes externally visible until the entire execution commits. Calling `events.emit` during candidate setup fails; emit from business operations that run after publication.
 

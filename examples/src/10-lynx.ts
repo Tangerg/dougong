@@ -53,11 +53,11 @@ function explorerPlugin(title: string, relativePath: string) {
   return definePlugin({
     name: explorerName,
     requires: { filesystem: FILESYSTEM, workspace: MAIN_WORKSPACE },
-    setup({ deps, contributions }) {
+    setup({ dependencies, contributions }) {
       for (const action of explorerActions)
         contributions.add(COMMANDS, action.id, {
           ...action,
-          run: () => deps.filesystem.read(`${deps.workspace.root}/${relativePath}`),
+          run: () => dependencies.filesystem.read(`${dependencies.workspace.root}/${relativePath}`),
         });
       contributions.add(PANELS, "explorer", { id: "explorer", title });
     },
@@ -76,19 +76,21 @@ export async function lynxScenario(): Promise<ExampleResult> {
     name: "examples.lynx.command-catalog",
     requires: { commands: COMMANDS },
     provides: { catalog: COMMAND_CATALOG },
-    setup({ deps }) {
+    setup({ dependencies }) {
       return {
         catalog: {
           list: async () =>
-            Object.freeze((await commandEntries(deps.commands)).map(({ action }) => action)),
+            Object.freeze(
+              (await commandEntries(dependencies.commands)).map(({ action }) => action),
+            ),
           async run(id: string) {
-            const matches = (await commandEntries(deps.commands)).filter(
+            const matches = (await commandEntries(dependencies.commands)).filter(
               ({ action }) => action.id === id,
             );
             if (matches.length > 1) throw new TypeError(`Duplicate command '${id}'`);
             const match = matches[0];
             if (!match) throw new Error(`Command '${id}' is unavailable`);
-            return deps.commands.use(match.entry, (command) => {
+            return dependencies.commands.use(match.entry, (command) => {
               if (command.id !== id) throw new Error(`Command '${id}' changed before invocation`);
               return command.run();
             });
@@ -105,9 +107,9 @@ export async function lynxScenario(): Promise<ExampleResult> {
   const shell = definePlugin({
     name: "examples.lynx.workspace-shell",
     requires: { panels: PANELS, workspace: MAIN_WORKSPACE },
-    setup({ deps }) {
-      workspacePanels = deps.panels;
-      workspaceRoot = deps.workspace.root;
+    setup({ dependencies }) {
+      workspacePanels = dependencies.panels;
+      workspaceRoot = dependencies.workspace.root;
     },
   });
   const host = createHost({

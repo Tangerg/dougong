@@ -31,7 +31,8 @@ it.each(["install", "update"])(
       },
     );
     expect(() => {
-      if (operation === "install") change.install(declaration, { id: "late", config: undefined });
+      if (operation === "install")
+        change.install(declaration, { id: "late", configuration: undefined });
       else change.update(installation, { plugin: declaration });
     }).toThrow("planned");
     const plan = await planning!;

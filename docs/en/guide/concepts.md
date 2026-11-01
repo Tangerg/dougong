@@ -17,7 +17,9 @@ Each fact has one owner. Other objects hold references or expose read-only proje
 | Catalog | Known immutable Artifacts |
 | Registration | The selected Artifact and selection revision |
 
-`PluginContext.deps` contains resolved declared requirements. `lifetime`, `events` and `contributions` expose separate capabilities. Dependency aliases therefore do not compete with framework operations for property names.
+`PluginContext.dependencies` contains resolved declared requirements. `lifetime`, `events` and `contributions` expose separate capabilities. Dependency aliases therefore do not compete with framework operations for property names.
+
+For example, a plugin declaring `requires: { storage: STORAGE }` receives the bound service at `context.dependencies.storage`. Its setup can read the installation identity from `context.metadata` and write logs through `context.logger`.
 
 Required Services determine the assembly topology. `optional(service)` resolves to `undefined` when absent. Provider changes rebuild affected consumers, keeping references stable within a generation. ExtensionPoints admit multiple contributions with owner-qualified keys; consumers own ordering and selection policy.
 

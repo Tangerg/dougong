@@ -55,8 +55,7 @@ export interface ErrorSnapshot {
   readonly cause?: ErrorSnapshot;
   readonly errors?: ReadonlyArray<ErrorSnapshot>;
   readonly details?: ErrorDetails;
-  readonly manifestName?: string;
-  readonly denied?: ReadonlyArray<string>;
+  readonly fields?: Readonly<Record<string, string | ReadonlyArray<string>>>;
   readonly issues?: ReadonlyArray<{
     readonly message: string;
     readonly path?: ReadonlyArray<string | number>;
@@ -80,9 +79,17 @@ export class RecordedFailure extends Error {
       : undefined;
   }
 
-  constructor(error: unknown) {
+  constructor(error: unknown, fields: ReadonlyArray<string> = []) {
+    const names = captureDataArray(fields, "Diagnostic field names");
+    if (
+      names.length > 8 ||
+      names.some((name) => typeof name !== "string" || !name || name.length > 256)
+    ) {
+      throw new TypeError("Select at most eight diagnostic field names of 1–256 characters each");
+    }
     const snapshot =
-      RecordedFailure.#recorded(error) ?? captureError(error, RecordedFailure.#recorded);
+      RecordedFailure.#recorded(error) ??
+      captureError(error, RecordedFailure.#recorded, new Set(names));
     super(snapshot.message);
     this.code = snapshot.code;
     this.#snapshot = snapshot;
@@ -95,6 +102,7 @@ export class RecordedFailure extends Error {
 function captureError(
   error: unknown,
   recorded: (value: unknown) => ErrorSnapshot | undefined,
+  fieldNames: ReadonlySet<string>,
 ): ErrorSnapshot {
   const seen = new Set<unknown>();
   let remaining = 32;
@@ -113,9 +121,13 @@ function captureError(
       const message =
         value === null ||
         ["string", "number", "boolean", "undefined", "bigint", "symbol"].includes(typeof value)
-          ? String(value).slice(0, 4096)
+          ? String(value)
           : "Non-Error object omitted";
-      return Object.freeze({ name: "NonError", message });
+      return Object.freeze({
+        name: "NonError",
+        message: message.slice(0, 4096),
+        ...(message.length > 4096 ? { truncated: true as const } : {}),
+      });
     }
     seen.add(value);
     let truncated = sealed?.truncated ?? false;
@@ -127,8 +139,7 @@ function captureError(
       const raw = readErrorProperty(value, key);
       return typeof raw === "string" ? clip(raw, limit) : undefined;
     };
-    const list = (container: unknown, key: string, limit: number) => {
-      const raw = readErrorProperty(container, key);
+    const list = (raw: unknown, limit: number) => {
       if (!isRecordableArray(raw)) return undefined;
       const length = readErrorProperty(raw, "length");
       if (typeof length !== "number" || !Number.isSafeInteger(length) || length < 0) {
@@ -144,14 +155,31 @@ function captureError(
     const stack = string("stack", 16384);
     const code = string("code", 256);
     const cause = readErrorProperty(value, "cause");
-    const errors = list(value, "errors", 8);
-    const manifestName = string("manifestName", 256);
-    const denied = list(value, "denied", 8)
-      ?.filter((item): item is string => typeof item === "string")
-      .map((item) => clip(item, 256));
-    const issues = list(value, "issues", 8)?.map((issue) => {
+    const errors = list(readErrorProperty(value, "errors"), 8);
+    const strings = (raw: unknown, limit: number) => {
+      const items = list(raw, limit);
+      return (
+        items &&
+        Object.freeze(
+          items
+            .filter((item): item is string => typeof item === "string")
+            .map((item) => clip(item, 256)),
+        )
+      );
+    };
+    let fields = sealed?.fields;
+    if (!sealed && fieldNames.size) {
+      const entries: Array<[string, string | ReadonlyArray<string>]> = [];
+      for (const key of fieldNames) {
+        const raw = readDiagnosticField(value, key);
+        const data = typeof raw === "string" ? clip(raw, 256) : strings(raw, 8);
+        if (data !== undefined) entries.push([key, data]);
+      }
+      if (entries.length) fields = Object.freeze(Object.fromEntries(entries));
+    }
+    const issues = list(readErrorProperty(value, "issues"), 8)?.map((issue) => {
       const message = readErrorProperty(issue, "message");
-      const path = list(issue, "path", 16)?.map((part) => {
+      const path = list(readErrorProperty(issue, "path"), 16)?.map((part) => {
         const key = part && typeof part === "object" ? readErrorProperty(part, "key") : part;
         return typeof key === "number"
           ? key
@@ -181,13 +209,8 @@ function captureError(
           fields[key] = field;
       }
       for (const key of ["dependencyPath", "affectedInstallations"] as const) {
-        const field = list(rawDetails, key, 32);
-        if (field)
-          fields[key] = Object.freeze(
-            field
-              .filter((part): part is string => typeof part === "string")
-              .map((part) => clip(part, 256)),
-          );
+        const field = strings(readErrorProperty(rawDetails, key), 32);
+        if (field) fields[key] = field;
       }
       details = Object.freeze(fields);
     }
@@ -200,8 +223,7 @@ function captureError(
       ...(errors === undefined
         ? {}
         : { errors: Object.freeze(errors.map((error) => visit(error, depth + 1, !!sealed))) }),
-      ...(manifestName === undefined ? {} : { manifestName }),
-      ...(denied === undefined ? {} : { denied: Object.freeze(denied) }),
+      ...(fields === undefined ? {} : { fields }),
       ...(issues === undefined ? {} : { issues: Object.freeze(issues) }),
       ...(details === undefined ? {} : { details }),
       ...(truncated ? { truncated: true as const } : {}),
@@ -224,6 +246,15 @@ function isRecordableArray(value: unknown): value is unknown[] {
     return Array.isArray(value);
   } catch {
     return false;
+  }
+}
+
+// Selecting a domain field must not invoke a second application getter while recording a failure.
+function readDiagnosticField(value: unknown, key: string): unknown {
+  try {
+    return Object.getOwnPropertyDescriptor(value, key)?.value;
+  } catch {
+    return undefined;
   }
 }
 
@@ -264,8 +295,8 @@ export function isCancellationReason(signal: AbortSignal, error: unknown) {
   return isError(error) && readErrorProperty(error, "name") === "AbortError";
 }
 
-export class ConfigValidationError extends DougongError {
-  override name = "ConfigValidationError";
+export class ConfigurationValidationError extends DougongError {
+  override name = "ConfigurationValidationError";
   readonly issues: ReadonlyArray<StandardSchemaV1.Issue>;
 
   constructor(
@@ -274,8 +305,8 @@ export class ConfigValidationError extends DougongError {
   ) {
     const snapshot = snapshotValidationIssues(issues);
     super(
-      "CONFIG_INVALID",
-      `Invalid Plugin config:\n${snapshot.map((issue) => `  - ${issue.message}`).join("\n")}`,
+      "CONFIGURATION_INVALID",
+      `Invalid Plugin configuration:\n${snapshot.map((issue) => `  - ${issue.message}`).join("\n")}`,
       options,
     );
     this.issues = snapshot;
@@ -285,14 +316,16 @@ export class ConfigValidationError extends DougongError {
 // Copy validator issues so retained errors cannot retain third-party object graphs.
 function snapshotValidationIssues(issues: unknown): ReadonlyArray<StandardSchemaV1.Issue> {
   return Object.freeze(
-    captureDataArray(issues, "Config validation issues").map((issue, index) => {
+    captureDataArray(issues, "Configuration validation issues").map((issue, index) => {
       if (!issue || typeof issue !== "object") {
-        throw new TypeError(`Config validation issue at index ${index} must be an object`);
+        throw new TypeError(`Configuration validation issue at index ${index} must be an object`);
       }
       const candidate = issue as { readonly message?: unknown; readonly path?: unknown };
       const message = candidate.message;
       if (typeof message !== "string") {
-        throw new TypeError(`Config validation issue at index ${index} message must be a string`);
+        throw new TypeError(
+          `Configuration validation issue at index ${index} message must be a string`,
+        );
       }
       const path = candidate.path;
       return Object.freeze({
@@ -305,18 +338,18 @@ function snapshotValidationIssues(issues: unknown): ReadonlyArray<StandardSchema
 
 function snapshotValidationPath(path: unknown, issueIndex: number) {
   return Object.freeze(
-    captureDataArray(path, `Config validation issue at index ${issueIndex} path`).map(
+    captureDataArray(path, `Configuration validation issue at index ${issueIndex} path`).map(
       (part, pathIndex) => {
         if (isPropertyKey(part)) return part;
         if (!part || typeof part !== "object") {
           throw new TypeError(
-            `Config validation issue at index ${issueIndex} path segment ${pathIndex} must be a property key`,
+            `Configuration validation issue at index ${issueIndex} path segment ${pathIndex} must be a property key`,
           );
         }
         const key = (part as { readonly key?: unknown }).key;
         if (!isPropertyKey(key)) {
           throw new TypeError(
-            `Config validation issue at index ${issueIndex} path segment ${pathIndex} must contain a property key`,
+            `Configuration validation issue at index ${issueIndex} path segment ${pathIndex} must contain a property key`,
           );
         }
         return Object.freeze({ key });

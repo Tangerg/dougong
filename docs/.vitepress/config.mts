@@ -8,13 +8,13 @@ const summary = {
   en: "A capability composition and structured lifetime kernel for JavaScript/TypeScript.",
 };
 
-function social(lang: string, description: string, url: string): HeadConfig[] {
+function social(locale: string, description: string, url: string): HeadConfig[] {
   return [
     ["meta", { property: "og:type", content: "website" }],
     ["meta", { property: "og:site_name", content: "Dougong" }],
     ["meta", { property: "og:title", content: "Dougong" }],
     ["meta", { property: "og:description", content: description }],
-    ["meta", { property: "og:locale", content: lang }],
+    ["meta", { property: "og:locale", content: locale }],
     ["meta", { property: "og:url", content: url }],
     ["meta", { name: "twitter:card", content: "summary" }],
     ["meta", { name: "twitter:title", content: "Dougong" }],
@@ -22,7 +22,7 @@ function social(lang: string, description: string, url: string): HeadConfig[] {
   ];
 }
 
-function sidebarZh(): DefaultTheme.SidebarItem[] {
+function chineseSidebar(): DefaultTheme.SidebarItem[] {
   return [
     {
       text: "指南",
@@ -62,7 +62,7 @@ function sidebarZh(): DefaultTheme.SidebarItem[] {
   ];
 }
 
-function sidebarEn(): DefaultTheme.SidebarItem[] {
+function englishSidebar(): DefaultTheme.SidebarItem[] {
   return [
     {
       text: "Guide",
@@ -122,7 +122,7 @@ export default defineConfig({
           { text: "参考", link: "/reference/core-api", activeMatch: "/reference/" },
           { text: "示例", link: "/examples", activeMatch: "/examples" },
         ],
-        sidebar: sidebarZh(),
+        sidebar: chineseSidebar(),
         outline: { label: "本页内容", level: [2, 3] },
         docFooter: { prev: "上一页", next: "下一页" },
         editLink: {
@@ -162,7 +162,7 @@ export default defineConfig({
           { text: "Reference", link: "/en/reference/core-api", activeMatch: "/en/reference/" },
           { text: "Examples", link: "/en/examples", activeMatch: "/en/examples" },
         ],
-        sidebar: sidebarEn(),
+        sidebar: englishSidebar(),
         outline: { label: "On this page", level: [2, 3] },
         editLink: {
           pattern: `${repository}/edit/main/docs/:path`,

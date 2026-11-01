@@ -16,7 +16,7 @@ import { createInterface } from "node:readline/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { parseArgs } from "node:util";
-import { valid } from "semver";
+import { prerelease, valid, validRange } from "semver";
 import { packageArchiveIn, readPackageFiles } from "../package-archive.mjs";
 import { packageName, publishedDirectories } from "../packages.mjs";
 import {
@@ -35,30 +35,33 @@ function step(message) {
   console.log(`\n[1m▸ ${message}[0m`);
 }
 
-function run(command, commandArgs, options = {}) {
-  const result = spawnSync(command, commandArgs, { stdio: "inherit", ...options });
+function run(command, commandArguments, options = {}) {
+  const result = spawnSync(command, commandArguments, { stdio: "inherit", ...options });
   if (result.error) fail(`${command} could not start: ${result.error.message}`);
   if (result.status !== 0) {
-    fail(`${command} ${commandArgs.join(" ")} exited with ${result.status}`);
+    fail(`${command} ${commandArguments.join(" ")} exited with ${result.status}`);
   }
 }
 
-function capture(command, commandArgs, options = {}) {
-  return execFileSync(command, commandArgs, { encoding: "utf8", ...options }).trim();
+function capture(command, commandArguments, options = {}) {
+  return execFileSync(command, commandArguments, { encoding: "utf8", ...options }).trim();
 }
 
-function manifestPath(dir) {
-  if (!lstatSync(dir).isDirectory() || realpathSync(dir) !== join(realpathSync("."), dir)) {
-    throw new Error(`Package root must be a directory inside this workspace: ${dir}`);
+function manifestPath(directory) {
+  if (
+    !lstatSync(directory).isDirectory() ||
+    realpathSync(directory) !== join(realpathSync("."), directory)
+  ) {
+    throw new Error(`Package root must be a directory inside this workspace: ${directory}`);
   }
-  const file = resolve(dir, "package.json");
+  const file = resolve(directory, "package.json");
   if (!lstatSync(file).isFile())
     throw new Error(`Release manifest must be a regular file: ${file}`);
   return file;
 }
 
-function readManifest(dir) {
-  return JSON.parse(readFileSync(manifestPath(dir), "utf8"));
+function readManifest(directory) {
+  return JSON.parse(readFileSync(manifestPath(directory), "utf8"));
 }
 
 function versionedManifest(contents) {
@@ -67,15 +70,17 @@ function versionedManifest(contents) {
   return Buffer.from(`${JSON.stringify(manifest, null, 2)}\n`);
 }
 
-function replaceManifest(dir, expected, replacement) {
-  const path = manifestPath(dir);
+function replaceManifest(directory, expected, replacement) {
+  const path = manifestPath(directory);
   const temporary = mkdtempSync(join(dirname(path), ".release-manifest-"));
   try {
     const file = join(temporary, "package.json");
     writeFileSync(file, replacement);
     chmodSync(file, statSync(path).mode);
-    if (!readFileSync(manifestPath(dir)).equals(expected)) {
-      throw new Error(`${dir}/package.json changed during release; preserving external edits`);
+    if (!readFileSync(manifestPath(directory)).equals(expected)) {
+      throw new Error(
+        `${directory}/package.json changed during release; preserving external edits`,
+      );
     }
     renameSync(file, path);
   } finally {
@@ -90,6 +95,7 @@ try {
       "dry-run": { type: "boolean" },
       yes: { type: "boolean" },
       otp: { type: "string" },
+      tag: { type: "string" },
     },
     allowPositionals: true,
     tokens: true,
@@ -99,7 +105,9 @@ try {
 }
 const { values, positionals, tokens } = input;
 if (positionals.length !== 1) {
-  fail("usage: node tooling/release/release.mjs <version> [--dry-run] [--yes] [--otp=<code>]");
+  fail(
+    "usage: node tooling/release/release.mjs <version> [--dry-run] [--yes] [--tag=<dist-tag>] [--otp=<code>]",
+  );
 }
 const seenOptions = new Set();
 for (const token of tokens) {
@@ -113,17 +121,31 @@ if (valid(version) !== version) {
 }
 const dryRun = values["dry-run"] === true;
 const assumeYes = values.yes === true;
-const otp = values.otp;
-if (otp !== undefined && !otp.trim()) fail("--otp must be a non-empty code");
+const oneTimePassword = values.otp;
+if (oneTimePassword !== undefined && !oneTimePassword.trim())
+  fail("--otp must be a non-empty code");
 
-const PACKAGES = publishedDirectories.map((dir) => {
-  return { dir, name: packageName(readManifest(dir).name) };
+const PACKAGES = publishedDirectories.map((directory) => {
+  const manifest = readManifest(directory);
+  const name = packageName(manifest.name);
+  const distributionTag = values.tag === undefined ? manifest.publishConfig?.tag : values.tag;
+  if (distributionTag === undefined && prerelease(version))
+    fail(`${name}: a prerelease needs --tag=<dist-tag> or publishConfig.tag`);
+  if (
+    distributionTag !== undefined &&
+    (typeof distributionTag !== "string" ||
+      !/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/u.test(distributionTag) ||
+      validRange(distributionTag) !== null)
+  )
+    fail(`${name}: invalid npm dist-tag; use a channel name such as next or beta`);
+  return { directory, name, distributionTag };
 });
 if (new Set(PACKAGES.map(({ name }) => name)).size !== PACKAGES.length)
   fail("Release package names must be unique");
-const manifestFiles = PACKAGES.map(({ dir }) => manifestPath(dir));
+const resumeCommand = `pnpm release ${version}${values.tag === undefined ? "" : ` --tag=${values.tag}`}`;
+const manifestFiles = PACKAGES.map(({ directory }) => manifestPath(directory));
 
-const current = readManifest(PACKAGES[0].dir).version;
+const current = readManifest(PACKAGES[0].directory).version;
 console.log(`\nDougong release: ${current} → ${version}${dryRun ? "  (dry run)" : ""}`);
 
 // Publish only reproducible source states so recovery cannot include unrelated commits.
@@ -153,12 +175,14 @@ function isReleaseCommit(commit, parent) {
   }
   if (capture("git", ["diff", "--summary", parent, commit])) return false;
   const changed = capture("git", ["diff", "--name-only", parent, commit]).split("\n");
-  if (changed.some((file) => !PACKAGES.some(({ dir }) => file === `${dir}/package.json`))) {
+  if (
+    changed.some((file) => !PACKAGES.some(({ directory }) => file === `${directory}/package.json`))
+  ) {
     return false;
   }
-  return PACKAGES.every(({ dir }) => {
-    const before = execFileSync("git", ["show", `${parent}:${dir}/package.json`]);
-    const after = execFileSync("git", ["show", `${commit}:${dir}/package.json`]);
+  return PACKAGES.every(({ directory }) => {
+    const before = execFileSync("git", ["show", `${parent}:${directory}/package.json`]);
+    const after = execFileSync("git", ["show", `${commit}:${directory}/package.json`]);
     return after.equals(versionedManifest(before));
   });
 }
@@ -170,22 +194,22 @@ if (ahead !== "0" && !pendingReleaseCommit) {
 }
 
 const tag = `v${version}`;
-const mainRef = "refs/heads/main";
-const tagRef = `refs/tags/${tag}`;
+const mainReference = "refs/heads/main";
+const tagReference = `refs/tags/${tag}`;
 const existingTag = capture("git", ["tag", "--list", tag])
-  ? capture("git", ["rev-parse", tagRef])
+  ? capture("git", ["rev-parse", tagReference])
   : undefined;
 if (
   existingTag &&
-  (!PACKAGES.every(({ dir }) => readManifest(dir).version === version) ||
+  (!PACKAGES.every(({ directory }) => readManifest(directory).version === version) ||
     capture("git", ["cat-file", "-t", existingTag]) !== "tag" ||
     capture("git", ["rev-parse", `${existingTag}^{commit}`]) !== head)
 ) {
   fail(`tag ${tag} already exists but does not record this release`);
 }
 // Fetching main need not fetch its tags. A remote reservation must be checked before the first upload.
-const remoteTag = capture("git", ["ls-remote", "--refs", "origin", tagRef]);
-if (remoteTag && remoteTag !== existingTag + "\t" + tagRef)
+const remoteTag = capture("git", ["ls-remote", "--refs", "origin", tagReference]);
+if (remoteTag && remoteTag !== existingTag + "\t" + tagReference)
   fail(`origin already has a different release tag ${tag}; inspect it before publishing`);
 console.log(
   `  main is clean${pendingReleaseCommit ? "; resuming its release record" : " and equals origin/main"} at ${head}`,
@@ -254,7 +278,7 @@ step("Bumping versions");
 
 // Capture all originals before writing so a partial write can restore every manifest.
 const originalManifests = new Map(
-  PACKAGES.map(({ dir }) => [dir, readFileSync(manifestPath(dir))]),
+  PACKAGES.map(({ directory }) => [directory, readFileSync(manifestPath(directory))]),
 );
 
 function restoreManifests() {
@@ -263,13 +287,13 @@ function restoreManifests() {
   if (!atReleaseSource()) return false;
 
   const errors = [];
-  for (const [dir, contents] of originals) {
+  for (const [directory, contents] of originals) {
     try {
-      if (!readFileSync(manifestPath(dir)).equals(contents)) {
-        replaceManifest(dir, versionedManifest(contents), contents);
+      if (!readFileSync(manifestPath(directory)).equals(contents)) {
+        replaceManifest(directory, versionedManifest(contents), contents);
       }
     } catch (cause) {
-      errors.push(new Error(`Could not restore ${dir}/package.json`, { cause }));
+      errors.push(new Error(`Could not restore ${directory}/package.json`, { cause }));
     }
   }
   if (errors.length) throw new AggregateError(errors, "Release manifest restoration failed");
@@ -306,9 +330,9 @@ for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) {
   });
 }
 
-for (const { dir, name } of PACKAGES) {
-  const original = originalManifests.get(dir);
-  replaceManifest(dir, original, versionedManifest(original));
+for (const { directory, name } of PACKAGES) {
+  const original = originalManifests.get(directory);
+  replaceManifest(directory, original, versionedManifest(original));
   console.log(`  ${name} → ${version}`);
 }
 
@@ -321,7 +345,10 @@ process.once("exit", () => {
 });
 run("pnpm", ["check"], { env: { ...process.env, [candidateOutput]: stage } });
 assertPublicationInputs("accept verified packages");
-const pathsOutsideManifests = [".", ...PACKAGES.map(({ dir }) => `:(exclude)${dir}/package.json`)];
+const pathsOutsideManifests = [
+  ".",
+  ...PACKAGES.map(({ directory }) => `:(exclude)${directory}/package.json`),
+];
 if (
   capture("git", ["status", "--porcelain", "--untracked-files=all", "--", ...pathsOutsideManifests])
 )
@@ -349,10 +376,10 @@ function writeCandidate(candidate, directory) {
   return path;
 }
 
-for (const { dir, name } of PACKAGES) {
-  const { files: candidateFiles, bytes } = candidates.get(dir);
+for (const { directory, name, distributionTag } of PACKAGES) {
+  const { files: candidateFiles, bytes } = candidates.get(directory);
   verifyManifest(
-    JSON.parse(versionedManifest(originalManifests.get(dir))),
+    JSON.parse(versionedManifest(originalManifests.get(directory))),
     JSON.parse(candidateFiles.get("package.json")),
     versions,
   );
@@ -363,7 +390,9 @@ for (const { dir, name } of PACKAGES) {
   }
 
   const size = (bytes.byteLength / 1024).toFixed(1);
-  console.log(`  ${name.padEnd(22)} ${size.padStart(7)} KB  ${version}`);
+  console.log(
+    `  ${name.padEnd(22)} ${size.padStart(7)} KB  ${version}${distributionTag ? ` (--tag=${distributionTag})` : ""}`,
+  );
 }
 
 if (dryRun) {
@@ -377,9 +406,11 @@ if (dryRun) {
 }
 
 if (!assumeYes) {
-  const rl = createInterface({ input: process.stdin, output: process.stdout });
-  const answer = await rl.question(`\nPublish ${PACKAGES.length} packages at ${version}? [y/N] `);
-  rl.close();
+  const prompt = createInterface({ input: process.stdin, output: process.stdout });
+  const answer = await prompt.question(
+    `\nPublish ${PACKAGES.length} packages at ${version}? [y/N] `,
+  );
+  prompt.close();
   if (answer.trim().toLowerCase() !== "y") {
     if (!restoreManifests()) fail("aborted; checkout moved, inspect manifests before resuming");
     fail("aborted; package.json versions restored");
@@ -409,41 +440,45 @@ function awaitRegistry(name) {
 
 function assertPublicationInputs(action) {
   if (!atReleaseSource()) fail(`release source changed during publication; refusing to ${action}`);
-  for (const [dir, contents] of originalManifests) {
-    if (!readFileSync(manifestPath(dir)).equals(versionedManifest(contents))) {
-      fail(`${dir}/package.json changed during release; refusing to ${action}`);
+  for (const [directory, contents] of originalManifests) {
+    if (!readFileSync(manifestPath(directory)).equals(versionedManifest(contents))) {
+      fail(`${directory}/package.json changed during release; refusing to ${action}`);
     }
   }
 }
 
 // Registry uploads cannot be rolled back if the verified branch or release tag changed while waiting.
-const verifiedRefs = [remoteMain + "\t" + mainRef, remoteTag].filter(Boolean).sort().join("\n");
-function assertRemoteReleaseRefs() {
-  const observed = capture("git", ["ls-remote", "--refs", "origin", mainRef, tagRef]);
-  if (observed.split("\n").sort().join("\n") !== verifiedRefs) {
+const verifiedReferences = [remoteMain + "\t" + mainReference, remoteTag]
+  .filter(Boolean)
+  .sort()
+  .join("\n");
+function assertRemoteReleaseReferences() {
+  const observed = capture("git", ["ls-remote", "--refs", "origin", mainReference, tagReference]);
+  if (observed.split("\n").sort().join("\n") !== verifiedReferences) {
     fail("remote release refs changed since preflight; refusing to publish");
   }
 }
 
 const published = [];
-for (const { dir, name } of PACKAGES) {
+for (const { directory, name, distributionTag } of PACKAGES) {
   if (alreadyPublished.has(name)) {
     console.log(`  · ${name}@${version} already published, skipped`);
     continue;
   }
   assertPublicationInputs("publish " + name);
-  const candidate = candidates.get(dir);
+  const candidate = candidates.get(directory);
   const upload = writeCandidate(candidate, mkdtempSync(join(stage, "upload-")));
-  const publishArgs = ["publish", upload, "--access", "public"];
-  if (otp !== undefined) publishArgs.push(`--otp=${otp}`);
-  assertRemoteReleaseRefs();
-  const result = spawnSync("npm", publishArgs, { stdio: "inherit" });
+  const publishArguments = ["publish", upload, "--access", "public"];
+  if (distributionTag !== undefined) publishArguments.push(`--tag=${distributionTag}`);
+  if (oneTimePassword !== undefined) publishArguments.push(`--otp=${oneTimePassword}`);
+  assertRemoteReleaseReferences();
+  const result = spawnSync("npm", publishArguments, { stdio: "inherit" });
   if (result.status === 0 && !awaitRegistry(name)) {
     console.error(
       `\n✗ ${name}: npm accepted ${version}, but it was not readable within 30 minutes; processing may still be pending.`,
     );
     if (published.length) console.error(`  Already published: ${published.join(", ")}`);
-    console.error(`  Re-running \`pnpm release ${version}\` resumes from here.`);
+    console.error(`  Re-running \`${resumeCommand}\` resumes from here.`);
     process.exit(1);
   }
   if (result.status !== 0) {
@@ -451,7 +486,7 @@ for (const { dir, name } of PACKAGES) {
     if (published.length) {
       console.error(`  Already on the registry: ${published.join(", ")}`);
     }
-    console.error(`  Fix the cause and re-run \`pnpm release ${version}\`; it resumes from here.`);
+    console.error(`  Fix the cause and re-run \`${resumeCommand}\`; it resumes from here.`);
     process.exit(1);
   }
   verifyRegistryContents(name, candidate.files);
@@ -488,7 +523,7 @@ if (changed.status === 1) {
 }
 originalManifests.clear();
 if (!existingTag) run("git", ["tag", "-a", tag, releaseCommit, "-m", `Dougong ${version}`]);
-const tagObject = existingTag ?? capture("git", ["rev-parse", tagRef]);
+const tagObject = existingTag ?? capture("git", ["rev-parse", tagReference]);
 if (
   capture("git", ["cat-file", "-t", tagObject]) !== "tag" ||
   capture("git", ["rev-parse", `${tagObject}^{commit}`]) !== releaseCommit
@@ -499,11 +534,11 @@ run("git", [
   "push",
   "--atomic",
   "--no-follow-tags",
-  `--force-with-lease=${mainRef}:${remoteMain}`,
-  `--force-with-lease=${tagRef}:${remoteTag.split("\t")[0]}`,
+  `--force-with-lease=${mainReference}:${remoteMain}`,
+  `--force-with-lease=${tagReference}:${remoteTag.split("\t")[0]}`,
   "origin",
-  `${releaseCommit}:${mainRef}`,
-  `${tagObject}:${tagRef}`,
+  `${releaseCommit}:${mainReference}`,
+  `${tagObject}:${tagReference}`,
 ]);
 
 console.log(`\n[32m✓ Dougong ${version} released[0m`);

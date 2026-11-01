@@ -33,13 +33,13 @@ export {
   type ResolvedRequirement,
   type ResolvedRequirements,
   type ProvidedServices,
-  type InstanceMeta,
+  type InstanceMetadata,
 } from "./composition/plugin.js";
-export { captureConfig, type ConfigValue } from "./composition/configuration.js";
+export { captureConfiguration, type ConfigurationValue } from "./composition/configuration.js";
 export {
   describePlugin,
   type PluginDescriptor,
-  type PluginConfigDescriptor,
+  type PluginConfigurationDescriptor,
   type PluginDescriptionOptions,
 } from "./composition/plugin-description.js";
 export type {
@@ -76,7 +76,7 @@ export type { EventListener, EventOperations, EventArguments } from "./events/ev
 export { isLogger, type Logger } from "./contracts/logging.js";
 export {
   DougongError,
-  ConfigValidationError,
+  ConfigurationValidationError,
   RecordedFailure,
   isError,
   isCancellationReason,

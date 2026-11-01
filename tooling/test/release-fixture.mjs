@@ -7,10 +7,13 @@ const releaseCommandTimeout = 10000;
 // Recovery runs two bounded CLIs plus real Git and archive operations.
 export const releaseTestTimeout = 30000;
 
-export async function executeRelease(args, { cwd, env }) {
-  const execution = executeFile(process.execPath, args, {
-    cwd,
-    env,
+export async function executeRelease(
+  commandArguments,
+  { cwd: workingDirectory, env: environment },
+) {
+  const execution = executeFile(process.execPath, commandArguments, {
+    cwd: workingDirectory,
+    env: environment,
     encoding: "utf8",
     timeout: releaseCommandTimeout,
   });

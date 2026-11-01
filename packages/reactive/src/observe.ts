@@ -2,11 +2,12 @@ import { isAborted, onAbort } from "./abort.js";
 import {
   asyncDisposeSymbol,
   captureReadable,
+  captureRelease,
   captureUnsubscribe,
   type AsyncDisposable,
   type Readable,
 } from "./protocol.js";
-import { assertSynchronous, captureThenable } from "./sync-result.js";
+import { assertSynchronous, captureThenable } from "./synchronous-result.js";
 
 // Serialize replacement so the previous resource owner finishes before the next observer begins.
 
@@ -178,10 +179,10 @@ class Observation<T, Child extends AsyncDisposable> {
     this.#observed = { present: false };
     if (this.#state.phase !== "active" || isAborted(signal)) return;
 
-    this.#createCurrent();
+    this.#createCurrent(signal);
   }
 
-  #createCurrent() {
+  #createCurrent(signal?: AbortSignal) {
     const { owner } = this.#requireBinding();
     const current = owner.child("observation");
     this.#current = captureRelease(
@@ -189,7 +190,9 @@ class Observation<T, Child extends AsyncDisposable> {
       "ObservationOwner.child() must return an AsyncDisposable",
     );
     // Creating a child can synchronously change the source, so subscribe before ownership and read afterward.
+    if (signal && isAborted(signal)) return;
     const value = this.#requireBinding().source.get();
+    if (signal && isAborted(signal)) return;
     this.#invokeObserver(value, current);
 
     if (this.#state.phase !== "active") return;
@@ -283,12 +286,6 @@ export function observe<T, Child extends AsyncDisposable>(
     }
     throw error;
   }
-}
-
-function captureRelease(value: AsyncDisposable, message: string): Release {
-  const release = value?.[asyncDisposeSymbol];
-  if (typeof release !== "function") throw new TypeError(message);
-  return () => Reflect.apply(release, value, []);
 }
 
 async function collect(resource: Release | undefined, errors: unknown[]) {

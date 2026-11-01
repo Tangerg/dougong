@@ -3,28 +3,34 @@ import { installCommandFixture } from "../release-command-fixture.mjs";
 
 const response = JSON.parse(readFileSync("response.json", "utf8"));
 
-installCommandFixture((name, args, options, nativeSpawn) => {
+installCommandFixture((name, commandArguments, options, nativeSpawn) => {
   if (name === "git") {
-    if (args[0] === "rev-parse") {
-      return { status: 0, stdout: args.includes("--abbrev-ref") ? "main" : "a".repeat(40) };
+    if (commandArguments[0] === "rev-parse") {
+      return {
+        status: 0,
+        stdout: commandArguments.includes("--abbrev-ref") ? "main" : "a".repeat(40),
+      };
     }
-    if (args[0] === "rev-list") return { status: 0, stdout: "0" };
+    if (commandArguments[0] === "rev-list") return { status: 0, stdout: "0" };
     if (
-      ["status", "fetch", "ls-remote"].includes(args[0]) ||
-      (args[0] === "tag" && args[1] === "--list")
+      ["status", "fetch", "ls-remote"].includes(commandArguments[0]) ||
+      (commandArguments[0] === "tag" && commandArguments[1] === "--list")
     ) {
       return { status: 0 };
     }
     process.exit(99);
   }
 
-  if (name === "npm" && args[0] === "view") {
-    if (args.length !== 5 || args.slice(2).join(" ") !== "version --prefer-online --json") {
+  if (name === "npm" && commandArguments[0] === "view") {
+    if (
+      commandArguments.length !== 5 ||
+      commandArguments.slice(2).join(" ") !== "version --prefer-online --json"
+    ) {
       process.exit(99);
     }
-    if (response.missing) return nativeSpawn(name, args, options);
+    if (response.missing) return nativeSpawn(name, commandArguments, options);
     const queries = JSON.parse(readFileSync("queries.json", "utf8"));
-    queries.push(args[1]);
+    queries.push(commandArguments[1]);
     writeFileSync("queries.json", JSON.stringify(queries));
     if (response.signal) {
       return nativeSpawn(
@@ -39,8 +45,8 @@ installCommandFixture((name, args, options, nativeSpawn) => {
     };
   }
 
-  if (name === "pnpm" && args.length === 1 && args[0] === "check") {
-    writeFileSync("gate-started", JSON.stringify(args));
+  if (name === "pnpm" && commandArguments.length === 1 && commandArguments[0] === "check") {
+    writeFileSync("gate-started", JSON.stringify(commandArguments));
     return { status: 1 };
   }
   process.exit(99);

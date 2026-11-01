@@ -25,7 +25,7 @@ export interface Contribution<T> extends Disposable {
 }
 
 export interface ContributionView<T> extends SnapshotView<ReadonlyArray<string>> {
-  use<R>(id: string, callback: (value: T) => Awaitable<R>): Promise<R>;
+  use<Result>(id: string, callback: (value: T) => Awaitable<Result>): Promise<Result>;
 }
 
 export interface ContributionOperations {
@@ -53,7 +53,7 @@ class ContributionViewHandle<T> implements ContributionView<T> {
   readonly #state: ContributionViewState<T>;
   readonly get: () => ReadonlyArray<string>;
   readonly subscribe: (listener: () => void) => Disposable;
-  readonly use: <R>(id: string, callback: (value: T) => Awaitable<R>) => Promise<R>;
+  readonly use: <Result>(id: string, callback: (value: T) => Awaitable<Result>) => Promise<Result>;
 
   constructor(state: ContributionViewState<T>) {
     this.#state = state;
@@ -143,7 +143,7 @@ class ContributionRecord<T> implements Publication {
     state.store.publishClaim(this.#id, this);
   }
 
-  use<R>(callback: (value: T) => Awaitable<R>): Promise<R> {
+  use<Result>(callback: (value: T) => Awaitable<Result>): Promise<Result> {
     const state = this.#state;
     if (state.phase === "disposed")
       throw new DougongError("CONTRIBUTION_UNAVAILABLE", "Contribution is no longer available");
@@ -257,7 +257,7 @@ export class ContributionStore<T> {
     return (this.#hostView ??= new ContributionViewHandle<T>({ binding: { store: this } }));
   }
 
-  use<R>(id: string, callback: (value: T) => Awaitable<R>): Promise<R> {
+  use<Result>(id: string, callback: (value: T) => Awaitable<Result>): Promise<Result> {
     const claim = this.#claims.get(id);
     if (claim?.phase !== "published")
       throw new DougongError("CONTRIBUTION_UNAVAILABLE", `Contribution '${id}' is not available`);

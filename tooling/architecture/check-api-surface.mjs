@@ -3,15 +3,15 @@
 
 import PACKAGES from "./public-api.json" with { type: "json" };
 import { pathToFileURL } from "node:url";
-import ts from "typescript";
+import typescript from "typescript";
 import { declarationSurface } from "./declaration-surface.mjs";
 import { existsSync, globSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { loadConfigFromFile } from "vite";
-import { retiredVocabulary } from "./vocabulary.mjs";
+import { abbreviatedDeclaration, retiredVocabulary } from "./vocabulary.mjs";
 import { packageEntrypoints, publishedDirectories } from "../packages.mjs";
-import { architectureRules } from "./rules.mjs";
+import { architectureRules, sourceExtensions } from "./rules.mjs";
 import { developmentEngines, runtimeBaseline } from "../runtime-baseline.mjs";
 
 const retiredIdentifiers = new Set(retiredVocabulary);
@@ -44,14 +44,14 @@ for (const manifestPath of ["package.json", ...publishedManifestPaths]) {
   }
 }
 for (const directory of [...publishedDirectories, "examples"]) {
-  const configPath = `${directory}/vite.config.ts`;
-  const config = await loadConfigFromFile(
+  const configurationPath = `${directory}/vite.config.ts`;
+  const configuration = await loadConfigFromFile(
     { command: "build", mode: "production" },
-    resolve(configPath),
+    resolve(configurationPath),
     resolve(directory),
   );
-  if (!isDeepStrictEqual(config?.config.build?.target, runtimeBaseline.buildTargets)) {
-    failures.push(`${configPath}: emitted syntax does not use the shared runtime baseline`);
+  if (!isDeepStrictEqual(configuration?.config.build?.target, runtimeBaseline.buildTargets)) {
+    failures.push(`${configurationPath}: emitted syntax does not use the shared runtime baseline`);
   }
 }
 for (const directory of publishedDirectories) {
@@ -78,37 +78,39 @@ for (const name of Object.keys(PACKAGES)) {
 }
 
 for (const file of publishedDirectories.flatMap((directory) =>
-  globSync(`${directory}/dist/**/*.d.ts`),
+  globSync(`${directory}/dist/**/*.d.{ts,mts,cts}`),
 )) {
-  const source = ts.createSourceFile(
+  const source = typescript.createSourceFile(
     file,
     readFileSync(file, "utf8"),
-    ts.ScriptTarget.Latest,
+    typescript.ScriptTarget.Latest,
     true,
-    ts.ScriptKind.TS,
+    typescript.ScriptKind.TS,
   );
   const visit = (node) => {
-    if (ts.isIdentifier(node) && retiredIdentifiers.has(node.text))
+    const abbreviated = abbreviatedDeclaration(node);
+    if (abbreviated) failures.push(`${file}: ${abbreviated}`);
+    if (typescript.isIdentifier(node) && retiredIdentifiers.has(node.text))
       failures.push(
         `${file}: retired identifier '${node.text}' appears in its declaration surface`,
       );
-    if (node.kind === ts.SyntaxKind.AnyKeyword) {
+    if (node.kind === typescript.SyntaxKind.AnyKeyword) {
       const line = source.getLineAndCharacterOfPosition(node.getStart(source)).line + 1;
       failures.push(`${file}:${line}: declaration surface contains an any type`);
     }
-    ts.forEachChild(node, visit);
+    typescript.forEachChild(node, visit);
   };
   visit(source);
 }
 
-for (const [name, spec] of Object.entries(PACKAGES)) {
+for (const [name, expectedSurface] of Object.entries(PACKAGES)) {
   const surface = surfaces.get(name);
   if (!surface) continue;
 
-  if (spec.values && spec.types) {
+  if (expectedSurface.values && expectedSurface.types) {
     for (const [kind, expected] of [
-      ["value", spec.values],
-      ["type", spec.types],
+      ["value", expectedSurface.values],
+      ["type", expectedSurface.types],
     ]) {
       const { added, missing } = difference(surface[`${kind}s`], expected);
       for (const item of added) failures.push(`${name}: undeclared ${kind} export '${item}'`);
@@ -117,43 +119,43 @@ for (const [name, spec] of Object.entries(PACKAGES)) {
   }
 }
 
-const ERROR_CODE_RE = /^[A-Z][A-Z_]{3,}$/;
+const ERROR_CODE_PATTERN = /^[A-Z][A-Z_]{3,}$/;
 const sourceCodes = new Set();
-for (const dir of ["packages/dougong/src", "packages/platform/src"]) {
-  for (const file of globSync(`${dir}/**/*.ts`)) {
-    const source = ts.createSourceFile(
+for (const directory of ["packages/dougong/src", "packages/platform/src"]) {
+  for (const file of globSync(`${directory}/**/*.{${sourceExtensions.join(",")}}`)) {
+    const source = typescript.createSourceFile(
       file,
       readFileSync(file, "utf8"),
-      ts.ScriptTarget.Latest,
+      typescript.ScriptTarget.Latest,
       true,
-      ts.ScriptKind.TS,
+      typescript.ScriptKind.TS,
     );
     const visit = (node) => {
-      if (ts.isStringLiteralLike(node) && ERROR_CODE_RE.test(node.text)) {
+      if (typescript.isStringLiteralLike(node) && ERROR_CODE_PATTERN.test(node.text)) {
         const parent = node.parent;
         const isDeclaredCode =
-          ts.isLiteralTypeNode(parent) &&
-          ts.isUnionTypeNode(parent.parent) &&
-          ts.isTypeAliasDeclaration(parent.parent.parent) &&
+          typescript.isLiteralTypeNode(parent) &&
+          typescript.isUnionTypeNode(parent.parent) &&
+          typescript.isTypeAliasDeclaration(parent.parent.parent) &&
           parent.parent.parent.name.text === "PlatformErrorCode";
         const isErrorConstruction =
-          ts.isNewExpression(parent) &&
+          typescript.isNewExpression(parent) &&
           parent.arguments?.[0] === node &&
-          ts.isIdentifier(parent.expression) &&
+          typescript.isIdentifier(parent.expression) &&
           (parent.expression.text === "DougongError" || parent.expression.text === "PlatformError");
         const isErrorSubclass =
-          ts.isCallExpression(parent) &&
+          typescript.isCallExpression(parent) &&
           parent.arguments[0] === node &&
-          parent.expression.kind === ts.SyntaxKind.SuperKeyword;
+          parent.expression.kind === typescript.SyntaxKind.SuperKeyword;
         const isTransitionFailure =
-          ts.isCallExpression(parent) &&
+          typescript.isCallExpression(parent) &&
           parent.arguments[0] === node &&
-          ts.isPropertyAccessExpression(parent.expression) &&
+          typescript.isPropertyAccessExpression(parent.expression) &&
           parent.expression.name.text === "#transitionError";
         const isFailureNormalization =
-          ts.isCallExpression(parent) &&
+          typescript.isCallExpression(parent) &&
           parent.arguments[1] === node &&
-          ts.isIdentifier(parent.expression) &&
+          typescript.isIdentifier(parent.expression) &&
           parent.expression.text === "normalizeFailure";
         if (
           isDeclaredCode ||
@@ -165,7 +167,7 @@ for (const dir of ["packages/dougong/src", "packages/platform/src"]) {
           sourceCodes.add(node.text);
         }
       }
-      ts.forEachChild(node, visit);
+      typescript.forEachChild(node, visit);
     };
     visit(source);
   }
@@ -230,17 +232,17 @@ for (const locale of [
   }
 }
 
-const retiredDocPatterns = [...retiredIdentifiers].map((term) => [
+const retiredDocumentationPatterns = [...retiredIdentifiers].map((term) => [
   term,
   new RegExp(`(?<![\\w$-])${escapeRegExp(term)}(?![\\w$-])`),
 ]);
 
-for (const doc of MARKDOWN_FILES) {
-  if (doc.includes(".vitepress")) continue;
-  const text = readFileSync(doc, "utf8");
+for (const documentPath of MARKDOWN_FILES) {
+  if (documentPath.includes(".vitepress")) continue;
+  const text = readFileSync(documentPath, "utf8");
   const code = markdownCode(text).join("\n");
-  for (const [term, pattern] of retiredDocPatterns) {
-    if (pattern.test(code)) failures.push(`${doc}: uses retired code term '${term}'`);
+  for (const [term, pattern] of retiredDocumentationPatterns) {
+    if (pattern.test(code)) failures.push(`${documentPath}: uses retired code term '${term}'`);
   }
   const documented = new Set(
     [...text.matchAll(/`([A-Z][A-Z_]{3,})`/g)]
@@ -249,11 +251,12 @@ for (const doc of MARKDOWN_FILES) {
   );
   for (const code of documented) {
     if (!sourceCodes.has(code))
-      failures.push(`${doc}: documents '${code}', which no source throws`);
+      failures.push(`${documentPath}: documents '${code}', which no source throws`);
   }
-  if (!REFERENCE_TABLES.includes(doc)) continue;
+  if (!REFERENCE_TABLES.includes(documentPath)) continue;
   for (const code of sourceCodes) {
-    if (!documented.has(code)) failures.push(`${doc}: error code '${code}' is not documented`);
+    if (!documented.has(code))
+      failures.push(`${documentPath}: error code '${code}' is not documented`);
   }
 }
 
@@ -300,8 +303,8 @@ function markdownCode(text) {
   const fragments = [];
   const prose = text.replace(
     /(?:^|\n)(`{3,}|~{3,})([^\n]*)\n([\s\S]*?)\n\1(?=\n|$)/g,
-    (_block, _fence, info, code) => {
-      if (/^\s*(?:[cm]?[jt]sx?|typescript|javascript|json)\b/i.test(info)) {
+    (_block, _fence, languageTag, code) => {
+      if (/^\s*(?:[cm]?[jt]sx?|typescript|javascript|json)\b/i.test(languageTag)) {
         fragments.push(code);
       }
       return "\n";
@@ -338,10 +341,10 @@ for (const [packageName, languages] of Object.entries(PUBLIC_DOCUMENTATION)) {
   const surface = surfaces.get(packageName);
   if (!surface) continue;
   const exported = [...surface.values, ...surface.types];
-  for (const [language, docs] of languages) {
+  for (const [language, documentPaths] of languages) {
     const documented = new Set(
-      docs.flatMap((doc) =>
-        markdownCode(readFileSync(doc, "utf8")).flatMap((code) =>
+      documentPaths.flatMap((documentPath) =>
+        markdownCode(readFileSync(documentPath, "utf8")).flatMap((code) =>
           [...code.matchAll(/[$A-Z_a-z][$\w]*/g)].map(([name]) => name),
         ),
       ),

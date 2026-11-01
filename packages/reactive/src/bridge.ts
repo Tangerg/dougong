@@ -1,5 +1,5 @@
 import {
-  asyncDisposeSymbol,
+  captureRelease,
   captureReadable,
   captureUnsubscribe,
   disposeSymbol,
@@ -17,10 +17,10 @@ export interface BridgeOwner {
 type BridgeValue<T> =
   | { readonly phase: "value"; readonly source: Readable<T>; readonly value: T }
   | { readonly phase: "error"; readonly source: Readable<T>; readonly error: unknown }
-  | { readonly phase: "disposed" };
+  | undefined;
 
 class ReadableBridge<T> implements Disposable {
-  readonly #value: Signal<BridgeValue<T>>;
+  #value: Signal<BridgeValue<T>> | undefined;
   #release: (() => void) | undefined;
   #reading: symbol | undefined;
   #failure: { readonly value: unknown } | undefined;
@@ -30,8 +30,8 @@ class ReadableBridge<T> implements Disposable {
     this.#value = signal<BridgeValue<T>>({ phase: "value", source, value: source.get() });
     this.view = Object.freeze({
       get: () => {
-        const state = this.#value.get();
-        if (state.phase === "disposed") throw new Error("Readable bridge has been disposed");
+        const state = this.#value?.get();
+        if (!state) throw new Error("Readable bridge has been disposed");
         if (state.phase === "error") throw state.error;
         return state.value;
       },
@@ -48,16 +48,15 @@ class ReadableBridge<T> implements Disposable {
         // A synchronously revoked attachment may still return a subscription whose release fails.
         return attaching ? Promise.resolve().then(() => this.#checkRelease()) : undefined;
       });
-      const close = cleanup?.[asyncDisposeSymbol];
-      if (typeof close !== "function") {
-        throw new TypeError("BridgeOwner.defer() must return an AsyncDisposable");
-      }
-      releaseRegistration = () => Reflect.apply(close, cleanup, []);
-      const state = this.#value.get();
-      if (state.phase === "disposed") throw new Error("Readable bridge has been disposed");
+      releaseRegistration = captureRelease(
+        cleanup,
+        "BridgeOwner.defer() must return an AsyncDisposable",
+      );
+      const state = this.#value?.get();
+      if (!state) throw new Error("Readable bridge has been disposed");
       const release = captureUnsubscribe(state.source.subscribe(() => this.#refresh()));
       this.#release = release;
-      if (this.#value.get().phase === "disposed") {
+      if (!this.#value?.get()) {
         try {
           release();
           this.#release = undefined;
@@ -86,8 +85,8 @@ class ReadableBridge<T> implements Disposable {
   }
 
   #refresh() {
-    const before = this.#value.get();
-    if (before.phase === "disposed") return;
+    const before = this.#value?.get();
+    if (!before) return;
     // A foreign getter may deliver another notification before returning an obsolete value.
     const read = Symbol();
     this.#reading = read;
@@ -99,39 +98,42 @@ class ReadableBridge<T> implements Disposable {
       } catch (error) {
         next = { phase: "error", source, error };
       }
-      if (this.#reading !== read || this.#value.get() !== before) return;
+      if (this.#reading !== read || this.#value?.get() !== before) return;
       if (before.phase === "value" && next.phase === "value" && Object.is(before.value, next.value))
         return;
       if (before.phase === "error" && next.phase === "error" && Object.is(before.error, next.error))
         return;
-      this.#value.set(next);
+      this.#value?.set(next);
     } finally {
       this.#reading = undefined;
     }
   }
 
   #subscribe(listener: () => void): Disposable {
-    if (this.#value.get().phase === "disposed")
-      throw new Error("Readable bridge has been disposed");
+    const value = this.#value;
+    if (!value?.get()) throw new Error("Readable bridge has been disposed");
     assertListener(listener);
-    const subscription = this.#value.subscribe(() => {
+    const subscription = value.subscribe(() => {
       // A batch may deliver termination later. Keep the slot until delivery or explicit withdrawal.
-      if (this.#value.get().phase === "disposed") subscription[disposeSymbol]();
+      if (!this.#value?.get()) subscription[disposeSymbol]();
       return listener();
     });
     return subscription;
   }
 
   [disposeSymbol]() {
-    if (this.#value.get().phase === "disposed") return this.#checkRelease();
+    const value = this.#value;
+    if (!value?.get()) return this.#checkRelease();
     const errors: unknown[] = [];
     try {
-      this.#value.set({ phase: "disposed" });
+      value.set(undefined);
     } catch (error) {
       // A pure calculation may reject a write before it happens; ownership has not changed in that case.
-      if (this.#value.get().phase !== "disposed") throw error;
+      if (value.get()) throw error;
       errors.push(error);
     }
+    // A retained terminal bridge must no longer root the computed graph that observed this signal.
+    this.#value = undefined;
     try {
       this.#release?.();
       this.#release = undefined;

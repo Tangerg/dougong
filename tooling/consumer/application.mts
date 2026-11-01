@@ -27,7 +27,11 @@ let setups = 0;
 const greeting = definePlugin({
   name: "consumer.greeting",
   provides: { greeting: GREETING },
-  setup({ lifetime, contributions }) {
+  setup({ lifetime, contributions, metadata, logger }) {
+    assert(
+      metadata.installationId === "greeting" && typeof logger.debug === "function",
+      "Packed Plugin context omitted its execution metadata or logger",
+    );
     contributions.add(ACTIONS, "hello", () => "hello");
     setups++;
     owner = lifetime;
@@ -41,7 +45,7 @@ const greeting = definePlugin({
 });
 const description = describePlugin(greeting);
 assert(
-  description.name === greeting.name && description.config.status === "none",
+  description.name === greeting.name && description.configuration.status === "none",
   "Packed declaration description differs",
 );
 assert(
@@ -102,8 +106,8 @@ const remote = definePlugin({
   name: "consumer.remote",
   requires: { greeting: GREETING },
   provides: { remote: REMOTE },
-  setup({ deps }) {
-    return { remote: { value: deps.greeting.greet("remote") } };
+  setup({ dependencies }) {
+    return { remote: { value: dependencies.greeting.greet("remote") } };
   },
 });
 const nextRemote = definePlugin({

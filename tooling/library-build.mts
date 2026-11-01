@@ -1,5 +1,5 @@
 import { defineConfig } from "vite";
-import dts from "unplugin-dts/vite";
+import generateDeclarations from "unplugin-dts/vite";
 import { packageEntrypoints } from "./packages.mjs";
 import { runtimeBaseline } from "./runtime-baseline.mjs";
 
@@ -24,7 +24,7 @@ export function libraryBuild(
   const dependencies = Object.keys(manifest.dependencies ?? {});
   return defineConfig({
     plugins: [
-      dts({
+      generateDeclarations({
         tsconfigPath: "./tsconfig.json",
         entryRoot: "src",
         include: ["src"],

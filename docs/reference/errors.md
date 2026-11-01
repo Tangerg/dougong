@@ -1,6 +1,8 @@
 # 错误码
 
-失败通过结构化错误拒绝。`DougongError` 提供 `code`、不可变 `details` 和可选原始 `cause`；`ConfigValidationError` 额外提供捕获后的 Standard Schema issues。`PlatformError` 使用 `PlatformErrorCode`，`PermissionDeniedError` 提供 manifestName 与 denied。
+失败通过结构化错误拒绝。`DougongError` 提供 `code`、不可变 `details` 和可选原始 `cause`；`ConfigurationValidationError` 额外提供捕获后的 Standard Schema issues。`PlatformError` 使用 `PlatformErrorCode`，`PermissionDeniedError` 提供 manifestName 与 denied。
+
+从旧版迁移时，读取 Registration 诊断的调用方应将 `snapshot.manifestName` 和 `snapshot.denied` 改为 `snapshot.fields?.manifestName` 和 `snapshot.fields?.denied`。直接捕获的 `PermissionDeniedError` 仍提供类型化字段。自定义诊断可用 `new RecordedFailure(error, fieldNames)` 选择最多八个字段，每个名称限 1 至 256 个字符。记录器只读取对象自身的数据属性，保留有界的字符串或字符串数组。
 
 `details.outcome` 区分 rejected、restored、quarantined。Promise 正常完成即成功，`ApplyResult` 只返回状态修订与影响安装；无须用固定字段再次判断成功。`RecordedFailure` 与 `ErrorSnapshot` 是有界诊断投影，直接调用者仍获得原始失败。参数与协议误用可能抛 TypeError；取消服从所属 AbortSignal，并不等于成功提交。
 
@@ -15,7 +17,7 @@
 | `BUSY` | 该资源所有者仍有前台借用，不能同步封闭此操作。 |
 | `CHANGE_CONFLICT` | 同一变更声明包含冲突意图。 |
 | `CHANGE_FOREIGN` | ChangeSet 不属于该 Host。 |
-| `CONFIG_INVALID` | Standard Schema 验证失败，读取 issues 修正输入。 |
+| `CONFIGURATION_INVALID` | Standard Schema 验证失败，读取 issues 修正输入。 |
 | `CONTRACT_CONFLICT` | 同一 Contract ID 被赋予不同契约类别。 |
 | `CONTRIBUTION_UNAVAILABLE` | 贡献已经撤销或其所有者不再接受调用。 |
 | `EVENT_BEFORE_COMMIT` | 候选 setup 尚未提交，不能向外广播事件。 |

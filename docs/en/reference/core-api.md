@@ -7,12 +7,12 @@ The main `dougong` package is the actual kernel. Its default surface exposes one
 | Responsibility | Exports |
 | --- | --- |
 | 契约 / Contracts | `service`, `extensionPoint`, `event`, `optional`, `ContractKind`, `ContractValue`, `Service`, `ExtensionPoint`, `Event`, `OptionalService`, `Requirement` |
-| 插件 / Plugins | `definePlugin`, `describePlugin`, `PluginDescriptor`, `PluginConfigDescriptor`, `PluginDescriptionOptions`, `Plugin`, `AnyPlugin`, `PluginContext`, `Requirements`, `Provisions`, `ResolvedRequirement`, `ResolvedRequirements`, `ProvidedServices`, `InstanceMeta` |
-| 安装与计划 / Installation and planning | `ChangeSet`, `Group`, `Installation`, `InstallationOptions`, `InstallationUpdate`, `InstallationOrigin`, `InitialInstallation`, `Plan`, `PlanReport`, `BindingReport`, `ImpactReason`, `PlanOperation`, `DeclarationSnapshot`, `captureConfig`, `ConfigValue` |
+| 插件 / Plugins | `definePlugin`, `describePlugin`, `PluginDescriptor`, `PluginConfigurationDescriptor`, `PluginDescriptionOptions`, `Plugin`, `AnyPlugin`, `PluginContext`, `Requirements`, `Provisions`, `ResolvedRequirement`, `ResolvedRequirements`, `ProvidedServices`, `InstanceMetadata` |
+| 安装与计划 / Installation and planning | `ChangeSet`, `Group`, `Installation`, `InstallationOptions`, `InstallationUpdate`, `InstallationOrigin`, `InitialInstallation`, `Plan`, `PlanReport`, `BindingReport`, `ImpactReason`, `PlanOperation`, `DeclarationSnapshot`, `captureConfiguration`, `ConfigurationValue` |
 | 运行 / Execution | `createHost`, `Host`, `HostOptions`, `ApplyResult`, `HostStatus`, `InstallationState` |
 | 资源 / Resources | `LifetimeContext`, `ChildLifetime`, `LifetimeOwnership`, `Task`, `Cleanup`, `BackgroundTask`, `LifetimePhase`, `LifetimeSnapshot`, `UnresolvedObligation`, `Disposable`, `AsyncDisposable`, `Resource`, `Awaitable`, `disposeSymbol`, `asyncDisposeSymbol` |
 | 事件与贡献 / Events and contributions | `Contribution`, `ContributionView`, `ContributionOperations`, `EventListener`, `EventArguments`, `EventOperations` |
-| 观察与错误 / Observation and errors | `HostSnapshot`, `InstallationSnapshot`, `GroupSnapshot`, `SnapshotView`, `isLogger`, `Logger`, `DougongError`, `ConfigValidationError`, `RecordedFailure`, `isError`, `isCancellationReason`, `ErrorSnapshot`, `ErrorDetails` |
+| 观察与错误 / Observation and errors | `HostSnapshot`, `InstallationSnapshot`, `GroupSnapshot`, `SnapshotView`, `isLogger`, `Logger`, `DougongError`, `ConfigurationValidationError`, `RecordedFailure`, `isError`, `isCancellationReason`, `ErrorSnapshot`, `ErrorDetails` |
 
 A plugin receives a `LifetimeContext` with work and resource registration capabilities. Its `child(label)` returns a `ChildLifetime` the caller may dispose. Only the Engine can stop the entire Instance.
 
@@ -25,12 +25,12 @@ A plugin receives a `LifetimeContext` with work and resource registration capabi
 ```ts
 const change = host.change();
 const group = change.group("workspace");
-const installation = change.install(plugin, { id: "search", group, config });
+const installation = change.install(plugin, { id: "search", group, configuration });
 await host.apply(await host.plan(change));
 await host.start();
 
 const next = host.change();
-next.update(installation, { config: nextConfig });
+next.update(installation, { configuration: nextConfiguration });
 const plan = await host.plan(next);
 await host.apply(plan);
 
@@ -48,7 +48,7 @@ await host.stop();
 
 Host states are `stopped`, `starting`, `running`, `changing`, `stopping` and `quarantined`. Quarantine is terminal for the entire Host, with no in-place recovery. See [Application handling after quarantine](../guide/transactions.md#quarantine) for operation boundaries and replacement preconditions. `Plan.report` is serializable and contains no modules, functions, real configuration payloads or mutable runtime objects. Lifetimes inside `HostSnapshot` are plain data snapshots too.
 
-Subscriptions share `get/subscribe`, do not replay and use standard Disposable cancellation. `ContributionView.use(id, fn)` borrows the contribution owner; `get()` exposes only a frozen, ordered list of IDs. Read metadata and invoke handlers inside `use`. `EventOperations.on/emit` supports synchronous or asynchronous listeners; emit awaits all results and aggregates failures, borrowing each listener's owner until completion. `ContributionOperations.add` registers owned contributions.
+Subscriptions share `get/subscribe`, do not replay and use standard Disposable cancellation. `ContributionView.use(id, callback)` borrows the contribution owner; `get()` exposes only a frozen, ordered list of IDs. Read metadata and invoke handlers inside `use`. `EventOperations.on/emit` supports synchronous or asynchronous listeners; emit awaits all results and aggregates failures, borrowing each listener's owner until completion. `ContributionOperations.add` registers owned contributions.
 
 `ErrorDetails` carries outcome, phase, stateRevision and optional installation, contract, dependency path and impact. `RecordedFailure` is a bounded diagnostic projection detached from resource graphs; direct callers still receive the cause of the original rejection.
 
@@ -56,7 +56,7 @@ Subscriptions share `get/subscribe`, do not replay and use standard Disposable c
 
 For callers updating from the previous API, replace the removed Host inspect method with `host.diagnostics.get()`. Remove checks of the former ApplyResult outcome field; code after a successful await handles success, while catch handles failures and their structured details. No alias or compatibility adapter is provided.
 
-Host defaults apply when an option is omitted. An explicit null name, installation list or group list is invalid. Configuration capture reads each shared input object once and freezes its result; cycles and excessive nesting still reject. The logger in `ctx.log` exposes standalone callbacks that the plugin may pass to another function. Its disposal belongs to the Instance. Host creation captures each logger method once with its original backend receiver, including the error fallback.
+Host defaults apply when an option is omitted. An explicit null name, installation list or group list is invalid. Configuration capture reads each shared input object once and freezes its result; cycles and excessive nesting still reject. The logger in `context.logger` exposes standalone callbacks that the plugin may pass to another function. Its disposal belongs to the Instance. Host creation captures each logger method once with its original backend receiver, including the error fallback.
 
 ## Advanced composition primitives
 
@@ -67,7 +67,7 @@ Use `dougong/advanced` for adapters and domain extensions. These primitives expo
 | `SnapshotPublisher`, `ReadonlyMapSnapshot` | Publish snapshots and expose read-only collections. |
 | `batchSnapshotNotifications` | Group publications in one synchronous callback. A returned Promise cannot extend the boundary. |
 | `SerialQueue` | Runs operations in order. The optional signal in `run(operation, signal)` withdraws a waiting operation immediately. Once invoked, the operation owns its result. |
-| `normalizePlainRecord` | Capture the data fields of a plain record. Use `captureConfig` when the input is plugin configuration. |
+| `normalizePlainRecord` | Capture the data fields of a plain record. Use `captureConfiguration` when the input is plugin configuration. |
 | `captureDataArray(input, label)` | Freeze a shallow copy of dense own index data without invoking the input’s methods or iterator. The caller validates the elements. |
 | `captureLogger(logger)` | Capture the four methods and their original receiver once when adopting a logging backend. |
 | `onAbort(signal, callback)` | Observe genuine cancellation once, passing its reason immediately if already aborted. The returned function detaches the callback. Dispatching an event named `abort` does not cancel a scope. |
@@ -78,6 +78,6 @@ On Node, Dougong uses a protected Node listener. Node itself may read `aborted` 
 
 ## Declaration descriptions and executable plans
 
-`describePlugin(plugin, { jsonSchemaTarget })` projects a `PluginDescriptor` from the same Plugin declaration for documentation, UI and agent callers. It runs neither setup nor validate and does not guess erased TypeScript interfaces. `PluginConfigDescriptor.status` distinguishes `none` (no configuration), `unavailable` (a validator without a JSON Schema exporter) and `available` (a standard JSON Schema exporter). The default target is `draft-2020-12`. Standard Schema 1.1's Standard JSON Schema protocol exports input and output descriptions; schemas without that protocol remain explicitly unavailable.
+`describePlugin(plugin, { jsonSchemaTarget })` projects a `PluginDescriptor` from the same Plugin declaration for documentation, UI and agent callers. It runs neither setup nor validate and does not guess erased TypeScript interfaces. `PluginConfigurationDescriptor.status` distinguishes `none` (no configuration), `unavailable` (a validator without a JSON Schema exporter) and `available` (a standard JSON Schema exporter). The default target is `draft-2020-12`. Standard Schema 1.1's Standard JSON Schema protocol exports input and output descriptions; schemas without that protocol remain explicitly unavailable.
 
 `PlanReport.bindings.before/after` show binding differences. `prepareOrder`, `stopOrder` and `publishOrder` describe preparation, shutdown and publication order. Installation `PlanOperation` entries carry before/after `DeclarationSnapshot` data containing only pluginName and public origin, without configuration payloads. Group operations describe id and parentId. `ImpactReason.previousProvider` and provider preserve provider-change explanations, including removal of an optional dependency's provider.

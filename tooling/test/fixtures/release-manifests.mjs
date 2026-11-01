@@ -1,4 +1,4 @@
-import fs from "node:fs";
+import fileSystem from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
 import { basename, dirname, join } from "node:path";
 import { installCommandFixture } from "../release-command-fixture.mjs";
@@ -11,17 +11,17 @@ const target = join(
   failure === "restore" ? "reactive" : "dougong",
   "package.json",
 );
-const read = fs.readFileSync;
-const write = fs.writeFileSync;
+const read = fileSystem.readFileSync;
+const write = fileSystem.writeFileSync;
 let writes = 0;
 
-fs.readFileSync = (path, ...args) => {
-  if (failure === "read" && path === target && !args.length) {
+fileSystem.readFileSync = (path, ...fileOptions) => {
+  if (failure === "read" && path === target && !fileOptions.length) {
     throw new Error("fixture manifest read failure");
   }
-  return read(path, ...args);
+  return read(path, ...fileOptions);
 };
-fs.writeFileSync = (path, contents, ...args) => {
+fileSystem.writeFileSync = (path, contents, ...fileOptions) => {
   if (
     basename(path) === "package.json" &&
     dirname(dirname(path)) === dirname(target) &&
@@ -29,39 +29,42 @@ fs.writeFileSync = (path, contents, ...args) => {
   ) {
     writes++;
     if (failure === "write" && writes === 1) {
-      write(path, "partial write", ...args);
+      write(path, "partial write", ...fileOptions);
       throw new Error("fixture manifest write failure");
     }
     if (failure === "restore" && writes === 2) {
       throw new Error("fixture manifest restoration failure");
     }
   }
-  return write(path, contents, ...args);
+  return write(path, contents, ...fileOptions);
 };
 syncBuiltinESMExports();
 
-installCommandFixture((name, args) => {
+installCommandFixture((name, commandArguments) => {
   if (name === "git") {
-    if (args[0] === "rev-parse") {
-      return { status: 0, stdout: args.includes("--abbrev-ref") ? "main" : "a".repeat(40) };
+    if (commandArguments[0] === "rev-parse") {
+      return {
+        status: 0,
+        stdout: commandArguments.includes("--abbrev-ref") ? "main" : "a".repeat(40),
+      };
     }
-    if (args[0] === "rev-list") return { status: 0, stdout: "0" };
+    if (commandArguments[0] === "rev-list") return { status: 0, stdout: "0" };
     if (
-      ["status", "fetch", "ls-remote"].includes(args[0]) ||
-      (args[0] === "tag" && args[1] === "--list")
+      ["status", "fetch", "ls-remote"].includes(commandArguments[0]) ||
+      (commandArguments[0] === "tag" && commandArguments[1] === "--list")
     ) {
       return { status: 0 };
     }
     process.exit(99);
   }
 
-  if (name === "npm" && args[0] === "view") {
+  if (name === "npm" && commandArguments[0] === "view") {
     return { status: 1, stdout: JSON.stringify({ error: { code: "E404" } }) };
   }
 
   if (name === "pnpm") {
-    if (args.length !== 1 || args[0] !== "check") process.exit(99);
-    fs.writeFileSync(join(workspace, "release-stage"), join(workspace, "test-pack"));
+    if (commandArguments.length !== 1 || commandArguments[0] !== "check") process.exit(99);
+    fileSystem.writeFileSync(join(workspace, "release-stage"), join(workspace, "test-pack"));
     return { status: 1 };
   }
   process.exit(99);

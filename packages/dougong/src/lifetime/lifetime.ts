@@ -1,6 +1,6 @@
 import { DougongError, isCancellationReason, RecordedFailure } from "../contracts/errors.js";
 import { abortReason, isAborted, onAbort } from "../internal/abort.js";
-import { assertSynchronous } from "../internal/sync-result.js";
+import { assertSynchronous } from "../internal/synchronous-result.js";
 import { batchSnapshotNotifications } from "../observation/snapshot-view.js";
 import type {
   LifetimePhase,
@@ -60,7 +60,7 @@ export interface LifetimeOptions {
   readonly report: (error: unknown) => void;
   readonly changed?: () => void;
   readonly parentSignal?: AbortSignal;
-  readonly shutdownTimeoutMs?: number;
+  readonly shutdownTimeoutMilliseconds?: number;
 }
 
 interface ChildOwnership {
@@ -245,7 +245,7 @@ export class Lifetime {
   readonly #publications = new Set<PublicationRecord>();
   readonly #tasks = new Set<TaskRecord<unknown>>();
   readonly #acquisitions = new Set<Promise<void>>();
-  readonly #shutdownTimeoutMs: number | undefined;
+  readonly #shutdownTimeoutMilliseconds: number | undefined;
   #report: ((error: unknown) => void) | undefined;
   #changed: (() => void) | undefined;
   #phase: LifetimePhase = "active";
@@ -265,7 +265,7 @@ export class Lifetime {
     this.#label = options.label;
     this.#report = options.report;
     this.#changed = options.changed;
-    this.#shutdownTimeoutMs = shutdownTimeout(options.shutdownTimeoutMs);
+    this.#shutdownTimeoutMilliseconds = shutdownTimeout(options.shutdownTimeoutMilliseconds);
     this.#visibility = ownership?.visibility ?? new Visibility();
     this.#detachFromParent = ownership?.detach;
     if (options.parentSignal) {
@@ -412,9 +412,9 @@ export class Lifetime {
         label,
         report: this.#report!,
         ...(this.#changed && { changed: this.#changed }),
-        ...(this.#shutdownTimeoutMs === undefined
+        ...(this.#shutdownTimeoutMilliseconds === undefined
           ? {}
-          : { shutdownTimeoutMs: this.#shutdownTimeoutMs }),
+          : { shutdownTimeoutMilliseconds: this.#shutdownTimeoutMilliseconds }),
       },
       {
         visibility: this.#visibility,
@@ -557,8 +557,8 @@ export class Lifetime {
     const entering = [...this.#tree()].filter((scope) => !scope.#completion);
     const errors: unknown[] = [];
     // Reserve every real join before withdrawal or cancellation can reenter a child or its parent.
-    for (let i = entering.length - 1; i >= 0; i--) {
-      const scope = entering[i]!;
+    for (let index = entering.length - 1; index >= 0; index--) {
+      const scope = entering[index]!;
       scope.#beginShutdown(scope === this ? errors : []);
     }
     try {
@@ -578,7 +578,7 @@ export class Lifetime {
     this.detachStartupSignal();
     const work = Promise.resolve().then(() => this.#finishShutdown(errors));
     this.#shutdownWork = work;
-    if (this.#shutdownTimeoutMs === undefined) {
+    if (this.#shutdownTimeoutMilliseconds === undefined) {
       this.#completion = Object.freeze(work);
       return;
     }
@@ -595,7 +595,7 @@ export class Lifetime {
       this.#phase = "quarantined";
       this.#changed?.();
       completion.reject(failure);
-    }, this.#shutdownTimeoutMs);
+    }, this.#shutdownTimeoutMilliseconds);
     void work.then(
       () => {
         clearTimeout(timeout);
@@ -700,7 +700,7 @@ export function shutdownTimeout(value: unknown): number | undefined {
     value > maximumTimerDelay
   )
     throw new TypeError(
-      `shutdownTimeoutMs must be a positive finite number no greater than ${maximumTimerDelay}`,
+      `shutdownTimeoutMilliseconds must be a positive finite number no greater than ${maximumTimerDelay}`,
     );
   return value;
 }

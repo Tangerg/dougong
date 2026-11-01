@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { createHost, definePlugin, type ConfigValue } from "dougong";
+import { createHost, definePlugin, type ConfigurationValue } from "dougong";
 import { createPlatform, MemoryLoader } from "../src";
 import { add, emptyPlugin, fixture, select, VALUE, valuePlugin } from "./fixtures";
 
@@ -76,39 +76,54 @@ describe("Catalog and selection ownership", () => {
     await platform[Symbol.asyncDispose]();
   });
 
-  it("owns config data before any lazy loading begins", async () => {
+  it("rejects an obsolete configuration key before reserving the revision", () => {
+    const { platform } = fixture();
+    const declaration = {
+      revision: "one",
+      manifest: { name: "reader", version: "1.0.0" },
+      reference: "reader-module",
+    };
+    const obsolete = { ...declaration, config: { limit: 1 } };
+    expect(() => platform.catalog.add(obsolete)).toThrow("unknown field 'config'");
+    const artifact = platform.catalog.add({ ...declaration, configuration: { limit: 2 } });
+    expect(artifact.configuration).toEqual({ limit: 2 });
+  });
+
+  it("owns configuration data before any lazy loading begins", async () => {
     let received: unknown;
     const plugin = definePlugin({
-      name: "config",
-      config: {
+      name: "configuration",
+      configuration: {
         "~standard": {
           version: 1 as const,
           vendor: "test",
           validate: (value: unknown) => ({ value }),
         },
       },
-      setup(_context, config) {
-        received = config;
+      setup(_context, configuration) {
+        received = configuration;
       },
     });
-    const { host, platform } = fixture(new Map([["config", plugin]]));
-    const config = { nested: { count: 1 } };
-    const artifact = add(platform, "config", "config", "1.0.0", { config });
-    config.nested.count = 8;
+    const { host, platform } = fixture(new Map([["configuration", plugin]]));
+    const configuration = { nested: { count: 1 } };
+    const artifact = add(platform, "configuration", "configuration", "1.0.0", { configuration });
+    configuration.nested.count = 8;
     const registration = await platform.select(artifact);
     await host.start();
     await platform.activate([registration]);
     expect(received).toEqual({ nested: { count: 1 } });
-    expect(Object.isFrozen(artifact.config)).toBe(true);
+    expect(Object.isFrozen(artifact.configuration)).toBe(true);
     await platform[Symbol.asyncDispose]();
     await host.stop();
   });
 
   it.each([Promise.resolve(1), new Date(), () => 1, new Map()])(
-    "rejects config outside the shared data protocol",
-    (config) => {
+    "rejects configuration outside the shared data protocol",
+    (configuration) => {
       const { platform } = fixture();
-      expect(() => add(platform, "config", "config", "1.0.0", { config })).toThrow(TypeError);
+      expect(() =>
+        add(platform, "configuration", "configuration", "1.0.0", { configuration }),
+      ).toThrow(TypeError);
     },
   );
 
@@ -171,7 +186,7 @@ describe("Catalog and selection ownership", () => {
     const { host, platform } = fixture(new Map([["sample", emptyPlugin("sample")]]));
     const registration = await select(platform, "sample", "sample");
     await platform.activate([registration]);
-    const origins: ReadonlyArray<Readonly<Record<string, ConfigValue>>> = [
+    const origins: ReadonlyArray<Readonly<Record<string, ConfigurationValue>>> = [
       {
         kind: "artifact",
         platformId: "other",

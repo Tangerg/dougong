@@ -34,9 +34,9 @@ it.each([false, true])(
     changes.update(host.installation("a")!, {
       plugin: definePlugin({
         name: "a",
-        setup(ctx) {
+        setup(context) {
           if (unclean)
-            ctx.lifetime.defer(() => {
+            context.lifetime.defer(() => {
               throw new Error("cleanup failed");
             });
           throw new Error("a failed");
@@ -88,7 +88,7 @@ it("keeps old Lifetime capabilities during rejected candidate validation", async
   };
   const message = event<string>("message");
   const items = extensionPoint<string>("items");
-  let ctx!: PluginContext<{}>;
+  let retainedContext!: PluginContext<{}>;
   const stopped = vi.fn<() => void>();
   const host = createHost({
     installations: [
@@ -97,42 +97,48 @@ it("keeps old Lifetime capabilities during rejected candidate validation", async
         plugin: definePlugin({
           name: "a",
           setup(context) {
-            ctx = context;
-            ctx.lifetime.defer(stopped);
+            retainedContext = context;
+            retainedContext.lifetime.defer(stopped);
           },
         }),
       },
-      { id: "b", plugin: definePlugin({ name: "b", config: schema, setup() {} }), config: true },
+      {
+        id: "b",
+        plugin: definePlugin({ name: "b", configuration: schema, setup() {} }),
+        configuration: true,
+      },
     ],
   });
   await host.start();
-  const a = host.installation("a")!;
+  const retainedInstallation = host.installation("a")!;
   const changes = host.change();
-  changes.remove(a);
-  changes.update(host.installation("b")!, { config: false });
+  changes.remove(retainedInstallation);
+  changes.update(host.installation("b")!, { configuration: false });
   const rejected = host.plan(changes).catch((error: unknown) => error);
   await entered.promise;
   try {
-    expect(ctx.lifetime.signal.aborted).toBe(false);
+    expect(retainedContext.lifetime.signal.aborted).toBe(false);
     const listener = vi.fn<(payload: string) => void>();
-    ctx.events.on(message, listener);
-    ctx.contributions.add(items, "old", "running");
-    await ctx.events.emit(message, "still alive");
+    retainedContext.events.on(message, listener);
+    retainedContext.contributions.add(items, "old", "running");
+    await retainedContext.events.emit(message, "still alive");
     expect(listener).toHaveBeenCalledWith("still alive");
     expect(stopped).not.toHaveBeenCalled();
   } finally {
     resume.resolve();
   }
-  expect(await rejected).toMatchObject({ code: "CONFIG_INVALID" });
+  expect(await rejected).toMatchObject({ code: "CONFIGURATION_INVALID" });
   expect(host.status).toBe("running");
-  expect(a.status).toBe("running");
-  expect(await host.contributions(items).use(`${a.id}/old`, (value) => value)).toBe("running");
+  expect(retainedInstallation.status).toBe("running");
+  expect(
+    await host.contributions(items).use(`${retainedInstallation.id}/old`, (value) => value),
+  ).toBe("running");
   await host.stop();
-  await expect(ctx.events.emit(message, "too late")).rejects.toMatchObject({
+  await expect(retainedContext.events.emit(message, "too late")).rejects.toMatchObject({
     code: "LIFETIME_DISPOSED",
   });
-  expect(() => ctx.events.on(message, () => undefined)).toThrow("closed");
-  expect(() => ctx.contributions.add(items, "late", "no")).toThrow("closed");
+  expect(() => retainedContext.events.on(message, () => undefined)).toThrow("closed");
+  expect(() => retainedContext.contributions.add(items, "late", "no")).toThrow("closed");
 });
 
 it.each(["cleanup", "restore", "stop"] as const)(
@@ -155,9 +161,9 @@ it.each(["cleanup", "restore", "stop"] as const)(
           plugin: definePlugin({
             name: "consumer",
             requires: { value },
-            async setup(ctx) {
+            async setup(context) {
               const unclean = failing && mode === "cleanup";
-              ctx.lifetime.defer(async () => {
+              context.lifetime.defer(async () => {
                 if (failing && mode === "stop") {
                   entered.resolve();
                   await resume.promise;
@@ -312,9 +318,9 @@ it("rejects a concurrent start and preserves quarantined ownership after the act
         plugin: definePlugin({
           name: "consumer",
           requires: { value },
-          async setup(ctx) {
+          async setup(context) {
             if (++attempts !== 2) return;
-            ctx.lifetime.defer(() => {
+            context.lifetime.defer(() => {
               throw new Error("cleanup failed");
             });
             entered.resolve();
@@ -345,15 +351,15 @@ it("retains a provider when its timed out consumer can still use its resources",
   let alive = true;
   let task!: Task;
   const host = createHost({
-    shutdownTimeoutMs: 5,
+    shutdownTimeoutMilliseconds: 5,
     installations: [
       {
         id: "provider",
         plugin: definePlugin({
           name: "timeout.provider",
           provides: { resource },
-          setup(ctx) {
-            ctx.lifetime.defer(() => {
+          setup(context) {
+            context.lifetime.defer(() => {
               alive = false;
               release();
             });
@@ -366,10 +372,10 @@ it("retains a provider when its timed out consumer can still use its resources",
         plugin: definePlugin({
           name: "timeout.consumer",
           requires: { resource },
-          setup(ctx) {
-            task = ctx.lifetime.spawn(async () => {
+          setup(context) {
+            task = context.lifetime.spawn(async () => {
               await resume.promise;
-              expect(ctx.deps.resource.read()).toBe(true);
+              expect(context.dependencies.resource.read()).toBe(true);
             });
           },
         }),
@@ -394,7 +400,7 @@ it("reports late setup failure and refreshes unresolved ownership after the dead
   const finished = Promise.withResolvers<void>();
   const report = vi.fn<(error: unknown) => void>();
   const host = createHost({
-    shutdownTimeoutMs: 5,
+    shutdownTimeoutMilliseconds: 5,
     onError: report,
     installations: [
       {
@@ -445,7 +451,7 @@ it("rejects lifecycle reentry from startup validation and releases execution own
   const setup = vi.fn<() => void>();
   const plugin = definePlugin({
     name: "validation.reentry",
-    config: {
+    configuration: {
       "~standard": {
         version: 1,
         vendor: "test",
@@ -523,7 +529,7 @@ it.each([false, true])(
     const candidate = change.install(
       definePlugin({
         name: "candidate",
-        config: {
+        configuration: {
           "~standard": {
             version: 1,
             vendor: "test",
@@ -536,7 +542,7 @@ it.each([false, true])(
         },
         setup() {},
       }),
-      { id: "candidate", config: null },
+      { id: "candidate", configuration: null },
     );
     const planning = host.plan(change);
     await validating.promise;
@@ -594,10 +600,10 @@ it.each([false, true])(
       change.install(
         definePlugin({
           name: id,
-          config: { "~standard": { version: 1, vendor: "test", validate } },
+          configuration: { "~standard": { version: 1, vendor: "test", validate } },
           setup() {},
         }),
-        { id, config: null },
+        { id, configuration: null },
       );
     }
     const reason = vi.fn<(error: unknown) => void>();
@@ -618,6 +624,62 @@ it.each([false, true])(
     expect(later).not.toHaveBeenCalled();
   },
 );
+
+it.each([false, true])(
+  "retires only the cancelled planning request (pre-aborted: %s)",
+  async (early) => {
+    const blocked = Promise.withResolvers<{ value: null }>();
+    const entered = Promise.withResolvers<void>();
+    const validate = vi.fn<() => Promise<{ value: null }>>(() => {
+      entered.resolve();
+      return blocked.promise;
+    });
+    const host = createHost();
+    const controller = new AbortController();
+    controller.signal.addEventListener("abort", (event) => event.stopImmediatePropagation());
+    const change = host.change();
+    const pending = change.install(
+      definePlugin({
+        name: "blocked",
+        configuration: { "~standard": { version: 1, vendor: "test", validate } },
+        setup() {},
+      }),
+      { id: "blocked", configuration: null },
+    );
+    const reason = new Error("caller withdrew");
+    const stateRevision = host.stateRevision;
+    const other = await host.plan(host.change());
+    if (early) controller.abort(reason);
+    const outcome = vi.fn<(error: unknown) => void>();
+    const done = host.plan(change, controller.signal).then(() => outcome("issued"), outcome);
+    try {
+      if (!early) {
+        await entered.promise;
+        controller.abort(reason);
+      }
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(outcome).toHaveBeenCalledExactlyOnceWith(reason);
+      expect(validate).toHaveBeenCalledTimes(early ? 0 : 1);
+      expect(pending.status).toBe("removed");
+      expect(host.stateRevision).toBe(stateRevision);
+      await expect(host.apply(other)).resolves.toMatchObject({ stateRevision });
+    } finally {
+      blocked.resolve({ value: null });
+      await done;
+    }
+  },
+);
+
+it("ends caller cancellation authority when the Host issues its Plan", async () => {
+  const controller = new AbortController();
+  const host = createHost();
+  const change = host.change();
+  const pending = change.install(definePlugin({ name: "issued", setup() {} }), { id: "issued" });
+  const plan = await host.plan(change, controller.signal);
+  controller.abort();
+  await host.apply(plan);
+  expect(host.installation("issued")).toBe(pending);
+});
 
 it("opens contribution publication before announcing an admitted transition to observers", async () => {
   const point = extensionPoint<number>("publication/at-ingress");
@@ -666,7 +728,7 @@ it("opens contribution publication before announcing an admitted transition to o
     await entered.promise;
     expect(added).toBe(true);
     expect(view.get()).toBe(before);
-    await expect(view.use("owner/later", (v) => v)).rejects.toMatchObject({
+    await expect(view.use("owner/later", (value) => value)).rejects.toMatchObject({
       code: "CONTRIBUTION_UNAVAILABLE",
     });
   } finally {

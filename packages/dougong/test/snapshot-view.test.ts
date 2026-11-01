@@ -304,7 +304,7 @@ describe("SnapshotPublisher", () => {
   it("reports asynchronous subscribers without leaking their rejection", async () => {
     const report = vi.fn<(error: unknown) => void>();
     const publisher = new SnapshotPublisher(() => 0, report);
-    const failure = new Error("async subscriber failed");
+    const failure = new Error("asynchronous subscriber failed");
     const rejected = Promise.reject(failure);
     publisher.view.subscribe(() => rejected);
 
@@ -354,7 +354,7 @@ describe("SnapshotPublisher", () => {
 
   it("rejects asynchronous error reporters without leaking their rejection", async () => {
     const subscriberFailure = new Error("subscriber failed");
-    const reporterFailure = new Error("async reporter failed");
+    const reporterFailure = new Error("asynchronous reporter failed");
     const rejected = Promise.reject(reporterFailure);
     const publisher = new SnapshotPublisher(
       () => 0,
@@ -474,7 +474,8 @@ describe("SnapshotPublisher", () => {
     const fixture = createTerminalPublisherFixture();
     for (
       let pass = 0;
-      pass < RELEASE_PASSES && Object.values(fixture.references).some((ref) => ref.deref());
+      pass < RELEASE_PASSES &&
+      Object.values(fixture.references).some((reference) => reference.deref());
       pass++
     ) {
       await new Promise<void>((resolve) => setTimeout(resolve, 0));
@@ -486,7 +487,10 @@ describe("SnapshotPublisher", () => {
     expect(() => fixture.subscription[Symbol.dispose]()).not.toThrow();
     expect(
       Object.fromEntries(
-        Object.entries(fixture.references).map(([name, ref]) => [name, ref.deref() === undefined]),
+        Object.entries(fixture.references).map(([name, reference]) => [
+          name,
+          reference.deref() === undefined,
+        ]),
       ),
     ).toEqual({ reader: true, reporter: true, listener: true });
   });

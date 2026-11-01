@@ -10,6 +10,8 @@ import {
   PlatformError,
 } from "../src";
 
+import { fixture, select } from "./fixtures";
+
 describe("manifest declarations", () => {
   it("captures and freezes every declared collection", () => {
     const input = {
@@ -17,19 +19,19 @@ describe("manifest declarations", () => {
       version: "1.0.0",
       activation: ["open"],
       permissions: ["read"],
-      dependencies: { dep: "^1.0.0" },
+      dependencies: { dependency: "^1.0.0" },
     };
     const manifest = defineManifest(input);
     input.activation.push("later");
     input.permissions[0] = "write";
-    input.dependencies.dep = "*";
+    input.dependencies.dependency = "*";
     expect(manifest).toEqual({
       name: "capture",
       version: "1.0.0",
       apiVersion: "*",
       activation: ["open"],
       permissions: ["read"],
-      dependencies: { dep: "^1.0.0" },
+      dependencies: { dependency: "^1.0.0" },
     });
     expect(Object.isFrozen(manifest)).toBe(true);
     expect(Object.isFrozen(manifest.activation)).toBe(true);
@@ -73,7 +75,7 @@ describe("manifest declarations", () => {
         expect.objectContaining({ code: "MANIFEST_INVALID" }),
       );
       expect(() =>
-        defineManifest({ name: "range", version: "1.0.0", dependencies: { dep: range } }),
+        defineManifest({ name: "range", version: "1.0.0", dependencies: { dependency: range } }),
       ).toThrow(expect.objectContaining({ code: "MANIFEST_INVALID" }));
     },
   );
@@ -240,6 +242,17 @@ describe("loaders and permission policy", () => {
     const result = await new ImportLoader().load(reference, new AbortController().signal);
     expect(substitute).not.toHaveBeenCalled();
     expect((result as { default: number }).default).toBe(817);
+  });
+
+  it("projects permission fields into Registration diagnostics", async () => {
+    const { platform } = fixture();
+    const registration = await select(platform, "reader", "reader", { permissions: ["disk:read"] });
+    await expect(platform.activate([registration])).rejects.toBeInstanceOf(PermissionDeniedError);
+    expect(registration.error?.snapshot.fields).toEqual({
+      manifestName: "reader",
+      denied: ["disk:read"],
+    });
+    await platform[Symbol.asyncDispose]();
   });
 
   it("captures grants and exposes owned denied-permission data", () => {

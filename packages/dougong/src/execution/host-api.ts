@@ -19,7 +19,7 @@ export interface HostOptions {
   readonly groups?: ReadonlyArray<{ readonly id: string; readonly parentId?: string }>;
   readonly logger?: Logger;
   readonly onError?: (error: unknown) => Awaitable<void>;
-  readonly shutdownTimeoutMs?: number;
+  readonly shutdownTimeoutMilliseconds?: number;
 }
 
 export interface ApplyResult {
@@ -33,15 +33,15 @@ export interface Host {
   readonly stateRevision: number;
   readonly diagnostics: SnapshotView<HostSnapshot>;
   change(): ChangeSet;
-  plan(change: ChangeSet): Promise<Plan>;
+  plan(change: ChangeSet, signal?: AbortSignal): Promise<Plan>;
   apply(plan: Plan): Promise<ApplyResult>;
   start(): Promise<ApplyResult>;
   stop(): Promise<ApplyResult>;
-  use<T, R>(service: Service<T>, callback: (value: T) => Awaitable<R>): Promise<R>;
-  use<T, R>(
+  use<T, Result>(service: Service<T>, callback: (value: T) => Awaitable<Result>): Promise<Result>;
+  use<T, Result>(
     service: OptionalService<T>,
-    callback: (value: T | undefined) => Awaitable<R>,
-  ): Promise<R>;
+    callback: (value: T | undefined) => Awaitable<Result>,
+  ): Promise<Result>;
   contributions<T>(point: ExtensionPoint<T>): ContributionView<T>;
   installation(id: string): Installation | undefined;
   group(id: string): Group | undefined;

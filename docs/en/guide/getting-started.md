@@ -9,9 +9,9 @@ pnpm add dougong
 ```ts
 import { createHost, definePlugin, service } from "dougong";
 
-const GREETER = service<{ greet(name: string): string }>("app/greeter");
+const GREETER = service<{ greet(name: string): string }>("application/greeter");
 const greeter = definePlugin({
-  name: "app.greeter",
+  name: "application.greeter",
   provides: { greeter: GREETER },
   setup() {
     return { greeter: { greet: (name) => `Hello, ${name}` } };
@@ -19,7 +19,7 @@ const greeter = definePlugin({
 });
 
 const host = createHost({
-  name: "app",
+  name: "application",
   installations: [{ id: "greeter", plugin: greeter }],
 });
 await host.start();

@@ -16,8 +16,8 @@ const preload = fileURLToPath(new URL("./fixtures/release-manifests.mjs", import
 async function runRelease(failure) {
   const workspace = mkdtempSync(join(tmpdir(), "dougong-release-manifests-test-"));
   try {
-    const bin = join(workspace, "bin");
-    mkdirSync(bin);
+    const executableDirectory = join(workspace, "bin");
+    mkdirSync(executableDirectory);
     const originals = {};
     for (const name of packages) {
       const packageName = name === "dougong" ? name : `@dougongjs/${name}`;
@@ -34,7 +34,7 @@ async function runRelease(failure) {
 
     const result = await executeRelease(["--import", preload, release, version, "--dry-run"], {
       cwd: workspace,
-      env: { ...process.env, PATH: bin, DOUGONG_RELEASE_FAILURE: failure },
+      env: { ...process.env, PATH: executableDirectory, DOUGONG_RELEASE_FAILURE: failure },
     });
     return {
       ...result,
