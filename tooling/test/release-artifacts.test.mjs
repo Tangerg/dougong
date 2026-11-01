@@ -180,6 +180,7 @@ async function runRelease(
           "/pending/",
           "/remote.git/",
           "/commands.jsonl",
+          "/dist-tags.json",
           "/release-stage",
           "/package.json",
           "/pnpm-workspace.yaml",
@@ -748,6 +749,31 @@ it.each(["command", "manifest"])(
     expect(result.remoteTags).toContain(`refs/tags/v${version}`);
   },
 );
+
+it("does not complete a partial release whose existing version is on another explicit channel", async () => {
+  const result = await runRelease(() => undefined, { distributionTag: "next", dryRun: false });
+  expect(result.status).toBe(1);
+  expect(result.stderr).toContain("@dougongjs/reactive@next does not point to " + version);
+  expect(Object.keys(result.published)).toEqual(["reactive"]);
+  expect(result.recorded).toEqual([]);
+});
+
+it("recognizes a recorded release after its distribution channel moves", async () => {
+  const result = await runRelease(() => undefined, {
+    publishedPackages: [],
+    distributionTag: "next",
+    dryRun: false,
+    resume: true,
+    beforeResume(_git, workspace) {
+      writeFileSync(join(workspace, "dist-tags.json"), "{}");
+    },
+  });
+  expect(result.interrupted.status).toBe(0);
+  expect(result.status).toBe(0);
+  expect(
+    result.calls.filter(({ commandArguments }) => commandArguments[0] === "publish"),
+  ).toHaveLength(packages.length);
+});
 
 it("waits for registry visibility before publishing dependents", async () => {
   const result = await runRelease(() => undefined, { dryRun: false, visibility: "delayed" });

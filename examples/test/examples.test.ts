@@ -1,7 +1,19 @@
+import { DougongError } from "dougong";
 import { describe, expect, it, vi } from "vitest";
+import { expectFailure } from "../src/example";
 import { benchmarkStartup, concepts, runAllExamples } from "../src/index";
 
 describe("the learning path", () => {
+  it("propagates unexpected failures and rejects accidental success in failure demonstrations", async () => {
+    const unrelated = new DougongError("HOST_QUARANTINED", "cleanup failed");
+    await expect(expectFailure("TRANSITION_FAILED", () => Promise.reject(unrelated))).rejects.toBe(
+      unrelated,
+    );
+    await expect(expectFailure("MODULE_LOAD_FAILED", () => undefined)).rejects.toThrow(
+      "Expected the example operation to fail with MODULE_LOAD_FAILED",
+    );
+  });
+
   it("climbs one rung at a time and teaches every concept exactly once", async () => {
     const results = await runAllExamples();
 
@@ -80,7 +92,9 @@ describe("the learning path", () => {
 
     expect(facts.get("09")).not.toContain("remote:superseded");
 
-    expect(facts.get("11")).toContain("invalid plan was rejected = true");
+    expect(facts.get("10")).toContain("panel now 'Files'");
+    expect(facts.get("10")).toContain("its panel view reports LIFETIME_DISPOSED");
+    expect(facts.get("11")).toContain("The missing module caused MODULE_LOAD_FAILED");
     expect(facts.get("11")).toContain("running service remained 'hello-v1'");
 
     expect(facts.get("12")).toContain(

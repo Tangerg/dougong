@@ -739,3 +739,47 @@ it("opens contribution publication before announcing an admitted transition to o
   expect(view.get()).toEqual(["owner/later"]);
   await host.stop();
 });
+
+it("keeps the revision authority's shared rejection stable across planning callers", async () => {
+  const host = createHost();
+  const entered = Promise.withResolvers<void>();
+  const release = Promise.withResolvers<void>();
+  let validating = 0;
+  const plugin = definePlugin({
+    name: "waiting",
+    configuration: {
+      "~standard": {
+        version: 1,
+        vendor: "test",
+        async validate() {
+          if (++validating === 2) entered.resolve();
+          await release.promise;
+          return { value: null };
+        },
+      },
+    },
+    setup() {},
+  });
+  const plan = (id: string) => {
+    const change = host.change();
+    change.install(plugin, { id, configuration: null });
+    return host.plan(change);
+  };
+  const first = plan("first").catch((error: Error) => {
+    Reflect.set(error, "code", "APPLICATION_FAILURE");
+    Reflect.set(error, "details", {});
+  });
+  const second = plan("second").catch((reason: unknown) => reason);
+  try {
+    await entered.promise;
+    await host.start();
+    await first;
+    expect(await second).toMatchObject({
+      code: "PLAN_STALE",
+      details: { outcome: "rejected", expectedRevision: 0, stateRevision: 1 },
+    });
+  } finally {
+    release.resolve();
+    await host.stop();
+  }
+});

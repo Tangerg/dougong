@@ -23,9 +23,9 @@ const editor = definePlugin({
 
 所有运行资源在获取时交给 Lifetime。标准资源交给 `lifetime.use(resource)`，释放函数交给 `lifetime.defer(cleanup)`；异步创建标准资源用 `lifetime.acquire(factory)`。声明一个依赖后通过 `context.dependencies.alias` 使用它，避免运行时动态查找隐藏依赖。
 
-监听与贡献默认属于当前 Instance 的 Lifetime。传入 `{ lifetime: child }` 可将其归属子树。候选 Instance 可以登记监听和贡献，但直到整笔执行提交后才可被外部观察到。候选 setup 内调用 `events.emit` 会失败；将外部事件放在提交后发生的实际业务操作中。
+监听与贡献默认属于当前 Instance 的 Lifetime。传入 `{ lifetime: child }` 可将其归属子树。归属选项必须是普通数据对象，出现未知字段或访问器会在登记前报错。候选 Instance 可以登记监听和贡献，但直到整笔执行提交后才可被外部观察到。候选 setup 内调用 `events.emit` 会失败，应在提交后的业务操作中发出事件。在两次 Host 变更之间添加或移除贡献时，贡献列表与所属 Lifetime 的发布计数都会先更新，再通知两个视图的订阅者。
 
-Event 监听器可以同步返回，也可以返回 Promise。`events.emit` 等待本次所有监听结果，汇总失败后拒绝；每个调用在完成前借用监听器的 Lifetime，因此异步处理不会脱离所有权。需要独立于本次广播持续运行的后台工作时，显式使用 `lifetime.spawn`，由 Task 拥有错误报告。需要先中断才能结束的资源使用 `lifetime.interrupt`。
+Event 监听器可以同步返回，也可以返回 Promise。`events.emit` 跳过 Lifetime 已封闭入口的监听器，等待所有已调用的监听器结束，并汇总它们的错误。每个调用在完成前借用监听器的 Lifetime，因此异步处理不会脱离所有权。需要独立于本次广播持续运行的后台工作时，显式使用 `lifetime.spawn`，由 Task 拥有错误报告。需要先中断才能结束的资源使用 `lifetime.interrupt`。
 
 配置是数据：普通对象、数组、字符串、有限数字、布尔值与 null。捕获时拒绝 getter、原型对象、循环、函数、symbol 和稀疏数组；validator 的输出也再次捕获。schema 只在 plan 阶段执行一次，apply 使用已经验证的计划结果。
 

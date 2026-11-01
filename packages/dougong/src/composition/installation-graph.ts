@@ -17,8 +17,7 @@ export class InstallationGraph {
   ) {}
 
   static build(declarations: ReadonlyMap<InstallationRecord, InstallationDeclaration>) {
-    // Sort by installation index so activation layers are reproducible across equivalent declarations.
-    const installations = [...declarations.keys()].sort((left, right) => left.index - right.index);
+    const installations = [...declarations.keys()];
     const contractKinds = new Map<string, ContractKind>();
     const providers = collectProviders(declarations, contractKinds);
     const dependencies = connectRequirements(declarations, providers, contractKinds);
@@ -148,11 +147,13 @@ function sortDependencies(
   dependents: ReadonlyMap<InstallationRecord, ReadonlySet<InstallationRecord>>,
   indegree: Map<InstallationRecord, number>,
 ) {
+  // Independent peers follow committed declaration order, even if their drafts were staged in reverse.
+  const positions = new Map(installations.map((installation, index) => [installation, index]));
   let frontier = installations.filter((installation) => indegree.get(installation) === 0);
   const order: InstallationRecord[] = [];
   const layers: InstallationRecord[][] = [];
   while (frontier.length) {
-    frontier.sort((left, right) => left.index - right.index);
+    frontier.sort((left, right) => positions.get(left)! - positions.get(right)!);
     const layer = frontier;
     frontier = [];
     layers.push(layer);

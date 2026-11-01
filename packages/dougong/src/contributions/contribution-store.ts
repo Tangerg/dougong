@@ -87,7 +87,8 @@ class ContributionViewHandle<T> implements ContributionView<T> {
 
   #requireBinding() {
     const binding = this.#state.binding;
-    if (!binding) throw new TypeError("Contribution view has been disposed");
+    if (!binding)
+      throw new DougongError("LIFETIME_DISPOSED", "Contribution view has been disposed");
     if (binding.owner && !binding.owner.acceptsWork) {
       throw new DougongError("LIFETIME_DISPOSED", "Contribution view owner is closed");
     }
@@ -167,11 +168,13 @@ class ContributionRecord<T> implements Publication {
     const state = this.#state;
     if (state.phase === "disposed") return;
     this.#state = { phase: "disposed" };
-    try {
-      state.store.removeContribution(this.#id, this);
-    } finally {
-      state.detachFromOwner();
-    }
+    batchSnapshotNotifications(() => {
+      try {
+        state.store.removeContribution(this.#id, this);
+      } finally {
+        state.detachFromOwner();
+      }
+    });
   }
 }
 
@@ -543,7 +546,7 @@ class ContributionScope implements ContributionOperations {
       throw new DougongError("LIFETIME_DISPOSED", "Contribution scope is closed");
     }
     const identity = normalizeContract(token, "extensionPoint");
-    const owner = binding.owner.resolveOwner(options?.lifetime);
+    const owner = binding.owner.resolveOwner(options);
     return binding.registry
       .get<T>(identity)
       .stage(binding.installationId, key, value, owner, () => binding.remember(identity));

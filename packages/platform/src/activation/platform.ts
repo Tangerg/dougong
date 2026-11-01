@@ -23,6 +23,7 @@ import {
 import { PermissionSet, type Authorizer } from "../admission/permissions.js";
 import {
   artifactOrigin,
+  assertCompatibleManifest,
   describeArtifact,
   type Artifact,
   type ArtifactDescriptor,
@@ -128,7 +129,21 @@ class DeliveryPlatform<Reference> implements Platform<Reference> {
   readonly #operations = new Set<ActivationOperation<Reference>>();
   readonly #modules: LoadedModules<Reference>;
   readonly #publisher: SnapshotPublisher<PlatformSnapshot>;
-  readonly #registrationPort: RegistrationPort<Reference>;
+  // Registration callbacks outlive disposal and must not share the constructor's loader and policy bindings.
+  readonly #registrationPort: RegistrationPort<Reference> = {
+    installation: (installationId) => this.#ports().host.installation(installationId),
+    operation: (registration, revision) => {
+      if (this.#executing === "disposal") return "removing";
+      // The command actually driving Core takes precedence over requests still preparing.
+      const executing = this.#executing?.statusFor(registration, revision);
+      if (executing) return executing;
+      for (const operation of this.#operations) {
+        const status = operation.statusFor(registration, revision);
+        if (status) return status;
+      }
+      return undefined;
+    },
+  };
   readonly #viewBinding: { synchronize: (() => void) | undefined };
   #hostSnapshot: unknown;
   #projection: PlatformSnapshot;
@@ -177,20 +192,6 @@ class DeliveryPlatform<Reference> implements Platform<Reference> {
       authorizer: admission,
       assertPlacement: () => this.#assertPlacement(),
     });
-    this.#registrationPort = {
-      installation: (installationId) => this.#ports().host.installation(installationId),
-      operation: (registration, revision) => {
-        if (this.#executing === "disposal") return "removing";
-        // The command actually driving Core takes precedence over requests still preparing.
-        const executing = this.#executing?.statusFor(registration, revision);
-        if (executing) return executing;
-        for (const operation of this.#operations) {
-          const status = operation.statusFor(registration, revision);
-          if (status) return status;
-        }
-        return undefined;
-      },
-    };
     this.#projection = this.#snapshot();
     this.#publisher = new SnapshotPublisher(() => this.#projection, reporter(capturedLogger));
     this.#hostSnapshot = host.diagnostics.get();
@@ -297,17 +298,7 @@ class DeliveryPlatform<Reference> implements Platform<Reference> {
       );
     } catch (error) {
       operation.checkpoint();
-      const failure = normalizeActivationFailure(error);
-      let recorded: RecordedFailure | undefined;
-      for (const selection of operation.plan.selections) {
-        if (selection.registration.actionFor(selection.artifact) !== "reuse") {
-          selection.registration.fail(
-            selection.revision,
-            (recorded ??= recordPlatformFailure(failure)),
-          );
-        }
-      }
-      throw failure;
+      throw recordActivationFailure(operation.plan, error);
     } finally {
       this.#operations.delete(operation);
       operation.finish();
@@ -345,10 +336,16 @@ class DeliveryPlatform<Reference> implements Platform<Reference> {
     signal: AbortSignal | undefined,
   ) {
     this.#assertActive();
-    if (roots.length) this.#assertPlacement();
     for (const root of [...roots, ...removing]) this.#assertRegistration(root);
     const plan = new ActivationPlan(this.#registrations, roots, removing);
-    plan.assertValid();
+    try {
+      if (roots.length) this.#assertPlacement();
+      plan.assertValid();
+    } catch (error) {
+      const failure = recordActivationFailure(plan, error);
+      this.#publish();
+      throw failure;
+    }
     const operation = new ActivationOperation(plan, signal);
     this.#operations.add(operation);
     this.#publish();
@@ -407,10 +404,20 @@ class DeliveryPlatform<Reference> implements Platform<Reference> {
     // A binding change can restart a committed Artifact whose selected revision was never requested.
     const preparing = new Set(plan.report.prepareOrder);
     for (const registration of this.#registrations.values()) {
-      if (preparing.has(registration.id) && !admission.has(registration.id)) {
-        const origin = registration.activeOrigin;
-        if (origin) admission.set(registration.id, origin);
-      }
+      if (
+        !preparing.has(registration.id) ||
+        admission.has(registration.id) ||
+        !registration.installation
+      )
+        continue;
+      const origin = registration.activeOrigin;
+      if (!origin)
+        throw new PlatformError(
+          "ARTIFACT_IDENTITY",
+          `Cannot authorize restart of '${registration.id}' without its committed Artifact origin`,
+        );
+      assertCompatibleManifest(this.apiVersion, origin.manifest);
+      admission.set(registration.id, origin);
     }
     for (const artifact of admission.values()) {
       operation.checkpoint();
@@ -648,10 +655,20 @@ function reporter(logger: Logger) {
   };
 }
 
-function normalizeActivationFailure(error: unknown) {
-  return isError(error)
+function recordActivationFailure<Reference>(plan: ActivationPlan<Reference>, error: unknown) {
+  const failure = isError(error)
     ? error
     : new PlatformError("ACTIVATION_FAILED", "Activation failed with a non-Error value", {
         cause: error,
       });
+  let recorded: RecordedFailure | undefined;
+  for (const selection of plan.selections) {
+    if (selection.registration.actionFor(selection.artifact) !== "reuse") {
+      selection.registration.fail(
+        selection.revision,
+        (recorded ??= recordPlatformFailure(failure)),
+      );
+    }
+  }
+  return failure;
 }

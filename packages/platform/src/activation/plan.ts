@@ -9,6 +9,14 @@ export interface ActivationBlocker {
   readonly dependencyPath: ReadonlyArray<string>;
 }
 
+const deferredChecks = Object.freeze([
+  "admission",
+  "module_validation",
+  "configuration_validation",
+  "core_binding",
+  "setup",
+] as const);
+
 export interface ActivationPreview {
   readonly removals: ReadonlyArray<{
     readonly registrationId: string;
@@ -21,13 +29,7 @@ export interface ActivationPreview {
     readonly action: "install" | "update" | "reuse";
   }>;
   readonly blockers: ReadonlyArray<ActivationBlocker>;
-  readonly deferred: readonly [
-    "admission",
-    "module_validation",
-    "configuration_validation",
-    "core_binding",
-    "setup",
-  ];
+  readonly deferred: typeof deferredChecks;
 }
 
 export interface ActivationPreviewOptions<Reference> {
@@ -105,13 +107,7 @@ export class ActivationPlan<Reference> {
         ),
       ),
       blockers: Object.freeze(blockers),
-      deferred: Object.freeze([
-        "admission",
-        "module_validation",
-        "configuration_validation",
-        "core_binding",
-        "setup",
-      ] as const),
+      deferred: deferredChecks,
     });
     Object.freeze(this);
   }

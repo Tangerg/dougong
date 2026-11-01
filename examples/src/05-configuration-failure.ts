@@ -4,9 +4,10 @@ import {
   createHost,
   definePlugin,
   describePlugin,
+  optional,
   service,
 } from "dougong";
-import { exampleResult, failureMessage, type ExampleResult } from "./example.js";
+import { exampleResult, expectFailure, type ExampleResult } from "./example.js";
 
 interface Cache {
   readonly capacity: number;
@@ -76,11 +77,12 @@ export async function configurationAndFailure(): Promise<ExampleResult> {
     },
   });
 
+  const socketFailure = new Error("exporter could not open its socket");
   const exporterPlugin = definePlugin({
     name: "examples.configuration.exporter",
     requires: { audit: AUDIT },
     setup() {
-      throw new Error("exporter could not open its socket");
+      throw socketFailure;
     },
   });
 
@@ -94,11 +96,12 @@ export async function configurationAndFailure(): Promise<ExampleResult> {
   await host.start();
   const running = await host.use(CACHE, (cache) => cache.capacity);
 
-  let issues: ReadonlyArray<string> = [];
+  let issues: ReadonlyArray<string>;
   try {
     const invalid = host.change();
     invalid.update(cacheInstallation, { configuration: { capacity: 0 } });
-    await host.apply(await host.plan(invalid));
+    await host.plan(invalid);
+    throw new Error("The invalid configuration was accepted");
   } catch (error) {
     if (!(error instanceof ConfigurationValidationError)) throw error;
     issues = error.issues.map((issue) => issue.message);
@@ -108,21 +111,13 @@ export async function configurationAndFailure(): Promise<ExampleResult> {
   const change = host.change();
   change.install(auditPlugin, { id: "audit" });
   change.install(exporterPlugin, { id: "exporter" });
-  let rejection = "";
-  try {
-    await host.apply(await host.plan(change));
-  } catch (error) {
-    rejection = failureMessage(error);
-  }
+  const plan = await host.plan(change);
+  const failure = await expectFailure("TRANSITION_FAILED", () => host.apply(plan));
+  if (failure.details.outcome !== "restored" || failure.cause !== socketFailure) throw failure;
 
   const afterRollback = await host.use(CACHE, (cache) => cache.capacity);
   const status = host.status;
-  let auditPublished = true;
-  try {
-    await host.use(AUDIT, () => undefined);
-  } catch {
-    auditPublished = false;
-  }
+  const auditPublished = await host.use(optional(AUDIT), (audit) => audit !== undefined);
   await host.stop();
 
   return exampleResult({
@@ -130,10 +125,10 @@ export async function configurationAndFailure(): Promise<ExampleResult> {
     title: "A rejected declaration and a failed setup",
     facts: [
       `The declaration produced ${serializedDescription.length} bytes of JSON for docs and agents, configuration schema '${descriptor.configuration.status}', with ${startsAfterDescription} setup calls.`,
-      `The schema applied its default and the caller's override: capacity ${running}.`,
+      `The cache started with a validated capacity of ${running}.`,
       `The invalid update was rejected with ${issues.join("; ")}, before any Instance stopped.`,
       `The running cache never moved: capacity ${afterInvalidConfiguration} → ${afterRollback}.`,
-      `The failing commit rejected with '${rejection}'; the audit Instance started ${auditStarts} time and was released ${auditReleases} time.`,
+      `Core reported ${failure.code} with outcome '${failure.details.outcome}'. The audit Instance started ${auditStarts} time and was released ${auditReleases} time.`,
       `Rollback is undone work, not skipped work — AUDIT published = ${auditPublished}, Host status '${status}'.`,
     ],
   });

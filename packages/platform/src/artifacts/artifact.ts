@@ -82,18 +82,22 @@ export function captureArtifact<Reference>(
     throw new TypeError("Artifact declaration must define reference");
   }
   const manifest = defineManifest(declaration.manifest);
-  if (!satisfies(apiVersion, manifest.apiVersion)) {
-    throw new PlatformError(
-      "API_INCOMPATIBLE",
-      `Artifact '${manifest.name}' requires API ${manifest.apiVersion}, Platform provides ${apiVersion}`,
-    );
-  }
+  assertCompatibleManifest(apiVersion, manifest);
   return Object.freeze({
     revision,
     manifest,
     reference: declaration.reference,
     configuration: captureConfiguration(declaration.configuration),
   });
+}
+
+export function assertCompatibleManifest(apiVersion: string, manifest: Manifest) {
+  if (!satisfies(apiVersion, manifest.apiVersion)) {
+    throw new PlatformError(
+      "API_INCOMPATIBLE",
+      `Artifact '${manifest.name}' requires API ${manifest.apiVersion}, Platform provides ${apiVersion}`,
+    );
+  }
 }
 
 export function artifactOrigin(platformId: string, artifact: ArtifactDescriptor): ArtifactOrigin {

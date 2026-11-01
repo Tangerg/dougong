@@ -65,7 +65,6 @@ export class InstallationRecord {
 
   constructor(
     readonly id: string,
-    readonly index: number,
     readonly group: GroupNode | undefined,
   ) {
     const record = this;

@@ -100,7 +100,6 @@ export class Engine {
   readonly #publisher: SnapshotPublisher<HostSnapshot>;
   #state: CommittedState;
   #transition: Transition | undefined;
-  #sequence = 0;
   #generation = 0;
 
   constructor(options: HostOptions = {}) {
@@ -751,7 +750,7 @@ export class Engine {
   }
 
   #createInstallation(id: string, group: GroupNode | undefined) {
-    const record = new InstallationRecord(id, ++this.#sequence, group);
+    const record = new InstallationRecord(id, group);
     this.#installations.set(record.facade, record);
     return record;
   }

@@ -102,7 +102,7 @@ describe("Lifetime diagnostic projections", () => {
 
 it("preserves the original child publication failure at its owner without a second withdrawal", async () => {
   const root = createLifetime();
-  const child = root.resolveOwner(root.child("child"));
+  const child = root.resolveOwner({ lifetime: root.child("child") });
   const original = new Error("cannot withdraw");
   const withdraw = vi.fn<() => never>(() => {
     throw original;

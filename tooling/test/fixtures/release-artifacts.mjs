@@ -33,6 +33,11 @@ function packageAt(state, reference) {
     });
 }
 
+const registryTagsPath = join(workspace, "dist-tags.json");
+function registryTags() {
+  return existsSync(registryTagsPath) ? JSON.parse(readFileSync(registryTagsPath, "utf8")) : {};
+}
+
 let injected = false;
 let previousPack;
 installCommandFixture((name, commandArguments, options, nativeSpawn) => {
@@ -250,6 +255,13 @@ installCommandFixture((name, commandArguments, options, nativeSpawn) => {
   }
 
   if (name === "npm" && commandArguments[0] === "view") {
+    if (commandArguments.slice(2).join(" ") === "dist-tags --prefer-online --json") {
+      const directory = packageAt("published", commandArguments[1]);
+      if (!directory) return { status: 1 };
+      const manifest = JSON.parse(readFileSync(join(directory, "package/package.json"), "utf8"));
+      const tags = registryTags()[manifest.name] ?? { latest: manifest.version };
+      return { status: 0, stdout: JSON.stringify(tags) };
+    }
     if (
       commandArguments.length !== 5 ||
       commandArguments.slice(2).join(" ") !== "version --prefer-online --json"
@@ -268,7 +280,9 @@ installCommandFixture((name, commandArguments, options, nativeSpawn) => {
 
   if (name === "npm" && commandArguments[0] === "publish") {
     const flags = commandArguments.slice(4);
-    if (flags[0]?.startsWith("--tag=")) flags.shift();
+    const channel = flags[0]?.startsWith("--tag=")
+      ? flags.shift().slice("--tag=".length)
+      : "latest";
     if (flags[0]?.startsWith("--otp=")) flags.shift();
     if (commandArguments[2] !== "--access" || commandArguments[3] !== "public" || flags.length)
       process.exit(99);
@@ -296,6 +310,11 @@ installCommandFixture((name, commandArguments, options, nativeSpawn) => {
     const extracted = nativeSpawn("tar", ["-xzf", commandArguments[1], "-C", target], {
       stdio: "pipe",
     });
+    if (extracted.status === 0) {
+      const tags = registryTags();
+      tags[manifest.name] = { ...tags[manifest.name], [channel]: manifest.version };
+      writeFileSync(registryTagsPath, JSON.stringify(tags));
+    }
     if (race === "registry-bytes" && extracted.status === 0)
       writeFileSync(join(target, "package/dist/index.js"), "export const replaced = true;");
     return extracted;

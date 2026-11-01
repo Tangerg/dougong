@@ -402,8 +402,12 @@ describe("structured lifetime", () => {
     const view = registry.view(extensionPoint("view"), owner);
     expect(view.get().length).toBe(0);
     await owner.dispose();
-    expect(() => view.get()).toThrow("disposed");
-    expect(() => view.subscribe(() => undefined)).toThrow("disposed");
+    const closed = expect.objectContaining({ code: "LIFETIME_DISPOSED" });
+    expect(() => view.get()).toThrowError(closed);
+    expect(() => view.subscribe(() => undefined)).toThrowError(closed);
+    await expect(view.use("owner/item", (value) => value)).rejects.toMatchObject({
+      code: "LIFETIME_DISPOSED",
+    });
   });
 
   it("withdraws an early disposed contribution subscription from the store", async () => {

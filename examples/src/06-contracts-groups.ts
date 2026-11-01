@@ -1,4 +1,4 @@
-import { createHost, definePlugin, service, type Service } from "dougong";
+import { createHost, definePlugin, optional, service, type Service } from "dougong";
 import { exampleResult, type ExampleResult } from "./example.js";
 
 interface WorkspaceStore {
@@ -67,12 +67,7 @@ export async function contractsAndGroups(): Promise<ExampleResult> {
   const remove = host.change();
   remove.removeGroup(alpha);
   await host.apply(await host.plan(remove));
-  let alphaAvailable = true;
-  try {
-    await host.use(ALPHA_STORE, () => undefined);
-  } catch {
-    alphaAvailable = false;
-  }
+  const alphaAvailable = await host.use(optional(ALPHA_STORE), (store) => store !== undefined);
   const betaSurvived = await host.use(BETA_STORE, (store) => store.version);
   await host.stop();
 

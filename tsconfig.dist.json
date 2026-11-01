@@ -1,12 +1,11 @@
 {
   "extends": "./tsconfig.base.json",
   "compilerOptions": {
-    "paths": {
-      "@dougongjs/reactive": ["packages/reactive/dist/index.d.ts"],
-      "@dougongjs/platform": ["packages/platform/dist/index.d.ts"],
-      "dougong": ["packages/dougong/dist/index.d.ts"],
-      "dougong/advanced": ["packages/dougong/dist/advanced.d.ts"]
-    }
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "paths": {},
+    "composite": true,
+    "tsBuildInfoFile": "./node_modules/.cache/dist-types.tsbuildinfo"
   },
   "include": ["packages/*/test/public-api.types.ts"]
 }

@@ -43,7 +43,7 @@ class ListenerRegistration<T> implements Publication {
 
   invoke(payload: T): Promise<unknown> {
     const binding = this.#binding;
-    if (!binding) return Promise.resolve();
+    if (!binding?.owner.acceptsWork) return Promise.resolve();
     const { owner, listener } = binding;
     return owner.borrow(() => listener(payload));
   }
@@ -78,7 +78,7 @@ class EventScope implements EventOperations {
     const binding = this.#requireBinding();
     if (typeof listener !== "function") throw new TypeError("Event listener must be a function");
     const identity = normalizeContract(token, "event");
-    const owner = binding.owner.resolveOwner(options?.lifetime);
+    const owner = binding.owner.resolveOwner(options);
     binding.remember(identity);
     return binding.hub.stage(identity.id, listener, owner);
   }

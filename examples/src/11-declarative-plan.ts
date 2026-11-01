@@ -6,7 +6,7 @@ import {
   type Platform,
   type Registration,
 } from "@dougongjs/platform";
-import { exampleResult, type ExampleResult } from "./example.js";
+import { exampleResult, expectFailure, type ExampleResult } from "./example.js";
 
 interface Greeter {
   greet(): string;
@@ -81,12 +81,9 @@ export async function declarativePlan(): Promise<ExampleResult> {
   const toolArtifact = artifact(TOOL_NAME, "1.0.0", "tool");
   await deploy(platform, [original, legacyArtifact]);
   const before = await host.use(GREETER, (greeter) => greeter.greet());
-  let rejected = false;
-  try {
-    await deploy(platform, [broken, toolArtifact]);
-  } catch {
-    rejected = true;
-  }
+  const failure = await expectFailure("MODULE_LOAD_FAILED", () =>
+    deploy(platform, [broken, toolArtifact]),
+  );
   const afterFailure = await host.use(GREETER, (greeter) => greeter.greet());
   const legacyAfterFailure = legacyDisposals;
   await deploy(platform, [replacement, toolArtifact]);
@@ -100,7 +97,7 @@ export async function declarativePlan(): Promise<ExampleResult> {
     title: "A desired-state controller compiled into one activation Plan",
     facts: [
       `The initial plan published '${before}'.`,
-      `The invalid plan was rejected = ${rejected}; the running service remained '${afterFailure}'.`,
+      `The missing module caused ${failure.code}. The running service remained '${afterFailure}'.`,
       `Failed preparation left the old removal candidate intact: its disposal count stayed ${legacyAfterFailure}.`,
       `One Core Plan added, replaced and removed implementations together, publishing '${afterCommit}' and releasing the legacy Instance ${legacyAfterCommit} time.`,
       `The resulting deployment contains ${deployed}; the tool started ${toolStarts} time.`,

@@ -8,7 +8,7 @@ import {
 } from "dougong";
 import { createPlatform, MemoryLoader, PermissionSet } from "@dougongjs/platform";
 import { actionActivation, type ActionDeclaration } from "./action-declaration.js";
-import { exampleResult, type ExampleResult } from "./example.js";
+import { exampleResult, expectFailure, type ExampleResult } from "./example.js";
 
 interface Filesystem {
   read(path: string): Promise<string>;
@@ -22,7 +22,6 @@ const explorerName = "examples.lynx.explorer";
 const openExplorer = Object.freeze({ id: "explorer.open", title: "Open Explorer" });
 const explorerActions: ReadonlyArray<ActionDeclaration> = Object.freeze([openExplorer]);
 interface Panel {
-  readonly id: string;
   readonly title: string;
 }
 interface CommandCatalog {
@@ -59,7 +58,7 @@ function explorerPlugin(title: string, relativePath: string) {
           ...action,
           run: () => dependencies.filesystem.read(`${dependencies.workspace.root}/${relativePath}`),
         });
-      contributions.add(PANELS, "explorer", { id: "explorer", title });
+      contributions.add(PANELS, "explorer", { title });
     },
   });
 }
@@ -157,8 +156,8 @@ export async function lynxScenario(): Promise<ExampleResult> {
   await platform.activate([explorer]);
   const secondOutput = await host.use(COMMAND_CATALOG, (commands) => commands.run(openExplorer.id));
   const panel = workspacePanels.get()[0];
-  const panelTitle =
-    panel === undefined ? undefined : await workspacePanels.use(panel, (value) => value.title);
+  if (panel === undefined) throw new Error("Explorer did not publish its workspace panel");
+  const panelTitle = await workspacePanels.use(panel, (value) => value.title);
 
   await platform[asyncDisposeSymbol]();
   const workspace = host.group("workspace-main");
@@ -170,12 +169,7 @@ export async function lynxScenario(): Promise<ExampleResult> {
     COMMAND_CATALOG,
     async (commands) => (await commands.list()).length,
   );
-  let workspaceViewDisposed = false;
-  try {
-    workspacePanels.get();
-  } catch {
-    workspaceViewDisposed = true;
-  }
+  const closedView = await expectFailure("LIFETIME_DISPOSED", workspacePanels.get);
   await host.stop();
   return exampleResult({
     id: "10",
@@ -185,7 +179,7 @@ export async function lynxScenario(): Promise<ExampleResult> {
       `The workspace shell bound to '${workspaceRoot}' with ${before} executable commands before activation.`,
       `An update retained the Registration identity while replacing its implementation: '${firstOutput}' → '${secondOutput}', panel now '${panelTitle}'.`,
       "A root-level catalog saw the Group's consumers and external contributions without implicit scope lookup.",
-      `Removing the workspace released its subtree: ${remainingCommands} commands left, its view disposed = ${workspaceViewDisposed}.`,
+      `Removing the workspace left ${remainingCommands} commands and its panel view reports ${closedView.code}.`,
     ],
   });
 }

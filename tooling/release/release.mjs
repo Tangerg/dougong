@@ -356,6 +356,18 @@ if (
 const candidates = readVerifiedCandidates(stage);
 const versions = new Map(PACKAGES.map(({ name }) => [name, version]));
 
+function assertDistributionTag(name, distributionTag) {
+  // Channels can move after a completed release. The remote Git tag owns its historical record.
+  if (distributionTag === undefined || remoteTag) return;
+  const tags = JSON.parse(
+    capture("npm", ["view", `${name}@${version}`, "dist-tags", "--prefer-online", "--json"]),
+  );
+  if (tags?.[distributionTag] !== version)
+    fail(
+      `${name}@${distributionTag} does not point to ${version}; check the npm channel before resuming`,
+    );
+}
+
 function verifyRegistryContents(name, candidateFiles) {
   const downloaded = mkdtempSync(join(stage, "registry-"));
   execFileSync("npm", ["pack", `${name}@${version}`, "--pack-destination", downloaded], {
@@ -385,6 +397,7 @@ for (const { directory, name, distributionTag } of PACKAGES) {
   );
   if (alreadyPublished.has(name)) {
     verifyRegistryContents(name, candidateFiles);
+    assertDistributionTag(name, distributionTag);
     console.log(`  ${name.padEnd(22)} ${"skip".padStart(7)}     already published, contents match`);
     continue;
   }
@@ -490,6 +503,7 @@ for (const { directory, name, distributionTag } of PACKAGES) {
     process.exit(1);
   }
   verifyRegistryContents(name, candidate.files);
+  assertDistributionTag(name, distributionTag);
   published.push(name);
   console.log(`  ✓ ${name}@${version}`);
 }
@@ -498,6 +512,8 @@ for (const { directory, name, distributionTag } of PACKAGES) {
 
 step("Recording the release");
 
+// Waiting for uploads or approval can outlive an earlier channel observation.
+for (const { name, distributionTag } of PACKAGES) assertDistributionTag(name, distributionTag);
 assertPublicationInputs("record");
 const staged = spawnSync("git", ["diff", "--cached", "--quiet", head, "--", ...manifestFiles], {
   stdio: "inherit",

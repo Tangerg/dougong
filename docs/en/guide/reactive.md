@@ -23,7 +23,7 @@ Bridge rereads after subscribing to close the attachment window. On owner shutdo
 
 Once attached, a failed source read invalidates the bridge: local reads throw the source error, and a later successful read recovers even if the value equals its last success.
 
-`observe(owner, source, observer)` creates a child owner for each source value. Replacement fully disposes the previous child before creating another; changes arriving during a transition coalesce to the latest value. The returned `AsyncDisposable` supports early termination.
+`observe(owner, source, observer)` creates a child owner for each source value. Replacement fully disposes the previous child before creating another; changes arriving during a transition coalesce to the latest value. The returned `AsyncDisposable` joins one registration release across concurrent and repeated calls, including a failed release. If the initial observer closes its owner synchronously, construction fails before the background task starts.
 
 Public types: `Readable`, `Signal`, `ReadonlySignal`, `Disposable`, `AsyncDisposable`, `BridgeOwner`, `ObservationOwner`, `ObservationTask`, `Observer`. `ObservationOwner` needs `defer`, `child` and `spawn`; the returned child supplies standard async disposal. The parent need not expose a disposer. Compatible owners need not inherit framework classes.
 

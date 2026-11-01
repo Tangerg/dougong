@@ -12,7 +12,7 @@ When migrating Registration diagnostics, read `snapshot.fields?.manifestName` an
 | `ACTIVATION_STALE` | Core state changed during activation preparation; preview and activate again. |
 | `API_INCOMPATIBLE` | The Artifact requires an incompatible host API range. |
 | `ARTIFACT_DUPLICATE` | The name and revision already exist; use a genuinely new delivery identity. |
-| `ARTIFACT_IDENTITY` | Loaded Plugin identity differs from the Artifact Manifest. |
+| `ARTIFACT_IDENTITY` | The loaded Plugin identity differs from the Manifest, or Platform cannot identify the committed Artifact for an indirect restart. |
 | `ARTIFACT_UNAVAILABLE` | The Artifact is unavailable in this Catalog. |
 | `BUSY` | The resource owner has foreground borrows and cannot synchronously seal this operation. |
 | `CHANGE_CONFLICT` | A change contains conflicting declaration intent. |

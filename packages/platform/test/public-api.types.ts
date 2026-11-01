@@ -5,7 +5,7 @@ import {
   type Artifact,
   type Platform,
   type Registration,
-} from "../src";
+} from "@dougongjs/platform";
 
 const plugin = definePlugin({ name: "types", setup() {} });
 const platform = createPlatform({

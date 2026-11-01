@@ -251,3 +251,33 @@ it("reports validation failure without changing the running generation", async (
   expect(stop).not.toHaveBeenCalled();
   await host.stop();
 });
+
+it("orders independent Installations by committed declarations even when drafts are staged out of order", async () => {
+  const host = createHost();
+  const starts: string[] = [];
+  const plugin = definePlugin({
+    name: "ordered",
+    setup({ metadata }) {
+      starts.push(metadata.installationId);
+    },
+  });
+  const earlierDraft = host.change();
+  earlierDraft.install(plugin, { id: "committed-second" });
+  const laterDraft = host.change();
+  laterDraft.install(plugin, { id: "committed-first" });
+  await host.apply(await host.plan(laterDraft));
+  await host.apply(await host.plan(earlierDraft));
+
+  const committed = host.diagnostics.get().installations.map(({ id }) => id);
+  expect(committed).toEqual(["committed-first", "committed-second"]);
+  await host.start();
+  expect(starts).toEqual(committed);
+
+  const change = host.change();
+  for (const id of [...committed].reverse()) change.update(host.installation(id)!, { plugin });
+  const plan = await host.plan(change);
+  expect(plan.report.prepareOrder).toEqual(committed);
+  await host.apply(plan);
+  expect(starts).toEqual([...committed, ...committed]);
+  await host.stop();
+});

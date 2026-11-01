@@ -50,6 +50,7 @@ class Observation<T, Child extends AsyncDisposable> {
   #dirty = false;
   #drainTask: Release | undefined;
   #ownerCleanup: Release | undefined;
+  #closingRegistration: Promise<void> | undefined;
   #wakeDrain: (() => void) | undefined;
   #disposePromise: Promise<void> | undefined;
 
@@ -67,11 +68,12 @@ class Observation<T, Child extends AsyncDisposable> {
   }
 
   #attach() {
-    const { owner, source } = this.#requireBinding();
+    const { source } = this.#requireBinding();
     this.#unsubscribe = captureUnsubscribe(source.subscribe(() => this.#invalidate()));
 
     this.#createCurrent();
 
+    const { owner } = this.#requireBinding();
     const runner = owner.spawn((signal) => this.#drain(signal));
     const cancel = captureRelease(
       runner,
@@ -88,7 +90,24 @@ class Observation<T, Child extends AsyncDisposable> {
   }
 
   attachOwnerCleanup(cleanup: Release) {
-    this.#ownerCleanup = cleanup;
+    if (!this.#disposePromise) this.#ownerCleanup = cleanup;
+  }
+
+  readonly handle = Object.freeze({ [asyncDisposeSymbol]: () => this.#closeRegistration() });
+
+  #closeRegistration() {
+    if (this.#closingRegistration) return this.#closingRegistration;
+    const cleanup = this.#ownerCleanup;
+    if (!cleanup) return this.dispose();
+    // A structural owner can reenter or reject after our own resources have finished closing.
+    const completion = Promise.withResolvers<void>();
+    this.#closingRegistration = completion.promise;
+    try {
+      completion.resolve(cleanup());
+    } catch (error) {
+      completion.reject(error);
+    }
+    return completion.promise;
   }
 
   dispose() {
@@ -231,9 +250,7 @@ class Observation<T, Child extends AsyncDisposable> {
     this.#releaseBinding("stopped");
     // The drain is the caller here; joining it from the owner's cleanup would wait on itself.
     this.#drainTask = undefined;
-    const cleanup = this.#ownerCleanup;
-    if (cleanup) await cleanup();
-    else await this.dispose();
+    await this.#closeRegistration();
   }
 
   #requireBinding() {
@@ -276,7 +293,7 @@ export function observe<T, Child extends AsyncDisposable>(
   observation.attachOwnerCleanup(close);
   try {
     observation.start();
-    return Object.freeze({ [asyncDisposeSymbol]: close });
+    return observation.handle;
   } catch (error) {
     // Roll back the owner's registration as well as the subscription; failed cleanup stays owned.
     try {

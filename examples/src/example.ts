@@ -1,3 +1,4 @@
+import { DougongError } from "dougong";
 import { onAbort } from "dougong/advanced";
 const curriculum = [
   { id: "01", stage: "atoms", introduces: ["service", "provides", "requires", "host.use"] },
@@ -110,7 +111,12 @@ export function whenAborted(signal: AbortSignal) {
   });
 }
 
-export function failureMessage(error: unknown): string {
-  if (error instanceof AggregateError) return error.errors.map(failureMessage).join("; ");
-  return error instanceof Error ? error.message : String(error);
+export async function expectFailure(code: string, operation: () => unknown): Promise<DougongError> {
+  try {
+    await operation();
+  } catch (error) {
+    if (error instanceof DougongError && error.code === code) return error;
+    throw error;
+  }
+  throw new Error(`Expected the example operation to fail with ${code}`);
 }

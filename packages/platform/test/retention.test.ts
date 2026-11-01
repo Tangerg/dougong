@@ -151,3 +151,37 @@ async function abandonPreparation(
     platform: new WeakRef(platform),
   };
 }
+
+it("releases admission and loader capabilities while application code retains the disposed Platform", async () => {
+  async function dispose() {
+    const loader = { load: () => ({ default: definePlugin({ name: "sample", setup() {} }) }) };
+    const authorizer = { authorize() {} };
+    const host = createHost();
+    const platform = createPlatform({
+      id: "retained",
+      host,
+      apiVersion: "1.0.0",
+      loader,
+      authorizer,
+    });
+    await platform.activate([await select(platform, "sample", "one")]);
+    await platform[Symbol.asyncDispose]();
+    return {
+      platform,
+      references: [new WeakRef(host), new WeakRef(loader), new WeakRef(authorizer)],
+    };
+  }
+  const { platform, references } = await dispose();
+  const collectGarbage = globalThis.gc;
+  if (!collectGarbage) throw new TypeError("Retention tests require Node.js --expose-gc");
+  for (let pass = 0; pass < 8 && references.some((reference) => reference.deref()); pass++) {
+    await nextTurn();
+    collectGarbage();
+  }
+  expect(platform.status).toBe("disposed");
+  expect(references.map((reference) => reference.deref())).toEqual([
+    undefined,
+    undefined,
+    undefined,
+  ]);
+});

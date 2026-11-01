@@ -12,7 +12,7 @@
 | `ACTIVATION_STALE` | 激活准备期间 Core 状态改变；重新预览与激活。 |
 | `API_INCOMPATIBLE` | Artifact 要求的宿主 API 范围不匹配。 |
 | `ARTIFACT_DUPLICATE` | 相同名称与 revision 已存在；使用真正的新发行身份。 |
-| `ARTIFACT_IDENTITY` | 加载的 Plugin 身份与 Artifact Manifest 不一致。 |
+| `ARTIFACT_IDENTITY` | 加载的 Plugin 身份与 Manifest 不一致，或 Platform 在间接重启前无法识别已提交的 Artifact。 |
 | `ARTIFACT_UNAVAILABLE` | Artifact 不属于可用 Catalog 或已被移除。 |
 | `BUSY` | 该资源所有者仍有前台借用，不能同步封闭此操作。 |
 | `CHANGE_CONFLICT` | 同一变更声明包含冲突意图。 |

@@ -79,10 +79,11 @@ async function loadPlugin<Reference>(
 ): Promise<AnyPlugin> {
   let loaded: unknown;
   try {
-    loaded = await Preparation.waitFor(
-      (loadSignal) => loader.load(artifact.reference, loadSignal),
+    const result = await Preparation.waitFor(
+      (loadSignal) => resolveModule(loader.load(artifact.reference, loadSignal)),
       signal,
     );
+    loaded = result.module;
   } catch (error) {
     AbortSignal.prototype.throwIfAborted.call(signal);
     throw new PlatformError(
@@ -115,4 +116,9 @@ async function loadPlugin<Reference>(
     );
   }
   return plugin;
+}
+
+// Only the Loader result crosses the thenable boundary. Sharing it with waiters must not resolve it again.
+async function resolveModule(result: unknown) {
+  return { module: await result };
 }

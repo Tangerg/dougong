@@ -357,6 +357,26 @@ describe("activation compilation", () => {
     await platform[Symbol.asyncDispose]();
   });
 
+  it("records a blocked closure on activation and clears it when its dependency becomes available", async () => {
+    const { platform } = fixture(
+      new Map(["root", "dependency"].map((name) => [name, emptyPlugin(name)])),
+    );
+    const root = await select(platform, "root", "root", { dependencies: { dependency: "*" } });
+    expect(platform.preview([root]).blockers).toHaveLength(1);
+    expect(root.error).toBeUndefined();
+    await expect(platform.activate([root])).rejects.toMatchObject({
+      code: "REGISTRATION_DEPENDENCY_MISSING",
+    });
+    expect(root.status).toBe("failed");
+    expect(root.error?.snapshot.details?.dependencyPath).toEqual(["root", "dependency"]);
+    expect(platform.diagnostics.get().registrations.get("root")?.error).toBe(root.error);
+    await select(platform, "dependency", "dependency");
+    await platform.activate([root]);
+    expect(root.status).toBe("installed");
+    expect(root.error).toBeUndefined();
+    await platform[Symbol.asyncDispose]();
+  });
+
   it("reports selected closure and unchanged consumer blockers together", async () => {
     const { platform } = fixture(
       new Map([
@@ -520,6 +540,52 @@ describe("activation compilation", () => {
         await platform[Symbol.asyncDispose]();
         await host.stop();
       }
+    },
+  );
+
+  it.each([
+    { origin: undefined, code: "ARTIFACT_IDENTITY" },
+    {
+      origin: {
+        kind: "artifact",
+        platformId: "test",
+        revision: "external",
+        manifest: { name: "consumer", version: "1.0.0", apiVersion: "^2" },
+      },
+      code: "API_INCOMPATIBLE",
+    },
+  ])(
+    "refuses an indirect restart without an admissible committed origin ($code)",
+    async ({ origin, code }) => {
+      const setup = vi.fn<() => void>();
+      const consumer = definePlugin({
+        name: "consumer",
+        requires: { value: optional(VALUE) },
+        setup,
+      });
+      const { host, platform } = fixture(
+        new Map<string, AnyPlugin>([
+          ["consumer", consumer],
+          ["provider", valuePlugin("provider", 1)],
+        ]),
+      );
+      const registration = await select(platform, "consumer", "consumer");
+      const provider = await select(platform, "provider", "provider");
+      await host.start();
+      await platform.activate([registration]);
+      const external = host.change();
+      external.update(registration.installation!, { plugin: consumer, ...(origin && { origin }) });
+      await host.apply(await host.plan(external));
+      const before = host.stateRevision;
+      const generations = setup.mock.calls.length;
+      await expect(platform.activate([provider])).rejects.toMatchObject({ code });
+      expect(host.stateRevision).toBe(before);
+      expect(provider.installation).toBeUndefined();
+      expect(setup).toHaveBeenCalledTimes(generations);
+      await platform.activate([provider, registration]);
+      expect(registration.activeOrigin?.revision).toBe("1.0.0");
+      await platform[Symbol.asyncDispose]();
+      await host.stop();
     },
   );
 

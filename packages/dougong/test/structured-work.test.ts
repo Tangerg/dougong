@@ -85,7 +85,7 @@ describe("structured work boundaries", () => {
   it("blocks a whole ownership tree without aborting or releasing borrowed resources", async () => {
     const changed = vi.fn<() => void>();
     const owner = new Lifetime({ label: "blocked", report: () => undefined, changed });
-    const child = owner.resolveOwner(owner.child("child"));
+    const child = owner.resolveOwner({ lifetime: owner.child("child") });
     const pending = Promise.withResolvers<void>();
     const release = vi.fn<() => void>();
     const abort = vi.fn<() => void>();
@@ -348,7 +348,7 @@ describe("structured work boundaries", () => {
     let deepest = owner.handle;
     const depth = 6000;
     for (let level = 0; level < depth; level++) deepest = deepest.child("nested");
-    const leaf = owner.resolveOwner(deepest);
+    const leaf = owner.resolveOwner({ lifetime: deepest });
     const trace: string[] = [];
     owner.defer(() => trace.push("root"));
     deepest.defer(() => trace.push("leaf"));

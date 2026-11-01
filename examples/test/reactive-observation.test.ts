@@ -229,7 +229,7 @@ describe("observe composition", () => {
         ...(phase === "stop" ? [readFailure] : []),
         new TypeError("Readable subscriptions must dispose synchronously"),
       ]);
-      if (phase === "stop") await handle[Symbol.asyncDispose]();
+      await expect(handle[Symbol.asyncDispose]()).rejects.toBe(errors.at(-1));
     },
   );
 
@@ -1308,3 +1308,94 @@ it.each(["child", "read"] as const)(
     expect(released).toBe(2);
   },
 );
+
+it("joins the same owner release for concurrent and repeated observation shutdown", async () => {
+  const failure = new Error("registration release failed");
+  const base = manualOwner(manualLifetime(() => undefined));
+  const entered = Promise.withResolvers<void>();
+  const finish = Promise.withResolvers<void>();
+  const release = vi.fn<() => Promise<never>>(async () => {
+    entered.resolve();
+    await finish.promise;
+    throw failure;
+  });
+  const handle = observe(
+    {
+      ...base,
+      defer(dispose) {
+        return asyncDisposable(async () => {
+          await dispose();
+          await release();
+        });
+      },
+    },
+    signal(0),
+    () => undefined,
+  );
+
+  const first = handle[Symbol.asyncDispose]();
+  await entered.promise;
+  const second = handle[Symbol.asyncDispose]();
+  finish.resolve();
+  for (const attempt of [first, second]) await expect(attempt).rejects.toBe(failure);
+  await expect(handle[Symbol.asyncDispose]()).rejects.toBe(failure);
+  expect(release).toHaveBeenCalledOnce();
+});
+
+it("does not create a drain after the initial observer closes its owner", async () => {
+  const base = manualOwner(manualLifetime(() => undefined));
+  let stop!: () => unknown;
+  let closing!: Promise<unknown>;
+  const spawned = vi.fn<() => void>();
+  const source = new ControlledReadable(1);
+  expect(() =>
+    observe(
+      {
+        ...base,
+        spawn(task) {
+          spawned();
+          return base.spawn(task);
+        },
+        defer(dispose) {
+          stop = dispose;
+          return base.defer(dispose);
+        },
+      },
+      source,
+      () => {
+        closing = Promise.resolve(stop());
+      },
+    ),
+  ).toThrow("Observation is not active");
+  await closing;
+  expect(spawned).not.toHaveBeenCalled();
+  expect(source.subscriptionsDisposed).toBe(1);
+});
+
+it("keeps a terminal observation handle without retaining the external registration", async () => {
+  function attach() {
+    const base = manualOwner(manualLifetime(() => undefined));
+    let reference!: WeakRef<AsyncDisposable>;
+    const handle = observe(
+      {
+        ...base,
+        defer(dispose) {
+          const registration = base.defer(dispose);
+          reference = new WeakRef(registration);
+          return registration;
+        },
+      },
+      signal(1),
+      () => undefined,
+    );
+    return { handle, reference };
+  }
+  const { handle, reference } = attach();
+  await handle[Symbol.asyncDispose]();
+  for (let pass = 0; pass < 8 && reference.deref(); pass++) {
+    await tick();
+    globalThis.gc!();
+  }
+  expect(reference.deref()).toBeUndefined();
+  await handle[Symbol.asyncDispose]();
+});

@@ -31,6 +31,8 @@ Execution first checks foreground borrows on affected generations. A live borrow
 
 Candidate failure cleans candidates and attempts to reconstruct the previous declarations using their validated configuration. Reconstruction creates new Instances; it does not revive disposed objects. Incomplete cleanup or restoration quarantines the Host. Failed consumers retain the providers they transitively use; other independently safe branches continue cleaning up and independent errors are aggregated.
 
+Within a dependency layer, preparation starts in committed declaration order. Asynchronous setup may finish in any order. Publication follows the same declaration order. Updates preserve an Installation’s position. A new Installation takes its position when its draft commits.
+
 `stopOrder` describes the dependency order, not wall-clock completion order. Independent consumers may shut down concurrently. Each provider waits for the consumers bound to that generation to exit successfully.
 
 | Outcome | Caller observes |

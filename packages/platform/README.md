@@ -86,6 +86,7 @@ contracts, not configuration.
 To update, add a new revision, select it, then activate the stable Registration. If setup
 fails and Core restores the previous graph, `selectedArtifact` remains the new target while
 `activeOrigin` remains the old committed source. The failed target is not silently discarded.
+A blocked dependency closure records its failure on the affected selections. Preview only reports the blockers.
 A stopped Host can contain committed installations; `activeOrigin` does not imply that their
 Instances are currently running.
 
@@ -152,7 +153,9 @@ Admission receives the concrete artifact descriptor and either `load` or `activa
 policy grants none. Loading checks happen after dependency waits and immediately before the
 Loader is entered. Before submitting its plan, Platform authorizes each requested install or
 update and each of its own committed artifacts that Core will restart because a binding changed.
-An indirect restart uses the committed origin, even if a newer revision is selected.
+An indirect restart uses the committed origin, even if a newer revision is selected. If a direct Host update
+removed or invalidated that origin, or declared an incompatible API range, admission rejects the whole
+change. Include the affected Registration in the activation to restore its selected Artifact.
 These checks cover the forward deployment. Once Core starts applying the plan, failed setup can
 reconstruct the previously committed revisions during rollback, using their prior admission.
 Direct Host commands and commands from other Platforms also operate outside this admission hook.

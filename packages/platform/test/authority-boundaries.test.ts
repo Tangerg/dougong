@@ -556,3 +556,28 @@ it("keeps activation admission and its completion paired for a decorated caller 
     closed: true,
   });
 });
+
+it("assimilates a loader result only once before validating its module", async () => {
+  const plugin = emptyPlugin("sample");
+  let reads = 0;
+  const loaded = new Proxy(
+    { default: plugin },
+    {
+      get(target, key, receiver) {
+        if (key === "then" && ++reads > 1) throw new Error("module resolution was repeated");
+        return Reflect.get(target, key, receiver);
+      },
+    },
+  );
+  const platform = createPlatform({
+    id: "module-result",
+    host: createHost(),
+    apiVersion: "1.0.0",
+    loader: { load: () => loaded },
+  });
+  const registration = await select(platform, "sample", "one");
+  await platform.activate([registration]);
+  expect(reads).toBe(1);
+  expect(registration.status).toBe("installed");
+  await platform[Symbol.asyncDispose]();
+});

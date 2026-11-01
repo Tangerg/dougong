@@ -1,5 +1,6 @@
 import { DougongError, isCancellationReason, RecordedFailure } from "../contracts/errors.js";
 import { abortReason, isAborted, onAbort } from "../internal/abort.js";
+import { normalizePlainRecord } from "../internal/record.js";
 import { assertSynchronous } from "../internal/synchronous-result.js";
 import { batchSnapshotNotifications } from "../observation/snapshot-view.js";
 import type {
@@ -53,6 +54,7 @@ export interface LifetimeOwnership {
   readonly lifetime?: LifetimeContext;
 }
 
+const ownershipFields = new Set(["lifetime"]);
 const lifetimeAuthorities = new WeakMap<LifetimeContext, Lifetime>();
 
 export interface LifetimeOptions {
@@ -299,7 +301,11 @@ export class Lifetime {
     return handle;
   }
 
-  resolveOwner(context?: LifetimeContext): Lifetime {
+  resolveOwner(options?: LifetimeOwnership): Lifetime {
+    const context =
+      options === undefined
+        ? undefined
+        : normalizePlainRecord(options, "Lifetime ownership", { fields: ownershipFields }).lifetime;
     this.#requireActive();
     if (context === undefined) return this;
     const owner = lifetimeAuthorities.get(context);
@@ -488,8 +494,10 @@ export class Lifetime {
     });
     record = new PublicationRecord(++this.#sequence, publication);
     this.#publications.add(record);
-    this.#changed?.();
-    if (this.published) publication.publish();
+    batchSnapshotNotifications(() => {
+      this.#changed?.();
+      if (this.published) publication.publish();
+    });
     return publication;
   }
 

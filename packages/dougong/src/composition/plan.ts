@@ -124,8 +124,9 @@ export class PlanAuthority {
   }
 
   invalidate(revision: number, quarantined: boolean) {
+    // A shared revision rejection must remain authoritative after it reaches an individual caller.
     this.#validation?.abort(
-      quarantined ? quarantinedHost(revision) : stalePlan(revision - 1, revision),
+      Object.freeze(quarantined ? quarantinedHost(revision) : stalePlan(revision - 1, revision)),
     );
     this.#validation = undefined;
     this.#pending.retire();

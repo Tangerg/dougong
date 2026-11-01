@@ -23,7 +23,7 @@ bridge 在订阅后重新读取以封闭挂接窗口。所有者退出时取消�
 
 连接完成后，源读取失败也会使桥接值失效：本地读取抛出源错误；下一次成功读取会恢复，即使值与上次成功时相同。
 
-`observe(owner, source, observer)` 按源值创建子所有者。替换时先完整退出旧子树，再创建新的子树；多个变化在进行中的切换间合并为最新值。返回 `AsyncDisposable`，可以提前结束观察。
+`observe(owner, source, observer)` 按源值创建子所有者。替换时先完整退出旧子树，再创建新的子树；多个变化在进行中的切换间合并为最新值。返回的 `AsyncDisposable` 可以提前结束观察。并发和重复关闭共用同一次释放及其结果。若初次观察回调同步关闭所有者，构造会在启动后台任务前失败。
 
 公开类型：`Readable`、`Signal`、`ReadonlySignal`、`Disposable`、`AsyncDisposable`、`BridgeOwner`、`ObservationOwner`、`ObservationTask`、`Observer`。`ObservationOwner` 只需提供 `defer`、`child` 和 `spawn`；它返回的子所有者实现标准异步释放协议。父所有者无需公开释放入口。
 
