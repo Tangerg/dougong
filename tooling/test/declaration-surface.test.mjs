@@ -1,8 +1,11 @@
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import { declarationSurface } from "../architecture/declaration-surface.mjs";
+
+// Declaration analysis creates a real TypeScript program, like the dependency guard tests.
+vi.setConfig({ testTimeout: 30000 });
 
 it("distinguishes a class constructor from a type-only re-export through an intermediate barrel", () => {
   const directory = mkdtempSync(join(tmpdir(), "dougong-surface-"));
