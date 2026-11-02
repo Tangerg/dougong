@@ -293,27 +293,67 @@ it("observes an existing composite without consulting shadow state on its upstre
   detach();
 });
 
-it("leaves unrelated listeners intact even when a native registration hook throws", () => {
+it("ignores throwing shadow accessors and detaches only its own cancellation observation", () => {
   const controller = new AbortController();
-  const signal = AbortSignal.any([controller.signal]);
+  const signal = controller.signal;
   const independent = vi.fn<() => void>();
   signal.addEventListener("abort", independent);
-  const failure = new Error("unreadable instance property");
-  Object.defineProperty(signal, "aborted", {
-    get() {
-      throw failure;
-    },
+  const shadow = vi.fn<() => never>(() => {
+    throw new Error("unreadable instance property");
+  });
+  Object.defineProperties(signal, {
+    aborted: { get: shadow },
+    reason: { get: shadow },
   });
   const withdrawn = vi.fn<() => void>();
-  try {
-    onAbort(signal, withdrawn)();
-  } catch (error) {
-    if (error !== failure) throw error;
-  }
-  expect(getEventListeners(signal, "abort")).toEqual([independent]);
-  controller.abort();
+  const notified = vi.fn<(reason: unknown) => void>();
+  onAbort(signal, withdrawn)();
+  onAbort(signal, notified);
+  const reason = new Error("controller cancellation");
+  controller.abort(reason);
+  expect(notified).toHaveBeenCalledExactlyOnceWith(reason);
   expect(independent).toHaveBeenCalledOnce();
   expect(withdrawn).not.toHaveBeenCalled();
+  expect(shadow).not.toHaveBeenCalled();
+});
+
+it.each(["timeout", "composite"] as const)(
+  "rolls back a %s registration when the native listener hook rejects a shadow accessor",
+  async (kind) => {
+    const timeoutMilliseconds = 60_000;
+    const controller = new AbortController();
+    const signal =
+      kind === "timeout"
+        ? AbortSignal.timeout(timeoutMilliseconds)
+        : AbortSignal.any([controller.signal]);
+    const independent = vi.fn<() => void>();
+    signal.addEventListener("abort", independent);
+    const failure = new Error("native listener hook rejected the shadow accessor");
+    Object.defineProperty(signal, "aborted", {
+      get() {
+        throw failure;
+      },
+    });
+    const notified = vi.fn<() => void>();
+    try {
+      await expect(Promise.resolve().then(() => onAbort(signal, notified))).rejects.toBe(failure);
+      expect(getEventListeners(signal, "abort")).toEqual([independent]);
+      signal.dispatchEvent(new Event("abort"));
+      expect(independent).toHaveBeenCalledOnce();
+      expect(notified).not.toHaveBeenCalled();
+    } finally {
+      signal.removeEventListener("abort", independent);
+    }
+  },
+);
+
+it("observes a native timeout despite an earlier listener stopping event dispatch", async () => {
+  const timeoutMilliseconds = 1;
+  const signal = AbortSignal.timeout(timeoutMilliseconds);
+  signal.addEventListener("abort", (event) => event.stopImmediatePropagation());
+  const cancelled = Promise.withResolvers<unknown>();
+  onAbort(signal, cancelled.resolve);
+  expect(await cancelled.promise).toMatchObject({ name: "TimeoutError" });
 });
 
 it("retains only ordered IDs in a snapshot when an executable contribution is replaced or removed", async () => {

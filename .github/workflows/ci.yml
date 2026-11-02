@@ -13,11 +13,25 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  runtimes:
+    runs-on: ubuntu-latest
+    outputs:
+      node: ${{ steps.versions.outputs.node }}
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - id: versions
+        run: >-
+          node --input-type=module -e
+          'import { runtimeBaseline } from "./tooling/runtime-baseline.mjs";
+          console.log("node=" + JSON.stringify(runtimeBaseline.nodeTestVersions));'
+          >> "$GITHUB_OUTPUT"
+
   check:
+    needs: runtimes
     strategy:
       fail-fast: false
       matrix:
-        node: [22, 24, 26]
+        node: ${{ fromJSON(needs.runtimes.outputs.node) }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:

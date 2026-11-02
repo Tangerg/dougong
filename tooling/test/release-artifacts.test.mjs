@@ -62,6 +62,7 @@ async function runRelease(
     publishFailure,
     concurrentEdit,
     visibility = "immediate",
+    visibilityQueryMilliseconds = 0,
     oneTimePassword,
     interruptAt,
     interruptAfter = false,
@@ -184,6 +185,7 @@ async function runRelease(
           "/commands.jsonl",
           "/dist-tags.json",
           "/release-stage",
+          "/release-clock.json",
           "/package.json",
           "/pnpm-workspace.yaml",
           "",
@@ -215,6 +217,7 @@ async function runRelease(
               DOUGONG_RELEASE_PUBLISH_FAILURE: publicationFailure ?? "",
               DOUGONG_RELEASE_CONCURRENT_EDIT: concurrentEdit ?? "",
               DOUGONG_RELEASE_VISIBILITY: visibility,
+              DOUGONG_RELEASE_QUERY_MILLISECONDS: String(visibilityQueryMilliseconds),
               DOUGONG_RELEASE_PUBLISHED_ARCHIVE_PREFIX: publishedArchivePrefix,
               DOUGONG_RELEASE_INTERRUPT: interruption ?? "",
               DOUGONG_RELEASE_INTERRUPT_AFTER: String(interruptAfter),
@@ -285,6 +288,8 @@ async function runRelease(
         ? readFileSync(join(workspace, "published/dougong/package/dist/index.js"), "utf8")
         : undefined,
       published: publishedManifests(),
+      elapsedMilliseconds: JSON.parse(readFileSync(join(workspace, "release-clock.json"), "utf8"))
+        .elapsedMilliseconds,
       calls,
       recorded: calls
         .filter(({ command }) => command === "git")
@@ -1017,6 +1022,48 @@ it.each(["never", "unreadable"])(
     );
   },
 );
+
+it("charges slow visibility queries against the same deadline as polling waits", async () => {
+  const result = await runRelease(() => undefined, {
+    dryRun: false,
+    visibility: "never",
+    visibilityQueryMilliseconds: 30_000,
+  });
+  expect(result.status).toBe(1);
+  expect(result.elapsedMilliseconds).toBe(30 * 60_000);
+  expect(result.stderr).toContain("not readable within 30 minutes");
+  expect(result.recorded).toEqual([]);
+  const publication = result.calls.findIndex(
+    ({ command, commandArguments }) => command === "npm" && commandArguments[0] === "publish",
+  );
+  const queries = result.calls
+    .slice(publication)
+    .filter(({ command, commandArguments }) => command === "npm" && commandArguments[0] === "view");
+  expect(queries).toHaveLength(40);
+  for (const query of queries) {
+    expect(query.timeoutMilliseconds + query.elapsedMilliseconds).toBe(30 * 60_000);
+    expect(query.killSignal).toBe("SIGKILL");
+  }
+});
+
+it("terminates a visibility query at the remaining deadline instead of granting another budget", async () => {
+  const result = await runRelease(() => undefined, {
+    dryRun: false,
+    visibility: "never",
+    visibilityQueryMilliseconds: 29 * 60_000,
+  });
+  expect(result.status).toBe(1);
+  expect(result.elapsedMilliseconds).toBe(30 * 60_000);
+  expect(result.stderr).toContain("Cannot determine whether");
+  expect(result.stderr).toContain("ETIMEDOUT");
+  expect(result.recorded).toEqual([]);
+  expect(result.calls.filter(({ command }) => command === "sleep")).toHaveLength(1);
+  const lastQuery = result.calls.findLast(
+    ({ command, commandArguments }) => command === "npm" && commandArguments[0] === "view",
+  );
+  expect(lastQuery.timeoutMilliseconds).toBe(45_000);
+  expect(lastQuery.killSignal).toBe("SIGKILL");
+});
 
 it("finishes release recording after every upload already completed", async () => {
   const result = await runRelease(() => undefined, { publishedPackages: packages, dryRun: false });

@@ -1,7 +1,7 @@
 import { DougongError, quarantinedHost } from "../contracts/errors.js";
 import { captureConfiguration, type ConfigurationValue } from "./configuration.js";
 import { normalizePlugin, type AnyPlugin, type NormalizedPlugin } from "./plugin.js";
-import { normalizePlainRecord } from "../internal/record.js";
+import { normalizePlainRecord, recordFields } from "../internal/record.js";
 import type {
   ChangeSet,
   Group,
@@ -18,6 +18,18 @@ import {
   type InstallationRecord,
 } from "./installation.js";
 import type { GroupNode } from "./group.js";
+
+const installationOptionFields = recordFields<InstallationOptions>()(
+  "id",
+  "configuration",
+  "origin",
+  "group",
+);
+const installationUpdateFields = recordFields<InstallationUpdate>()(
+  "plugin",
+  "configuration",
+  "origin",
+);
 
 export type ChangeOperation =
   | {
@@ -118,7 +130,7 @@ class ChangeSetDraft {
   ): Installation<Declaration> {
     const { port } = this.#requireOpen();
     const input = normalizePlainRecord(options, "Installation options", {
-      fields: new Set(["id", "configuration", "origin", "group"]),
+      fields: installationOptionFields,
     });
     assertId(input.id, "Installation id");
     const group = input.group === undefined ? undefined : port.resolveGroup(input.group as object);
@@ -135,7 +147,7 @@ class ChangeSetDraft {
   ) {
     const { port } = this.#requireOpen();
     const input = normalizePlainRecord(update, "Installation update", {
-      fields: new Set(["plugin", "configuration", "origin"]),
+      fields: installationUpdateFields,
     });
     const hasPlugin = Object.hasOwn(input, "plugin");
     const hasConfiguration = Object.hasOwn(input, "configuration");

@@ -7,6 +7,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { build, normalizePath } from "vite";
 import { runtimeBaseline } from "../runtime-baseline.mjs";
+import { abortListenerPort } from "../packages.mjs";
 import { candidateOutput, packCandidates, writeVerifiedCandidates } from "./package-candidates.mjs";
 import { installConsumerDependencies } from "./install-dependencies.mjs";
 
@@ -87,17 +88,15 @@ try {
     .flatMap((result) => result.output)
     .filter((file) => file.type === "chunk")
     .flatMap((chunk) => Object.keys(chunk.modules));
-  for (const name of ["dougong", "@dougongjs/reactive"]) {
+  for (const name of abortListenerPort.packages) {
+    const installed = packed.get(resolve(root, "packages", name));
     if (
-      !bundledModules.includes(normalizePath(join(modules, name, "runtime/abort-listener.web.mjs")))
+      !installed ||
+      !bundledModules.includes(normalizePath(join(installed, abortListenerPort.targets.default)))
     )
-      throw new Error(`${name}: browser build did not use its Web abort listener`);
+      throw new Error(`${name}: browser build did not use its public cancellation protocol`);
   }
-  if (
-    bundledModules.some(
-      (id) => id.includes("abort-listener.node.mjs") || id.includes("__vite-browser-external"),
-    )
-  )
+  if (bundledModules.some((id) => id.includes("__vite-browser-external")))
     throw new Error("Browser consumer includes a Node-only module");
   if (process.env[candidateOutput])
     writeVerifiedCandidates(process.env[candidateOutput], candidates);

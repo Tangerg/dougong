@@ -1,3 +1,4 @@
+import { setImmediate } from "node:timers/promises";
 import { describe, expect, it, vi } from "vitest";
 import { event, extensionPoint } from "../src/contracts/contracts";
 import { isCancellationReason } from "../src/contracts/errors";
@@ -25,9 +26,38 @@ describe("structured lifetime", () => {
     controller.abort(reason);
     expect(isCancellationReason(controller.signal, reason)).toBe(true);
     expect(isCancellationReason(controller.signal, new DOMException("late", "AbortError"))).toBe(
-      true,
+      false,
     );
     expect(isCancellationReason(controller.signal, new Error("late failure"))).toBe(false);
+  });
+
+  it("recognizes an SDK AbortError only when its own cause identifies this cancellation", async () => {
+    const controller = new AbortController();
+    const reason = new Error("cancelled timer");
+    const pending = setImmediate(undefined, { signal: controller.signal });
+    controller.abort(reason);
+    const failure: unknown = await pending.catch((error: unknown) => error);
+    expect(failure).toMatchObject({ name: "AbortError", cause: reason });
+    expect(isCancellationReason(controller.signal, failure)).toBe(true);
+
+    const unrelated = new Error("independent abort", { cause: new Error("another operation") });
+    unrelated.name = "AbortError";
+    expect(isCancellationReason(controller.signal, unrelated)).toBe(false);
+    expect(
+      isCancellationReason(controller.signal, new Error("failed to close", { cause: reason })),
+    ).toBe(false);
+    expect(isCancellationReason(controller.signal, { name: "AbortError", cause: reason })).toBe(
+      false,
+    );
+  });
+
+  it("does not execute an accessor to manufacture cancellation provenance", () => {
+    const reason = new Error("requested cancellation");
+    const read = vi.fn<() => Error>(() => reason);
+    const failure = new DOMException("independent failure", "AbortError");
+    Object.defineProperty(failure, "cause", { get: read });
+    expect(isCancellationReason(AbortSignal.abort(reason), failure)).toBe(false);
+    expect(read).not.toHaveBeenCalled();
   });
 
   it("uses actual cancellation to close every scoped operation and reclaim late acquisitions", async () => {

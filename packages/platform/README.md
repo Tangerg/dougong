@@ -120,8 +120,8 @@ Cancelling one waiter cannot cancel a load another waiter still needs. Every ope
 captures each involved Registration's selection revision. A late result from an older
 selection cannot install itself. Concurrent loads and activations admitted before a final handoff keep their place. While final
 configuration validation, authorization, Core application, or disposal cleanup is executing,
-a newly requested select, activate, remove or trigger rejects with `PLATFORM_BUSY`.
-Disposal cancels unfinished validation and authorization. During Core application or release it rejects with `PLATFORM_BUSY`.
+a newly requested select, activate, remove or trigger rejects with [`PLATFORM_BUSY`](../../docs/reference/errors.md).
+Disposal cancels unfinished validation and authorization. During Core application or release it rejects with [`PLATFORM_BUSY`](../../docs/reference/errors.md).
 This avoids waiting for the user callback that made the request. Wait until the outer
 operation finishes before issuing another command. Cancellation callbacks can read the complete
 new selection, removal batch or disposal phase through handles and diagnostics. Preview and reads remain available

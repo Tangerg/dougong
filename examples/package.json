@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "engines": {
-    "node": ">=22"
+    "node": "^24.22.0 || >=26.10.0"
   },
   "sideEffects": true,
   "exports": {

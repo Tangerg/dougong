@@ -17,6 +17,7 @@ import {
   captureDataArray,
   captureLogger,
   normalizePlainRecord,
+  recordFields,
   ReadonlyMapSnapshot,
   SerialQueue,
   SnapshotPublisher,
@@ -106,7 +107,7 @@ type PlatformState =
     }
   | { readonly phase: "disposed" };
 
-const optionFields = new Set([
+const optionFields = recordFields<PlatformOptions<unknown>>()(
   "id",
   "host",
   "group",
@@ -114,9 +115,9 @@ const optionFields = new Set([
   "loader",
   "authorizer",
   "logger",
-]);
-const activationOptionFields = new Set(["signal", "remove"]);
-const previewOptionFields = new Set(["remove"]);
+);
+const activationOptionFields = recordFields<ActivationOptions<unknown>>()("signal", "remove");
+const previewOptionFields = recordFields<ActivationPreviewOptions<unknown>>()("remove");
 
 class DeliveryPlatform<Reference> implements Platform<Reference> {
   readonly id: string;

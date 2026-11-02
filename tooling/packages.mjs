@@ -9,8 +9,7 @@ export const abortListenerPort = Object.freeze({
   packages: Object.freeze(["dougong", "reactive"]),
   targets: Object.freeze({
     types: "./runtime/abort-listener.d.mts",
-    node: "./runtime/abort-listener.node.mjs",
-    default: "./runtime/abort-listener.web.mjs",
+    default: "./runtime/abort-listener.mjs",
   }),
 });
 

@@ -54,6 +54,8 @@ Host 状态为 `stopped`、`starting`、`running`、`changing`、`stopping`、`q
 
 `ErrorDetails` 给出 outcome、phase、stateRevision 和可选的安装、契约、依赖路径与影响范围。`RecordedFailure` 是有界脱离资源图的诊断投影；原始拒绝的 cause 仍由直接调用者接收。
 
+`isCancellationReason` 按原生信号的取消原因身份分类，不把任意同名错误视为取消；带有同一原因的 `AbortError.cause` 数据属性也可建立因果。完整契约见[生命周期与资源](../guide/lifetime.md)。
+
 `apply`、`start`、`stop` 成功时 resolve 不可变 `ApplyResult`，只含 `stateRevision` 与 `affectedInstallations`；失败 reject。无变更时保留原修订并返回空的影响列表，不附加固定成功标记。
 
 从上一版 API 更新时，将已删除的 Host inspect 方法替换为 `host.diagnostics.get()`。删除对旧 ApplyResult outcome 字段的判断；await 正常完成后处理成功，catch 中处理失败及结构化 details。不提供别名或兼容适配器。
@@ -70,13 +72,18 @@ Host 只在选项缺省时使用默认值；显式传入 null 的名字、安装
 | `batchSnapshotNotifications` | 在一个同步回调中批量发布。返回 Promise 不能延长此次发布边界。 |
 | `SerialQueue` | 顺序执行提交的操作。传给 `run(operation, signal)` 的信号可立即撤回仍在排队的操作。操作开始后，由它自己决定完成结果。 |
 | `normalizePlainRecord` | 捕获普通记录的数据字段。插件配置请用 `captureConfiguration`。 |
+| `recordFields<T>()(...keys)` | 从声明类型建立穷尽的允许字段集合，供 `normalizePlainRecord` 使用。 |
 | `captureDataArray(input, label)` | 浅拷贝自有的稠密数据索引并冻结数组，不调用输入的方法或迭代器。元素的校验归调用方。 |
 | `captureLogger(logger)` | 接管日志后端时一次捕获四个方法及其原始接收者。 |
 | `onAbort(signal, callback)` | 观察真实取消，回调只接收一次原因；已取消时立即回调。返回的函数用于解除观察。手动派发名为 `abort` 的事件不能取消作用域。 |
 
+`recordFields` 在编译期要求每个字段都被列出，包括可选字段和联合声明各分支的字段，并拒绝额外字段。元组每项必须是一个确定字段，不能用可能取多个字段名的联合值代替穷尽枚举。不接受无法证明完整性的宽化数组、数字或符号键，以及开放索引签名。它声明允许出现哪些字段；必填性和值的校验仍归对应输入边界。
+
 较早的监听器调用 `stopImmediatePropagation()` 时，仍能收到真实取消。Core 和 Reactive 使用同一套原生状态读取与解绑逻辑。
 
-在 Node 上，框架使用 Node 的受保护监听器。对于 `AbortSignal.timeout()` 或合成信号，Node 自身的监听器管理也会访问 `aborted`。若自定义 getter 抛错，注册会回滚并抛出该错误。若提前将它覆写为 `true`，请保留源信号或解绑函数直到观察结束，以免 Node 提前回收仍在等待的超时信号。
+Node 与浏览器使用同一份公开 API 组合：源信号的原生监听器负责订阅的存活期，`AbortSignal.any` 创建的私有依赖信号通过弱引用传递取消，避免被遗弃的订阅继续保留源信号和回调。两条入口共用一次原生状态判断与解绑；合成事件不会推进取消，解除观察只清理本次订阅，不修改源信号上的其他监听器。上游仍然存活时，临时合成信号上的订阅保持原生监听器的存活语义。
+
+覆盖普通控制器信号的 `aborted`、`reason` 或监听方法不会改变真实取消结果。对于 `AbortSignal.timeout()` 或合成信号，Node 自身的原生监听器管理仍会读取 `aborted`：自定义 getter 抛错时，注册回滚并原样抛出该错误；若提前将它覆写为 `true`，请保留源信号或解绑函数直到观察结束，以免 Node 提前回收仍在等待的信号。
 
 ## 声明描述与可执行计划
 

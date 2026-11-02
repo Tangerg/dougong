@@ -125,11 +125,11 @@ it("distinguishes terminal restoration failure from unresolved resource ownershi
   const changing = host.apply(await host.plan(change)).catch((error: unknown) => error);
   await entered.promise;
   try {
-    expect(host.diagnostics.get().status).toBe("changing");
-    expect(host.installation("target")?.status).toBe("changing");
+    expect(host.diagnostics.get().status).toBe("quarantined");
+    expect(host.installation("target")?.status).toBe("quarantined");
     expect(host.diagnostics.get().installations.map((entry) => entry.status)).toEqual([
-      "changing",
-      "changing",
+      "quarantined",
+      "quarantined",
     ]);
   } finally {
     resume.resolve();

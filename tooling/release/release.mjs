@@ -16,6 +16,7 @@ import { createInterface } from "node:readline/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { parseArgs } from "node:util";
+import { performance } from "node:perf_hooks";
 import { prerelease, valid, validRange } from "semver";
 import { packageArchiveIn, readPackageFiles } from "../package-archive.mjs";
 import { packageName, publishedDirectories } from "../packages.mjs";
@@ -347,12 +348,18 @@ if (!dryRun) {
   }
 }
 
+// Publish-time scanning can exceed fifteen minutes; every visibility query shares this budget.
+const millisecondsPerSecond = 1_000;
+const millisecondsPerMinute = 60_000;
+const registryVisibilityTimeoutMilliseconds = 30 * millisecondsPerMinute;
+const registryPollIntervalMilliseconds = 15 * millisecondsPerSecond;
+
 // Only an explicit registry miss proves absence; failed observation leaves publication unknown.
-function registryHasVersion(name) {
+function registryHasVersion(name, timeoutMilliseconds = registryVisibilityTimeoutMilliseconds) {
   const result = spawnSync(
     "npm",
     npmArguments(name, ["view", `${name}@${version}`, "version", "--prefer-online", "--json"]),
-    { encoding: "utf8" },
+    { encoding: "utf8", timeout: timeoutMilliseconds, killSignal: "SIGKILL" },
   );
   const unreadable = (reason) =>
     fail(`Cannot determine whether ${name}@${version} is published: ${reason}`);
@@ -568,13 +575,31 @@ console.log(
 
 // Await registry visibility before publishing dependents because successful uploads can remain temporarily unreadable.
 function awaitRegistry(name) {
-  // Publish-time scanning can exceed fifteen minutes; the visibility timeout must cover that delay.
-  for (let attempt = 0; attempt < 120; attempt++) {
-    if (registryHasVersion(name)) return true;
-    if (attempt === 0) console.log(`  waiting for ${name}@${version} to become readable...`);
-    execFileSync("sleep", ["15"]);
+  const deadline = performance.now() + registryVisibilityTimeoutMilliseconds;
+  let announced = false;
+  while (true) {
+    const remaining = Math.floor(deadline - performance.now());
+    if (remaining <= 0) return false;
+    const visible = registryHasVersion(name, remaining);
+    if (performance.now() > deadline) return false;
+    if (visible) return true;
+    if (!announced) {
+      console.log(`  waiting for ${name}@${version} to become readable...`);
+      announced = true;
+    }
+    const remainingAfterQuery = Math.floor(deadline - performance.now());
+    if (remainingAfterQuery <= 0) return false;
+    const wait = Math.min(registryPollIntervalMilliseconds, remainingAfterQuery);
+    try {
+      execFileSync("sleep", [String(wait / millisecondsPerSecond)], {
+        timeout: remainingAfterQuery,
+        killSignal: "SIGKILL",
+      });
+    } catch (error) {
+      if (error.code === "ETIMEDOUT") return false;
+      throw error;
+    }
   }
-  return false;
 }
 
 function assertPublicationInputs(action) {
@@ -609,7 +634,7 @@ for (const { directory, name, distributionTag } of PACKAGES) {
   const result = spawnSync("npm", npmArguments(name, publishArguments), { stdio: "inherit" });
   if (result.status === 0 && !awaitRegistry(name)) {
     console.error(
-      `\n✗ ${name}: npm accepted ${version}, but it was not readable within 30 minutes; processing may still be pending.`,
+      `\n✗ ${name}: npm accepted ${version}, but it was not readable within ${registryVisibilityTimeoutMilliseconds / millisecondsPerMinute} minutes; processing may still be pending.`,
     );
     if (published.length) console.error(`  Already published: ${published.join(", ")}`);
     console.error(`  Re-running \`${resumeCommand}\` resumes from here.`);

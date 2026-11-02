@@ -113,6 +113,7 @@
       "ReadonlyMapSnapshot",
       "SerialQueue",
       "normalizePlainRecord",
+      "recordFields",
       "captureDataArray",
       "captureLogger",
       "onAbort",

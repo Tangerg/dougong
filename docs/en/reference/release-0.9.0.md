@@ -26,7 +26,7 @@ Add Platform and Reactive when needed. The former `@dougongjs/core` is merged in
 - Failed cleanup or restoration quarantines the entire Host permanently. Failed branches retain their actual providers while independently safe branches continue releasing. Late completion does not restore availability.
 - Platform owns immutable Artifacts in Catalog and selection intent in Registration; active origin is projected from Core Installation. Explicit revisions, stable Platform IDs and preview/activation replace the previous registration and placeholder flow.
 - Recorded permission fields move under `ErrorSnapshot.fields`; Core no longer embeds delivery-domain field names. Directly caught permission exceptions retain their typed properties.
-- Firefox support starts at 124. Node.js runtime support remains 22+. Published declarations support both Bundler and NodeNext resolution.
+- Firefox support starts at 124. Node.js runtime support is `^24.22.0 || >=26.10.0`, with cancellation adapters built only from public primitives. Published declarations support both Bundler and NodeNext resolution.
 
 ## Added
 
@@ -50,6 +50,6 @@ Add Platform and Reactive when needed. The former `@dougongjs/core` is merged in
 
 Publication uses the same tarballs verified by an isolated consumer, checking hashes, all public entrypoints, declarations, dependencies and runtime files. Uploaded packages are read back from npm and compared file by file before Git records the release. Publication and recovery preserve explicit npm dist-tags; prereleases require a channel.
 
-The full gate covers 936 tests, per-package coverage floors, types, lint, formatting, unused-code analysis, dependency cycles, architecture boundaries, builds, public APIs, packed consumers and bilingual documentation. CI runs the complete gate on Node.js 22, 24 and 26.
+The full gate covers 936 tests, per-package coverage floors, types, lint, formatting, unused-code analysis, dependency cycles, architecture boundaries, builds, public APIs, packed consumers and bilingual documentation. CI derives its version matrix from the runtime baseline and runs the complete gate on the minimum and current versions of every supported release line.
 
 Full changes: [v0.8.3…v0.9.0](https://github.com/Tangerg/dougong/compare/v0.8.3...v0.9.0).

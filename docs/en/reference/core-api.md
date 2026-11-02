@@ -54,6 +54,8 @@ Subscriptions share `get/subscribe`, do not replay and use standard Disposable c
 
 `ErrorDetails` carries outcome, phase, stateRevision and optional installation, contract, dependency path and impact. `RecordedFailure` is a bounded diagnostic projection detached from resource graphs; direct callers still receive the cause of the original rejection.
 
+`isCancellationReason` uses the native signal's reason identity. An arbitrary error with the same name is not cancellation; an `AbortError.cause` data property holding that reason also establishes the relation. See [Lifetime and resources](../guide/lifetime.md) for the full contract.
+
 `apply`, `start` and `stop` resolve with an immutable `ApplyResult` containing `stateRevision` and `affectedInstallations`; failure rejects. A no-op preserves the revision and returns an empty affected list. The result contains no constant success discriminator.
 
 For callers updating from the previous API, replace the removed Host inspect method with `host.diagnostics.get()`. Remove checks of the former ApplyResult outcome field; code after a successful await handles success, while catch handles failures and their structured details. No alias or compatibility adapter is provided.
@@ -70,13 +72,18 @@ Use `dougong/advanced` for adapters and domain extensions. These primitives expo
 | `batchSnapshotNotifications` | Group publications in one synchronous callback. A returned Promise cannot extend the boundary. |
 | `SerialQueue` | Runs operations in order. The optional signal in `run(operation, signal)` withdraws a waiting operation immediately. Once invoked, the operation owns its result. |
 | `normalizePlainRecord` | Capture the data fields of a plain record. Use `captureConfiguration` when the input is plugin configuration. |
+| `recordFields<T>()(...keys)` | Build an exhaustive accepted-field set from a declaration type for `normalizePlainRecord`. |
 | `captureDataArray(input, label)` | Freeze a shallow copy of dense own index data without invoking the input’s methods or iterator. The caller validates the elements. |
 | `captureLogger(logger)` | Capture the four methods and their original receiver once when adopting a logging backend. |
 | `onAbort(signal, callback)` | Observe genuine cancellation once, passing its reason immediately if already aborted. The returned function detaches the callback. Dispatching an event named `abort` does not cancel a scope. |
 
+`recordFields` requires every field at compile time, including optional fields and fields from each union member, and rejects extra fields. Each tuple element must name one definite field; a union-valued element cannot stand in for an exhaustive enumeration. Widened arrays, numeric or symbol keys, and open index signatures cannot prove completeness. The set declares which fields may occur; the input boundary still owns required-field and value validation.
+
 An earlier listener calling `stopImmediatePropagation()` cannot suppress genuine cancellation. Core and Reactive share the same native-state and detachment protocol.
 
-On Node, Dougong uses a protected Node listener. Node itself may read `aborted` when registering on a timeout or composite signal. A throwing override can make registration fail. Any partial subscription is removed and the error propagates. If an override returns `true` on a live timeout, retain the signal or its detach function until observation ends so Node cannot collect the pending timer.
+Node and browsers share one composition of public APIs. A native listener on the source owns subscription retention. A private dependent created with `AbortSignal.any` delegates through a weak reference so an abandoned observation cannot keep its source and callback alive. Both paths share one native-state check and detachment operation; synthetic events cannot advance cancellation, and detaching leaves unrelated source listeners intact. An observation on a temporary composite preserves native listener retention while its upstream source remains active.
+
+Shadowing an ordinary controller signal's `aborted`, `reason` or listener methods cannot change genuine cancellation. For `AbortSignal.timeout()` and composite signals, Node's native listener management still reads `aborted`. If a shadow getter throws, registration rolls back and rethrows that exact error. If it returns `true` before cancellation, retain the source signal or unsubscribe function until observation ends so Node cannot collect the pending signal prematurely.
 
 ## Declaration descriptions and executable plans
 

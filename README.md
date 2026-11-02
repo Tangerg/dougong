@@ -47,7 +47,7 @@ pnpm examples
 pnpm docs:dev
 ```
 
-运行环境：Node.js 22+、Chrome/Edge 119+、Firefox 124+、Safari 17.4+。开发环境：Node.js 22.12+、24 或 26+，使用仓库固定的 pnpm。发行包为 ESM。
+运行与开发环境：Node.js `^24.22.0 || >=26.10.0`、Chrome/Edge 119+、Firefox 124+、Safari 17.4+。使用仓库固定的 pnpm。发行包为 ESM。
 
 [文档](https://tangerg.github.io/dougong/) · [架构](./docs/reference/architecture.md) · [示例](./docs/examples.md) · [协作约束](./AGENTS.md)
 

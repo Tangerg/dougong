@@ -1,5 +1,5 @@
 import { captureConfiguration, type ConfigurationValue } from "dougong";
-import { normalizePlainRecord } from "dougong/advanced";
+import { normalizePlainRecord, recordFields } from "dougong/advanced";
 import { satisfies } from "semver";
 import { PlatformError } from "../errors.js";
 import { defineManifest, type Manifest, type ManifestInput } from "./manifest.js";
@@ -65,7 +65,12 @@ export function matchesArtifact(origin: ArtifactOrigin | undefined, artifact: Ar
 
 const originProjections = new WeakMap<object, ArtifactOrigin>();
 
-const artifactFields = new Set(["revision", "manifest", "reference", "configuration"]);
+const artifactFields = recordFields<ArtifactInput<unknown>>()(
+  "revision",
+  "manifest",
+  "reference",
+  "configuration",
+);
 
 export function captureArtifact<Reference>(
   apiVersion: string,

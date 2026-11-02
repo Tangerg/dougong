@@ -26,7 +26,7 @@ import { createPlatform } from "@dougongjs/platform";
 import { bridge, computed, observe, signal } from "@dougongjs/reactive";
 ```
 
-发行物仍为 ESM，要求 Node.js 22+；浏览器最低版本为 Chrome/Edge 119、Firefox 124、Safari 17.4。TypeScript 使用 `ES2024`、`DOM` 和 `ESNext.Disposable` 库。原生浏览器模块还需要保留包内的 `runtime/` 并配置私有导入映射，见[快速开始](./getting-started.md#浏览器原生-esm)。
+发行物仍为 ESM，要求 Node.js `^24.22.0 || >=26.10.0`；浏览器最低版本为 Chrome/Edge 119、Firefox 124、Safari 17.4。TypeScript 使用 `ES2024`、`DOM` 和 `ESNext.Disposable` 库。原生浏览器模块还需要保留包内的 `runtime/` 并配置私有导入映射，见[快速开始](./getting-started.md#浏览器原生-esm)。
 
 ## 2. 将安装命令改为计划与执行
 
@@ -64,7 +64,7 @@ await host[asyncDisposeSymbol]();
 
 删除对旧句柄 ready 方法的等待，直接等待 `plan`、`apply`、`start` 或 `stop`。规划时运行配置验证，apply 使用已经捕获的结果；规划不会执行 setup。运行中的整笔变更会在全部候选准备完成后共同发布。
 
-Plan 绑定签发它的 Host 和状态修订，只能应用一次。不要持久化报告后尝试重放它。`HOST_BUSY` 不消费 Plan；`PLAN_STALE` 要求根据当前状态重新创建 ChangeSet 并规划。`host.plan(change, signal)` 可以取消尚未完成的规划；取消该请求不会撤销已经签发的 Plan。
+Plan 绑定签发它的 Host 和状态修订，只能应用一次。不要持久化报告后尝试重放它。[`HOST_BUSY`](../reference/errors.md) 不消费 Plan；[`PLAN_STALE`](../reference/errors.md) 要求根据当前状态重新创建 ChangeSet 并规划。`host.plan(change, signal)` 可以取消尚未完成的规划；取消该请求不会撤销已经签发的 Plan。
 
 `apply`、`start`、`stop` 成功时返回 `{ stateRevision, affectedInstallations }`；失败通过 Promise 拒绝报告。无需变更的操作不推进修订。诊断统一从 `host.diagnostics.get()` 读取，通过同一视图的 `subscribe()` 观察。
 
@@ -81,7 +81,7 @@ Plan 绑定签发它的 Host 和状态修订，只能应用一次。不要持久
 | context.on、context.emit | `context.events.on`、`context.events.emit` |
 | context.contribute | `context.contributions.add` |
 | Plugin、安装选项、更新和 Artifact 的 config 字段 | `configuration` |
-| ConfigValidationError、CONFIG_INVALID | `ConfigurationValidationError`、`CONFIGURATION_INVALID` |
+| ConfigValidationError、CONFIG_INVALID | `ConfigurationValidationError`、[`CONFIGURATION_INVALID`](../reference/errors.md) |
 
 依赖声明仍叫 `requires`，它的运行时解析结果位于 `dependencies`。配置仍通过 setup 的第二个参数传入。
 

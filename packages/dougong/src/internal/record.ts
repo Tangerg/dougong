@@ -3,6 +3,29 @@ interface PlainRecordOptions {
   readonly createError?: (message: string) => Error;
 }
 
+type RecordField<T> = T extends unknown ? keyof T : never;
+
+type DefiniteField<Field extends string, Whole = Field> = Field extends unknown
+  ? [Whole] extends [Field]
+    ? {} extends Record<Field, unknown>
+      ? never
+      : Field
+    : never
+  : never;
+
+// A finite, exhaustive tuple keeps runtime acceptance a projection of its declaration type.
+export function recordFields<T extends object>() {
+  return <const Keys extends readonly (RecordField<T> & string)[]>(
+    ...keys: Keys & {
+      readonly [Index in keyof Keys]: DefiniteField<Keys[Index]>;
+    } & (number extends Keys["length"]
+        ? never
+        : Exclude<RecordField<T>, Keys[number]> extends never
+          ? unknown
+          : never)
+  ): ReadonlySet<string> => new Set(keys);
+}
+
 const objectConstructorSource = Function.prototype.toString.call(Object);
 
 function hasPlainPrototype(value: object): boolean {

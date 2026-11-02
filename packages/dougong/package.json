@@ -3,7 +3,7 @@
   "version": "0.9.0",
   "type": "module",
   "engines": {
-    "node": ">=22"
+    "node": "^24.22.0 || >=26.10.0"
   },
   "browserslist": [
     "Chrome >= 119",
@@ -31,8 +31,7 @@
   "imports": {
     "#abort-listener": {
       "types": "./runtime/abort-listener.d.mts",
-      "node": "./runtime/abort-listener.node.mjs",
-      "default": "./runtime/abort-listener.web.mjs"
+      "default": "./runtime/abort-listener.mjs"
     }
   },
   "scripts": {

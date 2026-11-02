@@ -26,7 +26,7 @@ import { createPlatform } from "@dougongjs/platform";
 import { bridge, computed, observe, signal } from "@dougongjs/reactive";
 ```
 
-Packages remain ESM and require Node.js 22+. Browser support starts at Chrome/Edge 119, Firefox 124 and Safari 17.4. TypeScript consumers need the `ES2024`, `DOM` and `ESNext.Disposable` libraries. Native browser modules must also retain the shipped `runtime/` directory and map its private import; see [getting started](./getting-started.md#native-browser-modules).
+Packages remain ESM and require Node.js `^24.22.0 || >=26.10.0`. Browser support starts at Chrome/Edge 119, Firefox 124 and Safari 17.4. TypeScript consumers need the `ES2024`, `DOM` and `ESNext.Disposable` libraries. Native browser modules must also retain the shipped `runtime/` directory and map its private import; see [getting started](./getting-started.md#native-browser-modules).
 
 ## 2. Replace installation commands with planning and execution
 
@@ -64,7 +64,7 @@ Every installation needs a stable `id` unique within its Host. Create groups wit
 
 Replace waits on old handle ready methods with awaits on `plan`, `apply`, `start` or `stop`. Configuration validation runs during planning; apply uses the captured result. Planning does not execute setup. A running transition publishes the whole change after all candidates have prepared.
 
-A Plan belongs to its issuing Host and state revision and is single-use. A persisted report cannot be replayed as authority. `HOST_BUSY` leaves a Plan unconsumed; `PLAN_STALE` requires creating a new ChangeSet and planning against current state. `host.plan(change, signal)` can cancel pending planning without revoking an already issued Plan.
+A Plan belongs to its issuing Host and state revision and is single-use. A persisted report cannot be replayed as authority. [`HOST_BUSY`](../reference/errors.md) leaves a Plan unconsumed; [`PLAN_STALE`](../reference/errors.md) requires creating a new ChangeSet and planning against current state. `host.plan(change, signal)` can cancel pending planning without revoking an already issued Plan.
 
 Successful `apply`, `start` and `stop` calls return `{ stateRevision, affectedInstallations }`; failures reject. Operations with no change preserve the revision. Read diagnostics through `host.diagnostics.get()` and subscribe through that same view.
 
@@ -81,7 +81,7 @@ Successful `apply`, `start` and `stop` calls return `{ stateRevision, affectedIn
 | context.on, context.emit | `context.events.on`, `context.events.emit` |
 | context.contribute | `context.contributions.add` |
 | config on Plugin, installation options, updates and Artifact | `configuration` |
-| ConfigValidationError, CONFIG_INVALID | `ConfigurationValidationError`, `CONFIGURATION_INVALID` |
+| ConfigValidationError, CONFIG_INVALID | `ConfigurationValidationError`, [`CONFIGURATION_INVALID`](../reference/errors.md) |
 
 Dependency declarations are still named `requires`; their resolved values live under `dependencies`. Configuration remains the second setup argument.
 

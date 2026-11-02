@@ -143,6 +143,135 @@ describe("Plugin configuration validation", () => {
     expect(failure).toMatchObject({ code: "CONFIGURATION_INVALID", issues: [] });
   });
 
+  it.each([false, true])(
+    "honors inherited Standard Schema issues before a competing value (async: %s)",
+    async (asynchronous) => {
+      const issues = vi.fn<() => ReadonlyArray<StandardSchemaV1.Issue>>(() => [
+        { message: "Configuration must be rejected" },
+      ]);
+      class RejectedResult implements StandardSchemaV1.FailureResult {
+        readonly value = 7;
+        get issues() {
+          return issues();
+        }
+      }
+      const result = new RejectedResult();
+      const schema: StandardSchemaV1<unknown, number> = {
+        "~standard": {
+          version: 1,
+          vendor: "test",
+          validate: () => (asynchronous ? Promise.resolve(result) : result),
+        },
+      };
+      const setup = vi.fn<() => void>();
+      const host = createHost({
+        installations: [
+          {
+            id: "configuration",
+            plugin: definePlugin({ name: "configuration", configuration: schema, setup }),
+          },
+        ],
+      });
+      try {
+        await expect(host.start()).rejects.toMatchObject({
+          code: "CONFIGURATION_INVALID",
+          issues: [{ message: "Configuration must be rejected" }],
+        });
+        expect(setup).not.toHaveBeenCalled();
+        expect(issues).toHaveBeenCalledOnce();
+      } finally {
+        await host.stop();
+      }
+    },
+  );
+
+  it.each([7, undefined])("captures inherited success members once (value: %s)", async (value) => {
+    const readValue = vi.fn<() => number | undefined>(() => value);
+    const readIssues = vi.fn<() => undefined>(() => undefined);
+    class AcceptedResult implements StandardSchemaV1.SuccessResult<number | undefined> {
+      get value() {
+        return readValue();
+      }
+      get issues() {
+        return readIssues();
+      }
+    }
+    const schema: StandardSchemaV1<unknown, number | undefined> = {
+      "~standard": {
+        version: 1,
+        vendor: "test",
+        validate: () => new AcceptedResult(),
+      },
+    };
+    const received: unknown[] = [];
+    const host = createHost({
+      installations: [
+        {
+          id: "configuration",
+          plugin: definePlugin({
+            name: "configuration",
+            configuration: schema,
+            setup(_context, configuration) {
+              received.push(configuration);
+            },
+          }),
+        },
+      ],
+    });
+    try {
+      await host.start();
+      expect(received).toEqual([value]);
+      expect(readIssues).toHaveBeenCalledOnce();
+      expect(readValue).toHaveBeenCalledOnce();
+    } finally {
+      await host.stop();
+    }
+  });
+
+  it.each(["issues", "value"])("propagates a result's failing %s accessor once", async (field) => {
+    const failure = new Error("Validation result is unreadable");
+    const read = vi.fn<() => never>(() => {
+      throw failure;
+    });
+    const result: unknown = Object.create(Object.defineProperty({}, field, { get: read }));
+    expect(await startWith(schemaReturning(result), undefined)).toBe(failure);
+    expect(read).toHaveBeenCalledOnce();
+  });
+
+  it("accepts a callable result without invoking it as configuration or validation", async () => {
+    const callable = vi.fn<() => void>();
+    const result = Object.assign(callable, { value: 7 });
+    const schema: StandardSchemaV1<unknown, number> = {
+      "~standard": {
+        version: 1,
+        vendor: "test",
+        validate: () => result,
+      },
+    };
+    const received: unknown[] = [];
+    const host = createHost({
+      installations: [
+        {
+          id: "configuration",
+          plugin: definePlugin({
+            name: "configuration",
+            configuration: schema,
+            setup(_context, configuration) {
+              received.push(configuration);
+            },
+          }),
+        },
+      ],
+    });
+    try {
+      await host.start();
+      expect(received).toEqual([7]);
+      expect(callable).not.toHaveBeenCalled();
+    } finally {
+      await host.stop();
+    }
+  });
+
   it("passes the resolved value through rather than the caller's input", async () => {
     let received: unknown;
     const plugin = definePlugin({

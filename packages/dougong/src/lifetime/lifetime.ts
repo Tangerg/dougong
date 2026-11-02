@@ -1,6 +1,6 @@
 import { DougongError, isCancellationReason, RecordedFailure } from "../contracts/errors.js";
 import { abortReason, isAborted, onAbort } from "../internal/abort.js";
-import { normalizePlainRecord } from "../internal/record.js";
+import { normalizePlainRecord, recordFields } from "../internal/record.js";
 import { assertSynchronous } from "../internal/synchronous-result.js";
 import { batchSnapshotNotifications } from "../observation/snapshot-view.js";
 import type {
@@ -54,13 +54,14 @@ export interface LifetimeOwnership {
   readonly lifetime?: LifetimeContext;
 }
 
-const ownershipFields = new Set(["lifetime"]);
+const ownershipFields = recordFields<LifetimeOwnership>()("lifetime");
 const lifetimeAuthorities = new WeakMap<object, Lifetime>();
 const claimedResources = new WeakSet<Resource>();
 
 export interface LifetimeOptions {
   readonly label: string;
   readonly report: (error: unknown) => void;
+  readonly releaseFailed?: (error: unknown) => void;
   readonly changed?: () => void;
   readonly parentSignal?: AbortSignal;
   readonly shutdownTimeoutMilliseconds?: number;
@@ -75,7 +76,12 @@ class Visibility {
   published = false;
 }
 
-const disposalReason = Object.freeze(new DOMException("Resource disposed", "AbortError"));
+function createDisposalReason() {
+  const reason = new DOMException("Resource disposed", "AbortError");
+  // Independent cancellation needs its own identity, without retaining completed stack frames.
+  Reflect.set(reason, "stack", undefined);
+  return Object.freeze(reason);
+}
 
 class CleanupRecord {
   readonly id: number;
@@ -84,6 +90,7 @@ class CleanupRecord {
   #detach: (() => void) | undefined;
   #completion: Promise<void> | undefined;
   #failure: RecordedFailure | undefined;
+  #releaseFailed: ((error: unknown) => void) | undefined;
   #changed: (() => void) | undefined;
 
   constructor(
@@ -91,8 +98,10 @@ class CleanupRecord {
     kind: "cleanup" | "interrupt",
     cleanup: Cleanup,
     detach: () => void,
+    releaseFailed: (error: unknown) => void,
     changed: () => void,
   ) {
+    this.#releaseFailed = releaseFailed;
     this.#changed = changed;
     this.id = id;
     this.kind = kind;
@@ -117,12 +126,14 @@ class CleanupRecord {
           this.#cleanup = undefined;
           const detach = this.#detach;
           this.#detach = undefined;
+          this.#releaseFailed = undefined;
           this.#changed = undefined;
           detach?.();
           completion.resolve();
         },
         (error) => {
           // A failed release still belongs to this record; retrying an arbitrary callback is unsafe.
+          this.#releaseFailed?.(error);
           this.#failure = new RecordedFailure(error);
           this.#changed?.();
           completion.reject(error);
@@ -134,6 +145,7 @@ class CleanupRecord {
   forget() {
     if (this.#completion) return;
     this.#cleanup = undefined;
+    this.#releaseFailed = undefined;
     this.#changed = undefined;
     const detach = this.#detach;
     this.#detach = undefined;
@@ -144,11 +156,13 @@ class CleanupRecord {
 class PublicationRecord {
   readonly id: number;
   readonly publication: Publication;
-  failure: { readonly reason: unknown; readonly recorded: RecordedFailure } | undefined;
+  failure: { readonly reason: unknown; recorded: RecordedFailure | undefined } | undefined;
+  #releaseFailed: ((error: unknown) => void) | undefined;
 
-  constructor(id: number, publication: Publication) {
+  constructor(id: number, publication: Publication, releaseFailed: (error: unknown) => void) {
     this.id = id;
     this.publication = publication;
+    this.#releaseFailed = releaseFailed;
   }
 
   withdraw(): boolean {
@@ -159,9 +173,12 @@ class PublicationRecord {
         "Publication withdrawal must be synchronous",
       );
     } catch (error) {
-      this.failure = { reason: error, recorded: new RecordedFailure(error) };
+      this.failure = { reason: error, recorded: undefined };
+      this.#releaseFailed?.(error);
+      this.failure.recorded = new RecordedFailure(error);
       return false;
     }
+    this.#releaseFailed = undefined;
     return true;
   }
 }
@@ -193,16 +210,7 @@ class TaskRecord<T> {
         });
       }
     };
-    // Classify a synchronous throw before disposal can overtake it. The public promise
-    // adopts the returned value itself, so an application thenable is resolved only once.
-    const result = Promise.resolve().then<T>(() => {
-      try {
-        return task(controller.signal);
-      } catch (error) {
-        failed(error);
-        throw error;
-      }
-    });
+    const result = Promise.resolve().then(() => task(controller.signal));
     this.settled = Object.freeze(
       result.then(
         () => this.#settle(),
@@ -226,7 +234,7 @@ class TaskRecord<T> {
   }
 
   #dispose() {
-    this.cancel(disposalReason);
+    this.cancel(createDisposalReason());
     return this.settled;
   }
 
@@ -250,6 +258,7 @@ export class Lifetime {
   readonly #acquisitions = new Set<Promise<void>>();
   readonly #shutdownTimeoutMilliseconds: number | undefined;
   #report: ((error: unknown) => void) | undefined;
+  #releaseFailed: ((error: unknown) => void) | undefined;
   #changed: (() => void) | undefined;
   #phase: LifetimePhase = "active";
   #foreground = 0;
@@ -267,6 +276,7 @@ export class Lifetime {
       throw new TypeError("Lifetime error reporter must be a function");
     this.#label = options.label;
     this.#report = options.report;
+    this.#releaseFailed = options.releaseFailed;
     this.#changed = options.changed;
     this.#shutdownTimeoutMilliseconds = shutdownTimeout(options.shutdownTimeoutMilliseconds);
     this.#visibility = ownership?.visibility ?? new Visibility();
@@ -430,6 +440,7 @@ export class Lifetime {
       {
         label,
         report: this.#report!,
+        ...(this.#releaseFailed && { releaseFailed: this.#releaseFailed }),
         ...(this.#changed && { changed: this.#changed }),
         ...(this.#shutdownTimeoutMilliseconds === undefined
           ? {}
@@ -477,7 +488,7 @@ export class Lifetime {
       .then(async (resource) => {
         const record = this.#adopt(resource, true);
         if (!this.acceptsWork) {
-          const reason = isAborted(this.signal) ? abortReason(this.signal) : disposalReason;
+          const reason = isAborted(this.signal) ? abortReason(this.signal) : createDisposalReason();
           await record.dispose();
           throw reason;
         }
@@ -502,7 +513,9 @@ export class Lifetime {
       if (record && !record.failure) this.#publications.delete(record);
       this.#changed?.();
     });
-    record = new PublicationRecord(++this.#sequence, publication);
+    record = new PublicationRecord(++this.#sequence, publication, (error) =>
+      this.#releaseFailed?.(error),
+    );
     this.#publications.add(record);
     batchSnapshotNotifications(() => {
       this.#changed?.();
@@ -587,7 +600,7 @@ export class Lifetime {
     } catch (error) {
       errors.push(error);
     }
-    this.#cancelTree(disposalReason);
+    this.#cancelTree(createDisposalReason());
     return this.#completion!;
   }
 
@@ -609,8 +622,9 @@ export class Lifetime {
         "SHUTDOWN_TIMEOUT",
         "Lifetime shutdown did not complete before its deadline",
       );
-      this.#timeoutFailure = new RecordedFailure(failure);
       this.#phase = "quarantined";
+      this.#releaseFailed?.(failure);
+      this.#timeoutFailure = new RecordedFailure(failure);
       this.#changed?.();
       completion.reject(failure);
     }, this.#shutdownTimeoutMilliseconds);
@@ -660,11 +674,12 @@ export class Lifetime {
     this.#phase = "disposed";
     // Detach the original signal's listeners/reason without pinning every retired scope's
     // future listeners to a globally shared EventTarget.
-    this.#cancellation = { signal: AbortSignal.abort(disposalReason) };
+    this.#cancellation = { signal: AbortSignal.abort(createDisposalReason()) };
     const detach = this.#detachFromParent;
     this.#detachFromParent = undefined;
     detach?.(this);
     this.#report = undefined;
+    this.#releaseFailed = undefined;
     this.#changed?.();
     this.#changed = undefined;
   }
@@ -689,6 +704,7 @@ export class Lifetime {
         if (resource !== undefined) claimedResources.delete(resource);
         this.#changed?.();
       },
+      (error) => this.#releaseFailed?.(error),
       () => this.#changed?.(),
     );
     records.add(record);

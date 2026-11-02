@@ -26,7 +26,7 @@ Platform 和 Reactive 按需添加。旧 `@dougongjs/core` 已合入 `dougong`�
 - 无法安全清理或恢复时，整个 Host 进入终止性的 `quarantined` 状态。失败分支保留实际依赖的提供者，独立安全分支继续释放；迟到完成不恢复可用性。
 - Platform 通过 Catalog 保存不可变 Artifact，通过 Registration 保存选择意图，实际来源从 Core Installation 投影。显式 revision、稳定 Platform ID 和预览/激活取代旧注册与 placeholder 流程。
 - 权限错误的诊断字段位于 `ErrorSnapshot.fields`；Core 不再内置交付领域字段。直接捕获的权限异常保留类型化属性。
-- Firefox 支持下限提升至 124；Node.js 运行要求仍为 22+。发行类型支持 Bundler 与 NodeNext 解析。
+- Firefox 支持下限提升至 124；Node.js 运行要求为 `^24.22.0 || >=26.10.0`，取消适配仅使用公开原语。发行类型支持 Bundler 与 NodeNext 解析。
 
 ## 新增能力
 
@@ -50,6 +50,6 @@ Platform 和 Reactive 按需添加。旧 `@dougongjs/core` 已合入 `dougong`�
 
 发布使用经隔离消费者验证的同一组 tarball，核对哈希、完整入口、声明、依赖和 runtime 文件；上传后从 npm 读回并逐文件比对，再记录 Git 标签。发布与恢复显式传递 npm dist-tag，预发布版本必须指定通道。
 
-完整门禁覆盖 936 个测试、按包覆盖率阈值、类型、lint、格式、未使用代码、循环依赖、架构边界、包构建、公开 API、打包消费者和中英双语文档。CI 在 Node.js 22、24、26 上执行完整验证。
+完整门禁覆盖 936 个测试、按包覆盖率阈值、类型、lint、格式、未使用代码、循环依赖、架构边界、包构建、公开 API、打包消费者和中英双语文档。CI 从运行基线派生版本矩阵，在每个受支持分支的最低版本及当前版本上执行完整验证。
 
 完整变更：[v0.8.3…v0.9.0](https://github.com/Tangerg/dougong/compare/v0.8.3...v0.9.0)。[English release notes](../en/reference/release-0.9.0.md)。

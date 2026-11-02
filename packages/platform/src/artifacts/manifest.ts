@@ -75,25 +75,27 @@ export function defineManifest(input: ManifestInput): Manifest {
     });
   }
 
-  let result: ReturnType<typeof manifestSchema.safeParse>;
+  const manifest = validateManifest(declaration);
+  assertUnique(manifest.activation, "activation event", manifest.name);
+  assertUnique(manifest.permissions, "permission", manifest.name);
+
+  return manifest;
+}
+
+// Error maps run lazily, so the validation boundary must also own error materialization.
+function validateManifest(declaration: Readonly<Record<string, unknown>>): Manifest {
+  let failure: PlatformError;
   try {
-    result = manifestSchema.safeParse(declaration);
+    const result = manifestSchema.safeParse(declaration);
+    if (result.success) return result.data;
+    const cause = result.error;
+    failure = new PlatformError("MANIFEST_INVALID", z.prettifyError(cause), { cause });
   } catch (error) {
     throw new PlatformError("MANIFEST_INVALID", "Manifest declaration could not be validated", {
       cause: error,
     });
   }
-  if (!result.success) {
-    throw new PlatformError("MANIFEST_INVALID", z.prettifyError(result.error), {
-      cause: result.error,
-    });
-  }
-
-  const manifest = result.data;
-  assertUnique(manifest.activation, "activation event", manifest.name);
-  assertUnique(manifest.permissions, "permission", manifest.name);
-
-  return manifest;
+  throw failure;
 }
 
 // Own the validated data so the supplier cannot mutate it between validation and storage.

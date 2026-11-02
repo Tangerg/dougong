@@ -31,6 +31,6 @@ Read and observe execution through `host.diagnostics.get()` and `host.diagnostic
 
 The formal `dougong/advanced` subpath exports stable snapshot publishing, immutable map snapshots, serial queues and record normalization for downstream composition. Optional delivery and reactivity live in `@dougongjs/platform` and `@dougongjs/reactive`.
 
-ESM; Node.js 22+, Chrome/Edge 119+, Firefox 124+, Safari 17.4+.
+ESM; Node.js `^24.22.0 || >=26.10.0`, Chrome/Edge 119+, Firefox 124+, Safari 17.4+.
 
 [API documentation](https://tangerg.github.io/dougong/en/reference/core-api) · [Architecture](https://tangerg.github.io/dougong/en/reference/architecture)

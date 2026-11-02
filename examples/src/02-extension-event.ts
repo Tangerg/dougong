@@ -38,9 +38,10 @@ export async function extensionAndEvent(): Promise<ExampleResult> {
   const helloPlugin = definePlugin({
     name: "examples.commands.hello",
     setup(context) {
+      const commandId = "hello";
       contribution = context.contributions.add(COMMANDS, "hello", {
-        id: "hello",
-        run: () => context.events.emit(COMMAND_EXECUTED, { id: "hello" }),
+        id: commandId,
+        run: () => context.events.emit(COMMAND_EXECUTED, { id: commandId }),
       });
     },
   });

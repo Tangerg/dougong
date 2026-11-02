@@ -11,6 +11,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
+import { performance } from "node:perf_hooks";
 import {
   candidateOutput,
   packCandidates,
@@ -20,6 +21,12 @@ import { cleanReleaseGit, installReleaseFixture } from "../release-command-fixtu
 
 const workspace = process.cwd();
 const visibility = process.env.DOUGONG_RELEASE_VISIBILITY;
+const queryMilliseconds = Number(process.env.DOUGONG_RELEASE_QUERY_MILLISECONDS ?? 0);
+let elapsedMilliseconds = 0;
+Object.defineProperty(performance, "now", { value: () => elapsedMilliseconds });
+process.once("exit", () =>
+  writeFileSync(join(workspace, "release-clock.json"), JSON.stringify({ elapsedMilliseconds })),
+);
 if (!["immediate", "delayed", "never", "unreadable"].includes(visibility)) {
   throw new TypeError(`Unknown fixture visibility: ${visibility}`);
 }
@@ -150,6 +157,9 @@ installReleaseFixture((name, commandArguments, options, nativeSpawn) => {
         commandArguments,
         registryArguments: options.registryArguments,
         gitConfigurationArguments: options.gitConfigurationArguments,
+        elapsedMilliseconds,
+        timeoutMilliseconds: options.timeout,
+        killSignal: options.killSignal,
       }) + "\n",
     );
   }
@@ -302,6 +312,17 @@ installReleaseFixture((name, commandArguments, options, nativeSpawn) => {
       commandArguments.slice(2).join(" ") !== "version --prefer-online --json"
     )
       process.exit(99);
+    if (packageAt("pending", commandArguments[1])) {
+      if (Number.isFinite(options.timeout) && queryMilliseconds >= options.timeout) {
+        elapsedMilliseconds += options.timeout;
+        return {
+          status: null,
+          signal: options.killSignal,
+          error: Object.assign(new Error("npm query ETIMEDOUT"), { code: "ETIMEDOUT" }),
+        };
+      }
+      elapsedMilliseconds += queryMilliseconds;
+    }
     if (visibility === "unreadable" && packageAt("pending", commandArguments[1])) {
       return { status: 1, stdout: JSON.stringify({ error: { code: "E503" } }) };
     }
@@ -355,7 +376,10 @@ installReleaseFixture((name, commandArguments, options, nativeSpawn) => {
     return extracted;
   }
 
-  if (name === "sleep" && commandArguments.length === 1 && commandArguments[0] === "15") {
+  if (name === "sleep" && commandArguments.length === 1) {
+    const duration = Number(commandArguments[0]) * 1000;
+    if (!Number.isFinite(duration) || duration <= 0) process.exit(99);
+    elapsedMilliseconds += duration;
     if (visibility === "delayed") {
       const pending = join(workspace, "pending");
       mkdirSync(join(workspace, "published"), { recursive: true });

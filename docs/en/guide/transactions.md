@@ -17,7 +17,7 @@ A Plan is issued by one Host and can be consumed once. Before execution effects,
 
 Core issues executable Plans only: invalid declarations reject during `host.plan()`, so its report has no constant empty list of blockers. A permanent contract-kind conflict discovered at execution preflight consumes that Plan: correct the declarations and plan again. Platform’s data preview can still report actual blockers.
 
-If another operation commits while schema validation is pending, planning rejects with `PLAN_STALE`; on quarantine it rejects with `HOST_QUARANTINED`. Build a new change against the current Host. An uncommitted Installation in an issued Plan becomes `removed` as soon as that revision ends. Keeping an obsolete Plan for its report does not retain the old executable payload.
+If another operation commits while schema validation is pending, planning rejects with [`PLAN_STALE`](../reference/errors.md); on quarantine it rejects with [`HOST_QUARANTINED`](../reference/errors.md). Build a new change against the current Host. An uncommitted Installation in an issued Plan becomes `removed` as soon as that revision ends. Keeping an obsolete Plan for its report does not retain the old executable payload.
 
 Contract kinds belong to the Host registry, so a live plugin or application can claim a kind without a graph commit. Planning checks its graph against those claims before issuing a Plan. If a different kind wins while candidate setup is running, admission rejects before publication: candidate cleanup and restoration follow the same path as a failed setup. A conflict by itself does not quarantine the Host.
 
@@ -27,7 +27,7 @@ Invalidation ends the waiting `plan()` immediately, even if its validator never 
 
 ## Execution and results
 
-Execution first checks foreground borrows on affected generations. A live borrow rejects with `HOST_BUSY` before execution effects and without consuming the Plan. Once execution is admitted, it seals affected old generations, joins their background work and releases resources, then prepares candidates in dependency order. After every candidate is ready, listeners, contributions, services and origin publish together.
+Execution first checks foreground borrows on affected generations. A live borrow rejects with [`HOST_BUSY`](../reference/errors.md) before execution effects and without consuming the Plan. Once execution is admitted, it seals affected old generations, joins their background work and releases resources, then prepares candidates in dependency order. After every candidate is ready, listeners, contributions, services and origin publish together.
 
 Candidate failure cleans candidates and attempts to reconstruct the previous declarations using their validated configuration. Reconstruction creates new Instances; it does not revive disposed objects. Incomplete cleanup or restoration quarantines the Host. Failed consumers retain the providers they transitively use; other independently safe branches continue cleaning up and independent errors are aggregated.
 
@@ -58,7 +58,7 @@ An existing Installation handle retains only its final status and origin. Open C
 | --- | --- |
 | `host.diagnostics.get()` and `subscribe()` | Read and observe errors, retained instances and resource obligations |
 | `installation(id)`, `group(id)` and `explain(id)` | Inspect retained declaration identities and bindings; data is not execution authority |
-| `change()`, `plan()`, `apply()`, `start()` and `stop()` | Reject with `HOST_QUARANTINED`; no alternate shutdown retry or recovery path |
+| `change()`, `plan()`, `apply()`, `start()` and `stop()` | Reject with [`HOST_QUARANTINED`](../reference/errors.md); no alternate shutdown retry or recovery path |
 | `host[Symbol.asyncDispose]()` | Uses stop and also rejects; standard disposal syntax does not erase an existing failure |
 | New `host.use()` or contribution borrows | Reject access to sealed execution owners |
 | Tasks, acquisitions or cleanup already in progress | May settle late; timeouts and sealed ingress cannot forcibly terminate arbitrary JavaScript |

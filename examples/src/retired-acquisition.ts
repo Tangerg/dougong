@@ -56,14 +56,9 @@ export function acquireForLifetime<T>(
 ): Promise<AcquisitionResult<T>> {
   const destination = generation.signal;
   return abandonOnAbort(destination, () => {
-    const operation = operations.spawn(async (signal) => {
-      try {
-        return await handoff(generation, operations, signal, destination, start, dispose);
-      } catch (cause) {
-        // An external AbortError is not cancellation requested by this Task.
-        throw new Error("External resource operation failed", { cause });
-      }
-    });
+    const operation = operations.spawn((signal) =>
+      handoff(generation, operations, signal, destination, start, dispose),
+    );
 
     // The operation Task owns reporting; rethrowing its projected outcome would report the failure twice.
     return operation.result.then(

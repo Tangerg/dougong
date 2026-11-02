@@ -1,6 +1,6 @@
 # Application code
 
-Application and agent callers consume the current generation through stable contracts. `host.use` acquires a borrow synchronously and releases it after the callback's complete result settles. A change that would destroy that generation rejects with `HOST_BUSY`. Once an admitted transition seals entry, affected generations reject new borrows; unaffected generations can continue serving.
+Application and agent callers consume the current generation through stable contracts. `host.use` acquires a borrow synchronously and releases it after the callback's complete result settles. A change that would destroy that generation rejects with [`HOST_BUSY`](../reference/errors.md). Once an admitted transition seals entry, affected generations reject new borrows; unaffected generations can continue serving.
 
 ```ts
 const answer = await host.use(SEARCH, async (search) => {

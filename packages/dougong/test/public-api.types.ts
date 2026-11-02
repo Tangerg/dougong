@@ -1,7 +1,7 @@
 import type { StandardJSONSchemaV1, StandardSchemaV1 } from "@standard-schema/spec";
 import { expectTypeOf } from "vitest";
 import * as core from "dougong";
-import { normalizePlainRecord, type SnapshotPublisher } from "dougong/advanced";
+import { normalizePlainRecord, recordFields, type SnapshotPublisher } from "dougong/advanced";
 
 expectTypeOf<ConstructorParameters<typeof core.RecordedFailure>>().toEqualTypeOf<
   [error: unknown, fields?: ReadonlyArray<string>]
@@ -18,6 +18,50 @@ expectTypeOf(capturedDeclaration).toEqualTypeOf<
 // @ts-expect-error Accepted declaration fields are immutable.
 capturedDeclaration.name = "replacement";
 capturedDeclaration.payload.value = 2;
+
+interface RecordFieldOptions {
+  readonly required: string;
+  readonly optional?: number;
+}
+
+const allowedFields = recordFields<RecordFieldOptions>()("required", "optional");
+expectTypeOf(allowedFields).toEqualTypeOf<ReadonlySet<string>>();
+type AlternativeRecordFieldOptions =
+  RecordFieldOptions | { readonly required: string; readonly alternative: number };
+recordFields<AlternativeRecordFieldOptions>()("required", "optional", "alternative");
+// @ts-expect-error Every member's fields belong to a union declaration's accepted-field contract.
+recordFields<AlternativeRecordFieldOptions>()("required");
+// @ts-expect-error Optional declaration fields still belong to the accepted field contract.
+recordFields<RecordFieldOptions>()("required");
+// @ts-expect-error Required declaration fields cannot be omitted.
+recordFields<RecordFieldOptions>()("optional");
+// @ts-expect-error Unknown fields cannot widen the input contract.
+recordFields<RecordFieldOptions>()("required", "optional", "unexpected");
+const incompleteFields: (keyof RecordFieldOptions)[] = ["required"];
+// @ts-expect-error An open-ended array cannot prove that every field was provided.
+recordFields<RecordFieldOptions>()(...incompleteFields);
+// @ts-expect-error Plain declaration fields are strings, so numeric keys are not representable.
+recordFields<{ readonly 0: string }>()();
+// @ts-expect-error An index signature cannot define a finite accepted-field set.
+recordFields<Record<string, unknown>>()("required");
+
+function rejectUncertainFields(
+  field: keyof RecordFieldOptions,
+  open: string,
+  pattern: `field:${string}`,
+) {
+  // @ts-expect-error One runtime field cannot cover both members of its union type.
+  recordFields<RecordFieldOptions>()(field);
+  // @ts-expect-error A union element may repeat an existing field instead of supplying the missing one.
+  recordFields<RecordFieldOptions>()("required", field);
+  const widenedTuple = [open] as const;
+  // @ts-expect-error A finite tuple of open strings cannot enumerate an index signature.
+  recordFields<Record<string, unknown>>()(...widenedTuple);
+  const patternTuple = [pattern] as const;
+  // @ts-expect-error A template index signature also denotes an open field range.
+  recordFields<Record<`field:${string}`, unknown>>()(...patternTuple);
+}
+void rejectUncertainFields;
 
 type PlainService = { readonly id: "plain"; readonly kind: "service" };
 type PlainOptional = {

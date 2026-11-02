@@ -38,7 +38,7 @@ Service dependencies appear in `requires`, and resolved values appear in `contex
 
 This can increase the rebuild scope, but consumers reason about ordinary TypeScript values and functions without a proxy changing its target between calls. The binding graph also supports plan explanation, startup ordering and safe shutdown. Dynamic ExtensionPoint membership is not a static Service dependency edge; executing a contribution borrows its owner instead.
 
-Application code uses `host.use(contract, callback)`. The borrow lasts until the callback's full result settles. A change that would destroy that generation rejects with `HOST_BUSY` before effects while a foreground borrow exists. Once a transition seals entry, affected generations accept no new borrows. This gives references a useful boundary, but TypeScript cannot prevent application code from saving a callback value globally; callers must honor the borrowing protocol.
+Application code uses `host.use(contract, callback)`. The borrow lasts until the callback's full result settles. A change that would destroy that generation rejects with [`HOST_BUSY`](errors.md) before effects while a foreground borrow exists. Once a transition seals entry, affected generations accept no new borrows. This gives references a useful boundary, but TypeScript cannot prevent application code from saving a callback value globally; callers must honor the borrowing protocol.
 
 ## Why planning precedes execution
 
@@ -71,6 +71,8 @@ The scope of blocked release differs from the scope of unavailable service. Clea
 A Host promises the health of one complete execution graph. Quarantine means Engine can no longer establish that promise, whether because of a shutdown timeout, a cleanup failure or failed restoration. Serving the remainder while retaining a failed branch would require explicit partial availability, cross-branch borrowing and recovery protocols. An installation failure flag alone cannot establish those guarantees.
 
 The current model makes an explicit choice: **quarantine is terminal for the entire Host, with no unquarantine, cleanup retry or in-place recovery API.** It withdraws availability, rejects new mutations and Service borrows, and keeps resource obligations observable. The cost is that one plugin's cleanup failure makes its whole Host unavailable. Dependency-aware cleanup reduces retained resources; it does not change that availability contract.
+
+Failed early disposal of a child or defer handle follows the same decision. Lifetime owns obligations and release failures; Engine owns Host availability, and diagnostic notifications only project the result. Quarantine seals ingress and invalidates Plans synchronously before awaiting safe cleanup. This terminal commit advances the revision once; cleanup progress does not advance it again. Generations being prepared or restored participate through their actual bindings and cannot commit a healthy state after quarantine.
 
 Shutdown work already in progress may continue after its deadline, and diagnostics reflect late completion. A shrinking `unresolved` list does not make the Host healthy: releasing resources is not equivalent to restoring the whole declaration graph, and the original operation has already failed. Application code cannot erase diagnostics, repeat start or recreate Platform to declare the incident resolved.
 

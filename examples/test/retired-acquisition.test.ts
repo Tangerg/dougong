@@ -106,6 +106,7 @@ describe("resource acquisition with explicit waiter retirement", () => {
 
   it("does not start queued work after its waiting generation retires", async () => {
     const { host, generation, operations, report } = await createFixture();
+    const generationSignal = generation.signal;
     const start = vi.fn<() => Promise<object>>(() => Promise.resolve({ id: "unused" }));
     const dispose = vi.fn<(value: object) => void>();
     let retirement: Promise<void> | undefined;
@@ -116,7 +117,7 @@ describe("resource acquisition with explicit waiter retirement", () => {
         retirement = generation[Symbol.asyncDispose]();
       });
 
-      expect(await observed).toBe(generation.signal.reason);
+      expect(await observed).toBe(generationSignal.reason);
       await retirement;
       await operations[Symbol.asyncDispose]();
 
@@ -132,6 +133,7 @@ describe("resource acquisition with explicit waiter retirement", () => {
     "releases a late resource once with adjacent microtasks: %s",
     async (order) => {
       const { host, generation, operations, report } = await createFixture();
+      const generationSignal = generation.signal;
       const started = Promise.withResolvers<void>();
       const operation = Promise.withResolvers<object>();
       const resource = { id: "old" };
@@ -159,7 +161,7 @@ describe("resource acquisition with explicit waiter retirement", () => {
         await retirement;
         await operations[Symbol.asyncDispose]();
 
-        await expect(waiter.result).rejects.toBe(generation.signal.reason);
+        await expect(waiter.result).rejects.toBe(generationSignal.reason);
         expect(start).toHaveBeenCalledOnce();
         expect(delivered).not.toHaveBeenCalled();
         expect(dispose).toHaveBeenCalledExactlyOnceWith(resource);
@@ -202,6 +204,7 @@ describe("resource acquisition with explicit waiter retirement", () => {
 
   it("registers ownership before delivery and cleans a resource retired during that handoff", async () => {
     const { host, generation, operations, report } = await createFixture();
+    const generationSignal = generation.signal;
     const started = Promise.withResolvers<void>();
     const operation = Promise.withResolvers<object>();
     const release = Promise.withResolvers<void>();
@@ -237,7 +240,7 @@ describe("resource acquisition with explicit waiter retirement", () => {
       });
       await setImmediate();
 
-      await expect(waiter.result).rejects.toBe(generation.signal.reason);
+      await expect(waiter.result).rejects.toBe(generationSignal.reason);
       expect(delivered).not.toHaveBeenCalled();
       expect(dispose).toHaveBeenCalledExactlyOnceWith(resource);
       expect(operationsDisposed).toBe(true);
@@ -277,6 +280,7 @@ describe("resource acquisition with explicit waiter retirement", () => {
 
   it("reclaims a value when start synchronously disposes its generation", async () => {
     const { host, generation, operations, report } = await createFixture();
+    const generationSignal = generation.signal;
     const resource = { id: "retired-inside-start" };
     const dispose = vi.fn<(value: object) => void>();
     let retirement: Promise<void> | undefined;
@@ -289,7 +293,7 @@ describe("resource acquisition with explicit waiter retirement", () => {
         acquireForLifetime(generation, operations, start, dispose),
       );
       await setImmediate();
-      await expect(waiter.result).rejects.toBe(generation.signal.reason);
+      await expect(waiter.result).rejects.toBe(generationSignal.reason);
       await retirement;
       await operations[Symbol.asyncDispose]();
 
@@ -303,6 +307,7 @@ describe("resource acquisition with explicit waiter retirement", () => {
 
   it("retires a pending generation while operations and Host shutdown still join late disposal", async () => {
     const { host, owner, generation, operations, report } = await createFixture();
+    const generationSignal = generation.signal;
     const started = Promise.withResolvers<void>();
     const operation = Promise.withResolvers<object>();
     const release = Promise.withResolvers<void>();
@@ -329,7 +334,7 @@ describe("resource acquisition with explicit waiter retirement", () => {
       await setImmediate();
       expect(retired).toBe(true);
       await retirement;
-      await expect(waiter.result).rejects.toBe(generation.signal.reason);
+      await expect(waiter.result).rejects.toBe(generationSignal.reason);
 
       const next = owner.child("next-generation");
       let nextResult: unknown;
@@ -450,8 +455,9 @@ describe("acquisition failure ownership", () => {
         );
         const result = await waiter.result;
 
-        expect(result).toMatchObject({ status: "failed", error: { cause: failure } });
+        expect(result).toMatchObject({ status: "failed", error: failure });
         if (result.status !== "failed") throw new Error("Expected a failed acquisition");
+        expect(result.error).toBe(failure);
         await operations[Symbol.asyncDispose]();
         expect(report).toHaveBeenCalledExactlyOnceWith(result.error);
         expect(dispose).not.toHaveBeenCalled();
@@ -469,6 +475,7 @@ describe("acquisition failure ownership", () => {
     });
     const fixture = await createFixture({ onError: report });
     generation = fixture.generation;
+    const generationSignal = generation.signal;
     const failure = new Error("failed before retirement");
     try {
       const waiter = generation.spawn(() =>
@@ -480,11 +487,11 @@ describe("acquisition failure ownership", () => {
         ),
       );
       await setImmediate();
-      await expect(waiter.result).rejects.toBe(generation.signal.reason);
+      await expect(waiter.result).rejects.toBe(generationSignal.reason);
       await retirement;
       await fixture.operations[Symbol.asyncDispose]();
 
-      expect(report).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ cause: failure }));
+      expect(report).toHaveBeenCalledExactlyOnceWith(failure);
     } finally {
       await fixture.host.stop();
     }
@@ -499,6 +506,7 @@ describe("acquisition failure ownership", () => {
     ["asynchronous disposal", true],
   ] as const)("reports late %s during Host shutdown (AbortError: %s)", async (mode, abortError) => {
     const { host, generation, operations, report } = await createFixture();
+    const generationSignal = generation.signal;
     const started = Promise.withResolvers<void>();
     const operation = Promise.withResolvers<object>();
     const resource = { id: "late" };
@@ -526,7 +534,7 @@ describe("acquisition failure ownership", () => {
       const stopping = host.stop();
       await setImmediate();
       expect(operations.signal.aborted).toBe(true);
-      await expect(waiter.result).rejects.toBe(generation.signal.reason);
+      await expect(waiter.result).rejects.toBe(generationSignal.reason);
 
       if (mode === "operation rejection") operation.reject(failure);
       else operation.resolve(resource);
@@ -553,9 +561,7 @@ describe("acquisition failure ownership", () => {
       );
       await setImmediate();
 
-      expect(report).toHaveBeenCalledExactlyOnceWith(
-        expect.objectContaining({ name: "Error", cause: failure }),
-      );
+      expect(report).toHaveBeenCalledExactlyOnceWith(failure);
       expect(dispose.mock.calls).toEqual(mode === "operation rejection" ? [] : [[resource]]);
     } finally {
       operation.resolve(resource);
@@ -600,7 +606,7 @@ describe("acquisition failure ownership", () => {
       await stopping;
       await setImmediate();
 
-      expect(reporter).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ cause: failure }));
+      expect(reporter).toHaveBeenCalledExactlyOnceWith(failure);
       expect(logger.error).toHaveBeenCalledExactlyOnceWith(
         expect.objectContaining({
           message: "Host error reporter failed",
@@ -616,57 +622,73 @@ describe("acquisition failure ownership", () => {
     }
   });
 
-  it.each([false, true])(
-    "reclaims a resource rejected by the cleanup registration boundary (release fails: %s)",
-    async (releaseFails) => {
-      const { host, generation, operations, report } = await createFixture();
-      const registrationFailure = new Error("cleanup registration failed");
-      const releaseFailure = new Error("reclamation failed");
-      const resource = { id: "unregistered" };
-      const refusingGeneration = {
-        signal: generation.signal,
-        defer() {
-          throw registrationFailure;
-        },
-      };
-      const dispose = vi.fn<(value: object) => void | Promise<never>>(() => {
-        if (releaseFails) return Promise.reject(releaseFailure);
-        return undefined;
+  it("reclaims a resource rejected by the cleanup registration boundary", async () => {
+    const { host, generation, operations, report } = await createFixture();
+    const registrationFailure = new Error("cleanup registration failed");
+    const resource = { id: "unregistered" };
+    const refusingGeneration = {
+      signal: generation.signal,
+      defer() {
+        throw registrationFailure;
+      },
+    };
+    const dispose = vi.fn<(value: object) => void>();
+    try {
+      const result = await acquireForLifetime(
+        refusingGeneration,
+        operations,
+        () => Promise.resolve(resource),
+        dispose,
+      );
+      expect(result).toEqual({ status: "failed", error: registrationFailure });
+      expect(report).toHaveBeenCalledExactlyOnceWith(registrationFailure);
+      await operations[Symbol.asyncDispose]();
+      expect(dispose).toHaveBeenCalledExactlyOnceWith(resource);
+    } finally {
+      await host.stop();
+    }
+  });
+
+  it("quarantines failed reclamation and cancels the waiting generation", async () => {
+    const { host, generation, operations, report } = await createFixture();
+    const generationSignal = generation.signal;
+    const registrationFailure = new Error("cleanup registration failed");
+    const releaseFailure = new Error("reclamation failed");
+    const resource = { id: "unregistered" };
+    const refusingGeneration = {
+      signal: generationSignal,
+      defer() {
+        throw registrationFailure;
+      },
+    };
+    const dispose = vi.fn<(value: object) => Promise<never>>(() => Promise.reject(releaseFailure));
+    try {
+      const rejection: unknown = await acquireForLifetime(
+        refusingGeneration,
+        operations,
+        () => Promise.resolve(resource),
+        dispose,
+      ).catch((error: unknown) => error);
+      expect(rejection).toBe(generationSignal.reason);
+      expect(host.status).toBe("quarantined");
+      await expect(operations[Symbol.asyncDispose]()).rejects.toMatchObject({
+        errors: [releaseFailure],
       });
-      try {
-        const result = await acquireForLifetime(
-          refusingGeneration,
-          operations,
-          () => Promise.resolve(resource),
-          dispose,
-        );
-        expect(result.status).toBe("failed");
-        if (result.status !== "failed") throw new Error("Expected a failed acquisition");
-        const cause = (result.error as Error).cause;
-        const failures = cause instanceof AggregateError ? cause.errors : [cause];
-        expect(cause).toBeInstanceOf(releaseFails ? AggregateError : Error);
-        expect(failures).toEqual(
-          releaseFails ? [registrationFailure, releaseFailure] : [registrationFailure],
-        );
-        expect(report).toHaveBeenCalledExactlyOnceWith(result.error);
-        await generation[Symbol.asyncDispose]();
-        await expect(
-          Promise.allSettled([operations[Symbol.asyncDispose]()]),
-        ).resolves.toMatchObject([
-          releaseFails
-            ? { status: "rejected", reason: { errors: [releaseFailure] } }
-            : { status: "fulfilled" },
-        ]);
-        expect(dispose).toHaveBeenCalledExactlyOnceWith(resource);
-      } finally {
-        await expect(Promise.allSettled([host.stop()])).resolves.toMatchObject([
-          releaseFails
-            ? { status: "rejected", reason: { code: "HOST_QUARANTINED" } }
-            : { status: "fulfilled" },
-        ]);
-      }
-    },
-  );
+      await expect(host.stop()).rejects.toMatchObject({ code: "HOST_QUARANTINED" });
+      expect(report).toHaveBeenCalledTimes(2);
+      expect(report).toHaveBeenNthCalledWith(
+        1,
+        expect.objectContaining({ errors: [registrationFailure, releaseFailure] }),
+      );
+      expect(report).toHaveBeenNthCalledWith(
+        2,
+        expect.objectContaining({ code: "HOST_QUARANTINED" }),
+      );
+      expect(dispose).toHaveBeenCalledExactlyOnceWith(resource);
+    } finally {
+      await Promise.allSettled([host.stop()]);
+    }
+  });
 
   it("leaves accepted cleanup failures in the generation's existing aggregate", async () => {
     const { host, generation, operations, report } = await createFixture();
@@ -711,6 +733,7 @@ describe("acquisition failure ownership", () => {
 describe("application-selected identity queues", () => {
   it("keeps real operations serial per identity while other identities advance", async () => {
     const { host, owner, generation, operations, report } = await createFixture();
+    const generationSignal = generation.signal;
     const firstIdentity = new SerialQueue();
     const secondIdentity = new SerialQueue();
     const operation = Promise.withResolvers<void>();
@@ -739,7 +762,7 @@ describe("application-selected identity queues", () => {
       await setImmediate();
       expect(retired).toBe(true);
       await retirement;
-      await expect(first.result).rejects.toBe(generation.signal.reason);
+      await expect(first.result).rejects.toBe(generationSignal.reason);
 
       const next = owner.child("next-generation");
       const second = next.spawn(async () => {

@@ -1,5 +1,5 @@
 import type { StandardJSONSchemaV1 } from "@standard-schema/spec";
-import { normalizePlainRecord } from "../internal/record.js";
+import { normalizePlainRecord, recordFields } from "../internal/record.js";
 import { assertSynchronous } from "../internal/synchronous-result.js";
 import { captureConfiguration, type ConfigurationValue } from "./configuration.js";
 import { normalizePlugin, type AnyPlugin } from "./plugin.js";
@@ -31,7 +31,7 @@ export interface PluginDescriptor {
   readonly configuration: PluginConfigurationDescriptor;
 }
 
-const descriptionOptionFields = new Set(["jsonSchemaTarget"]);
+const descriptionOptionFields = recordFields<PluginDescriptionOptions>()("jsonSchemaTarget");
 
 export function describePlugin(
   plugin: AnyPlugin,

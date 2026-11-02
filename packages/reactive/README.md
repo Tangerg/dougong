@@ -22,6 +22,6 @@ subscription[disposeSymbol]();
 
 `observe(owner, readable, observer)` disposes the previous child before building the next one. The structural owner supplies `child`, `defer` and `spawn`; only the returned child needs `Symbol.asyncDispose`; no framework base class is required. Use `generation.spawn` for asynchronous observer work.
 
-ESM; Node.js 22+, Chrome/Edge 119+, Firefox 124+, Safari 17.4+.
+ESM; Node.js `^24.22.0 || >=26.10.0`, Chrome/Edge 119+, Firefox 124+, Safari 17.4+.
 
 [Guide](https://tangerg.github.io/dougong/en/guide/reactive)

@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { createHost } from "dougong";
+import { z } from "zod";
 import {
   createPlatform,
   defineManifest,
@@ -200,6 +201,59 @@ describe("manifest declarations", () => {
     expect(() => defineManifest({ name: "invalid", version: "1.0.0", activation })).toThrow(
       expect.objectContaining({ code: "MANIFEST_INVALID", cause }),
     );
+  });
+
+  it("contains field reflection failures during validation error materialization", () => {
+    const cause = new Error("unreadable manifest name");
+    const name = new Proxy(
+      {},
+      {
+        getPrototypeOf() {
+          throw cause;
+        },
+      },
+    );
+    expect(() => defineManifest({ name, version: "1.0.0" } as never)).toThrow(
+      expect.objectContaining({ code: "MANIFEST_INVALID", cause }),
+    );
+  });
+
+  it.each(["customError", "localeError"] as const)(
+    "contains lazy %s failures without trusting supplier error codes",
+    (option) => {
+      const previous = { ...z.config() };
+      const cause = new PlatformError("MANIFEST_INVALID", "supplier formatter failed");
+      try {
+        z.config({
+          [option]: () => {
+            throw cause;
+          },
+        });
+        expect(() => defineManifest({ name: 42, version: "1.0.0" } as never)).toThrow(
+          expect.objectContaining({ code: "MANIFEST_INVALID", cause }),
+        );
+      } finally {
+        z.config({ customError: undefined, localeError: undefined, ...previous });
+      }
+    },
+  );
+
+  it("preserves one materialized validator error as the cause of ordinary rejection", () => {
+    const previous = { ...z.config() };
+    const customError = vi.fn<() => string>(() => "manifest name must be a string");
+    try {
+      z.config({ customError });
+      expect(() => defineManifest({ name: 42, version: "1.0.0" } as never)).toThrow(
+        expect.objectContaining({
+          code: "MANIFEST_INVALID",
+          cause: expect.any(z.ZodError),
+          message: expect.stringContaining("manifest name must be a string"),
+        }),
+      );
+      expect(customError).toHaveBeenCalledTimes(1);
+    } finally {
+      z.config({ customError: undefined, ...previous });
+    }
   });
 });
 

@@ -13,6 +13,7 @@ export interface InstanceEnvironment {
   readonly hostName: string;
   readonly logger: Logger;
   readonly report: (error: unknown) => void;
+  readonly releaseFailed: (error: unknown) => void;
   readonly changed: () => void;
   readonly events: EventHub;
   readonly contributions: ContributionRegistry;
@@ -34,6 +35,7 @@ export class Instance {
     this.lifetime = new Lifetime({
       label: installation.id + "@" + generation,
       report: environment.report,
+      releaseFailed: environment.releaseFailed,
       changed: environment.changed,
       parentSignal: environment.startupSignal,
       ...(environment.shutdownTimeoutMilliseconds === undefined
@@ -43,6 +45,7 @@ export class Instance {
   }
 
   async prepare(dependencies: Readonly<Record<string, unknown>>, configuration: unknown) {
+    const signal = this.lifetime.signal;
     const environment = this.environment;
     const metadata = Object.freeze({
       hostName: environment.hostName,
@@ -65,7 +68,7 @@ export class Instance {
     });
     const { setup } = this.declaration.plugin;
     const output = await this.lifetime.prepare(() => setup(context, configuration));
-    AbortSignal.prototype.throwIfAborted.call(this.lifetime.signal);
+    AbortSignal.prototype.throwIfAborted.call(signal);
     const entries = Object.entries(this.declaration.plugin.provides);
     const invalidOutput = (message: string, options?: ErrorOptions) =>
       new DougongError("PROVIDES_INVALID", message, {
@@ -85,7 +88,7 @@ export class Instance {
     } catch (cause) {
       throw invalidOutput("Plugin returned invalid or unreadable provided Services", { cause });
     }
-    AbortSignal.prototype.throwIfAborted.call(this.lifetime.signal);
+    AbortSignal.prototype.throwIfAborted.call(signal);
     for (const [alias, token] of entries) {
       if (!Object.hasOwn(values, alias)) throw invalidOutput("Plugin did not provide " + alias);
       this.#services.set(token.id, values[alias]);

@@ -157,28 +157,30 @@ export async function planetScenario(): Promise<ExampleResult> {
   });
   await host.start();
 
+  const remoteReference = "remote";
+  const remoteActivation = "media:remote";
   const platform = createPlatform({
     id: "media-providers",
     host,
     apiVersion: "1.0.0",
     authorizer: new PermissionSet(["network"]),
-    loader: new MemoryLoader(new Map([["remote", { default: remoteSource }]])),
+    loader: new MemoryLoader(new Map([[remoteReference, { default: remoteSource }]])),
   });
   const remote = await platform.select(
     platform.catalog.add({
       revision: "remote-content-1",
       manifest: {
-        name: "examples.planet.source.remote",
+        name: remoteSource.name,
         version: "1.0.0",
-        activation: ["media:remote"],
+        activation: [remoteActivation],
         permissions: ["network"],
       },
-      reference: "remote",
+      reference: remoteReference,
     }),
   );
 
   await host.use(PLAYER, (player) => player.play("intro"));
-  await platform.trigger("media:remote");
+  await platform.trigger(remoteActivation);
   const superseded = host
     .use(PLAYER, (player) => player.play("superseded"))
     .catch((error: unknown) => {

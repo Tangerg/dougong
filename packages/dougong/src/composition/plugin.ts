@@ -17,7 +17,7 @@ import type { LifetimeContext } from "../lifetime/lifetime.js";
 import type { Logger } from "../contracts/logging.js";
 import type { EventOperations } from "../events/event-hub.js";
 import type { Awaitable } from "../contracts/resource.js";
-import { normalizePlainRecord } from "../internal/record.js";
+import { normalizePlainRecord, recordFields } from "../internal/record.js";
 
 export type { Awaitable } from "../contracts/resource.js";
 
@@ -88,11 +88,11 @@ export interface Plugin<
 }
 
 // The uncallable setup signature preserves variance across heterogeneous declarations.
-export interface AnyPlugin {
-  readonly name: string;
+export interface AnyPlugin extends Omit<
+  Plugin<unknown, Requirements, Provisions>,
+  "configuration" | "setup"
+> {
   readonly configuration?: unknown;
-  readonly requires?: Requirements;
-  readonly provides?: Provisions;
   readonly setup: (context: never, configuration: never) => unknown;
 }
 
@@ -100,9 +100,10 @@ export type InstanceContext = Omit<PluginContext<{}>, "dependencies"> & {
   readonly dependencies: Readonly<Record<string, unknown>>;
 };
 
-export interface NormalizedPlugin {
-  readonly name: string;
-  readonly configuration?: PluginSchema<unknown, unknown>;
+export interface NormalizedPlugin extends Omit<
+  Plugin<unknown, Requirements, Provisions>,
+  "requires" | "provides" | "setup"
+> {
   readonly requires: Requirements;
   readonly provides: Provisions;
   readonly setup: (
@@ -111,7 +112,13 @@ export interface NormalizedPlugin {
   ) => Awaitable<void | Readonly<Record<string, unknown>>>;
 }
 
-const pluginFields = new Set(["name", "configuration", "requires", "provides", "setup"]);
+const pluginFields = recordFields<Plugin>()(
+  "name",
+  "configuration",
+  "requires",
+  "provides",
+  "setup",
+);
 
 interface PluginContractDeclaration {
   readonly alias: string;

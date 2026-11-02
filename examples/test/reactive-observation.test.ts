@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { createHost, definePlugin, type Logger } from "dougong";
+import { createHost, definePlugin, DougongError, type Logger } from "dougong";
 import {
   observe,
   bridge,
@@ -72,6 +72,10 @@ function errorTree(error: unknown): unknown[] {
     : error instanceof Error && error.cause !== undefined
       ? [error, ...errorTree(error.cause)]
       : [error];
+}
+
+function isQuarantineFailure(error: unknown): error is DougongError<"HOST_QUARANTINED"> {
+  return error instanceof DougongError && error.code === "HOST_QUARANTINED";
 }
 
 function manualOwner(
@@ -702,13 +706,23 @@ describe("observe composition", () => {
 
     expect(trace).toEqual(["start:1", "stop:1"]);
     expect(source.subscriptionsDisposed).toBe(1);
-    expect(logger.error).toHaveBeenCalledOnce();
-    expect(errorTree(logger.error.mock.calls[0]?.[0])).toContainEqual(new Error("defer:1"));
+    const failures: unknown[] = logger.error.mock.calls.map(([failure]) => failure);
+    const quarantines = failures.filter(isQuarantineFailure);
+    const taskFailures = failures.filter((failure) => !isQuarantineFailure(failure));
+    expect(quarantines).toHaveLength(1);
+    expect(taskFailures).toHaveLength(1);
+    for (const failure of [...taskFailures, ...quarantines])
+      expect(errorTree(failure)).toContainEqual(new Error("defer:1"));
+    expect(host.status).toBe("quarantined");
+    const revision = host.stateRevision;
     await expect(host.stop()).rejects.toMatchObject({
       code: "HOST_QUARANTINED",
       details: { outcome: "quarantined" },
     });
     expect(host.status).toBe("quarantined");
+    expect(host.stateRevision).toBe(revision);
+    expect(trace).toEqual(["start:1", "stop:1"]);
+    expect(logger.error).toHaveBeenCalledTimes(failures.length);
   });
 
   it("cleans a failed replacement and stops the observation", async () => {
@@ -804,15 +818,25 @@ describe("observe composition", () => {
 
     expect(trace).toEqual(["start:1", "stop:1", "start:2", "stop:2"]);
     expect(source.subscriptionsDisposed).toBe(1);
-    expect(logger.error).toHaveBeenCalledOnce();
-    expect(errorTree(logger.error.mock.calls[0]?.[0])).toEqual(
+    const failures: unknown[] = logger.error.mock.calls.map(([failure]) => failure);
+    const quarantines = failures.filter(isQuarantineFailure);
+    const taskFailures = failures.filter((failure) => !isQuarantineFailure(failure));
+    expect(quarantines).toHaveLength(1);
+    expect(taskFailures).toHaveLength(1);
+    expect(errorTree(taskFailures[0])).toEqual(
       expect.arrayContaining([observerFailure, cleanupFailure]),
     );
+    expect(errorTree(quarantines[0])).toContain(cleanupFailure);
+    expect(host.status).toBe("quarantined");
+    const revision = host.stateRevision;
     await expect(host.stop()).rejects.toMatchObject({
       code: "HOST_QUARANTINED",
       details: { outcome: "quarantined" },
     });
     expect(host.status).toBe("quarantined");
+    expect(host.stateRevision).toBe(revision);
+    expect(trace).toEqual(["start:1", "stop:1", "start:2", "stop:2"]);
+    expect(logger.error).toHaveBeenCalledTimes(failures.length);
   });
 });
 
@@ -906,6 +930,7 @@ it("keeps failed unsubscription owned after a source read stops the drain", asyn
     throw releaseError;
   });
   const reported = Promise.withResolvers<unknown>();
+  const quarantined = Promise.withResolvers<DougongError<"HOST_QUARANTINED">>();
   const source: Readable<number> = {
     get() {
       if (broken) throw new Error("read failed");
@@ -917,7 +942,10 @@ it("keeps failed unsubscription owned after a source read stops the drain", asyn
     },
   };
   const host = createHost({
-    onError: reported.resolve,
+    onError(error) {
+      reported.resolve(error);
+      if (isQuarantineFailure(error)) quarantined.resolve(error);
+    },
     installations: [
       {
         id: "observer",
@@ -934,9 +962,22 @@ it("keeps failed unsubscription owned after a source read stops the drain", asyn
   broken = true;
   notify();
   expect(errorTree(await reported.promise)).toContain(releaseError);
+  expect(errorTree(await quarantined.promise)).toContain(releaseError);
+  expect(host.status).toBe("quarantined");
+  const revision = host.stateRevision;
+  const retained = host.diagnostics.get().unresolved;
+  expect(retained.map((entry) => entry.installation)).toEqual(["observer"]);
+  expect(retained[0]?.lifetime.unresolved).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({
+        kind: "cleanup",
+        error: expect.objectContaining({ message: releaseError.message }),
+      }),
+    ]),
+  );
   const failure = await host.stop().catch((error: unknown) => error);
   expect(failure).toMatchObject({ code: "HOST_QUARANTINED" });
-  expect(errorTree(failure)).toContain(releaseError);
+  expect(host.stateRevision).toBe(revision);
   expect(release).toHaveBeenCalledOnce();
 });
 

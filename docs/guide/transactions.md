@@ -19,7 +19,7 @@ Plan 只能由签发它的 Host 使用一次。apply 在任何执行副作用之
 
 Core 只签发可执行的 Plan：声明不成立时，`host.plan()` 直接拒绝，报告不包含永远为空的 blockers 列表。签发后的执行预检如果遇到不可恢复的契约种类冲突，该 Plan 被消费；应修正声明后重新规划。Platform 的数据预览仍可以列出真实阻碍。
 
-如果 schema 验证等待期间另一个操作已提交，规划以 `PLAN_STALE` 拒绝；Host 已隔离时则以 `HOST_QUARANTINED` 拒绝。应根据当前 Host 重新创建变更。已经签发的 Plan 中，尚未提交的 Installation 会在基线版本失效时立即变成 `removed`。保留过期 Plan 供查看报告，不会因此保留旧的可执行内容。
+如果 schema 验证等待期间另一个操作已提交，规划以 [`PLAN_STALE`](../reference/errors.md) 拒绝；Host 已隔离时则以 [`HOST_QUARANTINED`](../reference/errors.md) 拒绝。应根据当前 Host 重新创建变更。已经签发的 Plan 中，尚未提交的 Installation 会在基线版本失效时立即变成 `removed`。保留过期 Plan 供查看报告，不会因此保留旧的可执行内容。
 
 契约种类归 Host 的注册表所有；运行中的插件或应用可以在不提交图变更的情况下登记一种契约。规划会在签发 Plan 前用注册表核对候选图。如果候选 setup 等待期间相同 ID 已被登记为另一种契约，本次发布不会开始；Core 按 setup 失败的路径清理候选并恢复原声明。种类冲突本身不会使 Host 隔离。
 
@@ -27,7 +27,7 @@ Core 只签发可执行的 Plan：声明不成立时，`host.plan()` 直接拒�
 
 ## 执行和结果
 
-执行前先检查受影响代次的前台借用。有借用时返回 `HOST_BUSY`，不产生执行副作用，也不消费 Plan。获准执行后，先封闭受影响旧代次的入口，等待其后台工作退出并释放资源，再按依赖顺序准备候选 Instance；所有候选准备成功后，监听、贡献、服务与来源共同发布。
+执行前先检查受影响代次的前台借用。有借用时返回 [`HOST_BUSY`](../reference/errors.md)，不产生执行副作用，也不消费 Plan。获准执行后，先封闭受影响旧代次的入口，等待其后台工作退出并释放资源，再按依赖顺序准备候选 Instance；所有候选准备成功后，监听、贡献、服务与来源共同发布。
 
 候选失败后清理候选，并尝试用已验证配置重建原声明。重建的是新的 Instance，不会复活已释放的旧对象。无法完成清理或恢复时，Host 进入隔离。失败释放仅阻止仍被它依赖的提供者，其他能安全退出的分支继续清理，独立错误汇总报告。
 
@@ -58,7 +58,7 @@ Core 只签发可执行的 Plan：声明不成立时，`host.plan()` 直接拒�
 | --- | --- |
 | `host.diagnostics.get()`、`subscribe()` | 读取和观察错误、保留实例及其资源义务 |
 | `installation(id)`、`group(id)`、`explain(id)` | 检查保留的声明身份与绑定；这些数据不代表可执行权限 |
-| `change()`、`plan()`、`apply()`、`start()`、`stop()` | 拒绝并报告 `HOST_QUARANTINED`，不会开启一条重试退出或恢复路径 |
+| `change()`、`plan()`、`apply()`、`start()`、`stop()` | 拒绝并报告 [`HOST_QUARANTINED`](../reference/errors.md)，不会开启一条重试退出或恢复路径 |
 | `host[Symbol.asyncDispose]()` | 复用 stop，也会拒绝；标准释放语法不会消除已有故障 |
 | 新的 `host.use()` 或贡献借用 | 拒绝访问已封闭的执行所有者 |
 | 已开始的任务、获取或清理 | 可能迟到完成；超时和封闭入口不能强制终止任意 JavaScript |

@@ -5,6 +5,7 @@ import PACKAGES from "./public-api.json" with { type: "json" };
 import { pathToFileURL } from "node:url";
 import typescript from "typescript";
 import { declarationSurface } from "./declaration-surface.mjs";
+import { constructedErrorCode, errorDocumentationFailures } from "./error-code-surface.mjs";
 import { existsSync, globSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { isDeepStrictEqual } from "node:util";
@@ -12,7 +13,7 @@ import { loadConfigFromFile } from "vite";
 import { abbreviatedDeclaration, retiredVocabulary } from "./vocabulary.mjs";
 import { packageEntrypoints, publishedDirectories } from "../packages.mjs";
 import { architectureRules, sourceExtensions } from "./rules.mjs";
-import { developmentEngines, runtimeBaseline } from "../runtime-baseline.mjs";
+import { runtimeBaseline } from "../runtime-baseline.mjs";
 
 const retiredIdentifiers = new Set(retiredVocabulary);
 
@@ -32,10 +33,22 @@ const publishedManifestPaths = publishedDirectories.map((directory) => `${direct
 const runtimeManifestPaths = ["package.json", ...publishedManifestPaths, "examples/package.json"];
 for (const manifestPath of runtimeManifestPaths) {
   const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
-  const engines = manifestPath === "package.json" ? developmentEngines : runtimeBaseline.engines;
-  if (JSON.stringify(manifest.engines) !== JSON.stringify(engines)) {
+  if (JSON.stringify(manifest.engines) !== JSON.stringify(runtimeBaseline.engines)) {
     failures.push(`${manifestPath}: engines differs from tooling/runtime-baseline.mjs`);
   }
+}
+for (const documentPath of [
+  "README.md",
+  "README.en.md",
+  "docs/guide/getting-started.md",
+  "docs/en/guide/getting-started.md",
+  "docs/guide/migrating-to-0.9.md",
+  "docs/en/guide/migrating-to-0.9.md",
+  "packages/dougong/README.md",
+  "packages/reactive/README.md",
+]) {
+  if (!readFileSync(documentPath, "utf8").includes(`Node.js \`${runtimeBaseline.engines.node}\``))
+    failures.push(`${documentPath}: Node.js range differs from tooling/runtime-baseline.mjs`);
 }
 for (const manifestPath of ["package.json", ...publishedManifestPaths]) {
   const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
@@ -139,10 +152,7 @@ for (const directory of ["packages/dougong/src", "packages/platform/src"]) {
           typescript.isTypeAliasDeclaration(parent.parent.parent) &&
           parent.parent.parent.name.text === "PlatformErrorCode";
         const isErrorConstruction =
-          typescript.isNewExpression(parent) &&
-          parent.arguments?.[0] === node &&
-          typescript.isIdentifier(parent.expression) &&
-          (parent.expression.text === "DougongError" || parent.expression.text === "PlatformError");
+          parent.arguments?.[0] === node && constructedErrorCode(parent) !== undefined;
         const isErrorSubclass =
           typescript.isCallExpression(parent) &&
           parent.arguments[0] === node &&
@@ -173,7 +183,6 @@ for (const directory of ["packages/dougong/src", "packages/platform/src"]) {
   }
 }
 // Check all pages so retired error codes cannot survive outside the canonical reference table.
-const REFERENCE_TABLES = ["docs/reference/errors.md", "docs/en/reference/errors.md"];
 const MARKDOWN_FILES = [
   ...globSync("docs/**/*.md"),
   ...globSync("packages/*/README.md"),
@@ -244,20 +253,8 @@ for (const documentPath of MARKDOWN_FILES) {
   for (const [term, pattern] of retiredDocumentationPatterns) {
     if (pattern.test(code)) failures.push(`${documentPath}: uses retired code term '${term}'`);
   }
-  const documented = new Set(
-    [...text.matchAll(/`([A-Z][A-Z_]{3,})`/g)]
-      .map(([, code]) => code)
-      .filter((code) => !code.endsWith("_")),
-  );
-  for (const code of documented) {
-    if (!sourceCodes.has(code))
-      failures.push(`${documentPath}: documents '${code}', which no source throws`);
-  }
-  if (!REFERENCE_TABLES.includes(documentPath)) continue;
-  for (const code of sourceCodes) {
-    if (!documented.has(code))
-      failures.push(`${documentPath}: error code '${code}' is not documented`);
-  }
+  for (const failure of errorDocumentationFailures(documentPath, text, sourceCodes))
+    failures.push(`${documentPath}: ${failure}`);
 }
 
 const GUARD_PAGES = ["docs/reference/guards.md", "docs/en/reference/guards.md"];

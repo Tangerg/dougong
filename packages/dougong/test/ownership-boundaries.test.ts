@@ -359,38 +359,42 @@ it("preserves independent sibling failures even when one is an AbortError", asyn
   expect(aborted).toEqual([false, false]);
 });
 
-it("reports a synchronous Task failure even when disposal overtakes its result reaction", async () => {
-  const failure = new DOMException("independent task", "AbortError");
-  const report = vi.fn<(error: unknown) => void>();
-  const entered = Promise.withResolvers<void>();
-  let task!: Task;
-  const host = createHost({
-    onError: report,
-    installations: [
-      {
-        id: "owner",
-        plugin: definePlugin({
-          name: "owned.task",
-          setup(context) {
-            task = context.lifetime.spawn((signal) => {
-              expect(signal.aborted).toBe(false);
-              entered.resolve();
-              throw failure;
-            });
-          },
-        }),
-      },
-    ],
-  });
-  const started = host.start();
-  await entered.promise;
-  const disposed = task[Symbol.asyncDispose]();
-  await expect(task.result).rejects.toBe(failure);
-  await disposed;
-  await started;
-  expect(report).toHaveBeenCalledExactlyOnceWith(failure);
-  await host.stop();
-});
+it.each([false, true])(
+  "reports an independent Task failure when disposal overtakes its result reaction (async: %s)",
+  async (asynchronous) => {
+    const failure = new DOMException("independent task", "AbortError");
+    const report = vi.fn<(error: unknown) => void>();
+    const entered = Promise.withResolvers<void>();
+    let task!: Task;
+    const host = createHost({
+      onError: report,
+      installations: [
+        {
+          id: "owner",
+          plugin: definePlugin({
+            name: "owned.task",
+            setup(context) {
+              const fail = (signal: AbortSignal): never => {
+                expect(signal.aborted).toBe(false);
+                entered.resolve();
+                throw failure;
+              };
+              task = context.lifetime.spawn(asynchronous ? async (signal) => fail(signal) : fail);
+            },
+          }),
+        },
+      ],
+    });
+    const started = host.start();
+    await entered.promise;
+    const disposed = task[Symbol.asyncDispose]();
+    await expect(task.result).rejects.toBe(failure);
+    await disposed;
+    await started;
+    expect(report).toHaveBeenCalledExactlyOnceWith(failure);
+    await host.stop();
+  },
+);
 
 it("reports a Task's AbortError when only its public signal properties claim cancellation", async () => {
   const failure = new DOMException("independent failure", "AbortError");
@@ -417,6 +421,53 @@ it("reports a Task's AbortError when only its public signal properties claim can
   await expect(task.result).rejects.toBe(failure);
   expect(report).toHaveBeenCalledExactlyOnceWith(failure);
   await host.stop();
+});
+
+it("keeps independently disposed Tasks from sharing cancellation provenance", async () => {
+  const report = vi.fn<(error: unknown) => void>();
+  const previousCancellation = Promise.withResolvers<unknown>();
+  const rejected = Promise.withResolvers<void>();
+  let first!: Task;
+  let second!: Task;
+  const host = createHost({
+    onError: report,
+    installations: [
+      {
+        id: "owner",
+        plugin: definePlugin({
+          name: "owner",
+          setup({ lifetime }) {
+            first = lifetime.spawn(
+              (signal) =>
+                new Promise<void>((_resolve, reject) => {
+                  signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+                }),
+            );
+            second = lifetime.spawn(async (signal) => {
+              const reason = await previousCancellation.promise;
+              expect(signal.aborted).toBe(false);
+              rejected.resolve();
+              throw reason;
+            });
+          },
+        }),
+      },
+    ],
+  });
+  try {
+    await host.start();
+    await first[Symbol.asyncDispose]();
+    const reason: unknown = await first.result.catch((error: unknown) => error);
+    previousCancellation.resolve(reason);
+    await rejected.promise;
+    const closing = second[Symbol.asyncDispose]();
+    await expect(second.result).rejects.toBe(reason);
+    await closing;
+    expect(report).toHaveBeenCalledExactlyOnceWith(reason);
+  } finally {
+    previousCancellation.resolve(new Error("test finished"));
+    await host.stop();
+  }
 });
 
 it("retains an immutable historical snapshot while a removed Installation detaches", async () => {

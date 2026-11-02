@@ -75,15 +75,13 @@ export async function resolvePluginConfiguration(
     ? (await readWhileCurrent(response, validity)).result
     : await response;
   validity?.throwIfAborted();
-  if (!result || typeof result !== "object") {
+  if (!result || (typeof result !== "object" && typeof result !== "function")) {
     throw new TypeError(
       `Installation '${installationId}' configuration validator returned a non-object result`,
     );
   }
 
-  const issues = Object.hasOwn(result, "issues")
-    ? (result as { readonly issues?: unknown }).issues
-    : undefined;
+  const issues = (result as { readonly issues?: unknown }).issues;
   if (issues !== undefined) {
     if (!Array.isArray(issues)) {
       throw new TypeError(
@@ -94,7 +92,7 @@ export async function resolvePluginConfiguration(
       details: { installation: installationId, phase: "configuration", outcome: "rejected" },
     });
   }
-  if (!Object.hasOwn(result, "value")) {
+  if (!("value" in result)) {
     throw new TypeError(
       `Installation '${installationId}' configuration validator returned neither value nor issues`,
     );
