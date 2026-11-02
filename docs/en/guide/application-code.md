@@ -22,7 +22,7 @@ if (id !== undefined) {
 
 `get()` returns a frozen array of owner-qualified IDs in publication order. Holding a snapshot never retains a handler. To migrate code that used `get().values()` or read a map entry, enumerate the IDs and use `await commands.use(id, command => command.title)` (or project another data field) to render. Borrow the value again when invoking it. `use` borrows the current published entry and returns a rejected Promise if unavailable. Changed or replaced values publish a fresh snapshot even when the IDs are unchanged. While a Host transition is pending, the snapshot stays on the last publication and changed entries are unavailable until published.
 
-`host.diagnostics.get()` is the sole entrypoint for reading a stable Host snapshot. Subscriptions do not replay immediately; notifications carry no payload, so read through `get()` in the callback. Unsubscribe with `subscription[Symbol.dispose]()`. Bounded `RecordedFailure` diagnostics avoid retaining arbitrary plugin resource graphs through exceptions.
+`host.diagnostics.get()` is the sole entrypoint for reading a stable Host snapshot. Subscriptions do not replay immediately; notifications carry no payload, so read through `get()` in the callback. Import `disposeSymbol` from `dougong` and call `subscription[disposeSymbol]()` to unsubscribe. Bounded `RecordedFailure` diagnostics avoid retaining arbitrary plugin resource graphs through exceptions.
 
 CLI, UI and agent callers share `change → plan → apply`. Present the Plan's bindings, impact, order and execution guarantees before applying that exact Plan. If state changed, plan again.
 

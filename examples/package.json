@@ -15,8 +15,8 @@
   },
   "scripts": {
     "build": "vite build",
-    "example": "vite build && node dist/run.js",
-    "benchmark": "vite build && node dist/benchmark.js"
+    "example": "pnpm -w build && node dist/run.js",
+    "benchmark": "pnpm -w build && node dist/benchmark.js"
   },
   "dependencies": {
     "dougong": "workspace:*",

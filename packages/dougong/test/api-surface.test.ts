@@ -247,6 +247,30 @@ describe("public API surface", () => {
     ).toHaveLength(8);
   });
 
+  it("keeps both failures when a resource throws while unwinding another failure", () => {
+    let failure: unknown;
+    try {
+      using resource = {
+        [Symbol.dispose]() {
+          throw new Error("release failed");
+        },
+      };
+      void resource;
+      throw new TypeError("request failed");
+    } catch (error) {
+      failure = error;
+    }
+    const recorded = new core.RecordedFailure(failure);
+    expect(recorded.snapshot).toMatchObject({
+      name: "SuppressedError",
+      error: { message: "release failed" },
+      suppressed: { name: "TypeError", message: "request failed" },
+    });
+    expect(
+      new core.RecordedFailure(new Error("outer", { cause: recorded })).snapshot.cause,
+    ).toEqual(recorded.snapshot);
+  });
+
   it("records primitive causes and bounds validation paths and deep failure trees", () => {
     for (const cause of [null, false, 42, "reason", 1n, Symbol("reason")]) {
       expect(new core.RecordedFailure(new Error("failed", { cause })).snapshot.cause).toEqual({

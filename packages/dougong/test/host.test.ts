@@ -605,7 +605,10 @@ describe("Host execution", () => {
           },
         ],
       });
-      await expect(host.start()).rejects.toMatchObject({ details: { outcome: "restored" } });
+      await expect(host.start()).rejects.toMatchObject({
+        details: { outcome: "restored" },
+        cause: { code: "PROVIDES_INVALID", details: { installation: "a" } },
+      });
     },
   );
 
@@ -613,7 +616,10 @@ describe("Host execution", () => {
     const host = createHost({
       installations: [{ id: "a", plugin: definePlugin({ name: "a", setup: () => ({}) as never }) }],
     });
-    await expect(host.start()).rejects.toMatchObject({ details: { outcome: "restored" } });
+    await expect(host.start()).rejects.toMatchObject({
+      details: { outcome: "restored" },
+      cause: { code: "PROVIDES_INVALID", details: { installation: "a" } },
+    });
   });
 });
 

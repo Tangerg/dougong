@@ -13,7 +13,7 @@
     "Safari >= 17.4"
   ],
   "scripts": {
-    "build": "node tooling/build.mjs",
+    "build": "pnpm --recursive --workspace-concurrency=1 --include-workspace-root=false run build",
     "typecheck": "tsc --noEmit -p packages/reactive && tsc --noEmit -p packages/dougong && tsc --noEmit -p packages/platform && tsc --noEmit -p examples && tsc --noEmit -p tsconfig.test.json",
     "test": "vitest run",
     "test:watch": "vitest --coverage.enabled=false",

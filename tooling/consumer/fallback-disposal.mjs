@@ -8,7 +8,19 @@ delete descriptors.asyncDispose;
 Object.defineProperties(masked, descriptors);
 globalThis.Symbol = masked;
 
-const { createHost, definePlugin, disposeSymbol, asyncDisposeSymbol } = await import("dougong");
+const { bridge, signal, disposeSymbol, asyncDisposeSymbol } = await import("@dougongjs/reactive");
+const value = signal(0);
+let updates = 0;
+const listener = value.subscribe(() => updates++);
+value.set(1);
+listener[disposeSymbol]();
+value.set(2);
+assert.equal(updates, 1);
+
+const core = await import("dougong");
+const { createHost, definePlugin } = core;
+assert.equal(core.disposeSymbol, disposeSymbol);
+assert.equal(core.asyncDisposeSymbol, asyncDisposeSymbol);
 const { onAbort } = await import("dougong/advanced");
 const controller = new AbortController();
 let called = 0;
@@ -17,7 +29,6 @@ detach();
 controller.abort();
 assert.equal(called, 0);
 const { createPlatform, MemoryLoader } = await import("@dougongjs/platform");
-const { bridge, signal } = await import("@dougongjs/reactive");
 assert.equal(disposeSymbol, Symbol.for("Symbol.dispose"));
 assert.equal(asyncDisposeSymbol, Symbol.for("Symbol.asyncDispose"));
 

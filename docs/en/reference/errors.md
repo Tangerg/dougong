@@ -6,6 +6,8 @@ When migrating Registration diagnostics, read `snapshot.fields?.manifestName` an
 
 `details.outcome` distinguishes rejected, restored and quarantined execution. Promise resolution communicates success; `ApplyResult` returns only the state revision and affected installations, without a constant success field. `RecordedFailure` and `ErrorSnapshot` are bounded diagnostic projections, while direct callers receive original failures. Argument and protocol misuse can throw TypeError. Cancellation follows the owning AbortSignal and is not a successful commit.
 
+When cleanup throws while another failure is being unwound, a `SuppressedError` snapshot records the cleanup failure under `error` and the preceding failure under `suppressed`. Both branches share the diagnostic depth and size budget.
+
 | Code | Meaning and response |
 | --- | --- |
 | `ACTIVATION_FAILED` | Activation execution failed; inspect cause and the structured Core outcome. |
@@ -40,8 +42,8 @@ When migrating Registration diagnostics, read `snapshot.fields?.manifestName` an
 | `PLAN_FOREIGN` | The Plan was not issued by this Host. |
 | `PLAN_STALE` | The Plan baseline is stale; plan again. |
 | `PLATFORM_BUSY` | A final activation or release is executing; request a new Platform mutation after it returns. |
-| `PLATFORM_UNAVAILABLE` | Platform or its Catalog is closing or closed. |
-| `PROVIDES_INVALID` | The setup result does not match provides. |
+| `PLATFORM_UNAVAILABLE` | Platform or Catalog is unavailable, or the destination Host is quarantined. |
+| `PROVIDES_INVALID` | The setup result has an invalid shape or differs from the declared Service aliases. Read `details.installation` on this error to identify the failing Installation. |
 | `REGISTRATION_CYCLE` | Selected delivery dependencies contain a cycle. |
 | `REGISTRATION_DEPENDENCY_INACTIVE` | A required delivery dependency has no activatable selection. |
 | `REGISTRATION_DEPENDENCY_INCOMPATIBLE` | A selected dependency version does not satisfy its Manifest range. |

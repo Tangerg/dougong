@@ -217,7 +217,7 @@ class ComputedNode<T> implements ReactiveNode {
   #checkedAt = -1;
   #evaluationDepth: number | undefined;
   #sources: Set<ReactiveNode> | undefined;
-  #dirty = true;
+  #invalidatedAt = -1;
   #version = 0;
 
   readonly view: ReadonlySignal<T>;
@@ -306,8 +306,9 @@ class ComputedNode<T> implements ReactiveNode {
   }
 
   readonly #invalidate = () => {
-    if (this.#dirty) return;
-    this.#dirty = true;
+    // A diamond shares one publication, but an unread cache must still forward later writes.
+    if (this.#invalidatedAt === writeVersion) return;
+    this.#invalidatedAt = writeVersion;
     publish(this.#listeners);
   };
 
@@ -328,13 +329,12 @@ class ComputedNode<T> implements ReactiveNode {
     const current = this.#result;
     if (
       current &&
-      !this.#dirty &&
+      this.#invalidatedAt <= this.#checkedAt &&
       (this.#checkedAt === writeVersion || !this.#dependenciesChanged())
     ) {
       this.#checkedAt = writeVersion;
       return;
     }
-    this.#dirty = true;
 
     const sources = new Set<ReactiveNode>();
     const next = this.#evaluate(sources);
@@ -350,7 +350,6 @@ class ComputedNode<T> implements ReactiveNode {
     }
     this.#result = next;
     this.#checkedAt = writeVersion;
-    this.#dirty = false;
     if (this.#listeners.size) this.#attachDependencies();
   }
 
@@ -361,7 +360,7 @@ class ComputedNode<T> implements ReactiveNode {
       node.refresh();
       if (dependency.version !== node.version) return true;
     }
-    return this.#dirty;
+    return this.#invalidatedAt > this.#checkedAt;
   }
 
   #evaluate(sources: Set<ReactiveNode>): ComputedResult<T> {

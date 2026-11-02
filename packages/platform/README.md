@@ -53,8 +53,8 @@ selected dependency closure and submits one Core plan. `trigger("startup")` acti
 matching roots in the same way. Module loading and configuration validation remain explicit
 deferred checks in the metadata-only preview.
 
-The scope disposes Platform before Host. For an explicit release, await
-`platform[Symbol.asyncDispose]()`. There is no parallel `dispose()` API.
+The scope disposes Platform before Host. For explicit disposal across the supported runtimes,
+import `asyncDisposeSymbol` from `dougong` and await `platform[asyncDisposeSymbol]()`.
 
 ## Availability, selection and committed source
 
@@ -120,7 +120,8 @@ Cancelling one waiter cannot cancel a load another waiter still needs. Every ope
 captures each involved Registration's selection revision. A late result from an older
 selection cannot install itself. Concurrent loads and activations admitted before a final handoff keep their place. While final
 configuration validation, authorization, Core application, or disposal cleanup is executing,
-a newly requested select, activate, remove, trigger, or disposal rejects with `PLATFORM_BUSY`.
+a newly requested select, activate, remove or trigger rejects with `PLATFORM_BUSY`.
+Disposal cancels unfinished validation and authorization. During Core application or release it rejects with `PLATFORM_BUSY`.
 This avoids waiting for the user callback that made the request. Wait until the outer
 operation finishes before issuing another command. Cancellation callbacks can read the complete
 new selection, removal batch or disposal phase through handles and diagnostics. Preview and reads remain available
@@ -149,6 +150,9 @@ const authorizer = {
 ```
 
 Admission receives the concrete artifact descriptor and either `load` or `activate`.
+An Authorizer approves by returning or resolving with `undefined`. To deny, throw or reject.
+If an existing JavaScript policy returns a boolean, change its false branch to throw and
+let its true branch return normally. Any non-undefined result is a policy protocol error.
 `PermissionSet` implements a fixed allow-list of manifest permission names; the default
 policy grants none. Loading checks happen after dependency waits and immediately before the
 Loader is entered. Before submitting its plan, Platform authorizes each requested install or

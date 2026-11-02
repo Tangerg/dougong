@@ -2,6 +2,8 @@
 
 `@dougongjs/reactive` has no external dependencies and does not depend on Host. `signal` creates a writable `Signal`, `computed` produces a lazy `ReadonlySignal`, and `batch` coalesces notifications. Read with `get()`; `subscribe(listener)` notifies changes without immediate replay. Subscriptions implement standard `Disposable`.
 
+For explicit disposal, import `disposeSymbol` or `asyncDisposeSymbol` from `@dougongjs/reactive`. These keys also work on supported runtimes without native disposal symbols.
+
 ```ts
 import { bridge, computed, observe, signal } from "@dougongjs/reactive";
 
@@ -15,7 +17,7 @@ observe(lifetime, title, (value, generation) => {
 });
 ```
 
-A write marks dependent computed signals stale without evaluating them. A batch delays notification, but eligibility is decided at each write: subscribing to a computed signal after a write, even inside the same batch or from another listener, does not replay that write. A later write in the batch can notify the new subscriber. A shared dependency is checked at most once between writes, so repeated reads of a diamond graph do not rewalk each path. Reading a cyclic computation throws. When an input breaks the cycle, direct reads and subscribers that caught the error can recover.
+A write marks dependent computed signals stale without evaluating them. Subscribers continue receiving invalidations even when they defer reading the value. A batch delays notification, but eligibility is decided at each write: subscribing to a computed signal after a write, even inside the same batch or from another listener, does not replay that write. A later write in the batch can notify the new subscriber. A shared dependency is checked at most once between writes, so repeated reads of a diamond graph do not rewalk each path. Reading a cyclic computation throws. When an input breaks the cycle, direct reads and subscribers that caught the error can recover.
 
 A computed collector tracks nodes from its own module copy. For another bundle, another copy of the package or another implementation, use the `Readable<T>` protocol and explicitly enter the local graph with `bridge(owner, source)`. `BridgeOwner` only needs `defer`. The caller's Lifetime owns the subscription; no cross-copy global collector exists.
 

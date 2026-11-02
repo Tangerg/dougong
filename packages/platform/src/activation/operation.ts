@@ -4,7 +4,8 @@ import { PlatformError } from "../errors.js";
 import type { ActivationPlan } from "./plan.js";
 
 export class ActivationOperation<Reference> {
-  readonly #controller = new AbortController();
+  readonly signal: AbortSignal;
+  #controller: AbortController | undefined;
   #detachCaller: (() => void) | undefined;
   readonly #completion = Promise.withResolvers<void>();
   readonly plan: ActivationPlan<Reference>;
@@ -14,17 +15,20 @@ export class ActivationOperation<Reference> {
   >();
 
   constructor(plan: ActivationPlan<Reference>, signal: AbortSignal | undefined) {
+    const controller = new AbortController();
+    this.#controller = controller;
+    this.signal = controller.signal;
     this.plan = plan;
     for (const { registration, revision } of plan.selections)
       this.#roles.set(registration, { revision, status: "activating" });
     for (const { registration, revision } of plan.removals)
       this.#roles.set(registration, { revision, status: "removing" });
-    if (signal) this.#detachCaller = onAbort(signal, (reason) => this.#controller.abort(reason));
+    if (signal) this.#detachCaller = onAbort(signal, (reason) => controller.abort(reason));
     this.signal.throwIfAborted();
   }
 
-  get signal() {
-    return this.#controller.signal;
+  get handedOff() {
+    return this.#controller === undefined;
   }
   get settled() {
     return this.#completion.promise;
@@ -36,6 +40,7 @@ export class ActivationOperation<Reference> {
 
   handoff() {
     this.checkpoint();
+    this.#controller = undefined;
     this.#detachCaller?.();
     this.#detachCaller = undefined;
   }
@@ -47,7 +52,7 @@ export class ActivationOperation<Reference> {
 
   supersede(registration: RegistrationRecord<Reference>) {
     if (this.#roles.has(registration)) {
-      this.#controller.abort(
+      this.#controller?.abort(
         new PlatformError(
           "SELECTION_SUPERSEDED",
           `Selection for '${registration.name}' changed during activation`,
@@ -57,7 +62,7 @@ export class ActivationOperation<Reference> {
   }
 
   cancel() {
-    this.#controller.abort();
+    this.#controller?.abort();
   }
 
   finish() {

@@ -5,7 +5,7 @@ The TypeScript plugin composition kernel. This package owns contracts, declarati
 Upgrading from 0.8.3? Read the [migration guide](https://tangerg.github.io/dougong/en/guide/migrating-to-0.9) and [0.9.0 release notes](https://tangerg.github.io/dougong/en/reference/release-0.9.0).
 
 ```ts
-import { createHost, definePlugin, service } from "dougong";
+import { asyncDisposeSymbol, createHost, definePlugin, service } from "dougong";
 
 const GREETER = service<{ greet(name: string): string }>("application/greeter");
 const greeter = definePlugin({
@@ -22,7 +22,7 @@ const host = createHost({
 });
 await host.start();
 const message = await host.use(GREETER, (service) => service.greet("Dougong"));
-await host[Symbol.asyncDispose]();
+await host[asyncDisposeSymbol]();
 ```
 
 Use `host.change()`, `host.plan(change)` and `host.apply(plan)` for changes. Services and executable contributions are borrowed with `host.use` and `ContributionView.use`. Standard resources belong to `context.lifetime`; context dependencies live under `context.dependencies`.

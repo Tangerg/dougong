@@ -1,3 +1,4 @@
+import { runInNewContext } from "node:vm";
 import type { StandardSchemaV1 } from "@standard-schema/spec";
 import { expect, it, vi } from "vitest";
 import {
@@ -74,6 +75,36 @@ it("rejects executable identity data rather than invoking getters", () => {
     definePlugin({ name: "invalid", requires: { value: token as never }, setup() {} }),
   ).toThrow(/data propert/);
   expect(getter).not.toHaveBeenCalled();
+});
+
+it("accepts the same cross-realm Contract identity for provisions, requirements and borrowing", async () => {
+  const token = runInNewContext(
+    'Object.freeze({kind: "service", id: "realm/value"})',
+  ) as ReturnType<typeof service<number>>;
+  const provider = definePlugin({
+    name: "provider",
+    provides: { value: token },
+    setup: () => ({ value: 7 }),
+  });
+  const received = vi.fn<(value: number) => void>();
+  const consumer = definePlugin({
+    name: "consumer",
+    requires: { value: token },
+    setup: ({ dependencies }) => received(dependencies.value),
+  });
+  const host = createHost({
+    installations: [
+      { id: "provider", plugin: provider },
+      { id: "consumer", plugin: consumer },
+    ],
+  });
+  try {
+    await host.start();
+    expect(received).toHaveBeenCalledExactlyOnceWith(7);
+    expect(await host.use(token, (value) => value)).toBe(7);
+  } finally {
+    await host.stop();
+  }
 });
 
 it("captures optional token identity only once during use", async () => {

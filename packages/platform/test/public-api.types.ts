@@ -3,9 +3,16 @@ import {
   createPlatform,
   MemoryLoader,
   type Artifact,
+  type Authorizer,
   type Platform,
   type Registration,
 } from "@dougongjs/platform";
+
+const invalidPolicy: Authorizer = {
+  // @ts-expect-error Denials must throw or reject so a false result cannot open admission.
+  authorize: () => false,
+};
+void invalidPolicy;
 
 const plugin = definePlugin({ name: "types", setup() {} });
 const platform = createPlatform({

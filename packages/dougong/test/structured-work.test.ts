@@ -497,3 +497,26 @@ describe("structured work boundaries", () => {
     expect(owner.snapshot()).toMatchObject({ phase: "disposed", tasks: 0, unresolved: [] });
   });
 });
+
+it.each(["use", "acquire"] as const)(
+  "preserves structural ownership when %s receives an existing child Lifetime",
+  async (operation) => {
+    const root = lifetime();
+    const parent = root.child("parent");
+    const child = parent.child("child");
+    const release = vi.fn<() => void>();
+    child.defer(release);
+    for (const resource of [child, parent]) {
+      await expect(async () => {
+        if (operation === "use") child.use(resource);
+        else await child.acquire(() => resource);
+      }).rejects.toThrow("Lifetime handles cannot be adopted as resources");
+    }
+    expect(root.snapshot().children[0]?.children[0]).toMatchObject({
+      cleanups: 1,
+      acquisitions: 0,
+    });
+    await root.dispose();
+    expect(release).toHaveBeenCalledOnce();
+  },
+);

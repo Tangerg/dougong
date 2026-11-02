@@ -446,3 +446,27 @@ it("captures the logger's adopted method and original receiver exactly once", as
   expect(logs).toContain(failure);
   await platform[Symbol.asyncDispose]();
 });
+
+it("lets an activation policy await disposal without joining its own callback", async () => {
+  const host = createHost();
+  const completed = deferred();
+  const platform = createPlatform({
+    id: "policy-disposal",
+    host,
+    apiVersion: "1.0.0",
+    loader: new MemoryLoader(new Map([["one", { default: emptyPlugin("sample") }]])),
+    authorizer: {
+      async authorize({ operation }) {
+        if (operation === "activate") {
+          await platform[Symbol.asyncDispose]();
+          completed.resolve();
+        }
+      },
+    },
+  });
+  const registration = await select(platform, "sample", "one");
+  await expect(platform.activate([registration])).rejects.toMatchObject({ name: "AbortError" });
+  await completed.promise;
+  expect(registration.status).toBe("removed");
+  expect(host.installation(registration.id)).toBeUndefined();
+});

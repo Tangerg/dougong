@@ -7,7 +7,7 @@ pnpm add dougong
 ```
 
 ```ts
-import { createHost, definePlugin, service } from "dougong";
+import { asyncDisposeSymbol, createHost, definePlugin, service } from "dougong";
 
 const GREETER = service<{ greet(name: string): string }>("application/greeter");
 const greeter = definePlugin({
@@ -24,7 +24,7 @@ const host = createHost({
 });
 await host.start();
 const message = await host.use(GREETER, (service) => service.greet("Dougong"));
-await host[Symbol.asyncDispose]();
+await host[asyncDisposeSymbol]();
 ```
 
 Service 的字符串 ID 是共享身份；其 TypeScript 类型描述值协议。Plugin 是可重复安装的声明，Installation 是带有稳定 ID 的安装位置，Instance 是一次执行产生的运行代次。应用通过 `host.use` 借用当前代次，回调返回的 Promise 完成后释放借用。

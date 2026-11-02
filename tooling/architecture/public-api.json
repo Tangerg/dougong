@@ -1,6 +1,14 @@
 {
   "@dougongjs/reactive": {
-    "values": ["batch", "bridge", "computed", "observe", "signal"],
+    "values": [
+      "asyncDisposeSymbol",
+      "batch",
+      "bridge",
+      "computed",
+      "disposeSymbol",
+      "observe",
+      "signal"
+    ],
     "types": [
       "AsyncDisposable",
       "Disposable",

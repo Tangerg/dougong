@@ -20,7 +20,7 @@ Applications that directly depend on `@dougongjs/core` should remove it from the
 Install the matching 0.9.0 delivery or reactive package when needed and import it directly. The main package no longer re-exports either layer.
 
 ```ts
-import { createHost, definePlugin, service } from "dougong";
+import { asyncDisposeSymbol, createHost, definePlugin, service } from "dougong";
 import { SnapshotPublisher } from "dougong/advanced";
 import { createPlatform } from "@dougongjs/platform";
 import { bridge, computed, observe, signal } from "@dougongjs/reactive";
@@ -33,7 +33,7 @@ Packages remain ESM and require Node.js 22+. Browser support starts at Chrome/Ed
 Installation and Group are now read-only identities. Replace direct Host installation, Installation updates and removal, Group removal and ChangeSet commit calls with staged intent, a Plan and its application.
 
 ```ts
-import { createHost, definePlugin, service } from "dougong";
+import { asyncDisposeSymbol, createHost, definePlugin, service } from "dougong";
 
 const GREETER = service<{ greet(name: string): string }>("application/greeter");
 const greeter = definePlugin({
@@ -57,7 +57,7 @@ console.log(message);
 const removal = host.change();
 removal.remove(installation);
 await host.apply(await host.plan(removal));
-await host[Symbol.asyncDispose]();
+await host[asyncDisposeSymbol]();
 ```
 
 Every installation needs a stable `id` unique within its Host. Create groups with `change.group(id, parent)` and remove their ownership subtrees with `change.removeGroup(group)`. Initial declarations can also be supplied through `createHost` options `installations` and `groups`. Query committed identities with `host.installation(id)` and `host.group(id)`.
@@ -134,8 +134,8 @@ const artifact = platform.catalog.add({
 const registration = await platform.select(artifact);
 await platform.activate([registration]);
 await deliveryHost.use(GREETER, (value) => value.greet("Dougong"));
-await platform[Symbol.asyncDispose]();
-await deliveryHost[Symbol.asyncDispose]();
+await platform[asyncDisposeSymbol]();
+await deliveryHost[asyncDisposeSymbol]();
 ```
 
 This example reuses the core imports, plugin and service contract above. Select a new Artifact to express an update. Use `platform.activate(registrations, { remove })` for one atomic install/update/removal batch and `platform.remove(...registrations)` for a separate removal. Replace old Registration ready, activate, update and remove calls and the old Platform ChangeSet. Registration is now a read-only selection identity.

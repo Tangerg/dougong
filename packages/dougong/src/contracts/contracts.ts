@@ -74,7 +74,9 @@ function contract<T, Kind extends ContractKind>(kind: Kind, id: string): Contrac
 
 function readDataProperty(value: object, key: string): unknown {
   const descriptor = Object.getOwnPropertyDescriptor(value, key);
-  return descriptor && "value" in descriptor ? descriptor.value : undefined;
+  if (descriptor && !("value" in descriptor))
+    throw new TypeError(`Contract field '${key}' must be a data property`);
+  return descriptor?.value;
 }
 
 function readContractIdentity(value: object, kind: unknown): ContractIdentity | undefined {

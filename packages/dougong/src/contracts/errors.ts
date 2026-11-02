@@ -53,6 +53,8 @@ export interface ErrorSnapshot {
   readonly code?: string;
   readonly stack?: string;
   readonly cause?: ErrorSnapshot;
+  readonly error?: ErrorSnapshot;
+  readonly suppressed?: ErrorSnapshot;
   readonly errors?: ReadonlyArray<ErrorSnapshot>;
   readonly details?: ErrorDetails;
   readonly fields?: Readonly<Record<string, string | ReadonlyArray<string>>>;
@@ -214,15 +216,20 @@ function captureError(
       }
       details = Object.freeze(fields);
     }
+    const child = (value: unknown) => visit(value, depth + 1, !!sealed);
     return Object.freeze({
       name,
       message,
       ...(code === undefined ? {} : { code }),
       ...(stack === undefined ? {} : { stack }),
-      ...(cause === undefined ? {} : { cause: visit(cause, depth + 1, !!sealed) }),
-      ...(errors === undefined
-        ? {}
-        : { errors: Object.freeze(errors.map((error) => visit(error, depth + 1, !!sealed))) }),
+      ...(cause === undefined ? {} : { cause: child(cause) }),
+      ...(errors === undefined ? {} : { errors: Object.freeze(errors.map(child)) }),
+      ...(name === "SuppressedError"
+        ? {
+            error: child(readErrorProperty(value, "error")),
+            suppressed: child(readErrorProperty(value, "suppressed")),
+          }
+        : {}),
       ...(fields === undefined ? {} : { fields }),
       ...(issues === undefined ? {} : { issues: Object.freeze(issues) }),
       ...(details === undefined ? {} : { details }),

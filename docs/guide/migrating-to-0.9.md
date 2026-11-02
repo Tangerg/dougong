@@ -20,7 +20,7 @@ pnpm add dougong@0.9.0
 使用交付层或响应式能力时，按需安装对应的 0.9.0 包并直接导入。主包不再汇总转发它们。
 
 ```ts
-import { createHost, definePlugin, service } from "dougong";
+import { asyncDisposeSymbol, createHost, definePlugin, service } from "dougong";
 import { SnapshotPublisher } from "dougong/advanced";
 import { createPlatform } from "@dougongjs/platform";
 import { bridge, computed, observe, signal } from "@dougongjs/reactive";
@@ -33,7 +33,7 @@ import { bridge, computed, observe, signal } from "@dougongjs/reactive";
 Installation 和 Group 现在是只读身份。把原先 Host 的直接安装、Installation 的更新和删除、Group 的删除以及 ChangeSet 的 commit 操作，改为暂存意图、生成 Plan、应用 Plan。
 
 ```ts
-import { createHost, definePlugin, service } from "dougong";
+import { asyncDisposeSymbol, createHost, definePlugin, service } from "dougong";
 
 const GREETER = service<{ greet(name: string): string }>("application/greeter");
 const greeter = definePlugin({
@@ -57,7 +57,7 @@ console.log(message);
 const removal = host.change();
 removal.remove(installation);
 await host.apply(await host.plan(removal));
-await host[Symbol.asyncDispose]();
+await host[asyncDisposeSymbol]();
 ```
 
 安装必须提供在 Host 内唯一的稳定 `id`。分组通过 `change.group(id, parent)` 创建，通过 `change.removeGroup(group)` 移除。也可以在 `createHost` 的 `installations` 和 `groups` 中声明初始结构。查询已提交身份使用 `host.installation(id)` 和 `host.group(id)`。
@@ -134,8 +134,8 @@ const artifact = platform.catalog.add({
 const registration = await platform.select(artifact);
 await platform.activate([registration]);
 await deliveryHost.use(GREETER, (value) => value.greet("Dougong"));
-await platform[Symbol.asyncDispose]();
-await deliveryHost[Symbol.asyncDispose]();
+await platform[asyncDisposeSymbol]();
+await deliveryHost[asyncDisposeSymbol]();
 ```
 
 示例沿用上文的主包导入、插件和服务契约声明。用新 Artifact 加 select 表达更新，用 `platform.activate(registrations, { remove })` 表达同次增、改、删，用 `platform.remove(...registrations)` 表达独立移除。删除旧 Registration 的 ready、activate、update、remove 调用和旧 Platform ChangeSet；Registration 现在是只读的选择身份。

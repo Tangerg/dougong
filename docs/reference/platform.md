@@ -37,7 +37,9 @@ Manifest dependencies 负责发行依赖；Plugin requires 负责真实能力绑
 
 Platform 构造时捕获 Loader 和 Authorizer 的方法，并保留各自的接收对象。Loader 是结构协议；ImportLoader 用同一 realm 的动态导入，MemoryLoader 适合测试与受控模块表。PermissionSet 是声明权限集合的 Authorizer 实现，不提供操作系统隔离。
 
-最终激活交接（Core 规划、最终准入与 apply）或 Core 释放期间，新发起的变更和释放命令以 `PLATFORM_BUSY` 拒绝，避免回调等待排在自己后面的命令。此前已接纳的激活仍能完成，交接之前的加载保持并发。等外层调用完成后再发起后续命令。
+Authorizer 通过返回或兑现为 `undefined` 批准请求，通过抛错或拒绝 Promise 拒绝请求。两个准入阶段收到其他返回值时都会抛出 TypeError。现有 JavaScript 策略若返回布尔值，应改为条件为假时抛错，条件为真时正常返回。
+
+Core 规划、最终准入、应用或释放期间，新的选择和激活命令以 `PLATFORM_BUSY` 拒绝。释放 Platform 会取消尚在等待的规划和准入，即使验证器或授权回调本身正在等待这次释放。一旦 Platform 将 Plan 交给 Core 应用，或已开始释放 Core 安装，释放命令也以 `PLATFORM_BUSY` 拒绝，避免 setup 或清理回调等待自己。此前已接纳的激活仍能完成，交接之前的加载保持并发。
 
 在配置验证或最终准入期间取消，Platform 会结束等待并释放命令占用；迟到的结果不能提交。取消不能撤销模块副作用或已经交给 `host.apply` 的 Plan。已没有已提交 Installation 的 Registration 仍可直接移除。
 
@@ -46,3 +48,5 @@ Platform 构造时捕获 Loader 和 Authorizer 的方法，并保留各自的接
 即使较早的请求仍在加载，Registration 状态也反映真正交给 Core 执行的命令；Platform 释放期间正在移除的安装显示为 `removing`。Manifest 依赖遍历使用显式栈，环诊断只包含实际闭环。Platform ID、Manifest 名称及依赖名称须为可编码的良构 Unicode。构造时一次捕获日志后端方法及其原始接收者。
 
 激活在排队等待准入或提交期间可以立即取消，即使前面的命令仍在等待用户代码。取消通过私有从属信号送达，即使调用方拦截了原信号上的事件也能撤回等待。
+
+最终准入期间，其他 Host 命令一旦推进提交版本，本次 Core Plan 即失效。Platform 会取消对授权回调的等待，并在目标 Host 被隔离或 Group 已移除时报告对应的目标错误。如果目标仍然可用，`ACTIVATION_STALE` 会给出预期版本和当前版本，调用方可以重新激活。

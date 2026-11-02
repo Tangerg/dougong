@@ -3,6 +3,7 @@
 Platform 组合 Dougong 的公开 API，负责发行事实、选择意图、加载、准入与激活。Catalog 拥有不可变 Artifact；Registration 拥有选择。实际执行来源直接读取 Core Installation 的 `origin`。
 
 ```ts
+import { asyncDisposeSymbol } from "dougong";
 import { createPlatform, MemoryLoader, PermissionSet } from "@dougongjs/platform";
 
 const platform = createPlatform({
@@ -25,7 +26,7 @@ const artifact = platform.catalog.add({
 const registration = await platform.select(artifact);
 const preview = platform.preview([registration]);
 await platform.trigger("command:format");
-await platform[Symbol.asyncDispose]();
+await platform[asyncDisposeSymbol]();
 ```
 
 预览只检查声明数据，列出明确延后的准入、模块验证、配置验证和 Core 绑定检查。查看 Catalog、选择或预览不会执行插件代码。懒激活之前没有可执行 placeholder；应用根据 Manifest 展示可发现信息，触发激活后才借用真实能力。

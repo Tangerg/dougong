@@ -7,7 +7,7 @@ pnpm add dougong
 ```
 
 ```ts
-import { createHost, definePlugin, service } from "dougong";
+import { asyncDisposeSymbol, createHost, definePlugin, service } from "dougong";
 
 const GREETER = service<{ greet(name: string): string }>("application/greeter");
 const greeter = definePlugin({
@@ -24,7 +24,7 @@ const host = createHost({
 });
 await host.start();
 const message = await host.use(GREETER, (service) => service.greet("Dougong"));
-await host[Symbol.asyncDispose]();
+await host[asyncDisposeSymbol]();
 ```
 
 A Service's string ID is its shared identity; its TypeScript parameter describes the value protocol. A Plugin is a reusable declaration, an Installation is a stable position in the application, and an Instance is one running generation. Application code borrows that generation through `host.use`; the borrow ends when the callback's result settles.

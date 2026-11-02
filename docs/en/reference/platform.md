@@ -37,7 +37,9 @@ Before submitting a Core Plan, Platform requests activation admission for direct
 
 Platform captures the Loader and Authorizer methods once during construction, preserving their receivers. Loader is structural. ImportLoader uses same-realm dynamic import; MemoryLoader supports testing and controlled module tables. PermissionSet implements Authorizer with a declared permission set and provides no operating-system isolation.
 
-During the final activation handoff (Core planning, final admission and apply) or Core release, new mutation commands and disposal reject with `PLATFORM_BUSY`. A callback cannot enqueue work behind itself and wait for it. Earlier admitted activations can finish; loading outside that window remains concurrent. Issue the next command after the outer call completes.
+An Authorizer grants admission by returning or fulfilling with `undefined` and denies it by throwing or rejecting. Both admission phases reject any other fulfillment with a TypeError. An existing boolean policy must throw when its predicate is false and return normally when it is true.
+
+During Core planning, final admission, apply and release, new selection or activation commands reject with `PLATFORM_BUSY`. Disposal cancels pending planning and admission, including a validator or policy that awaits disposal itself. Once Platform hands a Plan to Core or starts Core release, disposal also rejects with `PLATFORM_BUSY` so a setup or cleanup callback cannot wait on itself. Earlier admitted activations can finish, and loading outside that window remains concurrent.
 
 If a caller aborts during validation or final admission, Platform releases the command reservation and discards the late result. Cancellation cannot undo module side effects or revoke a Plan already handed to `host.apply`. Metadata-only removal can still forget a Registration that no longer has a committed Installation.
 
@@ -46,3 +48,5 @@ Registrations affected by one failed activation share one detached error snapsho
 Registration status follows the command executing in Core, including removal during Platform disposal, even if an older request is still loading. Manifest dependency traversal uses an explicit stack; a cycle report contains the closed cycle itself. Platform IDs, Manifest names and dependency names must be well-formed Unicode so they can identify an Installation. The logger is captured with its original receiver at construction.
 
 An activation waiting in the admission or commit queue can be withdrawn immediately while an earlier command is still waiting on application code. A private dependent signal delivers cancellation even if a listener intercepts the original signal’s event.
+
+If another Host command advances the revision during final admission, the Core Plan is obsolete. Platform cancels the policy wait and reports a quarantined Host or a removed Group. If the destination remains available, `ACTIVATION_STALE` includes the expected and current revisions so a new activation can plan against the current Host.

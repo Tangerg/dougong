@@ -22,7 +22,7 @@ if (id !== undefined) {
 
 `get()` 返回按发布顺序排列的冻结 ID 数组，每个 ID 都包含所有者标识。保留快照不会保留处理函数。原来用 `get().values()` 或按键取值的代码，应枚举这些 ID，通过 `await commands.use(id, command => command.title)` 等借用投影展示字段，执行时再借用当前值。`use` 借用当前已发布的条目，不可用时返回 rejected Promise。条目的值更新或被替换，即使 ID 不变，也发布新的快照。Host 切换期间，快照停在上一次发布，发生变化的条目直到发布才能借用。
 
-`host.diagnostics.get()` 是读取 Host 稳定快照的唯一入口。订阅不会立即重放，通知没有载荷，回调中调用 `get()` 读取。取消订阅使用 `subscription[Symbol.dispose]()`。错误诊断使用有界的 `RecordedFailure`，不保留插件异常里的任意资源图。
+`host.diagnostics.get()` 是读取 Host 稳定快照的唯一入口。订阅不会立即重放，通知没有载荷，回调中调用 `get()` 读取。取消订阅时，从 `dougong` 导入 `disposeSymbol` 并调用 `subscription[disposeSymbol]()`。错误诊断使用有界的 `RecordedFailure`，不保留插件异常里的任意资源图。
 
 CLI、UI 和代理复用 `change → plan → apply`。先展示 `plan.report` 的绑定、影响范围、顺序和执行承诺，再执行该 Plan；若状态已变，重新规划。
 

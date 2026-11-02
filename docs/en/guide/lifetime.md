@@ -13,6 +13,8 @@ Lifetimes compose into a resource tree. Each Instance creates a root; plugins cr
 | `signal` | Cooperative cancellation |
 | `child[Symbol.asyncDispose]()` | Closes the child subtree you created and joins its single shutdown |
 
+A child Lifetime belongs to the parent that created it. Within one loaded copy of Core, `use` and `acquire` reject an existing child handle. Across separately bundled copies, keep the child with its original parent. Its handle can still end the subtree early.
+
 Shutdown seals entry, withdraws publications and broadcasts cancellation, starts all interruptions and waits for them together, joins active work and acquisitions, then releases resources in reverse order. Use `interrupt` to break a blocking read and `defer` for final destruction that must wait for tasks to finish.
 
 ```ts

@@ -18,6 +18,8 @@ A plugin receives a `LifetimeContext` with work and resource registration capabi
 
 `LifetimeContext.acquire(factory)` resolves to a frozen `{ resource }` receipt with the adopted resource; destructure it to use the resource.
 
+Contract identities use their own data fields. A token from another JavaScript realm can supply a provision, declare a requirement or identify a borrow with the same `kind` and `id`.
+
 ## Host and installation
 
 `HostOptions` contains `name`, initial `installations`, initial `groups`, logging and error-reporting ports, and shutdown timeout. Installation IDs are unique within a Host. Group IDs are stable identities declared by the application.

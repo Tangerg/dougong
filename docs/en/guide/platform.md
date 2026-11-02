@@ -3,6 +3,7 @@
 Platform composes Dougong's public API to manage delivery facts, selection intent, loading, admission and activation. Catalog owns immutable Artifacts; Registration owns selection. Actual running origin is read directly from the Core Installation's `origin`.
 
 ```ts
+import { asyncDisposeSymbol } from "dougong";
 import { createPlatform, MemoryLoader, PermissionSet } from "@dougongjs/platform";
 
 const platform = createPlatform({
@@ -25,7 +26,7 @@ const artifact = platform.catalog.add({
 const registration = await platform.select(artifact);
 const preview = platform.preview([registration]);
 await platform.trigger("command:format");
-await platform[Symbol.asyncDispose]();
+await platform[asyncDisposeSymbol]();
 ```
 
 Preview checks declaration data and explicitly lists deferred admission, module validation, configuration validation and Core binding checks. Catalog browsing, selection and preview do not execute plugin code. Lazy activation publishes no executable placeholder. Applications render discoverable Manifest data, activate, then borrow real capabilities.

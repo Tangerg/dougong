@@ -55,7 +55,7 @@ export interface LifetimeOwnership {
 }
 
 const ownershipFields = new Set(["lifetime"]);
-const lifetimeAuthorities = new WeakMap<LifetimeContext, Lifetime>();
+const lifetimeAuthorities = new WeakMap<object, Lifetime>();
 
 export interface LifetimeOptions {
   readonly label: string;
@@ -392,7 +392,7 @@ export class Lifetime {
 
   #adopt(resource: Resource) {
     this.#requireActive();
-    const release = captureDisposer(resource);
+    const release = captureResource(resource);
     this.#requireActive();
     return this.#own(release, "cleanup");
   }
@@ -424,10 +424,7 @@ export class Lifetime {
       },
       {
         visibility: this.#visibility,
-        detach: (current) => {
-          this.#children.delete(current);
-          this.#changed?.();
-        },
+        detach: (current) => this.#children.delete(current),
       },
     );
     this.#children.add(child);
@@ -465,7 +462,7 @@ export class Lifetime {
     const completion = Promise.resolve()
       .then(() => factory(this.signal))
       .then(async (resource) => {
-        const record = this.#own(captureDisposer(resource), "cleanup");
+        const record = this.#own(captureResource(resource), "cleanup");
         if (!this.acceptsWork) {
           const reason = isAborted(this.signal) ? abortReason(this.signal) : disposalReason;
           await record.dispose();
@@ -651,12 +648,12 @@ export class Lifetime {
     // Detach the original signal's listeners/reason without pinning every retired scope's
     // future listeners to a globally shared EventTarget.
     this.#cancellation = { signal: AbortSignal.abort(disposalReason) };
-    this.#changed?.();
-    this.#changed = undefined;
     const detach = this.#detachFromParent;
     this.#detachFromParent = undefined;
     detach?.(this);
     this.#report = undefined;
+    this.#changed?.();
+    this.#changed = undefined;
   }
 
   #withdraw() {
@@ -711,6 +708,13 @@ export function shutdownTimeout(value: unknown): number | undefined {
       `shutdownTimeoutMilliseconds must be a positive finite number no greater than ${maximumTimerDelay}`,
     );
   return value;
+}
+
+function captureResource(resource: Resource) {
+  // A second disposal edge can make a child wait on its own shutdown or on a parent waiting for it.
+  if (lifetimeAuthorities.has(resource))
+    throw new TypeError("Lifetime handles cannot be adopted as resources");
+  return captureDisposer(resource);
 }
 
 function validateLabel(label: string) {

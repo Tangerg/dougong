@@ -67,21 +67,22 @@ export class Instance {
     const output = await this.lifetime.prepare(() => setup(context, configuration));
     AbortSignal.prototype.throwIfAborted.call(this.lifetime.signal);
     const entries = Object.entries(this.declaration.plugin.provides);
+    const invalidOutput = (message: string) =>
+      new DougongError("PROVIDES_INVALID", message, {
+        details: { installation: this.installation.id },
+      });
     if (!entries.length) {
       if (output !== undefined)
-        throw new DougongError(
-          "PROVIDES_INVALID",
-          "Plugin without provisions must return undefined",
-        );
+        throw invalidOutput("Plugin without provisions must return undefined");
       return;
     }
     const values = normalizePlainRecord(output, "Provided Services", {
       fields: new Set(entries.map(([alias]) => alias)),
+      createError: invalidOutput,
     });
     AbortSignal.prototype.throwIfAborted.call(this.lifetime.signal);
     for (const [alias, token] of entries) {
-      if (!Object.hasOwn(values, alias))
-        throw new DougongError("PROVIDES_INVALID", "Plugin did not provide " + alias);
+      if (!Object.hasOwn(values, alias)) throw invalidOutput("Plugin did not provide " + alias);
       this.#services.set(token.id, values[alias]);
     }
   }

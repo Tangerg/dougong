@@ -2,6 +2,8 @@
 
 `@dougongjs/reactive` 零外部依赖，不依赖 Host。`signal` 创建可写 `Signal`，`computed` 产生惰性 `ReadonlySignal`，`batch` 合并通知。调用 `get()` 读取，`subscribe(listener)` 仅通知变化，不立即重放；释放订阅使用标准 `Disposable`。
 
+显式释放订阅或观察时，从 `@dougongjs/reactive` 导入 `disposeSymbol` 或 `asyncDisposeSymbol`。这些键在缺少原生释放符号的运行环境中也可用。
+
 ```ts
 import { bridge, computed, observe, signal } from "@dougongjs/reactive";
 
@@ -15,7 +17,7 @@ observe(lifetime, title, (value, generation) => {
 });
 ```
 
-写入立即使依赖它的 computed 失效，不会执行计算。批处理推迟的是通知；哪些订阅能收到通知，在每次写入时就已确定。即使在同一个 batch 内，或在另一个监听器中，写入之后才订阅 computed 也不会收到这次写入的通知；批次中后续的写入仍可通知新订阅。两次写入之间，共享依赖只需验证一次；重复读取菱形依赖图不会沿每条路径重复检查。如果计算分支形成循环，读取会抛错。输入变化解除循环后，直接读取和捕获过该错误的上层订阅都能恢复。
+写入立即使依赖它的 computed 失效，不会执行计算。订阅者即使推迟读取，也会持续收到后续写入的失效通知。批处理推迟的是通知；哪些订阅能收到通知，在每次写入时就已确定。即使在同一个 batch 内，或在另一个监听器中，写入之后才订阅 computed 也不会收到这次写入的通知；批次中后续的写入仍可通知新订阅。两次写入之间，共享依赖只需验证一次；重复读取菱形依赖图不会沿每条路径重复检查。如果计算分支形成循环，读取会抛错。输入变化解除循环后，直接读取和捕获过该错误的上层订阅都能恢复。
 
 模块副本内的 computed 追踪属于该副本自己的节点。跨 bundle、跨版本副本或其他实现的输入使用 `Readable<T>` 协议，通过显式 `bridge(owner, source)` 进入本地依赖图。`BridgeOwner` 只需要 `defer`；桥接订阅由调用方 Lifetime 拥有，没有跨副本全局 collector。
 

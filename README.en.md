@@ -7,7 +7,7 @@ A TypeScript plugin composition kernel with immutable plans, atomic publication,
 Upgrading from 0.8.3? Read the [migration guide](./docs/en/guide/migrating-to-0.9.md) and [0.9.0 release notes](./docs/en/reference/release-0.9.0.md).
 
 ```ts
-import { createHost, definePlugin, service } from "dougong";
+import { asyncDisposeSymbol, createHost, definePlugin, service } from "dougong";
 
 const GREETER = service<{ greet(name: string): string }>("application/greeter");
 const greeter = definePlugin({
@@ -24,7 +24,7 @@ const host = createHost({
 });
 await host.start();
 const message = await host.use(GREETER, (service) => service.greet("Dougong"));
-await host[Symbol.asyncDispose]();
+await host[asyncDisposeSymbol]();
 ```
 
 ## Packages

@@ -20,6 +20,40 @@ import {
   valuePlugin,
 } from "./fixtures";
 
+it.each(["load", "activate"] as const)(
+  "fails closed when a JavaScript policy returns a decision value during %s admission",
+  async (phase) => {
+    const host = createHost();
+    const setup = vi.fn<() => void>();
+    const plugin = definePlugin({ name: "sample", setup });
+    const load = vi.fn<() => { default: typeof plugin }>(() => ({ default: plugin }));
+    const platform = createPlatform({
+      id: "invalid-policy",
+      host,
+      apiVersion: "1.0.0",
+      loader: { load },
+      authorizer: {
+        authorize({ operation }) {
+          return operation === phase
+            ? ((phase === "load" ? false : Promise.resolve(false)) as never)
+            : undefined;
+        },
+      },
+    });
+    const registration = await select(platform, "sample", "one");
+    await host.start();
+    try {
+      await expect(platform.activate([registration])).rejects.toThrow("Authorizer");
+      expect(load).toHaveBeenCalledTimes(phase === "load" ? 0 : 1);
+      expect(setup).not.toHaveBeenCalled();
+      expect(registration.installation).toBeUndefined();
+    } finally {
+      await platform[Symbol.asyncDispose]();
+      await host.stop();
+    }
+  },
+);
+
 it.each(["preview roots", "preview removals", "activation removals"] as const)(
   "does not expose a mutable RegistrationRecord through caller-owned %s",
   async (path) => {

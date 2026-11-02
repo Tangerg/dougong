@@ -18,6 +18,8 @@
 
 `LifetimeContext.acquire(factory)` 返回的 Promise 以冻结的 `{ resource }` 回执完成；解构即可取得实际被接管的资源。
 
+契约身份取自令牌自身的数据字段。来自另一个 JavaScript Realm 的令牌，可凭相同的 `kind` 和 `id` 声明服务提供、声明依赖和借用服务。
+
 ## Host 与安装
 
 `HostOptions` 包含 `name`、初始 `installations`、初始 `groups`、日志与错误报告端口和退出超时。每个 Installation ID 在 Host 中唯一，Group ID 也是应用声明的稳定身份。

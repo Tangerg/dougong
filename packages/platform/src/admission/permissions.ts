@@ -13,6 +13,22 @@ export interface Authorizer {
   readonly authorize: (request: AdmissionRequest, signal: AbortSignal) => Awaitable<void>;
 }
 
+export function captureAuthorizer(policy: Authorizer): Authorizer {
+  const authorize = policy?.authorize;
+  if (typeof authorize !== "function")
+    throw new TypeError("Platform authorizer must implement authorize()");
+  return Object.freeze<Authorizer>({
+    authorize: (request, signal) => admitted(Reflect.apply(authorize, policy, [request, signal])),
+  });
+}
+
+async function admitted(result: unknown) {
+  if ((await result) !== undefined)
+    throw new TypeError(
+      "Authorizer must return no value on approval and throw or reject on denial",
+    );
+}
+
 export class PermissionSet implements Authorizer {
   readonly #allowed: ReadonlySet<string>;
 

@@ -71,6 +71,29 @@ it("removes descendants in one plan and preserves unrelated Instances", async ()
   await host.stop();
 });
 
+it("plans overlapping Group removals once for each affected Installation", async () => {
+  const plugin = definePlugin({ name: "group.member", setup() {} });
+  const ids = ["outer", "inner", "sibling", "keep"];
+  const host = createHost({
+    groups: [
+      { id: "outer" },
+      { id: "inner", parentId: "outer" },
+      { id: "sibling" },
+      { id: "keep" },
+    ],
+    installations: ids.map((id) => ({ id, groupId: id, plugin })),
+  });
+  const change = host.change();
+  for (const id of ["sibling", "inner", "outer"]) change.removeGroup(host.group(id)!);
+  const plan = await host.plan(change);
+  expect(plan.report.affectedInstallations).toEqual(["outer", "inner", "sibling"]);
+  await host.apply(plan);
+  expect(host.diagnostics.get().groups.map((group) => group.id)).toEqual(["keep"]);
+  expect(host.diagnostics.get().installations.map((installation) => installation.id)).toEqual([
+    "keep",
+  ]);
+});
+
 it("rejects duplicate, missing and cyclic Group ownership", async () => {
   expect(() => createHost({ groups: [{ id: "x" }, { id: "x" }] })).toThrowError(
     expect.objectContaining({ code: "GROUP_CONFLICT" }),

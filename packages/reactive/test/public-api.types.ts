@@ -37,6 +37,9 @@ expectTypeOf<
   ReturnType<reactive.ObservationOwner<MinimalChild>["child"]>
 >().toEqualTypeOf<MinimalChild>();
 
+expectTypeOf<typeof reactive.disposeSymbol>().toEqualTypeOf<typeof Symbol.dispose>();
+expectTypeOf<typeof reactive.asyncDisposeSymbol>().toEqualTypeOf<typeof Symbol.asyncDispose>();
+
 // Standard resources need no named disposal alias to cross the protocol boundary.
 expectTypeOf<{ [Symbol.dispose](): void }>().toExtend<reactive.Disposable>();
 expectTypeOf<{ [Symbol.asyncDispose](): Promise<void> }>().toExtend<reactive.AsyncDisposable>();

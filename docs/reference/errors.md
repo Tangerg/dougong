@@ -6,6 +6,8 @@
 
 `details.outcome` 区分 rejected、restored、quarantined。Promise 正常完成即成功，`ApplyResult` 只返回状态修订与影响安装；无须用固定字段再次判断成功。`RecordedFailure` 与 `ErrorSnapshot` 是有界诊断投影，直接调用者仍获得原始失败。参数与协议误用可能抛 TypeError；取消服从所属 AbortSignal，并不等于成功提交。
 
+当资源清理和执行体都抛错时，`SuppressedError` 的快照分别用 `error` 保存清理错误、用 `suppressed` 保存先前错误。两条分支共用同一份诊断深度和大小预算。
+
 | 错误码 | 含义与处理 |
 | --- | --- |
 | `ACTIVATION_FAILED` | 激活执行失败；检查 cause 与 Core 的结构化执行结果。 |
@@ -40,8 +42,8 @@
 | `PLAN_FOREIGN` | Plan 没有由此 Host 签发。 |
 | `PLAN_STALE` | 计划的基线版本已过期；重新规划。 |
 | `PLATFORM_BUSY` | 最终激活转换或释放正在执行；待返回后再发起新的 Platform 变更。 |
-| `PLATFORM_UNAVAILABLE` | Platform 或其 Catalog 正在关闭或已经关闭。 |
-| `PROVIDES_INVALID` | setup 的返回值与 provides 声明不一致。 |
+| `PLATFORM_UNAVAILABLE` | Platform 或 Catalog 已不可用，或目标 Host 已被隔离。 |
+| `PROVIDES_INVALID` | setup 返回值的结构不合法，或返回的服务别名与 provides 声明不一致。读取该错误的 `details.installation` 可定位出错的安装。 |
 | `REGISTRATION_CYCLE` | 选择的发行依赖图包含循环。 |
 | `REGISTRATION_DEPENDENCY_INACTIVE` | 所需发行依赖没有可激活的选择。 |
 | `REGISTRATION_DEPENDENCY_INCOMPATIBLE` | 依赖选择的版本不满足 Manifest 范围。 |

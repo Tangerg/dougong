@@ -477,3 +477,72 @@ it.each(["select", "remove", "dispose"] as const)(
     }
   },
 );
+
+it.each(["revision", "quarantine"] as const)(
+  "releases obsolete final admission on Host %s",
+  async (change) => {
+    const entered = deferred<AbortSignal>();
+    const release = deferred();
+    const native = definePlugin({
+      name: "native",
+      setup({ lifetime }) {
+        if (change === "quarantine")
+          lifetime.defer(() => {
+            throw new Error("cleanup failed");
+          });
+      },
+    });
+    const host = createHost({ installations: [{ id: "native", plugin: native }] });
+    await host.start();
+    let hold = true;
+    const platform = createPlatform({
+      id: "stale-admission",
+      host,
+      apiVersion: "1.0.0",
+      loader: { load: (reference: string) => ({ default: emptyPlugin(reference) }) },
+      authorizer: {
+        authorize({ operation }, signal) {
+          if (operation === "activate" && hold) {
+            entered.resolve(signal);
+            return release.promise;
+          }
+          return undefined;
+        },
+      },
+    });
+    const target = await select(platform, "sample", "sample");
+    const before = host.stateRevision;
+    const attempt = platform.activate([target]).catch((error: unknown) => error);
+    const signal = await entered.promise;
+    try {
+      const stop = await host.stop().catch((error: unknown) => error);
+      expect(stop).toMatchObject(
+        change === "quarantine"
+          ? { code: "HOST_QUARANTINED" }
+          : { stateRevision: host.stateRevision },
+      );
+      const failure = await Promise.race([attempt, nextTurn().then(() => "still reserved")]);
+      expect(failure).toMatchObject(
+        change === "quarantine"
+          ? { code: "PLATFORM_UNAVAILABLE", details: { stateRevision: host.stateRevision } }
+          : {
+              code: "ACTIVATION_STALE",
+              details: { expectedRevision: before, stateRevision: host.stateRevision },
+            },
+      );
+      expect(signal.aborted).toBe(true);
+      expect(target.installation).toBeUndefined();
+      hold = false;
+      const retry = await platform.activate([target]).catch((error: unknown) => error);
+      expect(retry).toMatchObject(
+        change === "quarantine"
+          ? { code: "PLATFORM_UNAVAILABLE" }
+          : { affectedInstallations: [target.id] },
+      );
+    } finally {
+      release.resolve();
+      await attempt;
+      await platform[Symbol.asyncDispose]();
+    }
+  },
+);

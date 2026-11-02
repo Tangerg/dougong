@@ -125,3 +125,31 @@ it("preserves the original child publication failure at its owner without a seco
   });
   expect(withdraw).toHaveBeenCalledOnce();
 });
+
+it("removes a finished child before publishing its terminal diagnostics", async () => {
+  let close!: () => Promise<void>;
+  const host = createHost({
+    installations: [
+      {
+        id: "owner",
+        plugin: definePlugin({
+          name: "owner",
+          setup({ lifetime }) {
+            close = lifetime.child("session")[Symbol.asyncDispose];
+          },
+        }),
+      },
+    ],
+  });
+  await host.start();
+  try {
+    const phases: Array<string | undefined> = [];
+    using _subscription = host.diagnostics.subscribe(() => {
+      phases.push(host.diagnostics.get().installations[0]?.lifetime?.children[0]?.phase);
+    });
+    await close();
+    expect(phases).toEqual(["disposing", undefined]);
+  } finally {
+    await host.stop();
+  }
+});

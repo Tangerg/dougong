@@ -9,6 +9,7 @@ import {
   type Group,
   type Host,
   type Logger,
+  type Plan,
   type SnapshotView,
 } from "dougong";
 import {
@@ -20,7 +21,7 @@ import {
   SerialQueue,
   SnapshotPublisher,
 } from "dougong/advanced";
-import { PermissionSet, type Authorizer } from "../admission/permissions.js";
+import { captureAuthorizer, PermissionSet, type Authorizer } from "../admission/permissions.js";
 import {
   artifactOrigin,
   assertCompatibleManifest,
@@ -172,17 +173,13 @@ class DeliveryPlatform<Reference> implements Platform<Reference> {
       throw new TypeError("Platform Group must be committed in its Host");
     const load = loader?.load;
     if (typeof load !== "function") throw new TypeError("Platform loader must implement load()");
-    const policy = authorizer === undefined ? new PermissionSet() : authorizer;
-    const authorize = policy?.authorize;
-    if (typeof authorize !== "function")
-      throw new TypeError("Platform authorizer must implement authorize()");
+    const admission = captureAuthorizer(
+      authorizer === undefined ? new PermissionSet() : authorizer,
+    );
     const capturedLogger = captureLogger(logger === undefined ? console : logger);
 
     this.id = id;
     this.apiVersion = apiVersion;
-    const admission: Authorizer = Object.freeze<Authorizer>({
-      authorize: (request, signal) => Reflect.apply(authorize, policy, [request, signal]),
-    });
     const ports: PlatformPorts = Object.freeze({ host, group, authorizer: admission });
     this.#state = { phase: "active", ports };
     this.#catalog = new ArtifactCatalog(apiVersion);
@@ -313,7 +310,8 @@ class DeliveryPlatform<Reference> implements Platform<Reference> {
   #startDisposal() {
     const state = this.#state;
     if (state.phase === "disposed") return Promise.resolve();
-    if (this.#executing) return Promise.reject(this.#busy());
+    if (this.#executing === "disposal" || this.#executing?.handedOff)
+      return Promise.reject(this.#busy());
     if (state.phase === "disposing") return state.completion;
     const operations = [...this.#operations];
     const completion = Promise.all(operations.map((operation) => operation.settled)).then(() =>
@@ -364,7 +362,7 @@ class DeliveryPlatform<Reference> implements Platform<Reference> {
     operation.plan.assertCurrent();
     const candidate = new ActivationPlan(this.#registrations, roots, removing);
     candidate.assertValid();
-    const { host, authorizer, group } = this.#ports();
+    const { host, group } = this.#ports();
     const pending = candidate.selections.filter(
       (selection) => selection.registration.actionFor(selection.artifact) !== "reuse",
     );
@@ -419,22 +417,47 @@ class DeliveryPlatform<Reference> implements Platform<Reference> {
       assertCompatibleManifest(this.apiVersion, origin.manifest);
       admission.set(registration.id, origin);
     }
-    for (const artifact of admission.values()) {
-      operation.checkpoint();
-      await Preparation.waitFor(
-        (signal) =>
-          authorizer.authorize(
-            Object.freeze({ artifact: describeArtifact(artifact), operation: "activate" }),
-            signal,
-          ),
-        operation.signal,
-      );
-    }
+    await this.#authorize(plan, admission.values(), operation.signal);
     operation.plan.assertCurrent();
     operation.handoff();
     const result = await host.apply(plan);
     this.#commitSelections(candidate);
     return result;
+  }
+
+  async #authorize(plan: Plan, artifacts: Iterable<ArtifactDescriptor>, caller: AbortSignal) {
+    const { host, authorizer } = this.#ports();
+    const expectedRevision = plan.report.baseStateRevision;
+    const invalidated = new AbortController();
+    const signal = AbortSignal.any([caller, invalidated.signal]);
+    const checkRevision = () => {
+      const stateRevision = host.stateRevision;
+      if (stateRevision !== expectedRevision)
+        invalidated.abort(
+          this.#placementFailure() ??
+            new PlatformError("ACTIVATION_STALE", "Host changed during activation admission", {
+              details: { outcome: "rejected", phase: "admission", expectedRevision, stateRevision },
+            }),
+        );
+    };
+    // A policy may never settle. Once Core invalidates its Plan, waiting would reserve the Platform indefinitely.
+    const subscription = host.diagnostics.subscribe(checkRevision);
+    try {
+      checkRevision();
+      for (const artifact of artifacts) {
+        await Preparation.waitFor(
+          (admissionSignal) =>
+            authorizer.authorize(
+              Object.freeze({ artifact: describeArtifact(artifact), operation: "activate" }),
+              admissionSignal,
+            ),
+          signal,
+        );
+      }
+      signal.throwIfAborted();
+    } finally {
+      subscription[disposeSymbol]();
+    }
   }
 
   async #removeInstallations(
@@ -535,13 +558,19 @@ class DeliveryPlatform<Reference> implements Platform<Reference> {
   }
 
   #assertPlacement() {
+    const failure = this.#placementFailure();
+    if (failure) throw failure;
+  }
+
+  #placementFailure() {
     const { host, group } = this.#ports();
     if (host.status === "quarantined")
-      throw new PlatformError("PLATFORM_UNAVAILABLE", "Activation Host is quarantined", {
+      return new PlatformError("PLATFORM_UNAVAILABLE", "Activation Host is quarantined", {
         details: { outcome: "rejected", phase: "admission", stateRevision: host.stateRevision },
       });
     if (group && host.group(group.id) !== group)
-      throw new PlatformError("REGISTRATION_UNAVAILABLE", "Platform Group has been removed");
+      return new PlatformError("REGISTRATION_UNAVAILABLE", "Platform Group has been removed");
+    return undefined;
   }
 
   #assertActive() {

@@ -40,6 +40,7 @@ export async function compileTransition(
   const groups = new Map(current.groups);
   const ids = new Set(current.graph.byId.keys());
   const direct = new Map<InstallationRecord, ImpactReason["kind"]>();
+  const removedGroups = new Set<GroupNode>();
 
   for (const operation of operations) {
     if (operation.kind === "group") {
@@ -51,7 +52,12 @@ export async function compileTransition(
       groups.set(operation.group.id, operation.group);
       continue;
     }
-    if (operation.kind === "remove-group") continue;
+    if (operation.kind === "remove-group") {
+      if (current.groups.get(operation.group.id) !== operation.group)
+        throw new DougongError("GROUP_REMOVED", "Group is not committed: " + operation.group.id);
+      removedGroups.add(operation.group);
+      continue;
+    }
     const record = operation.installation;
     if (operation.kind === "install") {
       claimInstallationId(ids, record.id);
@@ -85,24 +91,20 @@ export async function compileTransition(
     }
   }
 
-  for (const operation of operations) {
-    if (operation.kind !== "remove-group") continue;
-    if (current.groups.get(operation.group.id) !== operation.group) {
-      throw new DougongError("GROUP_REMOVED", "Group is not committed: " + operation.group.id);
+  if (removedGroups.size) {
+    const children = Map.groupBy(groups.values(), (group) => group.parent);
+    // The Set visits each overlapping ownership subtree once, including descendants added during traversal.
+    for (const group of removedGroups) {
+      if (current.groups.get(group.id) !== group)
+        throw new DougongError(
+          "CHANGE_CONFLICT",
+          "Group creation conflicts with ancestor removal: " + group.id,
+        );
+      groups.delete(group.id);
+      for (const child of children.get(group) ?? []) removedGroups.add(child);
     }
-    const removed = new Set([operation.group.id]);
-    let expanded = true;
-    while (expanded) {
-      expanded = false;
-      for (const group of groups.values()) {
-        if (group.parentId && removed.has(group.parentId) && !removed.has(group.id)) {
-          removed.add(group.id);
-          expanded = true;
-        }
-      }
-    }
-    for (const [record] of declarations) {
-      if (record.groupId === undefined || !removed.has(record.groupId)) continue;
+    for (const record of declarations.keys()) {
+      if (!record.group || !removedGroups.has(record.group)) continue;
       if (direct.has(record))
         throw new DougongError(
           "CHANGE_CONFLICT",
@@ -110,14 +112,6 @@ export async function compileTransition(
         );
       declarations.delete(record);
       direct.set(record, "removed");
-    }
-    for (const id of removed) {
-      if (!current.groups.has(id))
-        throw new DougongError(
-          "CHANGE_CONFLICT",
-          "Group creation conflicts with ancestor removal: " + id,
-        );
-      groups.delete(id);
     }
   }
   assertGroups(groups, declarations);

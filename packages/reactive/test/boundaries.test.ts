@@ -274,3 +274,27 @@ it("rechecks a cached branch that becomes cyclic during dependency validation", 
   linkRight.set(false);
   expect(left.get()).toBe(2);
 });
+
+it("delivers each publication to computed subscribers even when they defer reading", () => {
+  const input = signal(0);
+  const left = computed(() => input.get());
+  const right = computed(() => input.get() * 2);
+  let evaluations = 0;
+  const total = computed(() => {
+    evaluations++;
+    return left.get() + right.get();
+  });
+  let changes = 0;
+  using _subscription = total.subscribe(() => {
+    changes++;
+  });
+  input.set(1);
+  input.set(2);
+  batch(() => {
+    input.set(3);
+    input.set(4);
+  });
+  expect(changes).toBe(3);
+  expect(evaluations).toBe(1);
+  expect(total.get()).toBe(12);
+});

@@ -232,11 +232,8 @@ class PluginContracts {
     const requires: Record<string, Requirement> = Object.create(null);
     for (const [alias, value] of Object.entries(declarations)) {
       this.#assertAlias(alias, "requirement");
-      if (!value || typeof value !== "object") {
-        throw new TypeError(`Plugin requirement '${alias}' is not a contract`);
-      }
       const requirement = normalizeRequirement(
-        normalizePlainRecord(value, `Plugin requirement '${alias}'`),
+        value,
         `Plugin requirement '${alias}' must be a Service or ExtensionPoint`,
         `Optional requirement '${alias}' must wrap a Service`,
       );

@@ -53,7 +53,9 @@ async function createDetachedViews() {
   return { registration, diagnostics, subscription, snapshot, references };
 }
 
-it.each(["admission", "module", "validation"] as const)(
+const preparationPhases = ["load", "module", "validation", "activate"] as const;
+
+it.each(preparationPhases)(
   "terminal Platform releases its artifact and ports despite abandoned %s that never settles",
   async (phase) => {
     const pending = Promise.withResolvers<never>();
@@ -87,7 +89,7 @@ it.each(["admission", "module", "validation"] as const)(
 );
 
 async function abandonPreparation(
-  phase: "admission" | "module" | "validation",
+  phase: (typeof preparationPhases)[number],
   pending: Promise<never>,
 ) {
   const entered = Promise.withResolvers<void>();
@@ -100,16 +102,20 @@ async function abandonPreparation(
   const loader = {
     load(_reference: object, signal: AbortSignal) {
       signal.addEventListener("abort", (event) => event.stopImmediatePropagation());
-      if (phase === "validation") {
-        return {
-          default: definePlugin({
-            name: "example",
-            configuration: { "~standard": { version: 1, vendor: "test", validate: stall } },
-            setup() {},
-          }),
-        };
-      }
-      return stall();
+      if (phase === "module") return stall();
+      return {
+        default: definePlugin({
+          name: "example",
+          configuration: {
+            "~standard": {
+              version: 1,
+              vendor: "test",
+              validate: (input) => (phase === "validation" ? stall() : { value: input }),
+            },
+          },
+          setup() {},
+        }),
+      };
     },
   };
   const reference = {};
@@ -119,9 +125,9 @@ async function abandonPreparation(
     host,
     loader,
     authorizer: {
-      authorize(_request, signal) {
+      authorize({ operation }, signal) {
         signal.addEventListener("abort", (event) => event.stopImmediatePropagation());
-        return phase === "admission" ? stall() : undefined;
+        return phase === operation ? stall() : undefined;
       },
     },
   });
@@ -132,17 +138,11 @@ async function abandonPreparation(
       reference,
     }),
   );
-  const controller = new AbortController();
-  const activation = platform
-    .activate([chosen], { signal: controller.signal })
-    .catch(() => undefined);
+  const activation = platform.activate([chosen]).catch((error: unknown) => error);
   await entered.promise;
-  if (phase === "validation") {
-    controller.abort();
-    await activation;
-  }
   await platform[Symbol.asyncDispose]();
-  await activation;
+  expect(await activation).toMatchObject({ name: "AbortError" });
+  expect(host.installation(chosen.id)).toBeUndefined();
   return {
     logger: new WeakRef(logger),
     reference: new WeakRef(reference),

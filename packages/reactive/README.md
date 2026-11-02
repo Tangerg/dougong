@@ -5,7 +5,7 @@ Independent synchronous signals and structurally owned reactive generations. No 
 Upgrading from 0.8.3? Read the [migration guide](https://tangerg.github.io/dougong/en/guide/migrating-to-0.9) and [0.9.0 release notes](https://tangerg.github.io/dougong/en/reference/release-0.9.0).
 
 ```ts
-import { batch, computed, signal } from "@dougongjs/reactive";
+import { batch, computed, disposeSymbol, signal } from "@dougongjs/reactive";
 
 const first = signal("Dougong");
 const last = signal("Plugins");
@@ -15,7 +15,7 @@ batch(() => {
   first.set("Typed");
   last.set("Composition");
 });
-subscription[Symbol.dispose]();
+subscription[disposeSymbol]();
 ```
 
 `Readable<T>` exposes `get()` and `subscribe()`. The subscription implements standard `Symbol.dispose`; callbacks notify changes without replay. `bridge(owner, readable)` adapts another module copy or implementation into the local dependency graph. Its subscription and terminal detachment belong to the supplied owner through `defer`.
