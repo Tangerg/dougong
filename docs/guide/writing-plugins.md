@@ -1,6 +1,6 @@
 # 编写插件
 
-`definePlugin` 接受 `name`、可选的 Standard Schema `configuration`、`requires`、`provides` 与 `setup`。setup 的返回值必须准确匹配提供声明。配置通过 `setup(context, configuration)` 的第二个参数传入。
+`definePlugin` 接受 `name`、可选的 Standard Schema `configuration`、`requires`、`provides` 与 `setup`。setup 的返回值必须准确匹配提供声明。配置通过 `setup(context, configuration)` 的第二个参数传入。同一份 Core 会直接复用 `definePlugin` 产出的不可变声明，供多个 Installation 装配。传入可变声明时，每次仍会重新捕获其字段。
 
 ```ts
 const COMMANDS = extensionPoint<{ title: string; run(): Promise<string> }>("editor/commands");

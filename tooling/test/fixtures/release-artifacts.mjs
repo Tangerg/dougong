@@ -14,7 +14,7 @@ import {
   packCandidates,
   writeVerifiedCandidates,
 } from "../../consumer/package-candidates.mjs";
-import { installCommandFixture } from "../release-command-fixture.mjs";
+import { cleanReleaseGit, installReleaseFixture } from "../release-command-fixture.mjs";
 
 const workspace = process.cwd();
 const visibility = process.env.DOUGONG_RELEASE_VISIBILITY;
@@ -40,7 +40,7 @@ function registryTags() {
 
 let injected = false;
 let previousPack;
-installCommandFixture((name, commandArguments, options, nativeSpawn) => {
+installReleaseFixture((name, commandArguments, options, nativeSpawn) => {
   const race = process.env.DOUGONG_RELEASE_CONCURRENT_EDIT;
   const git = process.env.DOUGONG_RELEASE_REAL_GIT;
   if (race && git && !injected) {
@@ -142,7 +142,12 @@ installCommandFixture((name, commandArguments, options, nativeSpawn) => {
   if (recording || name === "npm" || name === "sleep") {
     appendFileSync(
       join(workspace, "commands.jsonl"),
-      JSON.stringify({ command: name, commandArguments }) + "\n",
+      JSON.stringify({
+        command: name,
+        commandArguments,
+        registryArguments: options.registryArguments,
+        gitConfigurationArguments: options.gitConfigurationArguments,
+      }) + "\n",
     );
   }
   if (name === "git") {
@@ -153,26 +158,14 @@ installCommandFixture((name, commandArguments, options, nativeSpawn) => {
       if (interrupt && process.env.DOUGONG_RELEASE_INTERRUPT_AFTER !== "true") {
         return { status: 1 };
       }
-      const result = nativeSpawn(process.env.DOUGONG_RELEASE_REAL_GIT, commandArguments, {
-        ...options,
-        stdio: "pipe",
-      });
+      const result = nativeSpawn(
+        process.env.DOUGONG_RELEASE_REAL_GIT,
+        [...options.gitConfigurationArguments, ...commandArguments],
+        { ...options, stdio: "pipe" },
+      );
       return { ...result, status: interrupt ? 1 : result.status };
     }
-    if (commandArguments[0] === "rev-parse") {
-      return {
-        status: 0,
-        stdout: commandArguments.includes("--abbrev-ref") ? "main" : "a".repeat(40),
-      };
-    }
-    if (commandArguments[0] === "rev-list") return { status: 0, stdout: "0" };
-    if (
-      ["status", "fetch", "ls-remote"].includes(commandArguments[0]) ||
-      (commandArguments[0] === "tag" && commandArguments[1] === "--list")
-    ) {
-      return { status: 0 };
-    }
-    process.exit(99);
+    return cleanReleaseGit(commandArguments, options);
   }
 
   if (name === "pnpm" && commandArguments.length === 1 && commandArguments[0] === "check") {

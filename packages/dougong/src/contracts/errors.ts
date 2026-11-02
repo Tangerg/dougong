@@ -2,15 +2,65 @@ import type { StandardSchemaV1 } from "@standard-schema/spec";
 import { abortReason, isAborted } from "../internal/abort.js";
 import { captureDataArray } from "../internal/data-array.js";
 
-export interface ErrorDetails {
-  readonly outcome?: "rejected" | "restored" | "quarantined";
-  readonly phase?: string;
-  readonly installation?: string;
-  readonly contract?: string;
-  readonly dependencyPath?: ReadonlyArray<string>;
-  readonly affectedInstallations?: ReadonlyArray<string>;
-  readonly stateRevision?: number;
-  readonly expectedRevision?: number;
+const detailKinds = {
+  outcome: "outcome",
+  phase: "text",
+  installation: "text",
+  contract: "text",
+  dependencyPath: "path",
+  affectedInstallations: "path",
+  stateRevision: "revision",
+  expectedRevision: "revision",
+} as const;
+const outcomes = ["rejected", "restored", "quarantined"] as const;
+
+interface DetailValues {
+  readonly outcome: (typeof outcomes)[number];
+  readonly text: string;
+  readonly path: ReadonlyArray<string>;
+  readonly revision: number;
+}
+
+export type ErrorDetails = {
+  readonly [Field in keyof typeof detailKinds]?: DetailValues[(typeof detailKinds)[Field]];
+};
+
+interface DetailBounds {
+  readonly clip: (text: string, limit: number) => string;
+  readonly strings: (value: unknown, limit: number) => ReadonlyArray<string> | undefined;
+}
+
+// The constructor rejects invalid declarations; diagnostics can only project readable, bounded fields.
+function captureDetails(source: object, bounds?: DetailBounds): ErrorDetails {
+  const fields: Record<string, string | number | ReadonlyArray<string>> = {};
+  for (const key of bounds ? Object.keys(detailKinds) : Reflect.ownKeys(source)) {
+    if (typeof key !== "string" || !Object.hasOwn(detailKinds, key))
+      throw new TypeError(`Unknown error detail '${String(key)}'`);
+    const raw: unknown = bounds ? readErrorProperty(source, key) : Reflect.get(source, key);
+    if (raw === undefined) continue;
+    let field: DetailValues[keyof DetailValues] | undefined;
+    switch (detailKinds[key as keyof ErrorDetails]) {
+      case "outcome":
+        field = outcomes.find((outcome) => outcome === raw);
+        break;
+      case "text":
+        if (typeof raw === "string") field = bounds ? bounds.clip(raw, 256) : raw;
+        break;
+      case "revision":
+        if (typeof raw === "number" && Number.isSafeInteger(raw) && raw >= 0) field = raw;
+        break;
+      case "path":
+        if (bounds) field = bounds.strings(raw, 32);
+        else {
+          const items = captureDataArray(raw, key);
+          if (items.every((item): item is string => typeof item === "string")) field = items;
+        }
+        break;
+    }
+    if (field !== undefined) fields[key] = field;
+    else if (!bounds) throw new TypeError(`Invalid error detail '${key}'`);
+  }
+  return Object.freeze(fields);
 }
 
 export class DougongError<Code extends string = string> extends Error {
@@ -29,15 +79,13 @@ export class DougongError<Code extends string = string> extends Error {
     if (typeof message !== "string") throw new TypeError("DougongError message must be a string");
     super(message, options);
     this.code = code;
-    const details = { ...options?.details };
-    if (details.dependencyPath !== undefined)
-      details.dependencyPath = captureDataArray(details.dependencyPath, "Dependency path");
-    if (details.affectedInstallations !== undefined)
-      details.affectedInstallations = captureDataArray(
-        details.affectedInstallations,
-        "Affected Installations",
-      );
-    this.details = Object.freeze(details);
+    const details = options?.details;
+    if (
+      details !== undefined &&
+      (!details || typeof details !== "object" || Array.isArray(details))
+    )
+      throw new TypeError("Error details must be an object");
+    this.details = captureDetails(details ?? {});
   }
 }
 
@@ -173,7 +221,7 @@ function captureError(
     if (!sealed && fieldNames.size) {
       const entries: Array<[string, string | ReadonlyArray<string>]> = [];
       for (const key of fieldNames) {
-        const raw = readDiagnosticField(value, key);
+        const raw = ownDataField(value, key)?.value;
         const data = typeof raw === "string" ? clip(raw, 256) : strings(raw, 8);
         if (data !== undefined) entries.push([key, data]);
       }
@@ -195,28 +243,14 @@ function captureError(
       });
     });
     const rawDetails = readErrorProperty(value, "details");
-    let details: ErrorDetails | undefined;
-    if (rawDetails !== null && typeof rawDetails === "object") {
-      const fields: Record<string, string | number | ReadonlyArray<string>> = {};
-      const outcome = readErrorProperty(rawDetails, "outcome");
-      if (outcome === "rejected" || outcome === "restored" || outcome === "quarantined")
-        fields.outcome = outcome;
-      for (const key of ["phase", "installation", "contract"] as const) {
-        const field = readErrorProperty(rawDetails, key);
-        if (typeof field === "string") fields[key] = clip(field, 256);
-      }
-      for (const key of ["stateRevision", "expectedRevision"] as const) {
-        const field = readErrorProperty(rawDetails, key);
-        if (typeof field === "number" && Number.isSafeInteger(field) && field >= 0)
-          fields[key] = field;
-      }
-      for (const key of ["dependencyPath", "affectedInstallations"] as const) {
-        const field = strings(readErrorProperty(rawDetails, key), 32);
-        if (field) fields[key] = field;
-      }
-      details = Object.freeze(fields);
-    }
+    const details =
+      rawDetails !== null && typeof rawDetails === "object"
+        ? captureDetails(rawDetails, { clip, strings })
+        : undefined;
     const child = (value: unknown) => visit(value, depth + 1, !!sealed);
+    // Native and downlevel suppression store both failures as own data, even when a subclass renames the Error.
+    const primary = ownDataField(value, "error");
+    const suppressed = primary && ownDataField(value, "suppressed");
     return Object.freeze({
       name,
       message,
@@ -224,11 +258,8 @@ function captureError(
       ...(stack === undefined ? {} : { stack }),
       ...(cause === undefined ? {} : { cause: child(cause) }),
       ...(errors === undefined ? {} : { errors: Object.freeze(errors.map(child)) }),
-      ...(name === "SuppressedError"
-        ? {
-            error: child(readErrorProperty(value, "error")),
-            suppressed: child(readErrorProperty(value, "suppressed")),
-          }
+      ...(primary && suppressed
+        ? { error: child(primary.value), suppressed: child(suppressed.value) }
         : {}),
       ...(fields === undefined ? {} : { fields }),
       ...(issues === undefined ? {} : { issues: Object.freeze(issues) }),
@@ -242,7 +273,13 @@ function captureError(
 // Unreadable prototypes do not prove that a rejection value is an Error.
 export function isError(value: unknown): value is Error {
   try {
-    return value instanceof Error;
+    if (value instanceof Error) return true;
+    if (value === null || typeof value !== "object") return false;
+    if ("isError" in Error && typeof Error.isError === "function") return Error.isError(value);
+    // Older engines expose the native cross-realm brand only when no custom string tag shadows it.
+    return (
+      !(Symbol.toStringTag in value) && Object.prototype.toString.call(value) === "[object Error]"
+    );
   } catch {
     return false;
   }
@@ -257,9 +294,10 @@ function isRecordableArray(value: unknown): value is unknown[] {
 }
 
 // Selecting a domain field must not invoke a second application getter while recording a failure.
-function readDiagnosticField(value: unknown, key: string): unknown {
+function ownDataField(value: unknown, key: string) {
   try {
-    return Object.getOwnPropertyDescriptor(value, key)?.value;
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    return descriptor && "value" in descriptor ? descriptor : undefined;
   } catch {
     return undefined;
   }

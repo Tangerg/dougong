@@ -14,7 +14,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { delimiter, dirname, join, resolve } from "node:path";
+import { basename, delimiter, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { expect, it, vi } from "vitest";
 import { executeRelease, releaseTestTimeout } from "./release-fixture.mjs";
@@ -51,6 +51,7 @@ async function runRelease(
   {
     version: targetVersion = version,
     distributionTag,
+    registries = {},
     packedOverrides = {},
     declaredDependencies = { "@standard-schema/spec": "^1.0.0" },
     escapedNames = false,
@@ -67,6 +68,7 @@ async function runRelease(
     resume = false,
     beforeRelease = () => undefined,
     beforeResume = () => undefined,
+    afterRelease = () => undefined,
   } = {},
 ) {
   const workspace = mkdtempSync(join(tmpdir(), "dougong-release-artifacts-test-"));
@@ -206,6 +208,7 @@ async function runRelease(
             env: {
               ...environment,
               PATH: executableDirectory,
+              DOUGONG_RELEASE_REGISTRIES: JSON.stringify(registries),
               DOUGONG_RELEASE_PACKED_OVERRIDES: JSON.stringify(packedOverrides),
               DOUGONG_RELEASE_REAL_GIT: realGit ?? "",
               DOUGONG_RELEASE_REAL_PNPM: pnpm ?? "",
@@ -247,6 +250,7 @@ async function runRelease(
       : undefined;
     if (resume) beforeResume(git, workspace);
     const result = resume ? await execute(undefined) : interrupted;
+    afterRelease(git, workspace);
     const head = realGit ? git(["rev-parse", "HEAD"]) : undefined;
     for (const [path, contents] of originals) {
       const edited =
@@ -410,6 +414,80 @@ it("rejects an existing remote tag before uploading an irreversible npm version"
   expect(result.published).toEqual({});
   expect(result.recorded).toEqual([]);
 });
+
+it.each(["reserved tag", "multiple destinations"])(
+  "checks the configured Git push destination before npm publication (%s)",
+  async (conflict) => {
+    const result = await runRelease(() => undefined, {
+      dryRun: false,
+      publishedPackages: [],
+      beforeRelease(git, workspace) {
+        const origin = join(workspace, "remote.git");
+        const destination = join(origin, "publish.git");
+        git(["clone", "--bare", origin, destination]);
+        git(["remote", "set-url", "--push", "origin", destination]);
+        if (conflict === "reserved tag")
+          git(["-C", destination, "update-ref", `refs/tags/v${version}`, "refs/heads/main"]);
+        else git(["remote", "set-url", "--add", "--push", "origin", origin]);
+      },
+    });
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(
+      conflict === "reserved tag" ? "different release tag" : "one push destination",
+    );
+    expect(result.published).toEqual({});
+    expect(result.recorded).toEqual([]);
+  },
+);
+
+it.each([
+  { rewrite: "pushInsteadOf", rejected: false },
+  { rewrite: "insteadOf", rejected: true },
+])(
+  "keeps release destination ownership across a second $rewrite rewrite",
+  async ({ rewrite, rejected }) => {
+    let references;
+    const result = await runRelease(() => undefined, {
+      dryRun: false,
+      publishedPackages: [],
+      beforeRelease(git, workspace) {
+        const origin = join(workspace, "remote.git");
+        const destination = join(origin, "publish.git");
+        const unrelated = join(origin, "unrelated.git");
+        git(["clone", "--bare", origin, destination]);
+        git(["clone", "--bare", origin, unrelated]);
+        git(["config", `url.${destination}.pushInsteadOf`, origin]);
+        git(["config", `url.${unrelated}.${rewrite}`, destination]);
+        git(["remote", "add", "dougong-release", unrelated]);
+      },
+      afterRelease(git, workspace) {
+        const origin = join(workspace, "remote.git");
+        references = {
+          destination: git(["rev-parse", "refs/heads/main"], join(origin, "publish.git")),
+          unrelated: git(["rev-parse", "refs/heads/main"], join(origin, "unrelated.git")),
+          destinationTag: git(["tag", "--list", `v${version}`], join(origin, "publish.git")),
+          unrelatedTag: git(["tag", "--list", `v${version}`], join(origin, "unrelated.git")),
+          remotes: git(["remote"]),
+          originPush: git(["remote", "get-url", "--push", "origin"]),
+          preserved: git(["remote", "get-url", "dougong-release"]),
+          destinationPath: join(origin, "publish.git"),
+          unrelatedPath: join(origin, "unrelated.git"),
+        };
+      },
+    });
+    expect(result.status).toBe(rejected ? 1 : 0);
+    expect(Object.keys(result.published)).toEqual(rejected ? [] : packages);
+    expect(result.recorded).toEqual(rejected ? [] : ["commit", "tag", "push"]);
+    expect(result.stderr.includes("release destination would be rewritten")).toBe(rejected);
+    expect(references.destination).toBe(rejected ? result.initialHead : result.head);
+    expect(references.destinationTag).toBe(rejected ? "" : `v${version}`);
+    expect(references.unrelated).toBe(result.initialHead);
+    expect(references.unrelatedTag).toBe("");
+    expect(references.remotes).toBe("dougong-release\norigin");
+    expect(references.originPush).toBe(references.destinationPath);
+    expect(references.preserved).toBe(references.unrelatedPath);
+  },
+);
 
 it("preserves remote main when the remote release tag changes after preflight", async () => {
   const result = await runRelease(() => undefined, {
@@ -773,6 +851,110 @@ it("recognizes a recorded release after its distribution channel moves", async (
   expect(
     result.calls.filter(({ commandArguments }) => commandArguments[0] === "publish"),
   ).toHaveLength(packages.length);
+});
+
+const registryRoutes = {
+  fallback: "https://default.example.test/",
+  scoped: "https://scoped.example.test/npm/",
+  declared: "https://declared.example.test/releases/",
+};
+
+it.each([
+  {
+    route: "default registry override",
+    settings: {},
+    publishConfig: { registry: registryRoutes.declared },
+    expected: {
+      dougong: registryRoutes.fallback,
+      platform: registryRoutes.declared,
+      reactive: registryRoutes.fallback,
+    },
+  },
+  {
+    route: "package scope before default override",
+    settings: { "@dougongjs:registry": registryRoutes.scoped },
+    publishConfig: { registry: registryRoutes.declared },
+    expected: {
+      dougong: registryRoutes.fallback,
+      platform: registryRoutes.scoped,
+      reactive: registryRoutes.scoped,
+    },
+  },
+  {
+    route: "package scope override",
+    settings: { "@dougongjs:registry": registryRoutes.scoped },
+    publishConfig: { "@dougongjs:registry": registryRoutes.declared },
+    expected: {
+      dougong: registryRoutes.fallback,
+      platform: registryRoutes.declared,
+      reactive: registryRoutes.scoped,
+    },
+  },
+  {
+    route: "configured scope before default override",
+    settings: { scope: "delivery", "@delivery:registry": registryRoutes.scoped },
+    publishConfig: { registry: registryRoutes.declared },
+    expected: {
+      dougong: registryRoutes.scoped,
+      platform: registryRoutes.scoped,
+      reactive: registryRoutes.scoped,
+    },
+  },
+])(
+  "pins each package registry for all release operations ($route)",
+  async ({ settings, publishConfig, expected }) => {
+    const result = await runRelease(
+      (_published, workspace) => {
+        const path = join(workspace, "packages", "platform", "package.json");
+        const manifest = JSON.parse(readFileSync(path, "utf8"));
+        manifest.publishConfig = publishConfig;
+        writeFileSync(path, JSON.stringify(manifest, null, 2) + "\n");
+      },
+      {
+        registries: { registry: registryRoutes.fallback, ...settings },
+        distributionTag: "next",
+        dryRun: false,
+        publishedPackages: [],
+      },
+    );
+    expect(result).toMatchObject({ status: 0 });
+    const commands = result.calls.filter(({ command }) => command === "npm");
+    const identities = commands.filter(({ commandArguments }) => commandArguments[0] === "whoami");
+    expect(
+      identities
+        .map(({ registryArguments }) =>
+          registryArguments.find((arg) => arg.startsWith("--registry=")),
+        )
+        .sort(),
+    ).toEqual([...new Set(Object.values(expected))].map((url) => "--registry=" + url).sort());
+    for (const {
+      commandArguments: [operation, reference],
+      registryArguments,
+    } of commands) {
+      if (operation === "whoami") continue;
+      const name =
+        operation === "publish"
+          ? basename(reference, ".tgz")
+          : reference.split("@").at(-2).split("/").at(-1);
+      expect(registryArguments).toEqual([
+        "--scope=",
+        "--registry=" + expected[name],
+        ...(name === "dougong" ? [] : ["--@dougongjs:registry=" + expected[name]]),
+      ]);
+    }
+  },
+);
+
+it("rejects credential-bearing registry URLs before any upload without echoing them", async () => {
+  const result = await runRelease(() => undefined, {
+    dryRun: false,
+    publishedPackages: [],
+    registries: { registry: "https://user:fixture-secret@example.test/" },
+  });
+  expect(result.status).toBe(1);
+  expect(result.stderr).toContain("without embedded credentials");
+  expect(result.stdout + result.stderr).not.toContain("fixture-secret");
+  expect(result.calls.filter(({ command }) => command === "npm")).toEqual([]);
 });
 
 it("waits for registry visibility before publishing dependents", async () => {

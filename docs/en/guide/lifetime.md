@@ -15,6 +15,8 @@ Lifetimes compose into a resource tree. Each Instance creates a root; plugins cr
 
 A child Lifetime belongs to the parent that created it. Within one loaded copy of Core, `use` and `acquire` reject an existing child handle. Across separately bundled copies, keep the child with its original parent. Its handle can still end the subtree early.
 
+Within one loaded Core, an external resource object can also have only one Lifetime owner. Repeated `use`, competing `acquire` calls, and registration reentered through a disposal-method getter are rejected. Pending, timed-out, or failed cleanup keeps its original obligation; the same object can be adopted again only after the actual release succeeds. Give shared resources one explicit Lifetime and pass access through Service parameters.
+
 Shutdown seals entry, withdraws publications and broadcasts cancellation, starts all interruptions and waits for them together, joins active work and acquisitions, then releases resources in reverse order. Use `interrupt` to break a blocking read and `defer` for final destruction that must wait for tasks to finish.
 
 ```ts

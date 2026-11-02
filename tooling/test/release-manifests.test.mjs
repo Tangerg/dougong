@@ -84,3 +84,29 @@ it("attempts the remaining restorations and reports a manifest it cannot restore
   expect(result.stderr).toContain("fixture manifest restoration failure");
   expect(result.stdout).not.toContain("versions restored");
 });
+
+it("rejects a changed source manifest before adopting a second publication declaration", async () => {
+  const result = await runRelease("preflight-source");
+  expect(result.packStarted).toBe(false);
+  expect(result.stderr).toContain("packages/dougong/package.json changed");
+  expect(JSON.parse(result.manifests.dougong).publishConfig).toEqual({
+    registry: "https://new.example.test/",
+  });
+  expect(result.manifests.reactive).toBe(result.originals.reactive);
+});
+
+it("preserves an unclaimed manifest even when its independent edit matches the proposed release bytes", async () => {
+  const result = await runRelease("unclaimed");
+  expect(result.packStarted).toBe(false);
+  expect(result.stderr).toContain("packages/dougong/package.json changed");
+  expect(result.manifests.reactive).toBe(result.originals.reactive);
+  expect(JSON.parse(result.manifests.dougong).version).toBe(version);
+  expect(result.manifests.platform).toBe(result.originals.platform);
+});
+
+it("restores a replaced manifest if removing the staging directory fails", async () => {
+  const result = await runRelease("post-rename");
+  expect(result.packStarted).toBe(false);
+  expect(result.stderr).toContain("fixture post-rename cleanup failure");
+  expect(result.manifests).toEqual(result.originals);
+});

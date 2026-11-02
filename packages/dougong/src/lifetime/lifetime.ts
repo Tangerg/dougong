@@ -56,6 +56,7 @@ export interface LifetimeOwnership {
 
 const ownershipFields = new Set(["lifetime"]);
 const lifetimeAuthorities = new WeakMap<object, Lifetime>();
+const claimedResources = new WeakSet<Resource>();
 
 export interface LifetimeOptions {
   readonly label: string;
@@ -390,11 +391,23 @@ export class Lifetime {
     return () => record.forget();
   }
 
-  #adopt(resource: Resource) {
-    this.#requireActive();
-    const release = captureResource(resource);
-    this.#requireActive();
-    return this.#own(release, "cleanup");
+  #adopt(resource: Resource, reservedAcquisition = false) {
+    if (!reservedAcquisition) this.#requireActive();
+    if (lifetimeAuthorities.has(resource))
+      throw new TypeError("Lifetime handles cannot be adopted as resources");
+    if (claimedResources.has(resource))
+      throw new TypeError("Resource already has a Lifetime owner");
+    // A protocol getter may reenter adoption before the release record exists.
+    claimedResources.add(resource);
+    let release: Cleanup;
+    try {
+      release = captureDisposer(resource);
+      if (!reservedAcquisition) this.#requireActive();
+    } catch (error) {
+      claimedResources.delete(resource);
+      throw error;
+    }
+    return this.#own(release, "cleanup", resource);
   }
 
   defer(cleanup: Cleanup): AsyncDisposable {
@@ -462,7 +475,7 @@ export class Lifetime {
     const completion = Promise.resolve()
       .then(() => factory(this.signal))
       .then(async (resource) => {
-        const record = this.#own(captureResource(resource), "cleanup");
+        const record = this.#adopt(resource, true);
         if (!this.acceptsWork) {
           const reason = isAborted(this.signal) ? abortReason(this.signal) : disposalReason;
           await record.dispose();
@@ -664,7 +677,7 @@ export class Lifetime {
     }
   }
 
-  #own(cleanup: Cleanup, kind: "cleanup" | "interrupt") {
+  #own(cleanup: Cleanup, kind: "cleanup" | "interrupt", resource?: Resource) {
     const records = kind === "cleanup" ? this.#cleanups : this.#interrupts;
     let record: CleanupRecord;
     record = new CleanupRecord(
@@ -673,6 +686,7 @@ export class Lifetime {
       cleanup,
       () => {
         records.delete(record);
+        if (resource !== undefined) claimedResources.delete(resource);
         this.#changed?.();
       },
       () => this.#changed?.(),
@@ -708,13 +722,6 @@ export function shutdownTimeout(value: unknown): number | undefined {
       `shutdownTimeoutMilliseconds must be a positive finite number no greater than ${maximumTimerDelay}`,
     );
   return value;
-}
-
-function captureResource(resource: Resource) {
-  // A second disposal edge can make a child wait on its own shutdown or on a parent waiting for it.
-  if (lifetimeAuthorities.has(resource))
-    throw new TypeError("Lifetime handles cannot be adopted as resources");
-  return captureDisposer(resource);
 }
 
 function validateLabel(label: string) {

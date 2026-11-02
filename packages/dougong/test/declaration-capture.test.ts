@@ -6,6 +6,7 @@ import {
   createHost,
   definePlugin,
   optional,
+  type HostOptions,
   service,
 } from "../src/index";
 
@@ -22,6 +23,18 @@ it("captures plugin declarations and configuration before external mutation", as
   expect(setup.mock.calls[0]?.[0]).toMatchObject({ dependencies: { input: undefined } });
   expect(setup.mock.calls[0]?.[1]).toEqual({ port: 1 });
   await host.stop();
+});
+
+it("reuses an owned declaration while independently capturing each mutable input", () => {
+  const raw = { name: "first", setup() {} };
+  const first = definePlugin(raw);
+  raw.name = "second";
+  const second = definePlugin(raw);
+
+  expect(first.name).toBe("first");
+  expect(second.name).toBe("second");
+  expect(definePlugin(first)).toBe(first);
+  expect(definePlugin(second)).toBe(second);
 });
 
 it("captures update configuration when staged and validator output when planned", async () => {
@@ -102,6 +115,35 @@ it("accepts the same cross-realm Contract identity for provisions, requirements 
     await host.start();
     expect(received).toHaveBeenCalledExactlyOnceWith(7);
     expect(await host.use(token, (value) => value)).toBe(7);
+  } finally {
+    await host.stop();
+  }
+});
+
+it("runs a foreign-realm Plugin with its own declarations, configuration and provided values", async () => {
+  const token = service<number>("realm/configured");
+  const options = runInNewContext(
+    `({
+      installations: [{
+        id: "provider",
+        configuration: { input: 7 },
+        plugin: {
+          name: "provider",
+          provides: { value: token },
+          configuration: { "~standard": {
+            version: 1, vendor: "foreign",
+            validate: configuration => ({ value: { output: configuration.input + 1 } }),
+          } },
+          setup: (_context, configuration) => ({ value: configuration.output }),
+        },
+      }],
+    })`,
+    { token },
+  ) as HostOptions;
+  const host = createHost(options);
+  try {
+    await host.start();
+    expect(await host.use(token, (value) => value)).toBe(8);
   } finally {
     await host.stop();
   }

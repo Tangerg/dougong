@@ -141,7 +141,11 @@ export function definePlugin<
   >;
 }
 
+// Freezing alone does not prove a declaration was validated by this copy of Core.
+const capturedDeclarations = new WeakSet<AnyPlugin>();
+
 function normalizePluginDeclaration(plugin: AnyPlugin): AnyPlugin {
+  if (capturedDeclarations.has(plugin)) return plugin;
   const declaration = normalizePlainRecord(plugin, "Plugin declaration", { fields: pluginFields });
   const { name, configuration, setup } = declaration;
   if (typeof name !== "string" || !name.trim()) {
@@ -167,13 +171,15 @@ function normalizePluginDeclaration(plugin: AnyPlugin): AnyPlugin {
   const requires = contracts.normalizeRequirements(declaredRequirements ?? {});
   const provides = contracts.normalizeProvisions(declaredProvisions ?? {});
 
-  return Object.freeze({
+  const captured = Object.freeze({
     name,
     ...(capturedSchema === undefined ? {} : { configuration: capturedSchema }),
     requires,
     provides,
     setup,
   });
+  capturedDeclarations.add(captured);
+  return captured;
 }
 
 // Composed declarations can reuse our frozen protocol without chaining another validator or exporter.

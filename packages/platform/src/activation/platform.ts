@@ -286,7 +286,9 @@ class DeliveryPlatform<Reference> implements Platform<Reference> {
         if (selection.registration.actionFor(selection.artifact) !== "reuse") {
           loaded.set(
             selection.artifact,
-            await this.#modules.load(selection.artifact, operation.signal),
+            await this.#whileDestinationValid(operation.signal, (signal) =>
+              this.#modules.load(selection.artifact, signal),
+            ),
           );
         }
       }
@@ -362,7 +364,7 @@ class DeliveryPlatform<Reference> implements Platform<Reference> {
     operation.plan.assertCurrent();
     const candidate = new ActivationPlan(this.#registrations, roots, removing);
     candidate.assertValid();
-    const { host, group } = this.#ports();
+    const { host, group, authorizer } = this.#ports();
     const pending = candidate.selections.filter(
       (selection) => selection.registration.actionFor(selection.artifact) !== "reuse",
     );
@@ -417,7 +419,22 @@ class DeliveryPlatform<Reference> implements Platform<Reference> {
       assertCompatibleManifest(this.apiVersion, origin.manifest);
       admission.set(registration.id, origin);
     }
-    await this.#authorize(plan, admission.values(), operation.signal);
+    await this.#whileDestinationValid(
+      operation.signal,
+      async (signal) => {
+        for (const artifact of admission.values()) {
+          await Preparation.waitFor(
+            (admissionSignal) =>
+              authorizer.authorize(
+                Object.freeze({ artifact: describeArtifact(artifact), operation: "activate" }),
+                admissionSignal,
+              ),
+            signal,
+          );
+        }
+      },
+      plan,
+    );
     operation.plan.assertCurrent();
     operation.handoff();
     const result = await host.apply(plan);
@@ -425,36 +442,37 @@ class DeliveryPlatform<Reference> implements Platform<Reference> {
     return result;
   }
 
-  async #authorize(plan: Plan, artifacts: Iterable<ArtifactDescriptor>, caller: AbortSignal) {
-    const { host, authorizer } = this.#ports();
-    const expectedRevision = plan.report.baseStateRevision;
+  async #whileDestinationValid<T>(
+    caller: AbortSignal,
+    prepare: (signal: AbortSignal) => Promise<T>,
+    plan?: Plan,
+  ) {
+    const { host } = this.#ports();
+    const expectedRevision = plan?.report.baseStateRevision;
     const invalidated = new AbortController();
     const signal = AbortSignal.any([caller, invalidated.signal]);
-    const checkRevision = () => {
+    const check = () => {
+      const failure = this.#placementFailure();
+      if (failure) {
+        invalidated.abort(failure);
+        return;
+      }
       const stateRevision = host.stateRevision;
-      if (stateRevision !== expectedRevision)
+      if (expectedRevision !== undefined && stateRevision !== expectedRevision)
         invalidated.abort(
-          this.#placementFailure() ??
-            new PlatformError("ACTIVATION_STALE", "Host changed during activation admission", {
-              details: { outcome: "rejected", phase: "admission", expectedRevision, stateRevision },
-            }),
+          new PlatformError("ACTIVATION_STALE", "Host changed during activation admission", {
+            details: { outcome: "rejected", phase: "admission", expectedRevision, stateRevision },
+          }),
         );
     };
-    // A policy may never settle. Once Core invalidates its Plan, waiting would reserve the Platform indefinitely.
-    const subscription = host.diagnostics.subscribe(checkRevision);
+    // Loading survives unrelated commits. Final admission also needs the exact revision of its Core Plan.
+    const subscription = host.diagnostics.subscribe(check);
     try {
-      checkRevision();
-      for (const artifact of artifacts) {
-        await Preparation.waitFor(
-          (admissionSignal) =>
-            authorizer.authorize(
-              Object.freeze({ artifact: describeArtifact(artifact), operation: "activate" }),
-              admissionSignal,
-            ),
-          signal,
-        );
-      }
+      check();
       signal.throwIfAborted();
+      const result = await prepare(signal);
+      signal.throwIfAborted();
+      return result;
     } finally {
       subscription[disposeSymbol]();
     }

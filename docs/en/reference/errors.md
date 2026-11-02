@@ -2,11 +2,13 @@
 
 Failures reject with structured errors. `DougongError` exposes `code`, immutable `details` and an optional original `cause`. `ConfigurationValidationError` additionally exposes captured Standard Schema issues. `PlatformError` uses `PlatformErrorCode`; `PermissionDeniedError` exposes manifestName and denied permissions.
 
+The `DougongError` constructor validates the declared detail fields. Revision numbers must be nonnegative safe integers, and installation and dependency paths must contain strings. Unknown fields and invalid values throw a TypeError. Recording an external error still omits malformed fields and bounds the diagnostic data.
+
 When migrating Registration diagnostics, read `snapshot.fields?.manifestName` and `snapshot.fields?.denied` in place of the former top-level properties. A caught `PermissionDeniedError` retains its typed fields. To record domain diagnostics, pass up to eight field names of 1 to 256 characters to `new RecordedFailure(error, fieldNames)`. The recorder reads own data properties and captures bounded strings and string arrays.
 
 `details.outcome` distinguishes rejected, restored and quarantined execution. Promise resolution communicates success; `ApplyResult` returns only the state revision and affected installations, without a constant success field. `RecordedFailure` and `ErrorSnapshot` are bounded diagnostic projections, while direct callers receive original failures. Argument and protocol misuse can throw TypeError. Cancellation follows the owning AbortSignal and is not a successful commit.
 
-When cleanup throws while another failure is being unwound, a `SuppressedError` snapshot records the cleanup failure under `error` and the preceding failure under `suppressed`. Both branches share the diagnostic depth and size budget.
+A native Error from another realm retains its message and causes. When cleanup throws during unwinding, the recorder reads the own data fields `error` and `suppressed` even if the application has renamed the error. Both branches share the diagnostic depth and size budget.
 
 | Code | Meaning and response |
 | --- | --- |
@@ -43,7 +45,7 @@ When cleanup throws while another failure is being unwound, a `SuppressedError` 
 | `PLAN_STALE` | The Plan baseline is stale; plan again. |
 | `PLATFORM_BUSY` | A final activation or release is executing; request a new Platform mutation after it returns. |
 | `PLATFORM_UNAVAILABLE` | Platform or Catalog is unavailable, or the destination Host is quarantined. |
-| `PROVIDES_INVALID` | The setup result has an invalid shape or differs from the declared Service aliases. Read `details.installation` on this error to identify the failing Installation. |
+| `PROVIDES_INVALID` | The setup result is unreadable, has an invalid shape or differs from the declared Service aliases. Read `details.installation` to identify the failing Installation; `cause` preserves the original error thrown while capturing the output. |
 | `REGISTRATION_CYCLE` | Selected delivery dependencies contain a cycle. |
 | `REGISTRATION_DEPENDENCY_INACTIVE` | A required delivery dependency has no activatable selection. |
 | `REGISTRATION_DEPENDENCY_INCOMPATIBLE` | A selected dependency version does not satisfy its Manifest range. |

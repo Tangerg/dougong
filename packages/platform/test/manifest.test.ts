@@ -10,7 +10,7 @@ import {
   PlatformError,
 } from "../src";
 
-import { fixture, select } from "./fixtures";
+import { emptyPlugin, fixture, select } from "./fixtures";
 
 describe("manifest declarations", () => {
   it("captures and freezes every declared collection", () => {
@@ -86,20 +86,28 @@ describe("manifest declarations", () => {
     ).toThrow(expect.objectContaining({ code: "MANIFEST_INVALID" }));
   });
 
-  it("rejects unsupported dependency names without dropping them", () => {
-    const manifest = JSON.parse(
-      '{"name":"consumer","version":"1.0.0","dependencies":{"__proto__":"^1.0.0"}}',
-    );
-    expect(() => defineManifest(manifest)).toThrow(
+  it("preserves prototype-named dependency edges from discovery through activation", async () => {
+    const dependencies = { ["__proto__"]: "^1.0.0", constructor: "*", toString: "*" };
+    const input = { name: "consumer", version: "1.0.0", dependencies };
+    const manifest = defineManifest(input);
+    expect(Object.keys(manifest.dependencies)).toEqual(Object.keys(dependencies));
+    expect(Object.getPrototypeOf(manifest.dependencies)).toBe(Object.prototype);
+    expect(() => defineManifest({ ...input, dependencies: { ["__proto__"]: "broken" } })).toThrow(
       expect.objectContaining({ code: "MANIFEST_INVALID" }),
     );
+
+    const modules = new Map(
+      ["consumer", ...Object.keys(dependencies)].map((name) => [name, emptyPlugin(name)]),
+    );
+    const { platform } = fixture(modules);
+    const root = await select(platform, "consumer", "consumer", manifest);
     expect(
-      defineManifest({
-        name: "consumer",
-        version: "1.0.0",
-        dependencies: { constructor: "*", toString: "*" },
-      }).dependencies,
-    ).toEqual({ constructor: "*", toString: "*" });
+      platform.preview([root]).blockers.map((blocker) => blocker.dependencyPath.at(-1)),
+    ).toEqual(Object.keys(dependencies));
+    for (const name of Object.keys(dependencies)) await select(platform, name, name);
+    await platform.activate([root]);
+    expect(root.activeOrigin?.manifest.dependencies).toEqual(manifest.dependencies);
+    await platform[Symbol.asyncDispose]();
   });
 
   it("does not invoke top-level declaration accessors", () => {

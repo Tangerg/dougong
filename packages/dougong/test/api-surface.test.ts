@@ -1,3 +1,4 @@
+import { runInNewContext } from "node:vm";
 import budget from "../../../tooling/architecture/public-api.json" with { type: "json" };
 import { describe, expect, it } from "vitest";
 import * as core from "../src/index";
@@ -97,6 +98,36 @@ describe("public API surface", () => {
 
   it("keeps the Core value-export budget explicit", () => {
     expect(Object.keys(core).sort()).toEqual([...budget["dougong"].values].sort());
+  });
+
+  it("retains the identity and diagnostic fields of native errors from another realm", () => {
+    const reason: unknown = runInNewContext(
+      'new RangeError("outside range", { cause: new Error("outside cause") })',
+    );
+    expect(core.isError(reason)).toBe(true);
+    expect(normalizeFailure(reason, "SETUP_FAILED", "setup failed")).toBe(reason);
+    expect(new core.RecordedFailure(reason).snapshot).toMatchObject({
+      name: "RangeError",
+      message: "outside range",
+      cause: { name: "Error", message: "outside cause" },
+    });
+    expect(core.isError({ [Symbol.toStringTag]: "Error" })).toBe(false);
+  });
+
+  it("records suppression by its stored failure pair even under a domain name", () => {
+    const failure = Object.assign(new Error("teardown"), {
+      name: "TeardownError",
+      error: new Error("cleanup"),
+      suppressed: undefined,
+    });
+    const snapshot = new core.RecordedFailure(failure).snapshot;
+    expect(snapshot).toMatchObject({
+      name: "TeardownError",
+      error: { message: "cleanup" },
+      suppressed: { name: "NonError", message: "undefined" },
+    });
+    const ordinary = Object.assign(new Error("ordinary"), { name: "SuppressedError" });
+    expect(new core.RecordedFailure(ordinary).snapshot).not.toHaveProperty("suppressed");
   });
 
   it("records terminal diagnostics without claiming the original error class", () => {
@@ -499,6 +530,35 @@ it("reads error detail fields once and retains a snapshot independent of caller 
   expect(reads).toBe(1);
   expect(failure.details.dependencyPath).toEqual(["one"]);
   expect(Object.isFrozen(failure.details.dependencyPath)).toBe(true);
+});
+
+it.each([
+  { extra: new Map() },
+  { outcome: "unknown" },
+  { phase: { label: "mutable" } },
+  { stateRevision: -1 },
+  { expectedRevision: 1.5 },
+  { dependencyPath: [{ id: "mutable" }] },
+  { affectedInstallations: ["one", 2] },
+])("rejects invalid structured error details instead of retaining malformed data", (details) => {
+  expect(() => new core.DougongError("FAILED", "failed", { details: details as never })).toThrow(
+    TypeError,
+  );
+});
+
+it("keeps complete declared details and bounds their recorded projection", () => {
+  const phase = "p".repeat(300);
+  const affectedInstallations = Array.from({ length: 40 }, (_, index) => String(index));
+  const failure = new core.DougongError("FAILED", "failed", {
+    details: { phase, affectedInstallations },
+  });
+  affectedInstallations.length = 0;
+  expect(failure.details.phase).toBe(phase);
+  expect(failure.details.affectedInstallations).toHaveLength(40);
+  const recorded = new core.RecordedFailure(failure);
+  expect(recorded.snapshot.details?.phase).toHaveLength(256);
+  expect(recorded.snapshot.details?.affectedInstallations).toHaveLength(32);
+  expect(recorded.snapshot.truncated).toBe(true);
 });
 
 it("preserves the bounded diagnostic tree of a failure nested by another owner", () => {

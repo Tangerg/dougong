@@ -74,6 +74,12 @@ const options = compilerOptions();
 const graph = (await analyzeDependencies(options)).obj();
 const program = typescript.createProgram(Object.keys(graph), options);
 const checker = program.getTypeChecker();
+const commonJsRequire = checker.resolveName(
+  "require",
+  undefined,
+  typescript.SymbolFlags.Value,
+  false,
+);
 const resolution = typescript.createModuleResolutionCache(
   process.cwd(),
   typescript.sys.useCaseSensitiveFileNames ? (file) => file : (file) => file.toLowerCase(),
@@ -100,11 +106,18 @@ function moduleSpecifier(node) {
     return node.moduleSpecifier;
   if (typescript.isImportTypeNode(node) && typescript.isLiteralTypeNode(node.argument))
     return node.argument.literal;
-  if (
-    typescript.isCallExpression(node) &&
-    node.expression.kind === typescript.SyntaxKind.ImportKeyword
-  )
-    return node.arguments[0];
+  if (typescript.isExternalModuleReference(node)) return node.expression;
+  if (typescript.isCallExpression(node)) {
+    const callee = node.expression;
+    if (callee.kind === typescript.SyntaxKind.ImportKeyword) return node.arguments[0];
+    // A local function called require does not resolve modules through Node.
+    if (
+      typescript.isIdentifier(callee) &&
+      callee.text === "require" &&
+      checker.getSymbolAtLocation(callee) === commonJsRequire
+    )
+      return node.arguments[0];
+  }
 }
 
 function location(path) {

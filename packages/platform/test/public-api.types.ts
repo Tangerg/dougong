@@ -1,9 +1,11 @@
 import { createHost, definePlugin } from "dougong";
 import {
   createPlatform,
+  defineManifest,
   MemoryLoader,
   type Artifact,
   type Authorizer,
+  type ManifestInput,
   type Platform,
   type Registration,
 } from "@dougongjs/platform";
@@ -22,9 +24,17 @@ const platform = createPlatform({
   loader: new MemoryLoader(new Map([["module", { default: plugin }]])),
 });
 
+const declaration = {
+  name: plugin.name,
+  version: "1.0.0",
+  activation: ["startup"],
+  permissions: ["read"],
+} as const;
+const manifest: ManifestInput = defineManifest(declaration);
+
 const artifact: Artifact<string> = platform.catalog.add({
   revision: "release-1",
-  manifest: { name: plugin.name, version: "1.0.0" },
+  manifest,
   reference: "module",
 });
 

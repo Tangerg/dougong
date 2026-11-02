@@ -1,3 +1,4 @@
+import { runInNewContext } from "node:vm";
 import { describe, expect, it } from "vitest";
 import { normalizePlainRecord } from "../src/advanced";
 
@@ -6,6 +7,21 @@ describe("normalizePlainRecord", () => {
     expect(() => normalizePlainRecord([], "Options")).toThrowError(
       new TypeError("Options must be a plain record"),
     );
+  });
+
+  it("only trusts the native Object prototype of another realm", () => {
+    const values = runInNewContext(`[
+      Object.create(Object.assign(Object.create(null), { constructor: Object })),
+      Object.create((class Custom extends null {}).prototype),
+      Object.create(Object.defineProperty(Object.create(null), "constructor", {
+        get() { throw new Error("constructor getter invoked"); },
+      })),
+    ]`) as unknown[];
+    for (const value of values) {
+      expect(() => normalizePlainRecord(value, "Options")).toThrow(
+        new TypeError("Options must be a plain record"),
+      );
+    }
   });
 
   it("lets a higher layer preserve its public error taxonomy", () => {

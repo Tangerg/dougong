@@ -2,11 +2,13 @@
 
 失败通过结构化错误拒绝。`DougongError` 提供 `code`、不可变 `details` 和可选原始 `cause`；`ConfigurationValidationError` 额外提供捕获后的 Standard Schema issues。`PlatformError` 使用 `PlatformErrorCode`，`PermissionDeniedError` 提供 manifestName 与 denied。
 
+`DougongError` 构造时校验声明的详情字段。修订号必须是非负安全整数，安装列表和依赖路径的成员必须是字符串。未知字段或无效值会抛出 TypeError。记录外部错误时仍会忽略无效字段，并限制诊断数据的大小。
+
 从旧版迁移时，读取 Registration 诊断的调用方应将 `snapshot.manifestName` 和 `snapshot.denied` 改为 `snapshot.fields?.manifestName` 和 `snapshot.fields?.denied`。直接捕获的 `PermissionDeniedError` 仍提供类型化字段。自定义诊断可用 `new RecordedFailure(error, fieldNames)` 选择最多八个字段，每个名称限 1 至 256 个字符。记录器只读取对象自身的数据属性，保留有界的字符串或字符串数组。
 
 `details.outcome` 区分 rejected、restored、quarantined。Promise 正常完成即成功，`ApplyResult` 只返回状态修订与影响安装；无须用固定字段再次判断成功。`RecordedFailure` 与 `ErrorSnapshot` 是有界诊断投影，直接调用者仍获得原始失败。参数与协议误用可能抛 TypeError；取消服从所属 AbortSignal，并不等于成功提交。
 
-当资源清理和执行体都抛错时，`SuppressedError` 的快照分别用 `error` 保存清理错误、用 `suppressed` 保存先前错误。两条分支共用同一份诊断深度和大小预算。
+来自其他 Realm 的原生 Error 可以保留消息和原因链。当资源清理和执行体都抛错时，记录器从错误自身的数据字段 `error` 和 `suppressed` 读取两条失败原因，应用可以自定义错误名称。两条分支共用同一份诊断深度和大小预算。
 
 | 错误码 | 含义与处理 |
 | --- | --- |
@@ -43,7 +45,7 @@
 | `PLAN_STALE` | 计划的基线版本已过期；重新规划。 |
 | `PLATFORM_BUSY` | 最终激活转换或释放正在执行；待返回后再发起新的 Platform 变更。 |
 | `PLATFORM_UNAVAILABLE` | Platform 或 Catalog 已不可用，或目标 Host 已被隔离。 |
-| `PROVIDES_INVALID` | setup 返回值的结构不合法，或返回的服务别名与 provides 声明不一致。读取该错误的 `details.installation` 可定位出错的安装。 |
+| `PROVIDES_INVALID` | setup 返回值无法读取、结构不合法，或返回的服务别名与 provides 声明不一致。读取该错误的 `details.installation` 可定位出错的安装；捕获输出时抛出的原始错误保留在 `cause`。 |
 | `REGISTRATION_CYCLE` | 选择的发行依赖图包含循环。 |
 | `REGISTRATION_DEPENDENCY_INACTIVE` | 所需发行依赖没有可激活的选择。 |
 | `REGISTRATION_DEPENDENCY_INCOMPATIBLE` | 依赖选择的版本不满足 Manifest 范围。 |

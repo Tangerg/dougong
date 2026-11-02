@@ -58,7 +58,7 @@ Host 状态为 `stopped`、`starting`、`running`、`changing`、`stopping`、`q
 
 从上一版 API 更新时，将已删除的 Host inspect 方法替换为 `host.diagnostics.get()`。删除对旧 ApplyResult outcome 字段的判断；await 正常完成后处理成功，catch 中处理失败及结构化 details。不提供别名或兼容适配器。
 
-Host 只在选项缺省时使用默认值；显式传入 null 的名字、安装列表或分组列表会被拒绝。配置捕获只读取共享输入对象一次并冻结结果；循环引用和过深嵌套仍然拒绝。插件可单独传递 `context.logger` 的日志函数，释放日志作用域的权限归 Instance。Host 创建时一次性捕获日志方法，保留原后端作为接收者；错误兜底同样使用捕获的方法。
+Host 只在选项缺省时使用默认值；显式传入 null 的名字、安装列表或分组列表会被拒绝。声明、配置和 Service 提供值记录都接受空原型及其他 realm 的原生 Object 原型。配置捕获只读取共享输入对象一次并冻结结果；循环引用和过深嵌套仍然拒绝。插件可单独传递 `context.logger` 的日志函数，释放日志作用域的权限归 Instance。Host 创建时一次性捕获日志方法，保留原后端作为接收者；错误兜底同样使用捕获的方法。
 
 ## 高级组合原语
 

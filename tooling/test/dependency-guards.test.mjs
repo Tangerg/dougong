@@ -6,7 +6,6 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
-  readFileSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -14,9 +13,11 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { expect, it, vi } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
+import { arrangeLayerViolations } from "./fixtures/layer-violations.mjs";
 
-vi.setConfig({ testTimeout: 30000 });
+const guardTestTimeout = 30000;
+vi.setConfig({ testTimeout: guardTestTimeout });
 
 const repository = fileURLToPath(new URL("../../", import.meta.url));
 
@@ -51,7 +52,7 @@ function runGuard(script, arrange = () => undefined) {
       {
         cwd: workspace,
         encoding: "utf8",
-        timeout: 10000,
+        timeout: guardTestTimeout,
       },
     );
     if (result.error) throw result.error;
@@ -95,149 +96,80 @@ it("rejects an actual dependency cycle", () => {
   expect(result.output).toContain("cycle-a.ts");
 });
 
-it("rejects an actual upward layer dependency", () => {
-  const result = runGuard("check-layers.mjs", (workspace) => {
-    appendFileSync(
-      join(workspace, "packages/dougong/src/contracts/contracts.ts"),
-      '\nimport "../execution/host";\n',
+describe("layer violations", () => {
+  let output;
+
+  beforeAll(() => {
+    const result = runGuard("check-layers.mjs", arrangeLayerViolations);
+    if (result.status !== 1)
+      throw new Error(
+        `Expected the layer guard to reject the fixture (status ${result.status}):\n${result.output}`,
+      );
+    output = result.output;
+  }, guardTestTimeout);
+
+  it("rejects an actual upward layer dependency", () => {
+    expect(output).toContain(
+      "contracts/direction-probe.ts: [direction.module] forbidden responsibility direction contracts -> execution",
     );
   });
-  expect(result.status).toBe(1);
-  expect(result.output).toContain("contracts -> execution");
-});
 
-it("rejects core depending on a higher package", () => {
-  const result = runGuard("check-layers.mjs", (workspace) => {
-    appendFileSync(
-      join(workspace, "packages/dougong/src/contracts/contracts.ts"),
-      '\nimport "@dougongjs/platform";\n',
+  it("rejects Core depending on a higher package", () => {
+    expect(output).toContain(
+      "contracts/direction-probe.ts: [direction.package] forbidden package direction dougong -> platform",
     );
   });
-  expect(result.status).toBe(1);
-  expect(result.output).toContain("dougong -> platform");
-});
 
-it("requires new implementation directories to declare a responsibility", () => {
-  const result = runGuard("check-layers.mjs", (workspace) => {
-    const directory = join(workspace, "packages/dougong/src/unowned");
-    mkdirSync(directory);
-    writeFileSync(join(directory, "registry.ts"), "export const value = 1;\n");
-  });
-  expect(result.status).toBe(1);
-  expect(result.output).toContain("no declared responsibility");
-});
-
-it("follows actual Contract factory symbols, including ESM aliases, without treating a shadow as a declaration", () => {
-  const result = runGuard("check-layers.mjs", (workspace) => {
-    writeFileSync(
-      join(workspace, "packages/dougong/src/composition/ownership-probe.ts"),
-      [
-        'import { service as declare } from "../contracts/contracts.js";',
-        'import * as contract from "../contracts/contracts.js";',
-        'export const first = declare("probe/duplicate");',
-        "const emit = contract.event;",
-        'const ids = { conflict: "probe/duplicate" } as const;',
-        "export const second = emit(ids.conflict);",
-        'export function unrelated(declare: (id: string) => string) { return declare("probe/shadow"); }',
-        'export const actual = declare("probe/shadow");',
-      ].join("\n"),
+  it("requires new implementation directories to declare a responsibility", () => {
+    expect(output).toContain(
+      "unowned/registry.ts: [ownership.module] module 'unowned' has no declared responsibility",
     );
   });
-  expect(result.status).toBe(1);
-  expect(result.output).toContain("fixed Contract ID 'probe/duplicate'");
-  expect(result.output).not.toContain("fixed Contract ID 'probe/shadow'");
-});
 
-it("checks import types, re-exports and dynamic imports against the same package boundaries", () => {
-  const result = runGuard("check-layers.mjs", (workspace) => {
-    writeFileSync(
-      join(workspace, "packages/platform/src/activation/access-probe.ts"),
-      [
-        'export type Hidden = import("../../../dougong/src/execution/engine.js").Engine;',
-        'export { Engine } from "../../../dougong/src/execution/engine.js";',
-        'export const load = () => import("fs");',
-      ].join("\n"),
+  it("follows actual Contract factory symbols, including ESM aliases, without treating a shadow as a declaration", () => {
+    expect(output).toContain(
+      "ownership-probe.ts:6: [contracts.owner] fixed Contract ID 'probe/duplicate'",
+    );
+    expect(output).not.toContain("fixed Contract ID 'probe/shadow'");
+  });
+
+  it("checks import types, re-exports and dynamic imports against the same package boundaries", () => {
+    expect(output).toContain("access-probe.ts:1: [exports.public]");
+    expect(output).toContain("access-probe.ts:2: [exports.public]");
+    expect(output.match(/access-probe\.ts:\d+: \[exports\.public\]/g)).toHaveLength(2);
+    expect(output).toContain("access-probe.ts:3: [runtime.portable]");
+  });
+
+  it("checks the defining Lifetime constructor, production source roots and readonly callback types", () => {
+    expect(output).toContain("owner-probe.ts:3: [lifetime.owner]");
+    expect(output.match(/owner-probe\.ts:\d+: \[lifetime\.owner\]/g)).toHaveLength(1);
+    expect(output).toContain("owner-probe.ts:6: [ownership.module]");
+    expect(output).toContain("owner-probe.ts:8: [callbacks.readonly]");
+  });
+
+  it("rejects a private runtime port redirected into non-runtime workspace files", () => {
+    expect(output).toContain(
+      "packages/reactive/src/abort.ts:2: [ownership.module] runtime source cannot import a non-runtime workspace file: packages/reactive/runtime/undeclared.d.mts",
     );
   });
-  expect(result.status).toBe(1);
-  expect(result.output.match(/\[exports.public\]/g)).toHaveLength(2);
-  expect(result.output).toContain("[runtime.portable]");
-});
 
-it("checks the defining Lifetime constructor, production source roots and readonly callback types", () => {
-  const result = runGuard("check-layers.mjs", (workspace) => {
-    const directory = join(workspace, "packages/dougong");
-    mkdirSync(join(directory, "test"));
-    writeFileSync(join(directory, "test/helper.ts"), "export type Helper = string;\n");
-    writeFileSync(
-      join(directory, "src/composition/owner-probe.ts"),
-      [
-        'import { Lifetime as Scope } from "../lifetime/lifetime.js";',
-        "const Alias = Scope;",
-        'export const invalid = () => new Alias({ label: "orphan" });',
-        "class Lifetime {}",
-        "export const unrelated = new Lifetime();",
-        'export type TestHelper = import("../../test/helper.js").Helper;',
-        "type Notify = () => void;",
-        "interface ProbePort { notify?: Notify; readonly receive: Notify; count: number }",
-      ].join("\n"),
-    );
+  it("checks NodeNext TypeScript modules reachable from portable source", () => {
+    expect(output).toContain("source.mts:1: [runtime.portable]");
+    expect(output).toContain("common.cts:1: [runtime.portable]");
+    expect(output).toContain("common.cts:2: [runtime.portable]");
+    expect(output).not.toContain("common.cts:5:");
   });
-  expect(result.status).toBe(1);
-  expect(result.output).toContain("owner-probe.ts:3: [lifetime.owner]");
-  expect(result.output.match(/\[lifetime.owner\]/g)).toHaveLength(1);
-  expect(result.output).toContain("owner-probe.ts:6: [ownership.module]");
-  expect(result.output).toContain("owner-probe.ts:8: [callbacks.readonly]");
-});
 
-it("rejects a private runtime port redirected into non-runtime workspace files", () => {
-  const result = runGuard("check-layers.mjs", (workspace) => {
-    const root = join(workspace, "packages", "reactive");
-    const manifest = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
-    manifest.imports["#abort-listener"].types = "./runtime/undeclared.d.mts";
-    writeFileSync(join(root, "package.json"), JSON.stringify(manifest));
-    copyFileSync(
-      join(root, "runtime/abort-listener.d.mts"),
-      join(root, "runtime/undeclared.d.mts"),
-    );
+  it("checks project-authored names without treating data and foreign keys as declarations", () => {
+    const violations = output.split("\n").filter((line) => line.includes("names.ts:"));
+    expect(violations).toHaveLength(5);
+    for (const [line, name] of [
+      [1, "deps"],
+      [2, "#cachedDeps"],
+      [3, "ctx"],
+      [5, "shutdownTimeoutMs"],
+      [6, "fn"],
+    ])
+      expect(output).toContain(`names.ts:${line}: [vocabulary.current] Declaration '${name}'`);
   });
-  expect(result.status).toBe(1);
-  expect(result.output).toContain("[ownership.module]");
-  expect(result.output).toContain("runtime/undeclared.d.mts");
-});
-
-it("checks NodeNext TypeScript modules reachable from portable source", () => {
-  const result = runGuard("check-layers.mjs", (workspace) => {
-    const directory = join(workspace, "packages/reactive/src");
-    appendFileSync(join(directory, "index.ts"), '\nexport { read } from "./source.mjs";\n');
-    writeFileSync(join(directory, "source.mts"), 'export { readFile as read } from "node:fs";\n');
-  });
-  expect(result.status).toBe(1);
-  expect(result.output).toContain("source.mts:1: [runtime.portable]");
-});
-
-it("checks project-authored names without treating data and foreign keys as declarations", () => {
-  const result = runGuard("check-layers.mjs", (workspace) => {
-    writeFileSync(
-      join(workspace, "packages/reactive/src/names.ts"),
-      [
-        'export interface Options { readonly ["deps"]: string }',
-        "export class Owner { #cachedDeps = 0 }",
-        "export function read(ctx: Record<string, string>) {",
-        "  const { deps: dependencies } = ctx;",
-        "  const shutdownTimeoutMs = 5;",
-        "  const fn = () => ctx.fn;",
-        '  return [ctx.deps, dependencies, "deps", fn(), import.meta.url, ctx.config, ctx.publishConfig, shutdownTimeoutMs];',
-        "}",
-      ].join("\n"),
-    );
-  });
-  const violations = result.output.split("\n").filter((line) => line.includes("names.ts:"));
-  expect(violations).toHaveLength(5);
-  expect(violations.join("\n")).toContain("Declaration 'deps'");
-  expect(violations.join("\n")).toContain("Declaration '#cachedDeps'");
-  expect(violations.join("\n")).toContain("Declaration 'ctx'");
-  expect(violations.join("\n")).toContain("Declaration 'fn'");
-  expect(violations.join("\n")).toContain("Declaration 'shutdownTimeoutMs'");
-  expect(result.status).toBe(1);
 });

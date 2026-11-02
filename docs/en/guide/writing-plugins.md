@@ -1,6 +1,6 @@
 # Writing plugins
 
-`definePlugin` accepts `name`, an optional Standard Schema `configuration`, `requires`, `provides` and `setup`. The setup result must match the declared provisions. Configuration is the second argument of `setup(context, configuration)`.
+`definePlugin` accepts `name`, an optional Standard Schema `configuration`, `requires`, `provides` and `setup`. The setup result must match the declared provisions. Configuration is the second argument of `setup(context, configuration)`. An immutable Plugin returned by `definePlugin` can be reused across Installations. The same copy of Core reuses that captured declaration. Passing a mutable declaration captures its fields anew.
 
 ```ts
 const COMMANDS = extensionPoint<{ title: string; run(): Promise<string> }>("editor/commands");

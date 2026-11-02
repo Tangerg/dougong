@@ -65,7 +65,9 @@ describe("Plugin configuration validation", () => {
   it("rejects accessors without executing them", () => {
     const getter = vi.fn<() => number>(() => 1);
     const input = Object.defineProperty({}, "port", { enumerable: true, get: getter });
-    expect(() => captureConfiguration(input)).toThrow(/data properties/);
+    expect(() => captureConfiguration(input)).toThrow(
+      "configuration field 'port' must be a data property",
+    );
     expect(getter).not.toHaveBeenCalled();
     const array = Object.defineProperty([1], "0", { get: getter });
     expect(() => captureConfiguration(array)).toThrow(/data properties/);
@@ -93,7 +95,7 @@ describe("Plugin configuration validation", () => {
       createHost({
         installations: [{ id: "configuration", plugin, configuration: Promise.resolve(1) }],
       }),
-    ).toThrow(/plain records/);
+    ).toThrow("configuration must be a plain record");
     expect(setup).not.toHaveBeenCalled();
   });
 
@@ -103,7 +105,7 @@ describe("Plugin configuration validation", () => {
       "input",
     );
     expect(failure).toBeInstanceOf(TypeError);
-    expect(failure).toMatchObject({ message: expect.stringMatching(/plain records/) });
+    expect(failure).toMatchObject({ message: "configuration must be a plain record" });
   });
 
   it("names the Installation when a validator returns a non-object result", async () => {

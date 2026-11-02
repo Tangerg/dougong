@@ -58,7 +58,7 @@ Subscriptions share `get/subscribe`, do not replay and use standard Disposable c
 
 For callers updating from the previous API, replace the removed Host inspect method with `host.diagnostics.get()`. Remove checks of the former ApplyResult outcome field; code after a successful await handles success, while catch handles failures and their structured details. No alias or compatibility adapter is provided.
 
-Host defaults apply when an option is omitted. An explicit null name, installation list or group list is invalid. Configuration capture reads each shared input object once and freezes its result; cycles and excessive nesting still reject. The logger in `context.logger` exposes standalone callbacks that the plugin may pass to another function. Its disposal belongs to the Instance. Host creation captures each logger method once with its original backend receiver, including the error fallback.
+Host defaults apply when an option is omitted. An explicit null name, installation list or group list is invalid. Declaration, configuration and provided-service records accept null prototypes and native Object prototypes from other realms. Configuration capture reads each shared input object once and freezes its result; cycles and excessive nesting still reject. The logger in `context.logger` exposes standalone callbacks that the plugin may pass to another function. Its disposal belongs to the Instance. Host creation captures each logger method once with its original backend receiver, including the error fallback.
 
 ## Advanced composition primitives
 

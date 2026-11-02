@@ -32,34 +32,35 @@ const versionRange = identifier.refine(
   "must be a valid semantic version range",
 );
 
+// A Map validates arbitrary Registration names without invoking or stripping Object prototype keys.
+const dependencyRanges = z
+  .preprocess(
+    (dependencies: Record<string, string>) => new Map(Object.entries(dependencies)),
+    z.map(registrationName, versionRange),
+  )
+  .transform((dependencies) => Object.fromEntries(dependencies));
+
 const manifestSchema = z
   .object({
     name: registrationName,
     version: identifier.refine(isConcreteVersion, "must be a valid semantic version"),
     apiVersion: versionRange.default("*"),
-    activation: z.array(identifier).default(["startup"]),
-    permissions: z.array(identifier).default([]),
-    dependencies: z.record(registrationName, versionRange).default({}),
+    activation: z.array(identifier).default(["startup"]).readonly(),
+    permissions: z.array(identifier).default([]).readonly(),
+    dependencies: dependencyRanges.default({}).readonly(),
   })
-  .strict();
+  .strict()
+  .readonly();
 
-export interface Manifest {
-  readonly name: string;
-  readonly version: string;
-  readonly apiVersion: string;
-  readonly activation: ReadonlyArray<string>;
-  readonly permissions: ReadonlyArray<string>;
-  readonly dependencies: Readonly<Record<string, string>>;
-}
+export type Manifest = z.output<typeof manifestSchema>;
+export type ManifestInput = z.input<typeof manifestSchema>;
 
 export function isConcreteVersion(version: string) {
   return version === version.trim() && valid(version) !== null;
 }
 
-export type ManifestInput = z.input<typeof manifestSchema>;
-
 // Untrusted manifests can crash validators; preserve the cause under one public failure code.
-export function defineManifest(input: ManifestInput | Manifest): Manifest {
+export function defineManifest(input: ManifestInput): Manifest {
   let failure: PlatformError | undefined;
   const declarationError = (message: string) =>
     (failure = Object.freeze(new PlatformError("MANIFEST_INVALID", message)));
@@ -92,10 +93,7 @@ export function defineManifest(input: ManifestInput | Manifest): Manifest {
   assertUnique(manifest.activation, "activation event", manifest.name);
   assertUnique(manifest.permissions, "permission", manifest.name);
 
-  Object.freeze(manifest.activation);
-  Object.freeze(manifest.permissions);
-  Object.freeze(manifest.dependencies);
-  return Object.freeze(manifest);
+  return manifest;
 }
 
 // Own the validated data so the supplier cannot mutate it between validation and storage.
@@ -111,9 +109,6 @@ function snapshotManifestDeclaration(input: unknown, createError: (message: stri
     const dependencies = normalizePlainRecord(declaration.dependencies, "Manifest dependencies", {
       createError,
     });
-    if (Object.hasOwn(dependencies, "__proto__")) {
-      throw createError("Manifest dependency '__proto__' is not supported");
-    }
     return { ...declaration, ...collections, dependencies };
   }
   return { ...declaration, ...collections };

@@ -14,7 +14,7 @@
 | `types.precise` | Explicit any is forbidden |
 | `callbacks.readonly` | Port and Control callbacks are readonly function properties |
 | `tests.types` | Compile-only assertions belong to public-api.types.ts |
-| `runtime.portable` | Runtime libraries cannot depend on Node built-ins |
+| `runtime.portable` | Runtime libraries cannot import Node built-ins through ESM, import-equals or the global CommonJS `require` |
 | `exports.public` | Cross-package imports use formal public entrypoints |
 | `modules.esm` | Relative source imports carry runtime extensions so emitted declarations support NodeNext |
 | `reactive.independent` | Reactive has zero external dependencies |
@@ -40,7 +40,9 @@ The distribution type checks resolve package exports as a NodeNext consumer. Imp
 
 The expected public API lives in `tooling/architecture/public-api.json`. Source checks, emitted declarations and all four ESM entrypoints use the same budget.
 
-For a release, the full gate runs on the requested versions. The packed consumer and the release use the same archives: the consumer records their hashes only after the isolated application passes. After the remaining checks finish, release verifies those hashes, the source manifests, the fetched Git commit and the remote tag before the first upload. The uploader rechecks the remote branch and tag before each upload. Git records the release only if the remote refs still match the preflight. Existing and new registry versions must match the verified file names and contents before Git records the release.
+For a release, the full gate runs on the requested versions. The packed consumer and the release use the same archives: the consumer records their hashes only after the isolated application passes. After the remaining checks finish, release verifies those hashes, the source manifests, the fetched Git commit and the remote tag before the first upload. The release pins the single push destination configured for `origin`. Its main branch must match the fetched commit. Ref reads and pushes use one command-scoped remote with identical `url` and `pushurl` values, without changing persistent configuration. If `insteadOf` would rewrite the captured destination again, the release rejects it before uploading. The uploader rechecks that destination’s branch and tag before each upload and pushes the release record to the same address. Git records the release only if the remote refs still match the preflight. Existing and new registry versions must match the verified file names and contents before Git records the release.
+
+Each package has one registry destination for the release. Resolution follows npm’s precedence: the package scope’s registry, the configured scope’s registry, then the default registry. A `publishConfig` entry overrides the corresponding npm setting. `publishConfig.registry` overrides only the default registry; an existing scope-specific destination still takes precedence. Authentication, version and channel checks, publishing, and tarball readback all pin the resolved destination. Configure credentials separately through npm for that registry.
 
 Each published manifest lists the literal files or directories to ship. Packing must preserve those files, including additional assets outside `dist/`, and cannot introduce other files or metadata. Workspace dependency ranges are resolved to the versions under test; package-manager authoring data and packaging hooks need not ship. The ESM build derives external dependencies and subpaths from each package’s manifest. The declaration check uses TypeScript’s module namespace to distinguish a constructor from a type-only re-export of the same class.
 

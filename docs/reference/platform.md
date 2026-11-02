@@ -33,6 +33,8 @@ Platform 状态为 `active/disposing/disposed`。Registration 状态为 `selecte
 
 Manifest dependencies 负责发行依赖；Plugin requires 负责真实能力绑定。动态导入图属于 打包器的模块热替换适配器，不能从这两个图猜测。示例 12 展示将 bundler 影响集合提交为一笔激活计划。
 
+Manifest 的输入、输出类型和冻结语义由同一验证 schema 定义。`defineManifest` 接受只读声明，返回值可以直接作为新的 Manifest 输入。合法 Registration 名称在依赖记录中同样有效，包括 `__proto__`、`constructor` 和 `toString`；这些名称按普通依赖边处理。
+
 提交 Core Plan 前，Platform 会为直接安装和更新的 Artifact 请求激活授权。如果该 Plan 还会重启本 Platform 拥有的其他 Artifact，授权使用其已提交的来源。如果无法从已提交的来源恢复匹配的 Manifest，或其 API 范围与当前 Platform 不兼容，整笔变更会在执行前被拒绝。显式将该 Registration 加入激活目标，可按当前选择重新安装。依赖规划失败会记录在本次选中且需要安装或更新的 Registration 上，调用 preview 则只读取状态。Core 接手计划后，如果需要回滚，可能沿用已提交版本原先的准入结果并再次执行其 setup。直接调用 Host 或经其他 Platform 提交的命令也不经过这个 Platform 的准入。
 
 Platform 构造时捕获 Loader 和 Authorizer 的方法，并保留各自的接收对象。Loader 是结构协议；ImportLoader 用同一 realm 的动态导入，MemoryLoader 适合测试与受控模块表。PermissionSet 是声明权限集合的 Authorizer 实现，不提供操作系统隔离。
@@ -50,3 +52,5 @@ Core 规划、最终准入、应用或释放期间，新的选择和激活命令
 激活在排队等待准入或提交期间可以立即取消，即使前面的命令仍在等待用户代码。取消通过私有从属信号送达，即使调用方拦截了原信号上的事件也能撤回等待。
 
 最终准入期间，其他 Host 命令一旦推进提交版本，本次 Core Plan 即失效。Platform 会取消对授权回调的等待，并在目标 Host 被隔离或 Group 已移除时报告对应的目标错误。如果目标仍然可用，`ACTIVATION_STALE` 会给出预期版本和当前版本，调用方可以重新激活。
+
+加载授权和模块加载阶段也订阅目标有效性：Group 删除或 Host 隔离立即结束等待，即使适配器永不返回。此时分别报告 `REGISTRATION_UNAVAILABLE` 或 `PLATFORM_UNAVAILABLE`，并保留真实失败诊断。加载尚未绑定 Core Plan 的提交版本，所以不相关的 Host 提交不会令共享加载失效。

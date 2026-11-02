@@ -6,7 +6,7 @@ import { defineManifest, type Manifest, type ManifestInput } from "./manifest.js
 
 export interface ArtifactInput<Reference> {
   readonly revision: string;
-  readonly manifest: Manifest | ManifestInput;
+  readonly manifest: ManifestInput;
   readonly reference: Reference;
   readonly configuration?: unknown;
 }
@@ -25,7 +25,7 @@ export interface ArtifactOrigin extends Readonly<Record<string, ConfigurationVal
   readonly kind: "artifact";
   readonly platformId: string;
   readonly revision: string;
-  readonly manifest: Manifest & Readonly<Record<string, ConfigurationValue>>;
+  readonly manifest: Manifest;
 }
 
 const descriptors = new WeakMap<ArtifactDescriptor, ArtifactDescriptor>();
@@ -106,7 +106,7 @@ export function artifactOrigin(platformId: string, artifact: ArtifactDescriptor)
     platformId,
     revision: artifact.revision,
     manifest: artifact.manifest,
-  }) as ArtifactOrigin;
+  });
 }
 
 export function readArtifactOrigin(
@@ -134,7 +134,7 @@ export function readArtifactOrigin(
       platformId,
       revision: value.revision,
       manifest,
-    }) as ArtifactOrigin;
+    });
     originProjections.set(value, origin);
     return origin;
   } catch {

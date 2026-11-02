@@ -1,7 +1,7 @@
 import fileSystem from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
 import { basename, dirname, join } from "node:path";
-import { installCommandFixture } from "../release-command-fixture.mjs";
+import { cleanReleaseGit, installReleaseFixture } from "../release-command-fixture.mjs";
 
 const workspace = process.cwd();
 const failure = process.env.DOUGONG_RELEASE_FAILURE;
@@ -13,7 +13,9 @@ const target = join(
 );
 const read = fileSystem.readFileSync;
 const write = fileSystem.writeFileSync;
+const remove = fileSystem.rmSync;
 let writes = 0;
+let injected = false;
 
 fileSystem.readFileSync = (path, ...fileOptions) => {
   if (failure === "read" && path === target && !fileOptions.length) {
@@ -28,6 +30,7 @@ fileSystem.writeFileSync = (path, contents, ...fileOptions) => {
     basename(dirname(path)).startsWith(".release-manifest-")
   ) {
     writes++;
+    if (failure === "unclaimed" && writes === 1) write(target, contents);
     if (failure === "write" && writes === 1) {
       write(path, "partial write", ...fileOptions);
       throw new Error("fixture manifest write failure");
@@ -38,24 +41,29 @@ fileSystem.writeFileSync = (path, contents, ...fileOptions) => {
   }
   return write(path, contents, ...fileOptions);
 };
+fileSystem.rmSync = (path, options) => {
+  remove(path, options);
+  if (
+    failure === "post-rename" &&
+    !injected &&
+    dirname(path) === dirname(target) &&
+    basename(path).startsWith(".release-manifest-")
+  ) {
+    injected = true;
+    throw new Error("fixture post-rename cleanup failure");
+  }
+};
 syncBuiltinESMExports();
 
-installCommandFixture((name, commandArguments) => {
+installReleaseFixture((name, commandArguments, options) => {
   if (name === "git") {
-    if (commandArguments[0] === "rev-parse") {
-      return {
-        status: 0,
-        stdout: commandArguments.includes("--abbrev-ref") ? "main" : "a".repeat(40),
-      };
+    if (failure === "preflight-source" && !injected) {
+      injected = true;
+      const manifest = JSON.parse(read(target, "utf8"));
+      manifest.publishConfig = { registry: "https://new.example.test/" };
+      write(target, JSON.stringify(manifest, null, 2) + "\n");
     }
-    if (commandArguments[0] === "rev-list") return { status: 0, stdout: "0" };
-    if (
-      ["status", "fetch", "ls-remote"].includes(commandArguments[0]) ||
-      (commandArguments[0] === "tag" && commandArguments[1] === "--list")
-    ) {
-      return { status: 0 };
-    }
-    process.exit(99);
+    return cleanReleaseGit(commandArguments, options);
   }
 
   if (name === "npm" && commandArguments[0] === "view") {

@@ -1,5 +1,6 @@
 import type { StandardSchemaV1 } from "@standard-schema/spec";
 import { onAbort } from "../internal/abort.js";
+import { normalizePlainRecord } from "../internal/record.js";
 import { captureDataArray } from "../internal/data-array.js";
 import { ConfigurationValidationError } from "../contracts/errors.js";
 
@@ -45,19 +46,10 @@ export function captureConfiguration(input: unknown): ConfigurationValue | undef
       const items = captureDataArray(value, `Configuration array at ${path}`);
       result = Object.freeze(items.map((item, index) => member(item, `${path}[${index}]`)));
     } else {
-      const prototype = Object.getPrototypeOf(value);
-      if (prototype !== Object.prototype && prototype !== null)
-        throw new TypeError(`Configuration must contain plain records at ${path}`);
+      const fields = normalizePlainRecord(value, path);
       const record: Record<string, ConfigurationValue> = Object.create(null);
-      for (const key of Reflect.ownKeys(value)) {
-        if (typeof key !== "string")
-          throw new TypeError(`Configuration keys must be strings at ${path}`);
-        const field = Object.getOwnPropertyDescriptor(value, key);
-        if (!field || !("value" in field) || !field.enumerable)
-          throw new TypeError(
-            `Configuration must contain enumerable data properties at ${path}.${key}`,
-          );
-        if (field.value !== undefined) record[key] = member(field.value, `${path}.${key}`);
+      for (const [key, field] of Object.entries(fields)) {
+        if (field !== undefined) record[key] = member(field, `${path}.${key}`);
       }
       result = Object.freeze(record);
     }

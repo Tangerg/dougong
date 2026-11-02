@@ -3,6 +3,21 @@ interface PlainRecordOptions {
   readonly createError?: (message: string) => Error;
 }
 
+const objectConstructorSource = Function.prototype.toString.call(Object);
+
+function hasPlainPrototype(value: object): boolean {
+  const prototype: object | null = Object.getPrototypeOf(value);
+  if (prototype === Object.prototype || prototype === null) return true;
+  if (Object.getPrototypeOf(prototype) !== null) return false;
+  // A foreign realm has its own intrinsic Object. A borrowed constructor does not authenticate a custom prototype.
+  const constructor: unknown = Object.getOwnPropertyDescriptor(prototype, "constructor")?.value;
+  return (
+    typeof constructor === "function" &&
+    Function.prototype.toString.call(constructor) === objectConstructorSource &&
+    Object.getOwnPropertyDescriptor(constructor, "prototype")?.value === prototype
+  );
+}
+
 // Capture inert descriptors so accessors and Proxy reads cannot replace already-validated declaration values.
 export function normalizePlainRecord<T extends object>(
   value: T,
@@ -19,11 +34,7 @@ export function normalizePlainRecord(
   label: string,
   options: PlainRecordOptions = {},
 ): Readonly<Record<string, unknown>> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw recordError(options, `${label} must be a plain record`);
-  }
-  const prototype = Object.getPrototypeOf(value);
-  if (prototype !== Object.prototype && prototype !== null) {
+  if (!value || typeof value !== "object" || Array.isArray(value) || !hasPlainPrototype(value)) {
     throw recordError(options, `${label} must be a plain record`);
   }
   const record: Record<string, unknown> = Object.create(null);

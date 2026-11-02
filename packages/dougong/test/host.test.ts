@@ -621,6 +621,39 @@ describe("Host execution", () => {
       cause: { code: "PROVIDES_INVALID", details: { installation: "a" } },
     });
   });
+
+  it.each(["getPrototypeOf", "ownKeys", "getOwnPropertyDescriptor"] as const)(
+    "preserves the cause of an unreadable setup result at %s",
+    async (operation) => {
+      const failure = new Error("provided values became inaccessible");
+      const output = new Proxy(
+        { value: 1 },
+        {
+          [operation]: () => {
+            throw failure;
+          },
+        },
+      );
+      const host = createHost({
+        installations: [
+          {
+            id: "provider",
+            plugin: definePlugin({ name: "provider", provides: { value }, setup: () => output }),
+          },
+        ],
+      });
+      await expect(host.start()).rejects.toMatchObject({
+        code: "TRANSITION_FAILED",
+        details: { outcome: "restored" },
+        cause: {
+          code: "PROVIDES_INVALID",
+          details: { installation: "provider" },
+          cause: failure,
+        },
+      });
+      expect(host.status).toBe("stopped");
+    },
+  );
 });
 
 it("reports the concrete Service cycle even in a dependency graph deeper than the call stack", () => {
