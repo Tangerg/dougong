@@ -165,6 +165,7 @@ step("Verifying repository state");
 
 const branch = capture("git", ["rev-parse", "--abbrev-ref", "HEAD"]);
 if (branch !== "main") fail(`on branch '${branch}'; releases are cut from main`);
+const head = capture("git", ["rev-parse", "HEAD"]);
 
 if (capture("git", ["status", "--porcelain", "--untracked-files=all"])) {
   fail("working tree is not clean; commit or stash first");
@@ -172,8 +173,8 @@ if (capture("git", ["status", "--porcelain", "--untracked-files=all"])) {
 
 run("git", ["fetch", "--quiet", "origin", "main"]);
 const remoteMain = capture("git", ["rev-parse", "FETCH_HEAD^{commit}"]);
-const ahead = capture("git", ["rev-list", "--count", remoteMain + "..HEAD"]);
-const behind = capture("git", ["rev-list", "--count", "HEAD.." + remoteMain]);
+const ahead = capture("git", ["rev-list", "--count", remoteMain + ".." + head]);
+const behind = capture("git", ["rev-list", "--count", head + ".." + remoteMain]);
 if (behind !== "0") fail(`local main is ${behind} commit(s) behind origin/main`);
 
 // Git owns the release record; a separate recovery marker could disagree with the actual commit.
@@ -198,7 +199,6 @@ function isReleaseCommit(commit, parent) {
   });
 }
 
-const head = capture("git", ["rev-parse", "HEAD"]);
 const pendingReleaseCommit = ahead === "1" && isReleaseCommit(head, remoteMain);
 if (ahead !== "0" && !pendingReleaseCommit) {
   fail(`local main is ${ahead} commit(s) ahead of origin/main; push first`);

@@ -1,3 +1,7 @@
 packages:
   - packages/*
   - examples
+
+overrides:
+  # The parser's upstream range still admits GHSA-g3hv-75wg-m249; use the fixed implementation.
+  "@typescript-eslint/typescript-estree>minimatch": ^11.0.4

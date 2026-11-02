@@ -256,7 +256,7 @@ async function runRelease(
       const edited =
         concurrentEdit === "manifest" && path === join(workspace, "packages/dougong/package.json");
       const expected =
-        edited || (realGit && head !== initialHead)
+        edited || (realGit && head !== initialHead && concurrentEdit !== "preflight-source")
           ? JSON.stringify(
               {
                 ...JSON.parse(contents),
@@ -291,7 +291,10 @@ async function runRelease(
         .map(({ commandArguments }) => commandArguments[0]),
       stagedFiles: realGit ? git(["diff", "--cached", "--name-only"]) : undefined,
       committedFiles: realGit ? git(["diff", "--name-only", initialHead, "HEAD"]) : undefined,
-      parent: realGit && head !== initialHead ? git(["rev-parse", "HEAD^"]) : undefined,
+      parent:
+        realGit && head !== initialHead
+          ? git(["rev-list", "--parents", "-n", "1", head]).split(" ")[1]
+          : undefined,
       initialHead,
       remoteReferences: realGit
         ? git(["ls-remote", "origin", "refs/heads/main", `refs/tags/v${targetVersion}^{}`])
@@ -350,6 +353,24 @@ it("refuses untracked source even when Git hides it by default", async () => {
   });
   expect(result.status).toBe(1);
   expect(result.stderr).toContain("working tree is not clean");
+  expect(result.stdout).not.toContain("Running the full gate");
+});
+
+it("refuses a source replaced after its ancestry checks without overwriting the other owner's branch", async () => {
+  const result = await runRelease(() => undefined, {
+    publishedPackages: [],
+    dryRun: false,
+    concurrentEdit: "preflight-source",
+  });
+  expect(result.status).toBe(1);
+  expect(result.stderr).toContain("release source changed while checking");
+  expect(result.head).not.toBe(result.initialHead);
+  expect(result.parent).toBeUndefined();
+  expect(result.committedFiles).toBe("packages/dougong/README.md");
+  expect(result.stagedFiles).toBe("");
+  expect(result.published).toEqual({});
+  expect(result.recorded).not.toContain("push");
+  expect(result.remoteReferences).toBe(`${result.initialHead}\trefs/heads/main`);
   expect(result.stdout).not.toContain("Running the full gate");
 });
 

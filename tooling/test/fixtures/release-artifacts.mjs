@@ -5,10 +5,12 @@ import {
   mkdirSync,
   readFileSync,
   readdirSync,
+  realpathSync,
   renameSync,
   writeFileSync,
 } from "node:fs";
-import { basename, join } from "node:path";
+import { tmpdir } from "node:os";
+import { basename, dirname, join } from "node:path";
 import {
   candidateOutput,
   packCandidates,
@@ -39,6 +41,7 @@ function registryTags() {
 }
 
 let injected = false;
+let sourceComparisons = 0;
 let previousPack;
 installReleaseFixture((name, commandArguments, options, nativeSpawn) => {
   const race = process.env.DOUGONG_RELEASE_CONCURRENT_EDIT;
@@ -163,6 +166,45 @@ installReleaseFixture((name, commandArguments, options, nativeSpawn) => {
         [...options.gitConfigurationArguments, ...commandArguments],
         { ...options, stdio: "pipe" },
       );
+      if (
+        race === "preflight-source" &&
+        !injected &&
+        commandArguments[0] === "rev-list" &&
+        commandArguments[1] === "--count" &&
+        ++sourceComparisons === 2
+      ) {
+        const git = (args, directory = workspace) => {
+          const result = nativeSpawn(process.env.DOUGONG_RELEASE_REAL_GIT, args, {
+            cwd: directory,
+            stdio: ["ignore", "pipe", "pipe"],
+            encoding: "utf8",
+          });
+          if (result.error || result.status !== 0)
+            throw new Error("Concurrent Git fixture failed: " + result.stderr);
+          return result.stdout.trim();
+        };
+        const remote = join(workspace, "remote.git");
+        if (
+          !basename(workspace).startsWith("dougong-release-artifacts-test-") ||
+          dirname(realpathSync(workspace)) !== realpathSync(tmpdir()) ||
+          git(["remote", "get-url", "origin"]) !== remote ||
+          git(["rev-parse", "--is-bare-repository"], remote) !== "true"
+        )
+          throw new Error("Concurrent source fixture requires its isolated local Git repository");
+        writeFileSync(
+          join(workspace, "packages/dougong/README.md"),
+          "Concurrent unpushed documentation\n",
+        );
+        git(["add", "packages/dougong/README.md"]);
+        const replacement = git([
+          "commit-tree",
+          git(["write-tree"]),
+          "-m",
+          "Unpublished unrelated source",
+        ]);
+        git(["update-ref", "refs/heads/main", replacement]);
+        injected = true;
+      }
       return { ...result, status: interrupt ? 1 : result.status };
     }
     return cleanReleaseGit(commandArguments, options);
