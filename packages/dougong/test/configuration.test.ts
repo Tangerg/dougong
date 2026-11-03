@@ -5,6 +5,7 @@ import {
   captureConfiguration,
   createHost,
   definePlugin,
+  type InstallationArguments,
 } from "../src/index";
 
 function schemaReturning(result: unknown): StandardSchemaV1<unknown, unknown> {
@@ -31,6 +32,56 @@ async function startWith(schema: StandardSchemaV1<unknown, unknown>, configurati
 }
 
 describe("Plugin configuration validation", () => {
+  it.each([false, true])(
+    "preserves paired input through installation and replacement (configured: %s)",
+    async (configured) => {
+      const received: unknown[] = [];
+      const schema: StandardSchemaV1<string, number> = {
+        "~standard": {
+          version: 1,
+          vendor: "test",
+          validate: (input) => ({ value: Number(input) }),
+        },
+      };
+      const parsed = definePlugin({
+        name: "configuration.parsed",
+        configuration: schema,
+        setup(_context, configuration) {
+          received.push(configuration);
+        },
+      });
+      const unconfigured = definePlugin({
+        name: "configuration.unconfigured",
+        setup(_context, configuration) {
+          received.push(configuration);
+        },
+      });
+      const declaration: InstallationArguments<typeof parsed | typeof unconfigured> = configured
+        ? [parsed, { id: "selected", configuration: "42" }]
+        : [unconfigured, { id: "selected" }];
+      const host = createHost();
+      const change = host.change();
+      const installation = change.install(...declaration);
+
+      try {
+        await host.apply(await host.plan(change));
+        await host.start();
+        expect(installation.status).toBe("running");
+        expect(received).toEqual(configured ? [42] : [undefined]);
+
+        const replacement = configured
+          ? { plugin: unconfigured, configuration: undefined }
+          : { plugin: parsed, configuration: "43" };
+        const update = host.change();
+        update.update(installation, replacement);
+        await host.apply(await host.plan(update));
+        expect(received).toEqual(configured ? [42, undefined] : [undefined, 43]);
+      } finally {
+        await host.stop();
+      }
+    },
+  );
+
   it.each([
     ["promise", Promise.resolve(1)],
     ["function", () => 1],

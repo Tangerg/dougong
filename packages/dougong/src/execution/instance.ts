@@ -3,7 +3,7 @@ import { DougongError, providesInvalidCode, serviceUnavailableCode } from "../co
 import { ScopedLogger, type Logger } from "../contracts/logging.js";
 import type { EventHub } from "../events/event-hub.js";
 import type { ContributionRegistry } from "../contributions/contribution-store.js";
-import { Lifetime } from "../lifetime/lifetime.js";
+import { Lifetime, type ReleaseFailure } from "../lifetime/lifetime.js";
 import type { InstallationRecord, InstallationDeclaration } from "../composition/installation.js";
 import type { InstanceContext } from "../composition/plugin.js";
 import { normalizePlainRecord } from "../internal/record.js";
@@ -13,7 +13,7 @@ export interface InstanceEnvironment {
   readonly hostName: string;
   readonly logger: Logger;
   readonly report: (error: unknown) => void;
-  readonly releaseFailed: (error: unknown) => void;
+  readonly releaseFailed: (failure: ReleaseFailure) => void;
   readonly changed: () => void;
   readonly events: EventHub;
   readonly contributions: ContributionRegistry;

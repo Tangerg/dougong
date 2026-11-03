@@ -38,7 +38,16 @@ import {
   type Registration,
   type RegistrationSnapshot,
 } from "../catalog/registration.js";
-import { PlatformError, recordPlatformFailure } from "../errors.js";
+import {
+  PlatformError,
+  recordPlatformFailure,
+  artifactIdentityCode,
+  platformBusyCode,
+  platformUnavailableCode,
+  registrationUnavailableCode,
+  activationStaleCode,
+  activationFailedCode,
+} from "../errors.js";
 import type { Loader } from "../loaders/loader.js";
 import { LoadedModules } from "./loading.js";
 import { ActivationOperation } from "./operation.js";
@@ -380,7 +389,7 @@ class DeliveryPlatform<Reference> implements Platform<Reference> {
       const plugin = loaded.get(selection.artifact);
       if (!plugin)
         throw new PlatformError(
-          "ACTIVATION_STALE",
+          activationStaleCode,
           `Installation '${selection.registration.id}' changed during loading; activation must be planned again`,
         );
       const declaration = {
@@ -414,7 +423,7 @@ class DeliveryPlatform<Reference> implements Platform<Reference> {
       const origin = registration.activeOrigin;
       if (!origin)
         throw new PlatformError(
-          "ARTIFACT_IDENTITY",
+          artifactIdentityCode,
           `Cannot authorize restart of '${registration.id}' without its committed Artifact origin`,
         );
       assertCompatibleManifest(this.apiVersion, origin.manifest);
@@ -461,7 +470,7 @@ class DeliveryPlatform<Reference> implements Platform<Reference> {
       const stateRevision = host.stateRevision;
       if (expectedRevision !== undefined && stateRevision !== expectedRevision)
         invalidated.abort(
-          new PlatformError("ACTIVATION_STALE", "Host changed during activation admission", {
+          new PlatformError(activationStaleCode, "Host changed during activation admission", {
             details: { outcome: "rejected", phase: "admission", expectedRevision, stateRevision },
           }),
         );
@@ -571,7 +580,7 @@ class DeliveryPlatform<Reference> implements Platform<Reference> {
   #assertRegistration(registration: RegistrationRecord<Reference>) {
     if (this.#registrations.get(registration.name) !== registration)
       throw new PlatformError(
-        "REGISTRATION_UNAVAILABLE",
+        registrationUnavailableCode,
         `Registration '${registration.name}' is not selected in this Platform`,
       );
   }
@@ -584,23 +593,23 @@ class DeliveryPlatform<Reference> implements Platform<Reference> {
   #placementFailure() {
     const { host, group } = this.#ports();
     if (host.status === "quarantined")
-      return new PlatformError("PLATFORM_UNAVAILABLE", "Activation Host is quarantined", {
+      return new PlatformError(platformUnavailableCode, "Activation Host is quarantined", {
         details: { outcome: "rejected", phase: "admission", stateRevision: host.stateRevision },
       });
     if (group && host.group(group.id) !== group)
-      return new PlatformError("REGISTRATION_UNAVAILABLE", "Platform Group has been removed");
+      return new PlatformError(registrationUnavailableCode, "Platform Group has been removed");
     return undefined;
   }
 
   #assertActive() {
     if (this.#state.phase !== "active")
-      throw new PlatformError("PLATFORM_UNAVAILABLE", `Platform is ${this.#state.phase}`);
+      throw new PlatformError(platformUnavailableCode, `Platform is ${this.#state.phase}`);
   }
 
   #ports() {
     const state = this.#state;
     if (state.phase === "disposed")
-      throw new PlatformError("PLATFORM_UNAVAILABLE", "Platform is disposed");
+      throw new PlatformError(platformUnavailableCode, "Platform is disposed");
     return state.ports;
   }
 
@@ -610,7 +619,7 @@ class DeliveryPlatform<Reference> implements Platform<Reference> {
   }
 
   #busy() {
-    return new PlatformError("PLATFORM_BUSY", "Platform is executing a Core command", {
+    return new PlatformError(platformBusyCode, "Platform is executing a Core command", {
       details: { outcome: "rejected" },
     });
   }
@@ -706,7 +715,7 @@ function reporter(logger: Logger) {
 function recordActivationFailure<Reference>(plan: ActivationPlan<Reference>, error: unknown) {
   const failure = isError(error)
     ? error
-    : new PlatformError("ACTIVATION_FAILED", "Activation failed with a non-Error value", {
+    : new PlatformError(activationFailedCode, "Activation failed with a non-Error value", {
         cause: error,
       });
   let recorded: RecordedFailure | undefined;

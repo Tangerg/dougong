@@ -4,7 +4,7 @@ import { valid, validRange } from "semver";
 import { z } from "zod";
 import { captureConfiguration } from "dougong";
 import { normalizePlainRecord } from "dougong/advanced";
-import { PlatformError } from "../errors.js";
+import { PlatformError, manifestInvalidCode } from "../errors.js";
 
 const identifier = z
   .string()
@@ -63,14 +63,14 @@ export function isConcreteVersion(version: string) {
 export function defineManifest(input: ManifestInput): Manifest {
   let failure: PlatformError | undefined;
   const declarationError = (message: string) =>
-    (failure = Object.freeze(new PlatformError("MANIFEST_INVALID", message)));
+    (failure = Object.freeze(new PlatformError(manifestInvalidCode, message)));
   let declaration: Readonly<Record<string, unknown>>;
   try {
     declaration = snapshotManifestDeclaration(input, declarationError);
   } catch (error) {
     // A supplier may rethrow a genuine declaration error from an earlier call.
     if (failure && error === failure) throw failure;
-    throw new PlatformError("MANIFEST_INVALID", "Manifest declaration could not be read", {
+    throw new PlatformError(manifestInvalidCode, "Manifest declaration could not be read", {
       cause: error,
     });
   }
@@ -89,9 +89,9 @@ function validateManifest(declaration: Readonly<Record<string, unknown>>): Manif
     const result = manifestSchema.safeParse(declaration);
     if (result.success) return result.data;
     const cause = result.error;
-    failure = new PlatformError("MANIFEST_INVALID", z.prettifyError(cause), { cause });
+    failure = new PlatformError(manifestInvalidCode, z.prettifyError(cause), { cause });
   } catch (error) {
-    throw new PlatformError("MANIFEST_INVALID", "Manifest declaration could not be validated", {
+    throw new PlatformError(manifestInvalidCode, "Manifest declaration could not be validated", {
       cause: error,
     });
   }
@@ -121,7 +121,7 @@ function assertUnique(values: ReadonlyArray<string>, label: string, manifestName
   for (const value of values) {
     if (seen.has(value)) {
       throw new PlatformError(
-        "MANIFEST_INVALID",
+        manifestInvalidCode,
         `Manifest '${manifestName}' declares duplicate ${label} '${value}'`,
       );
     }

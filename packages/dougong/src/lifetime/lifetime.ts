@@ -68,10 +68,16 @@ const claimedResources = new WeakSet<Resource>();
 export interface LifetimeOptions {
   readonly label: string;
   readonly report: (error: unknown) => void;
-  readonly releaseFailed?: (error: unknown) => void;
+  readonly releaseFailed?: (failure: ReleaseFailure) => void;
   readonly changed?: () => void;
   readonly parentSignal?: AbortSignal;
   readonly shutdownTimeoutMilliseconds?: number;
+}
+
+export interface ReleaseFailure {
+  readonly owner: Lifetime;
+  readonly kind: ObligationKind;
+  readonly error: unknown;
 }
 
 interface ChildOwnership {
@@ -265,7 +271,7 @@ export class Lifetime {
   readonly #acquisitions = new Set<Promise<void>>();
   readonly #shutdownTimeoutMilliseconds: number | undefined;
   #report: ((error: unknown) => void) | undefined;
-  #releaseFailed: ((error: unknown) => void) | undefined;
+  #releaseFailed: ((failure: ReleaseFailure) => void) | undefined;
   #changed: (() => void) | undefined;
   #phase: LifetimePhase = "active";
   #foreground = 0;
@@ -521,7 +527,7 @@ export class Lifetime {
       this.#changed?.();
     });
     record = new PublicationRecord(++this.#sequence, publication, (error) =>
-      this.#releaseFailed?.(error),
+      this.#notifyReleaseFailure(error, "publication"),
     );
     this.#publications.add(record);
     batchSnapshotNotifications(() => {
@@ -631,7 +637,7 @@ export class Lifetime {
         "Lifetime shutdown did not complete before its deadline",
       );
       this.#phase = "quarantined";
-      this.#releaseFailed?.(failure);
+      this.#notifyReleaseFailure(failure, "shutdown");
       this.#timeoutFailure = new RecordedFailure(failure);
       this.#changed?.();
       completion.reject(failure);
@@ -712,7 +718,7 @@ export class Lifetime {
         if (resource !== undefined) claimedResources.delete(resource);
         this.#changed?.();
       },
-      (error) => this.#releaseFailed?.(error),
+      (error) => this.#notifyReleaseFailure(error, kind),
       () => this.#changed?.(),
     );
     records.add(record);
@@ -723,6 +729,10 @@ export class Lifetime {
   #reportError(error: unknown) {
     const report = this.#report;
     if (report) assertSynchronous(report(error), "Lifetime error reporters must be synchronous");
+  }
+
+  #notifyReleaseFailure(error: unknown, kind: ObligationKind) {
+    this.#releaseFailed?.(Object.freeze({ owner: this, kind, error }));
   }
 
   #requireActive() {

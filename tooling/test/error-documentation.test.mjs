@@ -112,6 +112,7 @@ it("derives the error catalogue from resolved code types across aliases, conditi
     const program = typescript.createProgram([definitions, entrypoint, consumer], {
       noEmit: true,
       noLib: true,
+      types: [],
       strict: true,
       target: typescript.ScriptTarget.Latest,
       module: typescript.ModuleKind.ESNext,

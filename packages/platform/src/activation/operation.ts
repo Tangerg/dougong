@@ -1,6 +1,6 @@
 import { onAbort } from "dougong/advanced";
 import type { RegistrationRecord } from "../catalog/registration.js";
-import { PlatformError } from "../errors.js";
+import { PlatformError, selectionSupersededCode } from "../errors.js";
 import type { ActivationPlan } from "./plan.js";
 
 export class ActivationOperation<Reference> {
@@ -54,7 +54,7 @@ export class ActivationOperation<Reference> {
     if (this.#roles.has(registration)) {
       this.#controller?.abort(
         new PlatformError(
-          "SELECTION_SUPERSEDED",
+          selectionSupersededCode,
           `Selection for '${registration.name}' changed during activation`,
         ),
       );

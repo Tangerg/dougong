@@ -1,4 +1,4 @@
-import { shutdownTimeout } from "../lifetime/lifetime.js";
+import { shutdownTimeout, type ReleaseFailure } from "../lifetime/lifetime.js";
 import { ContractRegistry } from "../contracts/contract-registry.js";
 import {
   DougongError,
@@ -513,7 +513,7 @@ export class Engine {
             hostName: this.name,
             logger: this.#logger,
             report: (error) => this.#report(error),
-            releaseFailed: (error) => this.#releaseFailed(instance, error),
+            releaseFailed: (failure) => this.#releaseFailed(instance, failure),
             changed: () => {
               if (
                 this.#state.instances.get(record) === instance ||
@@ -665,17 +665,19 @@ export class Engine {
     }
   }
 
-  #releaseFailed(instance: Instance, error: unknown) {
+  #releaseFailed(instance: Instance, failure: ReleaseFailure) {
     if (this.#isQuarantined()) return;
-    // A root shutdown already returns its release failures to the active transition.
-    if (instance.lifetime.phase !== "active" && instance.lifetime.phase !== "sealed") return;
+    const root = instance.lifetime;
+    // A descendant deadline rejects its own receipt, not the actual shutdown work joined by the root.
+    const descendantDeadline = failure.kind === "shutdown" && failure.owner !== root;
+    if (!descendantDeadline && root.phase !== "active" && root.phase !== "sealed") return;
     const record = instance.installation;
     if (
       this.#state.instances.get(record) !== instance &&
       !this.#transition?.scopes.some((scope) => scope.instances.get(record) === instance)
     )
       return;
-    void this.#quarantine(this.#state, [error], undefined, "release").then(
+    void this.#quarantine(this.#state, [failure.error], undefined, "release").then(
       (failure) => this.#report(failure),
       (failure) => this.#report(failure),
     );

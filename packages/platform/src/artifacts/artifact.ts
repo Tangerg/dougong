@@ -1,7 +1,7 @@
 import { captureConfiguration, type ConfigurationValue } from "dougong";
 import { normalizePlainRecord, recordFields } from "dougong/advanced";
 import { satisfies } from "semver";
-import { PlatformError } from "../errors.js";
+import { PlatformError, apiIncompatibleCode } from "../errors.js";
 import { defineManifest, type Manifest, type ManifestInput } from "./manifest.js";
 
 export interface ArtifactInput<Reference> {
@@ -99,7 +99,7 @@ export function captureArtifact<Reference>(
 export function assertCompatibleManifest(apiVersion: string, manifest: Manifest) {
   if (!satisfies(apiVersion, manifest.apiVersion)) {
     throw new PlatformError(
-      "API_INCOMPATIBLE",
+      apiIncompatibleCode,
       `Artifact '${manifest.name}' requires API ${manifest.apiVersion}, Platform provides ${apiVersion}`,
     );
   }

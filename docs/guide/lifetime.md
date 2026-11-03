@@ -17,6 +17,10 @@ Lifetime 以组合构成资源树。根由 Instance 创建，插件通过 `child
 
 同一份已加载的 Core 也只允许一个 Lifetime 接管同一个外部资源对象。重复调用 `use`、并发 `acquire` 或从释放方法的 getter 重入登记都会被拒绝。释放仍在进行、已经超时或已经失败时，原所有者继续承担义务；只有实际释放成功后才能重新接管该对象。调用方应将共享资源交给一个明确的 Lifetime，并通过服务参数传递使用权。
 
+`Symbol.dispose` 必须同步完成；异步释放应使用 `Symbol.asyncDispose`。同步回调返回 Promise 或 thenable 会被拒绝，失败释放仍归原 Lifetime。Core 与 Reactive 的同步结果检查共用一份协议：保留标准 Promise 原型标记的原生 Promise，包括跨 realm 的对象和子类，由内建 `then` 验证并观察实际结算，自有 `then` 或 `Symbol.toStringTag` 不能替代它。检查不执行展示标签的 getter，也不会再次解析原生 Promise 已完成的载荷；普通 thenable 的 `then` 只捕获一次，并保留原 receiver。
+
+该检查不修改传入对象。完全替换 Promise 原型链或篡改其原型标记，不属于原生 Promise 识别保证。Proxy 的反射陷阱可以影响候选检查，伪造 Promise 原型或循环原型链会明确失败。原生 `constructor` 或 `Symbol.species` 阻止观察时，错误直接传播，不降级为同步成功；标准 JavaScript 没有绕过这些钩子的公开观察操作，此时不能保证接住原 Promise 的拒绝。资源所有者仍保留失败的释放义务。
+
 退出先封闭入口、撤销发布并传播取消，发起全部中断并等待它们完成，再等待使用中的工作与创建义务，最后逆序释放资源。用 `interrupt` 关闭阻塞读取的通道，用 `defer` 执行任务退出后才能进行的最终销毁。
 
 ```ts
@@ -32,6 +36,8 @@ lifetime.spawn((signal) => connection.readUntilClosed(signal));
 通过 child 或 defer 句柄提前释放时，清理失败同样使整个 Host 进入隔离。Lifetime 上报释放失败，Engine 先撤销可用性，再捕获错误诊断并清理独立安全分支；直接调用者仍收到原释放失败，Host 的错误报告端口接收隔离结果。错误对象的 getter 不能趁诊断捕获重新借用 Service。准备中或恢复中的候选也归这次退出处理，不能在故障之后提交。
 
 `shutdownTimeoutMilliseconds` 为正数且最多为 2,147,483,647 毫秒（原生计时器上限）；不设置即不限制等待时间。超时只结束等待，不证明底层工作已停止；已经启动的退出可能随后完成，但清理失败不会自动重试。隔离是整个 Host 的终止状态，迟到完成只更新诊断，不恢复服务。AbortSignal 无法强杀任意 JavaScript；硬终止需要实际执行隔离。应用的处置和替换前提见[隔离后的应用处理](./transactions.md#quarantine)。
+
+子 Lifetime 的关闭截止时间独立生效。即使根已经进入关闭流程，子截止时间到期仍立即使整个 Host 隔离；子清理赶在根截止时间之前完成，也不能让停止或更新成功。Lifetime 保留对真实子清理工作的等待，Engine 依据失败来源保持唯一的终态隔离，父资源和服务提供者不会因子等待回执超时而被提前释放。
 
 取消以原生 AbortSignal 的状态为准。手动派发名为 `abort` 的事件不会取消子树或任务，也不会使它们错过随后真正的取消。Lifetime 通过自己拥有的任务和子树传播取消；公开信号的监听器阻止事件派发，也不能阻止这些结构化的取消。
 

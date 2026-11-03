@@ -7,7 +7,7 @@ import {
   type ArtifactDescriptor,
   type ArtifactOrigin,
 } from "../artifacts/artifact.js";
-import { PlatformError } from "../errors.js";
+import { PlatformError, registrationUnavailableCode, selectionSupersededCode } from "../errors.js";
 
 export type RegistrationStatus =
   "selected" | "activating" | "removing" | "installed" | "failed" | "quarantined" | "removed";
@@ -194,7 +194,7 @@ export class RegistrationRecord<Reference> {
       state.artifact !== selection.artifact
     ) {
       throw new PlatformError(
-        "SELECTION_SUPERSEDED",
+        selectionSupersededCode,
         `Selection for '${this.name}' changed during activation`,
       );
     }
@@ -254,7 +254,10 @@ export class RegistrationRecord<Reference> {
   #requireSelected() {
     const state = this.#state;
     if (state.phase === "removed")
-      throw new PlatformError("REGISTRATION_UNAVAILABLE", `Registration '${this.name}' is removed`);
+      throw new PlatformError(
+        registrationUnavailableCode,
+        `Registration '${this.name}' is removed`,
+      );
     return state;
   }
 }

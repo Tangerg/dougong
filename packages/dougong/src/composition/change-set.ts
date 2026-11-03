@@ -6,6 +6,7 @@ import type {
   ChangeSet,
   Group,
   Installation,
+  InstallationArguments,
   InstallationOptions,
   InstallationOrigin,
   InstallationUpdate,
@@ -124,10 +125,9 @@ class ChangeSetDraft {
     Object.freeze(this);
   }
 
-  install<Declaration extends AnyPlugin>(
-    plugin: Declaration,
-    options: InstallationOptions<Declaration>,
-  ): Installation<Declaration> {
+  install<Arguments extends readonly [plugin: AnyPlugin, options: unknown]>(
+    ...[plugin, options]: Arguments & NoInfer<InstallationArguments<Arguments[0]>>
+  ): Installation<Arguments[0]> {
     const { port } = this.#requireOpen();
     const input = normalizePlainRecord(options, "Installation options", {
       fields: installationOptionFields,
@@ -138,12 +138,12 @@ class ChangeSetDraft {
     this.#requireOpen();
     const installation = port.create(input.id, group);
     this.#stage(installation, { kind: "install", installation, declaration });
-    return installation.facade as unknown as Installation<Declaration>;
+    return installation.facade as unknown as Installation<Arguments[0]>;
   }
 
   update<Declaration extends AnyPlugin>(
     installation: Installation<Declaration>,
-    update: InstallationUpdate<Declaration>,
+    update: NoInfer<InstallationUpdate<Declaration>>,
   ) {
     const { port } = this.#requireOpen();
     const input = normalizePlainRecord(update, "Installation update", {

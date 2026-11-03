@@ -8,7 +8,7 @@
 | --- | --- |
 | 契约 / Contracts | `service`, `extensionPoint`, `event`, `optional`, `ContractKind`, `ContractValue`, `Service`, `ExtensionPoint`, `Event`, `OptionalService`, `Requirement` |
 | 插件 / Plugins | `definePlugin`, `describePlugin`, `PluginDescriptor`, `PluginConfigurationDescriptor`, `PluginDescriptionOptions`, `Plugin`, `AnyPlugin`, `PluginContext`, `Requirements`, `Provisions`, `ResolvedRequirement`, `ResolvedRequirements`, `ProvidedServices`, `InstanceMetadata` |
-| 安装与计划 / Installation and planning | `ChangeSet`, `Group`, `Installation`, `InstallationOptions`, `InstallationUpdate`, `InstallationOrigin`, `InitialInstallation`, `Plan`, `PlanReport`, `BindingReport`, `ImpactReason`, `PlanOperation`, `DeclarationSnapshot`, `captureConfiguration`, `ConfigurationValue` |
+| 安装与计划 / Installation and planning | `ChangeSet`, `Group`, `Installation`, `InstallationOptions`, `InstallationArguments`, `InstallationUpdate`, `InstallationOrigin`, `InitialInstallation`, `Plan`, `PlanReport`, `BindingReport`, `ImpactReason`, `PlanOperation`, `DeclarationSnapshot`, `captureConfiguration`, `ConfigurationValue` |
 | 运行 / Execution | `createHost`, `Host`, `HostOptions`, `ApplyResult`, `HostStatus`, `InstallationState` |
 | 资源 / Resources | `LifetimeContext`, `ChildLifetime`, `LifetimeOwnership`, `Task`, `Cleanup`, `BackgroundTask`, `LifetimePhase`, `LifetimeSnapshot`, `UnresolvedObligation`, `Disposable`, `AsyncDisposable`, `Resource`, `Awaitable`, `disposeSymbol`, `asyncDisposeSymbol` |
 | 事件与贡献 / Events and contributions | `Contribution`, `ContributionView`, `ContributionOperations`, `EventListener`, `EventArguments`, `EventOperations` |
@@ -25,6 +25,23 @@
 `HostOptions` 包含 `name`、初始 `installations`、初始 `groups`、日志与错误报告端口和退出超时。每个 Installation ID 在 Host 中唯一，Group ID 也是应用声明的稳定身份。
 
 `createHost` 按初始列表中的每个 Plugin 推断其配置输入；异构列表也保留各自的配对。`InitialInstallation<typeof plugin>` 和 `InstallationOptions<typeof plugin>` 从同一 Plugin 类型派生配置要求。输入允许 `undefined` 时可以省略配置，包括 `void`、可选输入与 schema 默认值；否则必须提供配置。schema 转换后的输出只供 setup 使用，安装声明仍须提供转换前的输入。配置不能反向扩宽 Plugin 类型来通过检查。
+
+`ChangeSet.install` 保留同样的 Plugin 与输入关联。`InstallationArguments<First | Second>` 分发完整的 `[plugin, options]` 元组，`InitialInstallation` 从这条规则投影初始声明。联合 Plugin 与独立选择的配置会被拒绝，`void` 分支也不能掩盖另一个分支必填的输入。在多个 Plugin 中选择时，应保留完整配对：
+
+```ts
+const declaration: InstallationArguments<typeof textPlugin | typeof numberPlugin> = useText
+  ? [textPlugin, { id: "selected", configuration: "text" }]
+  : [numberPlugin, { id: "selected", configuration: 42 }];
+const installation = change.install(...declaration);
+```
+
+返回的 `Installation<First | Second>` 无法确定实际安装的分支，因此仅更新配置时，输入必须同时满足所有可能分支。替换 Plugin 时，配置与新 Plugin 保持配对；只有新 Plugin 能接受全部可能的旧输入时，才可以省略配置并继承已捕获的输入，否则必须显式提供配置。替换为无配置 Plugin 时，使用 `configuration: undefined` 明确清空可能存在的旧输入。一个 Plugin 自身声明的输入联合类型（例如 `string | number`）仍然接受其声明的每一种输入。
+
+在联合选择前使用 `definePlugin` 或明确的 `Plugin<...>` 注解，使 schema 输入保持不变性；相同输出不能让较窄的输入被自动宽化。未注解的原始对象按 TypeScript 结构规则推断，调用前已被宽化或擦除的输入关系无法由框架恢复。这一约束只存在于类型层，不给 Plugin 增加运行字段。
+
+`install` 的显式类型参数现在描述完整参数元组：`install<InstallationArguments<typeof plugin>>(plugin, options)`；原有 `install<typeof plugin>` 形式已经移除。普通调用继续自动推断类型，无须显式参数。
+
+需要传递安装命令时，直接保存 `const install = change.install`，可保留完整签名与已有绑定。针对已知 Plugin 集合的包装函数可以接收 `InstallationArguments<First | Second>` 并展开调用。TypeScript 5.9.3 无法证明任意泛型 `P` 的 `InstallationArguments<P>` 在再次展开后仍保留关联，因此这种泛型装饰器不能直接转发；将它宽化为 `AnyPlugin` 会丢失输入契约。
 
 保存带类型的 Host 选项时，可用 `HostOptions<readonly [typeof firstPlugin, typeof secondPlugin]>` 描述异构列表。显式使用 `AnyPlugin` 或不带类型参数的 `HostOptions` 会擦除具体输入类型，适用于动态加载边界；未知配置仍经过原有的数据捕获与 schema 验证，不增加独立的配置状态。
 

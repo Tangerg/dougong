@@ -64,6 +64,44 @@ function verifySubscriptions() {
   );
 }
 
+async function verifySynchronousResults() {
+  const iframe = document.createElement("iframe");
+  document.body.append(iframe);
+  try {
+    const foreignWindow = iframe.contentWindow;
+    assert(foreignWindow, "Browser consumer could not create a separate Promise realm");
+    for (const promiseConstructor of [Promise, foreignWindow.window.Promise]) {
+      for (const throwing of [false, true]) {
+        const pending = promiseConstructor.withResolvers<void>();
+        const thenDescriptor = throwing
+          ? {
+              get() {
+                throw new Error("Public then cannot replace native Promise settlement");
+              },
+            }
+          : { value: undefined };
+        // oxlint-disable-next-line unicorn/no-thenable -- A Proxy would lose the native brand required by this regression.
+        Object.defineProperty(pending.promise, "then", thenDescriptor);
+        let failure: unknown;
+        try {
+          computed(() => pending.promise).get();
+        } catch (error) {
+          failure = error;
+        }
+        pending.reject(new Error("Decorated native Promise rejection"));
+        assert(
+          failure instanceof TypeError,
+          "A decorated native Promise bypassed the browser synchronous-result boundary",
+        );
+      }
+    }
+    // Both realms must survive the rejection-reporting task so pageerror can expose a leak.
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+  } finally {
+    iframe.remove();
+  }
+}
+
 async function verifyResources() {
   const values = signal(1);
   const observations: number[] = [];
@@ -175,5 +213,6 @@ async function verifyResources() {
 export async function verifyBrowserConsumer() {
   verifyCancellation();
   verifySubscriptions();
+  await verifySynchronousResults();
   await verifyResources();
 }

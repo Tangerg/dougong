@@ -1,25 +1,44 @@
 import { DougongError, RecordedFailure, type ErrorDetails } from "dougong";
 import { captureDataArray } from "dougong/advanced";
 
+export const manifestInvalidCode = "MANIFEST_INVALID";
+export const apiIncompatibleCode = "API_INCOMPATIBLE";
+export const artifactDuplicateCode = "ARTIFACT_DUPLICATE";
+export const artifactUnavailableCode = "ARTIFACT_UNAVAILABLE";
+export const artifactIdentityCode = "ARTIFACT_IDENTITY";
+export const moduleLoadFailedCode = "MODULE_LOAD_FAILED";
+export const moduleInvalidCode = "MODULE_INVALID";
+const permissionDeniedCode = "PERMISSION_DENIED";
+export const platformBusyCode = "PLATFORM_BUSY";
+export const platformUnavailableCode = "PLATFORM_UNAVAILABLE";
+export const registrationUnavailableCode = "REGISTRATION_UNAVAILABLE";
+export const selectionSupersededCode = "SELECTION_SUPERSEDED";
+export const activationStaleCode = "ACTIVATION_STALE";
+export const activationFailedCode = "ACTIVATION_FAILED";
+export const registrationDependencyMissingCode = "REGISTRATION_DEPENDENCY_MISSING";
+export const registrationDependencyIncompatibleCode = "REGISTRATION_DEPENDENCY_INCOMPATIBLE";
+export const registrationDependencyInactiveCode = "REGISTRATION_DEPENDENCY_INACTIVE";
+export const registrationCycleCode = "REGISTRATION_CYCLE";
+
 export type PlatformErrorCode =
-  | "MANIFEST_INVALID"
-  | "API_INCOMPATIBLE"
-  | "ARTIFACT_DUPLICATE"
-  | "ARTIFACT_UNAVAILABLE"
-  | "ARTIFACT_IDENTITY"
-  | "MODULE_LOAD_FAILED"
-  | "MODULE_INVALID"
-  | "PERMISSION_DENIED"
-  | "PLATFORM_BUSY"
-  | "PLATFORM_UNAVAILABLE"
-  | "REGISTRATION_UNAVAILABLE"
-  | "SELECTION_SUPERSEDED"
-  | "ACTIVATION_STALE"
-  | "ACTIVATION_FAILED"
-  | "REGISTRATION_DEPENDENCY_MISSING"
-  | "REGISTRATION_DEPENDENCY_INCOMPATIBLE"
-  | "REGISTRATION_DEPENDENCY_INACTIVE"
-  | "REGISTRATION_CYCLE";
+  | typeof manifestInvalidCode
+  | typeof apiIncompatibleCode
+  | typeof artifactDuplicateCode
+  | typeof artifactUnavailableCode
+  | typeof artifactIdentityCode
+  | typeof moduleLoadFailedCode
+  | typeof moduleInvalidCode
+  | typeof permissionDeniedCode
+  | typeof platformBusyCode
+  | typeof platformUnavailableCode
+  | typeof registrationUnavailableCode
+  | typeof selectionSupersededCode
+  | typeof activationStaleCode
+  | typeof activationFailedCode
+  | typeof registrationDependencyMissingCode
+  | typeof registrationDependencyIncompatibleCode
+  | typeof registrationDependencyInactiveCode
+  | typeof registrationCycleCode;
 
 export class PlatformError extends DougongError<PlatformErrorCode> {
   override readonly name: string = "PlatformError";
@@ -55,7 +74,7 @@ export class PermissionDeniedError extends PlatformError {
       ),
     );
     super(
-      "PERMISSION_DENIED",
+      permissionDeniedCode,
       `Manifest '${manifestName}' was denied permissions: ${immutableDenied.join(", ")}`,
       { details: { outcome: "rejected", phase: "admission" } },
     );

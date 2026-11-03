@@ -8,7 +8,7 @@ The main `dougong` package is the actual kernel. Its default surface exposes one
 | --- | --- |
 | 契约 / Contracts | `service`, `extensionPoint`, `event`, `optional`, `ContractKind`, `ContractValue`, `Service`, `ExtensionPoint`, `Event`, `OptionalService`, `Requirement` |
 | 插件 / Plugins | `definePlugin`, `describePlugin`, `PluginDescriptor`, `PluginConfigurationDescriptor`, `PluginDescriptionOptions`, `Plugin`, `AnyPlugin`, `PluginContext`, `Requirements`, `Provisions`, `ResolvedRequirement`, `ResolvedRequirements`, `ProvidedServices`, `InstanceMetadata` |
-| 安装与计划 / Installation and planning | `ChangeSet`, `Group`, `Installation`, `InstallationOptions`, `InstallationUpdate`, `InstallationOrigin`, `InitialInstallation`, `Plan`, `PlanReport`, `BindingReport`, `ImpactReason`, `PlanOperation`, `DeclarationSnapshot`, `captureConfiguration`, `ConfigurationValue` |
+| 安装与计划 / Installation and planning | `ChangeSet`, `Group`, `Installation`, `InstallationOptions`, `InstallationArguments`, `InstallationUpdate`, `InstallationOrigin`, `InitialInstallation`, `Plan`, `PlanReport`, `BindingReport`, `ImpactReason`, `PlanOperation`, `DeclarationSnapshot`, `captureConfiguration`, `ConfigurationValue` |
 | 运行 / Execution | `createHost`, `Host`, `HostOptions`, `ApplyResult`, `HostStatus`, `InstallationState` |
 | 资源 / Resources | `LifetimeContext`, `ChildLifetime`, `LifetimeOwnership`, `Task`, `Cleanup`, `BackgroundTask`, `LifetimePhase`, `LifetimeSnapshot`, `UnresolvedObligation`, `Disposable`, `AsyncDisposable`, `Resource`, `Awaitable`, `disposeSymbol`, `asyncDisposeSymbol` |
 | 事件与贡献 / Events and contributions | `Contribution`, `ContributionView`, `ContributionOperations`, `EventListener`, `EventArguments`, `EventOperations` |
@@ -25,6 +25,23 @@ Contract identities use their own data fields. A token from another JavaScript r
 `HostOptions` contains `name`, initial `installations`, initial `groups`, logging and error-reporting ports, and shutdown timeout. Installation IDs are unique within a Host. Group IDs are stable identities declared by the application.
 
 `createHost` infers configuration input from each Plugin in the initial list, preserving each pairing in heterogeneous lists. `InitialInstallation<typeof plugin>` and `InstallationOptions<typeof plugin>` derive their configuration requirement from the same Plugin type. Configuration may be omitted when its input accepts `undefined`, including `void`, optional inputs and schema defaults; otherwise it is required. Schema output belongs to setup, while installation declarations still require the schema input. Configuration cannot widen the inferred Plugin type to pass type checking.
+
+`ChangeSet.install` preserves the same Plugin/input pairing. `InstallationArguments<First | Second>` distributes complete `[plugin, options]` tuples, and `InitialInstallation` projects this rule for initial declarations. A union Plugin and an independently chosen configuration are rejected, including a missing required input hidden by a `void` branch. Preserve the complete pair when selecting between Plugins:
+
+```ts
+const declaration: InstallationArguments<typeof textPlugin | typeof numberPlugin> = useText
+  ? [textPlugin, { id: "selected", configuration: "text" }]
+  : [numberPlugin, { id: "selected", configuration: 42 }];
+const installation = change.install(...declaration);
+```
+
+The resulting `Installation<First | Second>` cannot establish its installed branch, so configuration-only updates must satisfy every possible branch. A replacement keeps configuration paired with its new Plugin. Configuration may be omitted to retain captured input only when the replacement accepts every possible previous input; otherwise it must be supplied explicitly. When replacing with an unconfigured Plugin, use `configuration: undefined` to clear a possible previous input. A single Plugin whose input is itself a union, such as `string | number`, still accepts every declared input member.
+
+Use `definePlugin` or an explicit `Plugin<...>` annotation before selecting between Plugins so schema input remains invariant; equal outputs cannot silently widen a narrower input. Unannotated raw objects follow TypeScript's structural inference, and the framework cannot reconstruct input relationships already widened or erased before a call. This constraint exists only in types and adds no runtime field to a Plugin.
+
+An explicit `install` type argument now describes the complete tuple: `install<InstallationArguments<typeof plugin>>(plugin, options)`. The former `install<typeof plugin>` form has been removed. Ordinary calls continue to infer their types without explicit arguments.
+
+To pass the installation command elsewhere, retain `const install = change.install`; its full signature and existing binding remain intact. A wrapper for a known Plugin set can accept `InstallationArguments<First | Second>` and spread it into the call. TypeScript 5.9.3 cannot prove that an unresolved generic `InstallationArguments<P>` preserves its correlation when spread again, so that generic decorator cannot forward directly. Widening it to `AnyPlugin` would erase the input contract.
 
 To retain typed Host options, use `HostOptions<readonly [typeof firstPlugin, typeof secondPlugin]>` for a heterogeneous list. Explicit `AnyPlugin` declarations or `HostOptions` without a type argument erase the concrete input type for dynamic loading boundaries. Unknown configuration still follows the existing data capture and schema validation path, without separate configuration state.
 

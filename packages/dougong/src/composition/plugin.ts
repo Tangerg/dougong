@@ -71,12 +71,16 @@ export interface PluginContext<T extends Requirements = Requirements> {
   readonly logger: Logger;
 }
 
+declare const configurationInputBrand: unique symbol;
+
 export interface Plugin<
   Configuration = void,
   Requires extends Requirements = {},
   Provides extends Provisions = {},
   ConfigurationInput = Configuration,
 > {
+  // Schema input must stay invariant even when TypeScript compares declarations structurally.
+  readonly [configurationInputBrand]?: (input: ConfigurationInput) => ConfigurationInput;
   readonly name: string;
   readonly configuration?: PluginSchema<ConfigurationInput, Configuration>;
   readonly requires?: Requires;
@@ -90,7 +94,7 @@ export interface Plugin<
 // The uncallable setup signature preserves variance across heterogeneous declarations.
 export interface AnyPlugin extends Omit<
   Plugin<unknown, Requirements, Provisions>,
-  "configuration" | "setup"
+  "configuration" | "setup" | typeof configurationInputBrand
 > {
   readonly configuration?: unknown;
   readonly setup: (context: never, configuration: never) => unknown;
@@ -112,7 +116,7 @@ export interface NormalizedPlugin extends Omit<
   ) => Awaitable<void | Readonly<Record<string, unknown>>>;
 }
 
-const pluginFields = recordFields<Plugin>()(
+const pluginFields = recordFields<AnyPlugin>()(
   "name",
   "configuration",
   "requires",

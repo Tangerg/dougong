@@ -1,7 +1,14 @@
 import { satisfies } from "semver";
 import { describeArtifact, type ArtifactDescriptor } from "../artifacts/artifact.js";
 import type { Registration, RegistrationRecord, Selection } from "../catalog/registration.js";
-import { PlatformError, type PlatformErrorCode } from "../errors.js";
+import {
+  PlatformError,
+  type PlatformErrorCode,
+  registrationDependencyMissingCode,
+  registrationDependencyIncompatibleCode,
+  registrationDependencyInactiveCode,
+  registrationCycleCode,
+} from "../errors.js";
 
 export interface ActivationBlocker {
   readonly code: PlatformErrorCode;
@@ -58,7 +65,7 @@ export class ActivationPlan<Reference> {
       if (!removed.has(root)) return true;
       blockers.push(
         blocker(
-          "REGISTRATION_DEPENDENCY_MISSING",
+          registrationDependencyMissingCode,
           `Activation requires removed Registration '${root.name}'`,
           [root.name],
         ),
@@ -192,8 +199,8 @@ function validateArtifacts(
           blockers.push(
             blocker(
               parents.has(name)
-                ? "REGISTRATION_DEPENDENCY_MISSING"
-                : "REGISTRATION_DEPENDENCY_INACTIVE",
+                ? registrationDependencyMissingCode
+                : registrationDependencyInactiveCode,
               `Registration '${name}' requires '${dependencyName}' to be installed`,
               dependencyPath(name, dependencyName),
             ),
@@ -202,7 +209,7 @@ function validateArtifacts(
           if (!satisfies(dependency.manifest.version, range))
             blockers.push(
               blocker(
-                "REGISTRATION_DEPENDENCY_INCOMPATIBLE",
+                registrationDependencyIncompatibleCode,
                 `Registration '${name}' requires '${dependencyName}' ${range}, candidate ${dependency.manifest.version}`,
                 dependencyPath(name, dependencyName),
               ),
@@ -215,7 +222,7 @@ function validateArtifacts(
       cycle: (path) =>
         blockers.push(
           blocker(
-            "REGISTRATION_CYCLE",
+            registrationCycleCode,
             `Registration dependency cycle: ${path.join(" -> ")}`,
             path,
           ),

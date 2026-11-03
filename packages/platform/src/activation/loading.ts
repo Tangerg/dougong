@@ -7,7 +7,13 @@ import {
 } from "dougong";
 import type { Authorizer } from "../admission/permissions.js";
 import { describeArtifact, type Artifact } from "../artifacts/artifact.js";
-import { PlatformError } from "../errors.js";
+import {
+  PlatformError,
+  artifactIdentityCode,
+  moduleLoadFailedCode,
+  moduleInvalidCode,
+  platformUnavailableCode,
+} from "../errors.js";
 import type { Loader } from "../loaders/loader.js";
 import { Preparation } from "./preparation.js";
 
@@ -44,7 +50,7 @@ export class LoadedModules<Reference> {
   }
 
   #ports() {
-    if (!this.#state) throw new PlatformError("PLATFORM_UNAVAILABLE", "Module loading is closed");
+    if (!this.#state) throw new PlatformError(platformUnavailableCode, "Module loading is closed");
     return this.#state;
   }
 
@@ -87,7 +93,7 @@ async function loadPlugin<Reference>(
   } catch (error) {
     AbortSignal.prototype.throwIfAborted.call(signal);
     throw new PlatformError(
-      "MODULE_LOAD_FAILED",
+      moduleLoadFailedCode,
       `Failed to load Artifact '${artifact.manifest.name}'`,
       { cause: error },
     );
@@ -104,14 +110,14 @@ async function loadPlugin<Reference>(
     plugin = definePlugin(descriptor.value as Plugin<unknown, Requirements, Provisions, unknown>);
   } catch (error) {
     throw new PlatformError(
-      "MODULE_INVALID",
+      moduleInvalidCode,
       `Artifact '${artifact.manifest.name}' does not default-export a valid Plugin`,
       { cause: error },
     );
   }
   if (plugin.name !== artifact.manifest.name) {
     throw new PlatformError(
-      "ARTIFACT_IDENTITY",
+      artifactIdentityCode,
       `Artifact '${artifact.manifest.name}' loaded Plugin '${plugin.name}'`,
     );
   }

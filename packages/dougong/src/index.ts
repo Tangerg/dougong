@@ -19,6 +19,7 @@ export type {
   Group,
   Installation,
   InstallationOptions,
+  InstallationArguments,
   InstallationUpdate,
   InstallationOrigin,
   InitialInstallation,

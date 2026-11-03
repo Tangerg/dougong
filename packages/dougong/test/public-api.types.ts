@@ -195,6 +195,7 @@ const verifyInstallationTypes = (
   change.install(parsed, { id: "parsed", configuration: 42 });
 
   const precise = change.install(parsed, { id: "parsed", configuration: "42" });
+  expectTypeOf(precise).toEqualTypeOf<core.Installation<typeof parsed>>();
   change.update(precise, { configuration: "43" });
   // @ts-expect-error Updates preserve the Installation declaration's input type.
   change.update(precise, { configuration: 43 });
@@ -304,6 +305,14 @@ void verifyDynamicInput;
 function rejectUncorrelatedInput(plugin: typeof text | typeof number) {
   // @ts-expect-error A union Plugin does not establish which configuration input applies.
   core.createHost({ installations: [{ id: "uncertain", plugin, configuration: "text" }] });
+  const change = core.createHost().change();
+  // @ts-expect-error Separate union parameters do not establish a Plugin/input pairing.
+  change.install(plugin, { id: "uncertain", configuration: "text" });
+  // @ts-expect-error Explicit arguments must preserve the same pairing.
+  change.install<core.InstallationArguments<typeof plugin>>(plugin, {
+    id: "explicit-uncertain",
+    configuration: "text",
+  });
 }
 void rejectUncorrelatedInput;
 
@@ -311,10 +320,205 @@ const change = core.createHost().change();
 change.install(unconfigured, { id: "void" });
 change.install(optional, { id: "optional" });
 change.install(unknown, { id: "unknown" });
+change.install(unconfigured, { id: "explicit-void", configuration: undefined });
+change.install(optional, { id: "explicit-optional", configuration: "text" });
+change.install(unknown, { id: "explicit-unknown", configuration: { value: 42 } });
 // @ts-expect-error ChangeSet uses the same required-input rule as initial declarations.
 change.install(text, { id: "required" });
 // @ts-expect-error Optional configuration cannot widen the declared input.
 change.install(optional, { id: "wrong-optional", configuration: 42 });
+// @ts-expect-error Void does not authorize arbitrary configuration.
+change.install(unconfigured, { id: "wrong-void", configuration: "text" });
+
+function rejectUncorrelatedOptionalInput(plugin: typeof text | typeof unconfigured) {
+  // @ts-expect-error A void branch cannot make another Plugin's required input optional.
+  change.install(plugin, { id: "uncertain-optional" });
+}
+void rejectUncorrelatedOptionalInput;
+
+function verifyCorrelatedInstallation(
+  declaration: core.InstallationArguments<typeof text | typeof number>,
+  readonlyDeclaration:
+    | readonly [typeof text, core.InstallationOptions<typeof text>]
+    | readonly [typeof number, core.InstallationOptions<typeof number>],
+  optionalDeclaration: core.InstallationArguments<typeof text | typeof unconfigured>,
+) {
+  const installation = change.install(...declaration);
+  expectTypeOf(installation).toEqualTypeOf<core.Installation<typeof text | typeof number>>();
+  expectTypeOf(change.install(...readonlyDeclaration)).toEqualTypeOf<
+    core.Installation<typeof text | typeof number>
+  >();
+  change.install<core.InstallationArguments<typeof text | typeof number>>(...declaration);
+  change.remove(installation);
+
+  // @ts-expect-error The handle does not identify which installed branch accepts this input.
+  change.update(installation, { configuration: "text" });
+  // @ts-expect-error Explicit Plugin unions do not identify the installed branch either.
+  change.update<typeof text | typeof number>(installation, { configuration: 42 });
+  // @ts-expect-error Replacement cannot inherit input from an unknown installed branch.
+  change.update(installation, { plugin: text });
+  change.update(installation, { plugin: text, configuration: "replacement" });
+  change.update(installation, { plugin: number, configuration: 42 });
+  // @ts-expect-error Replacement input remains paired with its own Plugin.
+  change.update(installation, { plugin: text, configuration: 42 });
+
+  const optionalInstallation = change.install(...optionalDeclaration);
+  // @ts-expect-error A void branch does not authorize dropping the installed branch's input.
+  change.update(optionalInstallation, { configuration: undefined });
+  // @ts-expect-error Omitting replacement configuration would retain a possible string input.
+  change.update(optionalInstallation, { plugin: unconfigured });
+  change.update(optionalInstallation, { plugin: unconfigured, configuration: undefined });
+}
+void verifyCorrelatedInstallation;
+
+const explicitInstallation = change.install<core.InstallationArguments<typeof parsed>>(parsed, {
+  id: "explicit-parsed",
+  configuration: "42",
+});
+expectTypeOf(explicitInstallation).toEqualTypeOf<core.Installation<typeof parsed>>();
+change.update<typeof parsed>(explicitInstallation, { configuration: "43" });
+// @ts-expect-error Explicit arguments still require schema input, not setup output.
+change.install<core.InstallationArguments<typeof parsed>>(parsed, {
+  id: "explicit-wrong-schema-input",
+  configuration: 42,
+});
+// @ts-expect-error The explicit type parameter describes a complete argument tuple.
+change.install<typeof parsed>(parsed, { id: "obsolete-type-argument", configuration: "42" });
+
+const unionInput = core.definePlugin<string | number>({ name: "input.union", setup() {} });
+const unionInputInstallation = change.install(unionInput, {
+  id: "union-input",
+  configuration: "text",
+});
+change.update(unionInputInstallation, { configuration: 42 });
+change.update(unionInputInstallation, { plugin: unionInput, configuration: "text" });
+
+function rejectOverlappingInput(plugin: typeof text | typeof unionInput) {
+  // @ts-expect-error The string-only Plugin branch does not accept a number.
+  change.install(plugin, { id: "overlapping-input", configuration: 42 });
+}
+void rejectOverlappingInput;
+
+const broadInputSchema: StandardSchemaV1<string | number, number> = {
+  "~standard": {
+    version: 1,
+    vendor: "surface",
+    validate: (input) => ({ value: Number(input) }),
+  },
+};
+const parsedBroadInput = core.definePlugin({
+  name: "input.parsed-broad",
+  configuration: broadInputSchema,
+  setup(_context, configuration) {
+    expectTypeOf(configuration).toEqualTypeOf<number>();
+  },
+});
+expectTypeOf<typeof parsed extends typeof parsedBroadInput ? true : false>().toEqualTypeOf<false>();
+expectTypeOf<
+  core.Plugin<number, {}, {}, string> extends core.Plugin<number, {}, {}, string | number>
+    ? true
+    : false
+>().toEqualTypeOf<false>();
+
+function verifyOverlappingSchemaInputs(
+  plugin: typeof parsed | typeof parsedBroadInput,
+  useNarrowInput: boolean,
+) {
+  // @ts-expect-error Equal schema outputs cannot widen a declared Plugin union's input.
+  change.install(plugin, { id: "declared-overlapping-schema", configuration: 42 });
+  const selected = useNarrowInput ? parsed : parsedBroadInput;
+  // @ts-expect-error Schema input covariance cannot collapse an inferred Plugin union.
+  change.install(selected, { id: "inferred-overlapping-schema", configuration: 42 });
+  // @ts-expect-error Initial declarations use the same invariant schema input contract.
+  core.createHost({ installations: [{ id: "overlapping-schema", plugin, configuration: 42 }] });
+
+  const declaration: core.InstallationArguments<typeof parsed | typeof parsedBroadInput> =
+    useNarrowInput
+      ? [parsed, { id: "paired-schema", configuration: "42" }]
+      : [parsedBroadInput, { id: "paired-schema", configuration: 42 }];
+  const installation = change.install(...declaration);
+  change.update(installation, { configuration: "43" });
+  // @ts-expect-error The update cannot widen the handle to the broader schema input branch.
+  change.update(installation, { configuration: 43 });
+  change.update(installation, { plugin: parsedBroadInput });
+  // @ts-expect-error A narrow replacement cannot inherit every possible previous input.
+  change.update(installation, { plugin: parsed });
+  change.update(installation, { plugin: parsed, configuration: "43" });
+
+  const narrow = change.install(parsed, { id: "narrow-schema", configuration: "42" });
+  // @ts-expect-error A replacement cannot widen the Plugin inferred from the Installation.
+  change.update(narrow, { plugin: parsedBroadInput, configuration: 43 });
+}
+void verifyOverlappingSchemaInputs;
+
+const requiringText = core.definePlugin({
+  name: "input.requiring-text",
+  requires: { configuration: CONFIGURATION },
+  setup(_context, _configuration: string) {},
+});
+function verifySharedInput(installation: core.Installation<typeof text | typeof requiringText>) {
+  change.update(installation, { configuration: "text" });
+  change.update(installation, { plugin: text });
+  change.update(installation, { plugin: requiringText });
+}
+void verifySharedInput;
+
+const leftInput = core.definePlugin<"left" | "shared">({ name: "input.left", setup() {} });
+const rightInput = core.definePlugin<"right" | "shared">({ name: "input.right", setup() {} });
+function verifySharedLiteralInput(
+  declaration: core.InstallationArguments<typeof leftInput | typeof rightInput>,
+) {
+  const installation = change.install(...declaration);
+  change.update(installation, { configuration: "shared" });
+  // @ts-expect-error The right Plugin cannot consume the left-only input.
+  change.update(installation, { configuration: "left" });
+  // @ts-expect-error The left Plugin cannot consume the right-only input.
+  change.update(installation, { configuration: "right" });
+}
+void verifySharedLiteralInput;
+
+const optionalNumber = core.definePlugin<number | undefined>({
+  name: "input.optional-number",
+  setup() {},
+});
+function verifySharedOptionalInput(
+  installation: core.Installation<typeof optional | typeof optionalNumber>,
+) {
+  change.update(installation, { configuration: undefined });
+  // @ts-expect-error The optional string branch still rejects a number.
+  change.update(installation, { configuration: 42 });
+  // @ts-expect-error The optional number branch still rejects a string.
+  change.update(installation, { configuration: "text" });
+}
+void verifySharedOptionalInput;
+
+const structuredInput = core.definePlugin<{
+  mode: "text" | "number";
+  pair: [string, number];
+}>({ name: "input.structured", setup() {} });
+change.install(structuredInput, {
+  id: "structured-input",
+  configuration: { mode: "text", pair: ["text", 42] },
+});
+
+const defaultingSchema: StandardSchemaV1<string | undefined, number> = {
+  "~standard": {
+    version: 1,
+    vendor: "surface",
+    validate: (input) => ({ value: Number(input ?? 0) }),
+  },
+};
+const defaulting = core.definePlugin({
+  name: "input.defaulting",
+  configuration: defaultingSchema,
+  setup(_context, value) {
+    expectTypeOf(value).toEqualTypeOf<number>();
+  },
+});
+change.install(defaulting, { id: "defaulting" });
+change.install(defaulting, { id: "explicit-defaulting", configuration: "42" });
+// @ts-expect-error Schema defaults do not authorize setup output as installation input.
+change.install(defaulting, { id: "wrong-defaulting", configuration: 42 });
 
 expectTypeOf<core.Installation["status"]>().toEqualTypeOf<core.InstallationState>();
 expectTypeOf<core.HostSnapshot["error"]>().toEqualTypeOf<core.ErrorSnapshot | undefined>();

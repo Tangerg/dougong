@@ -1,6 +1,11 @@
 import { ReadonlyMapSnapshot } from "dougong/advanced";
 import { captureArtifact, type Artifact, type ArtifactInput } from "../artifacts/artifact.js";
-import { PlatformError } from "../errors.js";
+import {
+  PlatformError,
+  artifactDuplicateCode,
+  artifactUnavailableCode,
+  platformUnavailableCode,
+} from "../errors.js";
 
 export interface Catalog<Reference> {
   readonly add: (input: ArtifactInput<Reference>) => Artifact<Reference>;
@@ -34,7 +39,7 @@ export class ArtifactCatalog<Reference> implements Catalog<Reference> {
       this.#artifacts.get(name) ?? new Map<string, Artifact<Reference> | undefined>();
     if (artifacts.has(artifact.revision)) {
       throw new PlatformError(
-        "ARTIFACT_DUPLICATE",
+        artifactDuplicateCode,
         `Artifact '${name}' revision '${artifact.revision}' already exists`,
       );
     }
@@ -72,7 +77,7 @@ export class ArtifactCatalog<Reference> implements Catalog<Reference> {
       !this.#owned.has(artifact) ||
       this.get(artifact.manifest.name, artifact.revision) !== artifact
     ) {
-      throw new PlatformError("ARTIFACT_UNAVAILABLE", "Artifact is not available in this Catalog");
+      throw new PlatformError(artifactUnavailableCode, "Artifact is not available in this Catalog");
     }
   }
 
@@ -82,6 +87,6 @@ export class ArtifactCatalog<Reference> implements Catalog<Reference> {
   }
 
   #assertActive() {
-    if (!this.#active) throw new PlatformError("PLATFORM_UNAVAILABLE", "Catalog is closed");
+    if (!this.#active) throw new PlatformError(platformUnavailableCode, "Catalog is closed");
   }
 }
