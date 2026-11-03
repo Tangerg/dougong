@@ -127,7 +127,7 @@ it("captures normalized configuration once and consumes only the issuing Host pl
   await host.apply(plan);
   await host.start();
   expect(validate).toHaveBeenCalledOnce();
-  expect(await host.use(value, (result) => result)).toBe(3);
+  expect((await host.use(value, (result) => result)).value).toBe(3);
   await expect(host.apply(plan)).rejects.toMatchObject({ code: "PLAN_CONSUMED" });
   await host.stop();
 });
@@ -164,7 +164,7 @@ it("rejects stale plans before touching resources", async () => {
     },
   });
   expect(dispose).toHaveBeenCalledOnce();
-  expect(await host.use(value, (result) => result)).toBe(2);
+  expect((await host.use(value, (result) => result)).value).toBe(2);
   await host.stop();
 });
 

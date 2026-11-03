@@ -71,7 +71,7 @@ it.each(["borrow", "task"] as const)(
     try {
       await new Promise<void>((resolve) => setImmediate(resolve));
       expect(reads).toBe(1);
-      expect(await result.then((actual) => actual === value)).toBe(true);
+      expect(await result.then((actual) => actual.value === value)).toBe(true);
       expect(owner.snapshot()).toMatchObject({ foreground: 0, tasks: 0 });
     } finally {
       gate.resolve();
@@ -149,14 +149,14 @@ it("publishes executable contribution values at the same boundary as their colle
     const unavailable = { code: "CONTRIBUTION_UNAVAILABLE" };
     for (const id of ["owner/existing", "owner/new"])
       await expect(view.use(id, (action) => action())).rejects.toMatchObject(unavailable);
-    expect(await view.use("owner/stable", (action) => action())).toBe(1);
+    expect((await view.use("owner/stable", (action) => action())).value).toBe(1);
   } finally {
     gate.resolve();
     await updating;
     try {
       expect(view.get()).toEqual(["owner/existing", "owner/stable", "owner/new"]);
-      expect(await view.use("owner/existing", (action) => action())).toBe(2);
-      expect(await view.use("owner/new", (action) => action())).toBe(2);
+      expect((await view.use("owner/existing", (action) => action())).value).toBe(2);
+      expect((await view.use("owner/new", (action) => action())).value).toBe(2);
     } finally {
       await host.stop();
     }
@@ -182,7 +182,7 @@ it("binds a detached public contribution updater to its original entry", async (
   try {
     await host.start();
     update(2);
-    expect(await host.contributions(point).use("owner/one", (value) => value)).toBe(2);
+    expect((await host.contributions(point).use("owner/one", (value) => value)).value).toBe(2);
   } finally {
     await host.stop();
   }
@@ -385,7 +385,7 @@ it("retains only ordered IDs in a snapshot when an executable contribution is re
   expect(before).toEqual(["owner/run"]);
   expect(after).not.toBe(before);
   expect(after).toEqual(before);
-  expect(await view.use(before[0]!, (invoke) => invoke())).toBe("second");
+  expect((await view.use(before[0]!, (invoke) => invoke())).value).toBe("second");
   await host.stop();
   expect(view.get()).toEqual([]);
   expect(before).toEqual(["owner/run"]);

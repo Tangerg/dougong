@@ -93,18 +93,21 @@ export async function planetScenario(): Promise<ExampleResult> {
             await previous[asyncDisposeSymbol]();
             let selected: { id: string; score: number } | undefined;
             for (const id of context.dependencies.sources.get()) {
-              const score = await context.dependencies.sources.use(id, (source) =>
+              const { value: score } = await context.dependencies.sources.use(id, (source) =>
                 source.score(query),
               );
               if (!selected || score > selected.score) selected = { id, score };
             }
             if (!selected) throw new Error("No media source is available");
-            const track = await context.dependencies.sources.use(selected.id, async (source) => {
-              const uri = await source.resolve(query, currentPlayback.signal);
-              currentPlayback.signal.throwIfAborted();
-              await context.dependencies.audio.play(uri, currentPlayback.signal);
-              return Object.freeze({ query, uri, source: source.id });
-            });
+            const { value: track } = await context.dependencies.sources.use(
+              selected.id,
+              async (source) => {
+                const uri = await source.resolve(query, currentPlayback.signal);
+                currentPlayback.signal.throwIfAborted();
+                await context.dependencies.audio.play(uri, currentPlayback.signal);
+                return Object.freeze({ query, uri, source: source.id });
+              },
+            );
             // An external output can finish after the next playback has taken ownership.
             currentPlayback.signal.throwIfAborted();
             current.set(track);

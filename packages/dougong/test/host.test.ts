@@ -69,7 +69,7 @@ describe("Host execution", () => {
     expect(host.status).toBe("stopped");
     await expect(read(host, output)).rejects.toMatchObject({ code: "SERVICE_UNAVAILABLE" });
     await host.start();
-    expect(await read(host, output)).toBe(8);
+    expect((await read(host, output)).value).toBe(8);
     expect(steps).toEqual(["a", "b"]);
     await host.stop();
     expect(steps).toEqual(["a", "b", "-b", "-a"]);
@@ -161,7 +161,7 @@ describe("Host execution", () => {
       ],
     });
     await host.start();
-    expect(await read(host, output)).toBe(3);
+    expect((await read(host, output)).value).toBe(3);
     await host.stop();
   });
 
@@ -208,7 +208,7 @@ describe("Host execution", () => {
     ]);
     await host.apply(plan);
     expect(count).toEqual({ provider: 2, consumer: 2, other: 1 });
-    expect(await read(host, output)).toBe(3);
+    expect((await read(host, output)).value).toBe(3);
     await host.stop();
   });
 
@@ -223,16 +223,16 @@ describe("Host execution", () => {
     });
     const host = createHost({ installations: [{ id: "consumer", plugin: consumer }] });
     await host.start();
-    expect(await read(host, output)).toBe(0);
+    expect((await read(host, output)).value).toBe(0);
     const add = host.change();
     const installed = add.install(provider(5), { id: "provider" });
     await host.apply(await host.plan(add));
-    expect(await read(host, output)).toBe(5);
+    expect((await read(host, output)).value).toBe(5);
     const remove = host.change();
     remove.remove(installed);
     await host.apply(await host.plan(remove));
-    expect(await read(host, output)).toBe(0);
-    expect(await host.use(optional(value), (result) => result)).toBeUndefined();
+    expect((await read(host, output)).value).toBe(0);
+    expect((await host.use(optional(value), (result) => result)).value).toBeUndefined();
     expect(installed.status).toBe("removed");
     await host.stop();
   });
@@ -366,7 +366,7 @@ describe("Host execution", () => {
     exit.resolve();
     await using;
     await host.apply(plan);
-    expect(await read(host, value)).toBe(2);
+    expect((await read(host, value)).value).toBe(2);
     await host.stop();
   });
 
@@ -425,11 +425,11 @@ describe("Host execution", () => {
     });
     expect(host.installation("a")).toBe(handle);
     expect(handle.origin).toEqual({ version: "1" });
-    expect(await read(host, value)).toBe(1);
+    expect((await read(host, value)).value).toBe(1);
     expect(host.diagnostics.get().error?.message).toContain("new failed");
     await replace(host, "a", provider(3));
     expect(handle.origin).toBeUndefined();
-    expect(await read(host, value)).toBe(3);
+    expect((await read(host, value)).value).toBe(3);
     await host.stop();
   });
 
@@ -503,7 +503,11 @@ describe("Host execution", () => {
       { id: "item" },
     );
     await host.apply(await host.plan(change));
-    expect(await Promise.all(view.get().map((id) => view.use(id, (value) => value)))).toEqual([1]);
+    expect(
+      (await Promise.all(view.get().map((id) => view.use(id, (value) => value)))).map(
+        ({ value }) => value,
+      ),
+    ).toEqual([1]);
     expect(starts).toHaveBeenCalledOnce();
     const remove = host.change();
     remove.remove(installed);
@@ -519,7 +523,7 @@ describe("Host execution", () => {
       throw new Error("observer");
     });
     await expect(host.start()).resolves.toEqual({ stateRevision: 1, affectedInstallations: ["a"] });
-    expect(await read(host, value)).toBe(1);
+    expect((await read(host, value)).value).toBe(1);
     expect(report).toHaveBeenCalled();
     subscription[Symbol.dispose]();
     await host.stop();
@@ -623,7 +627,7 @@ describe("Host execution", () => {
   });
 
   it.each(["getPrototypeOf", "ownKeys", "getOwnPropertyDescriptor"] as const)(
-    "preserves the cause of an unreadable setup result at %s",
+    "preserves the cause of an unreadable fulfilled setup result at %s",
     async (operation) => {
       const failure = new Error("provided values became inaccessible");
       const output = new Proxy(
@@ -638,7 +642,11 @@ describe("Host execution", () => {
         installations: [
           {
             id: "provider",
-            plugin: definePlugin({ name: "provider", provides: { value }, setup: () => output }),
+            plugin: definePlugin({
+              name: "provider",
+              provides: { value },
+              setup: () => Promise.resolve(output),
+            }),
           },
         ],
       });

@@ -20,6 +20,7 @@ Platform 和 Reactive 按需添加。旧 `@dougongjs/core` 已合入 `dougong`�
 
 - 安装变更统一为 `ChangeSet → host.plan() → host.apply()`。Installation 和 Group 是稳定只读身份；旧的直接安装、句柄更新、删除、ready 和 commit 路径被移除。
 - 应用通过 `host.use` 借用服务。贡献视图返回有序 ID 数组，通过 `ContributionView.use` 读取和执行；使用中的代次受到变更保护。
+- `Task.result`、`host.use`、`ContributionView.use` 和 `SerialQueue.run` 返回 `Promise<ResolvedValue<T>>`，成功结果通过冻结的 `{ value }` 回执交付。跨 realm Promise 使用公开结构协议，不再通过展示标签推断原生身份。
 - PluginContext 明确分为 `dependencies`、`lifetime`、`events`、`contributions`、`metadata` 和 `logger`。配置字段统一为 `configuration`，相关类型与错误名也使用完整拼写。
 - 配置输入与验证输出只接受不可变数据；资源对象、Promise、函数、访问器、循环和稀疏数组被拒绝。规划捕获配置，回滚复用已验证值。
 - 根 `LifetimeContext` 只登记资源和工作；可提前释放的子树使用 `ChildLifetime`。句柄统一使用标准释放符号。异步获取返回 `{ resource }` 回执。

@@ -33,7 +33,7 @@ export async function serviceBasics(): Promise<ExampleResult> {
   });
   await host.start();
 
-  trace.push(`host:${await host.use(CLOCK, (clock) => clock.now())}`);
+  trace.push(`host:${(await host.use(CLOCK, (clock) => clock.now())).value}`);
   await host.stop();
 
   return exampleResult({

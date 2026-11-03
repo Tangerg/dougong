@@ -113,7 +113,7 @@ it("keeps Instance lifetime termination in the Engine while a plugin can retire 
   await host.start();
   await child[Symbol.asyncDispose]();
   expect(release).not.toHaveBeenCalled();
-  expect(await host.use(value, (current) => current)).toBe(1);
+  expect((await host.use(value, (current) => current)).value).toBe(1);
   await host.stop();
   expect(release).toHaveBeenCalledOnce();
 });

@@ -12,6 +12,7 @@ import {
   lifetimeDisposedCode,
 } from "../contracts/errors.js";
 import type { Lifetime, LifetimeOwnership } from "../lifetime/lifetime.js";
+import type { ResolvedValue } from "../internal/async-result.js";
 import {
   disposeSymbol,
   type Disposable,
@@ -29,7 +30,10 @@ export interface Contribution<T> extends Disposable {
 }
 
 export interface ContributionView<T> extends SnapshotView<ReadonlyArray<string>> {
-  use<Result>(id: string, callback: (value: T) => Awaitable<Result>): Promise<Result>;
+  use<Result>(
+    id: string,
+    callback: (value: T) => Awaitable<Result>,
+  ): Promise<ResolvedValue<Awaited<Result>>>;
 }
 
 export interface ContributionOperations {
@@ -57,7 +61,10 @@ class ContributionViewHandle<T> implements ContributionView<T> {
   readonly #state: ContributionViewState<T>;
   readonly get: () => ReadonlyArray<string>;
   readonly subscribe: (listener: () => void) => Disposable;
-  readonly use: <Result>(id: string, callback: (value: T) => Awaitable<Result>) => Promise<Result>;
+  readonly use: <Result>(
+    id: string,
+    callback: (value: T) => Awaitable<Result>,
+  ) => Promise<ResolvedValue<Awaited<Result>>>;
 
   constructor(state: ContributionViewState<T>) {
     this.#state = state;
@@ -148,7 +155,7 @@ class ContributionRecord<T> implements Publication {
     state.store.publishClaim(this.#id, this);
   }
 
-  use<Result>(callback: (value: T) => Awaitable<Result>): Promise<Result> {
+  use<Result>(callback: (value: T) => Awaitable<Result>): Promise<ResolvedValue<Awaited<Result>>> {
     const state = this.#state;
     if (state.phase === "disposed")
       throw new DougongError(contributionUnavailableCode, "Contribution is no longer available");
@@ -264,7 +271,10 @@ export class ContributionStore<T> {
     return (this.#hostView ??= new ContributionViewHandle<T>({ binding: { store: this } }));
   }
 
-  use<Result>(id: string, callback: (value: T) => Awaitable<Result>): Promise<Result> {
+  use<Result>(
+    id: string,
+    callback: (value: T) => Awaitable<Result>,
+  ): Promise<ResolvedValue<Awaited<Result>>> {
     const claim = this.#claims.get(id);
     if (claim?.phase !== "published")
       throw new DougongError(contributionUnavailableCode, `Contribution '${id}' is not available`);

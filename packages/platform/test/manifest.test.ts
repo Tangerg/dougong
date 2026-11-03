@@ -297,13 +297,19 @@ describe("loaders and permission policy", () => {
     ).toThrow(TypeError);
   });
 
-  it("imports the URL itself without executing a supplied coercion method", async () => {
+  it("rejects a mutable URL without executing a supplied coercion method", async () => {
     const reference = new URL("data:text/javascript,export default 817");
     const substitute = vi.fn<() => string>(() => "data:text/javascript,export default 0");
     Object.defineProperty(reference, Symbol.toPrimitive, { value: substitute });
-    const result = await new ImportLoader().load(reference, new AbortController().signal);
+    const rejection = await new ImportLoader()
+      .load(reference as never, new AbortController().signal)
+      .then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+    expect(rejection).toBeInstanceOf(TypeError);
+    expect(rejection).toMatchObject({ message: "ImportLoader reference must be a string" });
     expect(substitute).not.toHaveBeenCalled();
-    expect((result as { default: number }).default).toBe(817);
   });
 
   it("projects permission fields into Registration diagnostics", async () => {

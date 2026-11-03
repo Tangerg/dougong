@@ -481,7 +481,7 @@ it("retains a busy unrelated borrower and its providers without deadlocking quar
   const change = host.change();
   change.remove(host.installation("failure")!);
   const plan = await host.plan(change);
-  const error = await host.use(consumer, async (value) => {
+  const { value: error } = await host.use(consumer, async (value) => {
     expect(value).toBe(1);
     return host.apply(plan).catch((error: unknown) => error);
   });

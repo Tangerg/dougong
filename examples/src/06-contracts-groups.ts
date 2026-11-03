@@ -54,21 +54,24 @@ export async function contractsAndGroups(): Promise<ExampleResult> {
   await host.apply(await host.plan(initial));
   await host.start();
 
-  const alphaWorkspace = await host.use(ALPHA_STORE, (store) => store.workspace);
-  const betaWorkspace = await host.use(BETA_STORE, (store) => store.workspace);
+  const { value: alphaWorkspace } = await host.use(ALPHA_STORE, (store) => store.workspace);
+  const { value: betaWorkspace } = await host.use(BETA_STORE, (store) => store.workspace);
   const atStartup = [...trace];
   const change = host.change();
   change.update(alphaProvider, { configuration: 2 });
   change.update(betaProvider, { configuration: 2 });
   const plan = await host.plan(change);
   await host.apply(plan);
-  const versions = `alpha@${await host.use(ALPHA_STORE, (store) => store.version)}, beta@${await host.use(BETA_STORE, (store) => store.version)}`;
+  const versions = `alpha@${(await host.use(ALPHA_STORE, (store) => store.version)).value}, beta@${(await host.use(BETA_STORE, (store) => store.version)).value}`;
 
   const remove = host.change();
   remove.removeGroup(alpha);
   await host.apply(await host.plan(remove));
-  const alphaAvailable = await host.use(optional(ALPHA_STORE), (store) => store !== undefined);
-  const betaSurvived = await host.use(BETA_STORE, (store) => store.version);
+  const { value: alphaAvailable } = await host.use(
+    optional(ALPHA_STORE),
+    (store) => store !== undefined,
+  );
+  const { value: betaSurvived } = await host.use(BETA_STORE, (store) => store.version);
   await host.stop();
 
   return exampleResult({

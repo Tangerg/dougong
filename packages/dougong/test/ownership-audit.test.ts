@@ -18,7 +18,7 @@ it("publishes committed Host availability only with the matching contribution sn
   const contributions = host.contributions(values);
   await host.start();
   const observations: Array<readonly [number, number | undefined]> = [];
-  const readings: Promise<void>[] = [];
+  const readings: Promise<unknown>[] = [];
   let revision = host.stateRevision;
   using subscription = host.diagnostics.subscribe(() => {
     const snapshot = host.diagnostics.get();
@@ -187,7 +187,7 @@ it("keeps dependency and group membership committed while a Plan validates", asy
   expect(host.status).toBe("running");
   expect(host.stateRevision).toBe(revision);
   expect(host.diagnostics.get()).toBe(before);
-  expect(await host.use(capability, (value) => value)).toBe(1);
+  expect((await host.use(capability, (value) => value)).value).toBe(1);
   expect(host.group("empty")?.parentId).toBe("consumers");
   resume.resolve();
   const plan = await planning;

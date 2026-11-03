@@ -7,18 +7,18 @@ import {
   type AsyncDisposable,
   type Readable,
 } from "./protocol.js";
-import { assertSynchronous, captureThenable } from "./synchronous-result.js";
+import { assertSynchronous, captureThenable, resolveValue } from "./async-result.js";
 
 // Serialize replacement so the previous resource owner finishes before the next observer begins.
 
-export interface ObservationTask<T = void> extends AsyncDisposable {
-  readonly result: Promise<T>;
+export interface ObservationTask extends AsyncDisposable {
+  readonly result: PromiseLike<unknown>;
 }
 
 export interface ObservationOwner<Child extends AsyncDisposable = AsyncDisposable> {
   readonly defer: (dispose: () => unknown) => AsyncDisposable;
   readonly child: (label: string) => Child;
-  readonly spawn: <T>(task: (signal: AbortSignal) => T | PromiseLike<T>) => ObservationTask<T>;
+  readonly spawn: (task: (signal: AbortSignal) => void | PromiseLike<void>) => ObservationTask;
 }
 
 export type Observer<T, Child extends AsyncDisposable> = (value: T, lifetime: Child) => void;
@@ -103,7 +103,7 @@ class Observation<T, Child extends AsyncDisposable> {
     const completion = Promise.withResolvers<void>();
     this.#closingRegistration = completion.promise;
     try {
-      completion.resolve(cleanup());
+      void resolveValue(cleanup()).then(() => completion.resolve(), completion.reject);
     } catch (error) {
       completion.reject(error);
     }
@@ -229,7 +229,7 @@ class Observation<T, Child extends AsyncDisposable> {
     if (!current) return;
     // Replacement and terminal shutdown share the same attempt, including its rejection.
     return (this.#currentRelease ??= Promise.resolve()
-      .then(current)
+      .then(() => resolveValue(current()))
       .then(() => {
         this.#current = undefined;
         this.#currentRelease = undefined;
@@ -282,8 +282,7 @@ export function observe<T, Child extends AsyncDisposable>(
   const binding: ObservationOwner<Child> = {
     defer: (release) => Reflect.apply(defer, owner, [release]),
     child: (label) => Reflect.apply(child, owner, [label]),
-    spawn: <T>(task: (signal: AbortSignal) => T | PromiseLike<T>) =>
-      Reflect.apply(spawn<T>, owner, [task]),
+    spawn: (task) => Reflect.apply(spawn, owner, [task]),
   };
   const observation = new Observation(binding, readable, observer);
   const close = captureRelease(
@@ -297,7 +296,7 @@ export function observe<T, Child extends AsyncDisposable>(
   } catch (error) {
     // Roll back the owner's registration as well as the subscription; failed cleanup stays owned.
     try {
-      void Promise.resolve(close()).catch(() => undefined);
+      void resolveValue(close()).catch(() => undefined);
     } catch (cleanupError) {
       throw new AggregateError([error, cleanupError], "Observation construction failed");
     }
@@ -308,7 +307,7 @@ export function observe<T, Child extends AsyncDisposable>(
 async function collect(resource: Release | undefined, errors: unknown[]) {
   if (!resource) return;
   try {
-    await resource();
+    await resolveValue(resource());
   } catch (error) {
     errors.push(error);
   }

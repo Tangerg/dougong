@@ -41,6 +41,10 @@ Before submitting a Core Plan, Platform requests activation admission for direct
 
 Platform captures the Loader and Authorizer methods once during construction, preserving their receivers. Loader is structural. ImportLoader uses same-realm dynamic import; MemoryLoader supports testing and controlled module tables. PermissionSet implements Authorizer with a declared permission set and provides no operating-system isolation.
 
+`ImportLoader` implements `Loader<string>`. It accepts primitive string module specifiers and rejects `URL` and other objects at runtime without implicit string conversion. Applications capture `url.href` when declaring an Artifact; a changed target requires another Artifact revision. Native module resolution, caching and evaluation cancellation limits still apply. A string specifier does not guarantee content integrity or execution isolation. See the [loading reference example](../guide/platform.md#capture-module-specifiers-in-artifact-declarations).
+
+Other `Loader<Reference>` implementations may define their own opaque reference protocols, including object identities. Platform does not deep-clone those references. Their meaning, mapping stability and integrity guarantees belong to the corresponding Loader and cannot be inferred from the generic type.
+
 An Authorizer grants admission by returning or fulfilling with `undefined` and denies it by throwing or rejecting. Both admission phases reject any other fulfillment with a TypeError. An existing boolean policy must throw when its predicate is false and return normally when it is true.
 
 During Core planning, final admission, apply and release, new selection or activation commands reject with [`PLATFORM_BUSY`](errors.md). Disposal cancels pending planning and admission, including a validator or policy that awaits disposal itself. Once Platform hands a Plan to Core or starts Core release, disposal also rejects with [`PLATFORM_BUSY`](errors.md) so a setup or cleanup callback cannot wait on itself. Earlier admitted activations can finish, and loading outside that window remains concurrent.

@@ -14,6 +14,7 @@ export {
 export { createHost } from "./execution/host.js";
 export type { Host, HostOptions, ApplyResult } from "./execution/host-api.js";
 export type { HostStatus, InstallationState } from "./contracts/status.js";
+export type { ResolvedValue } from "./internal/async-result.js";
 export type {
   ChangeSet,
   Group,

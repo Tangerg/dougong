@@ -119,10 +119,10 @@ it("keeps the captured Task completion authoritative until observation disposal"
   const baseOwner = manualOwner(child);
   const taskDisposed = vi.fn<() => void>();
   let reads = 0;
-  let completion!: Promise<unknown>;
+  let completion!: PromiseLike<unknown>;
   const owner: ObservationOwner = {
     ...baseOwner,
-    spawn<T>(task: (signal: AbortSignal) => T | PromiseLike<T>) {
+    spawn(task) {
       const runner = baseOwner.spawn(task);
       completion = runner.result;
       const dispose = () => {
@@ -131,7 +131,7 @@ it("keeps the captured Task completion authoritative until observation disposal"
       };
       return {
         get result() {
-          return ++reads === 1 ? runner.result : Promise.resolve(undefined as T);
+          return ++reads === 1 ? runner.result : Promise.resolve();
         },
         [Symbol.asyncDispose]: dispose,
       };
@@ -184,12 +184,12 @@ describe("observe composition", () => {
     async (phase) => {
       const releaseChild = vi.fn<() => void>();
       const base = manualOwner(manualLifetime(releaseChild));
-      let runnerResult!: Promise<void>;
+      let runnerResult!: PromiseLike<unknown>;
       const owner: ObservationOwner = {
         ...base,
         spawn(task) {
           const runner = base.spawn(task);
-          runnerResult = runner.result as Promise<void>;
+          runnerResult = runner.result;
           return runner;
         },
       };
@@ -218,7 +218,14 @@ describe("observe composition", () => {
       } else {
         failed = true;
         notify();
-        completion = runnerResult.catch((error: unknown) => error);
+        completion = (async () => {
+          try {
+            await runnerResult;
+            return undefined;
+          } catch (error) {
+            return error;
+          }
+        })();
       }
       await tick();
       try {
@@ -1151,11 +1158,11 @@ it.each(["invalid", "throwing"] as const)(
           releases.push("child");
         }),
       ),
-      spawn<T>() {
+      spawn() {
         return {
-          get result(): Promise<T> {
+          get result(): PromiseLike<unknown> {
             if (kind === "throwing") throw fail;
-            return null as unknown as Promise<T>;
+            return null as unknown as PromiseLike<unknown>;
           },
           async [Symbol.asyncDispose]() {
             releases.push("runner");
@@ -1190,7 +1197,7 @@ it("uses the accepted release methods for the observation registration, drain an
       };
       return registration;
     },
-    spawn<T>(task: (signal: AbortSignal) => T | PromiseLike<T>) {
+    spawn(task) {
       const actual = base.spawn(task);
       const handle = {
         result: actual.result,

@@ -9,7 +9,7 @@ describe("SerialQueue", () => {
       new TypeError("SerialQueue operation must be a function"),
     );
     expect(() => queue.run(() => 1, null as never)).toThrow(TypeError);
-    await expect(queue.run(() => 1)).resolves.toBe(1);
+    await expect(queue.run(() => 1)).resolves.toEqual({ value: 1 });
   });
 
   it("isolates caller results while continuing after a failed operation", async () => {
@@ -40,7 +40,7 @@ describe("SerialQueue", () => {
 
     await expect(first).rejects.toBe(failure);
     await expect(firstSettled).resolves.toBeUndefined();
-    await expect(second).resolves.toBe(2);
+    await expect(second).resolves.toEqual({ value: 2 });
     await expect(settled).resolves.toBeUndefined();
     expect(trace).toEqual(["first:start", "first:end", "second"]);
   });
@@ -67,6 +67,59 @@ describe("SerialQueue", () => {
       blocked.resolve();
       await first;
     }
+  });
+
+  it("waits for a decorated native Promise before starting the next command", async () => {
+    const queue = new SerialQueue();
+    const pending = Promise.withResolvers<void>();
+    // oxlint-disable-next-line unicorn/no-thenable -- A Proxy would lose the native Promise brand.
+    Object.defineProperty(pending.promise, "then", { value: undefined });
+    const trace: string[] = [];
+    const first = queue.run(() => {
+      trace.push("first");
+      return pending.promise;
+    });
+    const second = queue.run(() => {
+      trace.push("second");
+      return 2;
+    });
+    let settled = false;
+    void queue.settled.then(() => {
+      settled = true;
+    });
+
+    try {
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(trace).toEqual(["first"]);
+      expect(settled).toBe(false);
+    } finally {
+      pending.resolve();
+      await Promise.all([first, second]);
+    }
+    expect(trace).toEqual(["first", "second"]);
+    expect((await second).value).toBe(2);
+  });
+
+  it("preserves an already fulfilled native Promise payload without resolving it again", async () => {
+    const queue = new SerialQueue();
+    let reads = 0;
+    const payload = new Proxy(
+      {},
+      {
+        get(target, key, receiver) {
+          if (key === "then" && ++reads > 1)
+            throw new Error("queued payload was assimilated again");
+          return Reflect.get(target, key, receiver);
+        },
+      },
+    );
+    const fulfilled = Promise.resolve(payload);
+    expect(reads).toBe(1);
+
+    const receipt = await queue.run(() => fulfilled);
+    expect(receipt.value).toBe(payload);
+    expect(Object.isFrozen(receipt)).toBe(true);
+    expect(reads).toBe(1);
   });
 });
 
@@ -98,7 +151,7 @@ it("cancels only queued work and retains the position of later commands", async 
     expect(trace).toEqual([]);
   } finally {
     release.resolve(7);
-    expect(await first).toBe(7);
+    expect((await first).value).toBe(7);
     await last;
   }
   expect(called).toBe(false);

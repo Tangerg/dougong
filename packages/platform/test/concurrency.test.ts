@@ -43,7 +43,7 @@ describe("selection and activation races", () => {
     await platform.activate([registration]);
     release.resolve();
     await nextTurn();
-    expect(await host.use(VALUE, (value) => value.value)).toBe(2);
+    expect((await host.use(VALUE, (value) => value.value)).value).toBe(2);
     expect(registration.activeOrigin?.revision).toBe("2.0.0");
     expect(registration.error).toBeUndefined();
     await platform[Symbol.asyncDispose]();
@@ -194,9 +194,9 @@ describe("selection and activation races", () => {
     await platform.select(next);
     expect(registration.selectedArtifact.revision).toBe("2.0.0");
     expect(registration.activeOrigin?.revision).toBe("1.0.0");
-    expect(await host.use(VALUE, (value) => value.value)).toBe(1);
+    expect((await host.use(VALUE, (value) => value.value)).value).toBe(1);
     await platform.activate([registration]);
-    expect(await host.use(VALUE, (value) => value.value)).toBe(2);
+    expect((await host.use(VALUE, (value) => value.value)).value).toBe(2);
     await platform[Symbol.asyncDispose]();
     await host.stop();
   });

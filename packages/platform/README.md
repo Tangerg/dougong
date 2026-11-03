@@ -176,6 +176,16 @@ same-realm JavaScript. `ImportLoader` preserves native import caching and does n
 transitive hot module replacement or cancellation of module evaluation. Use a Loader backed by a real execution
 boundary when stronger execution controls are required.
 
+`ImportLoader` implements `Loader<string>` and rejects `URL` objects at runtime. Capture a
+module specifier with `new URL("./plugin.js", import.meta.url).href` when declaring the Artifact,
+before selection or asynchronous admission. A changed target requires a new Artifact revision;
+mutating the original URL cannot change the captured string. A new revision does not bypass
+native module caching for the same specifier.
+
+Other `Loader<Reference>` implementations may intentionally use opaque object identities.
+Platform preserves those identities without deep-cloning them. Their meaning, stable mapping to
+artifacts and integrity guarantees remain the corresponding Loader's responsibility.
+
 ## Placement and diagnostics
 
 `PlatformOptions.group` can place installations in a committed Group owned by `host`.

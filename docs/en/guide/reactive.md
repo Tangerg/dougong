@@ -29,6 +29,16 @@ Once attached, a failed source read invalidates the bridge: local reads throw th
 
 Public types: `Readable`, `Signal`, `ReadonlySignal`, `Disposable`, `AsyncDisposable`, `BridgeOwner`, `ObservationOwner`, `ObservationTask`, `Observer`. `ObservationOwner` needs `defer`, `child` and `spawn`; the returned child supplies standard async disposal. The parent need not expose a disposer. Compatible owners need not inherit framework classes.
 
+Observation only needs the drain task's completion. `ObservationTask` has no type parameter and exposes `result: PromiseLike<unknown>`; `spawn` accepts a task returning `void | PromiseLike<void>`. An owner with a generic `spawn` or a Task carrying result data still satisfies this narrower protocol. Observation does not interpret that payload. Existing declarations using `ObservationTask<T>` must remove the type argument.
+
 Observers register resources synchronously. Use `generation.spawn` for asynchronous work. The observation task's owner reports failures; a failed old-generation exit never silently starts a replacement.
 
 The adapters capture the accepted source methods and subscription disposer. Observation also captures each child, task and cleanup handle’s disposer when it takes ownership. If a custom owner returns a cancellable task whose `result` is missing or throws, construction fails and rollback invokes that task’s captured disposer. A failed unsubscribe remains a release obligation of the owner: early termination, drain failure and later shutdown cannot turn it into success by running it again.
+
+## Asynchronous result protocol
+
+Synchronous boundary checks and asynchronous release share one result protocol. A prototype chain containing this module's realm's `Promise.prototype` selects the native protocol. Intrinsic `then` validates the brand and observes actual settlement; an own `then` cannot replace it, and an already fulfilled payload is not assimilated again. A `constructor` or `Symbol.species` failure propagates without retrying the public `then`. Child, drain-task and owner-registration disposal all join that outcome before replacement or observation completion.
+
+Other objects use the structural protocol: capture the public `then` once, preserve its receiver and follow standard recursive resolution. `Symbol.toStringTag` has no role in protocol selection, so a structural Promise with a `"Promise"` display tag remains valid.
+
+This narrows the guarantee across realms. An ordinary foreign Promise supplies a conforming public `then`; the package does not infer its internal native brand. Adapt a foreign Promise that hides or changes that protocol in its origin realm first. If its fulfilled payload cannot tolerate another assimilation, box the payload into a plain data receipt in that realm before crossing the boundary.

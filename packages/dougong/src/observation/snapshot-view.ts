@@ -1,7 +1,7 @@
 // Asynchronous snapshot subscribers could resume against a state newer than the notification they received.
 
 import { disposeSymbol, type Disposable } from "../contracts/resource.js";
-import { assertSynchronous } from "../internal/synchronous-result.js";
+import { assertSynchronous } from "../internal/async-result.js";
 import { RecordedFailure } from "../contracts/errors.js";
 
 export interface SnapshotView<T> {

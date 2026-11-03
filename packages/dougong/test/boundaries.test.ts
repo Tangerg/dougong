@@ -31,7 +31,7 @@ it.each(["left", "right"])(
     const leftView = host.contributions(left);
     const rightView = host.contributions(right);
     const seen: number[][][] = [];
-    const readings: Promise<void>[] = [];
+    const readings: Promise<unknown>[] = [];
     using _subscription = (side === "left" ? leftView : rightView).subscribe(() => {
       const pair: number[][] = [[], []];
       seen.push(pair);
@@ -78,7 +78,7 @@ it("publishes a changed contribution key even when both values are undefined", a
   store.stage("owner", "new", undefined, owner);
   registry.endBatch();
   expect(store.snapshot()).toEqual(["owner/new"]);
-  expect(await store.use("owner/new", (value) => value)).toBeUndefined();
+  expect((await store.use("owner/new", (value) => value)).value).toBeUndefined();
   expect(changed).toHaveBeenCalledOnce();
   await owner.dispose();
 });
@@ -265,7 +265,7 @@ it("owns frozen Contract identities after normalizing structural declarations", 
     ],
   });
   await host.start();
-  expect(await host.use(service<number>("boundary.value"), (value) => value)).toBe(7);
+  expect((await host.use(service<number>("boundary.value"), (value) => value)).value).toBe(7);
   expect(received).toEqual([7, undefined]);
   expect(consumer.requires?.maybe.service.id).toBe("boundary.optional");
   expect(Object.isFrozen(consumer.requires?.maybe.service)).toBe(true);

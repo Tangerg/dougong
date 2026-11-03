@@ -1,6 +1,7 @@
 import { getEventListeners } from "node:events";
 import { setImmediate } from "node:timers/promises";
 import { describe, expect, it, vi } from "vitest";
+import type { ResolvedValue } from "dougong";
 import { abandonOnAbort } from "../src/abandon-on-abort";
 
 describe("explicitly abandoning an operation on abort", () => {
@@ -71,12 +72,12 @@ describe("explicitly abandoning an operation on abort", () => {
     controller.signal.addEventListener("abort", unrelated, { once: true });
     const result = abandonOnAbort(controller.signal, () => Promise.resolve("complete"));
 
-    await expect(result).resolves.toBe("complete");
+    await expect(result).resolves.toEqual({ value: "complete" });
 
     expect(getEventListeners(controller.signal, "abort")).toEqual([unrelated]);
     controller.abort();
     expect(unrelated).toHaveBeenCalledOnce();
-    await expect(result).resolves.toBe("complete");
+    await expect(result).resolves.toEqual({ value: "complete" });
   });
 
   it("returns the original failure and releases the listener", async () => {
@@ -89,6 +90,49 @@ describe("explicitly abandoning an operation on abort", () => {
     expect(getEventListeners(controller.signal, "abort")).toHaveLength(0);
     controller.abort();
     await expect(result).rejects.toBe(failure);
+  });
+
+  it("waits for a decorated native operation before delivering its receipt", async () => {
+    const controller = new AbortController();
+    const pending = Promise.withResolvers<string>();
+    // oxlint-disable-next-line unicorn/no-thenable -- A Proxy would lose the native Promise brand.
+    Object.defineProperty(pending.promise, "then", { value: undefined });
+    const result = abandonOnAbort(controller.signal, () => pending.promise);
+    let settled = false;
+    void result.then(() => {
+      settled = true;
+    });
+    await setImmediate();
+    const settledBeforeOperation = settled;
+    pending.resolve("complete");
+
+    const receipt = await result;
+    expect(settledBeforeOperation).toBe(false);
+    expect(receipt.value).toBe("complete");
+    expect(Object.isFrozen(receipt)).toBe(true);
+    expect(getEventListeners(controller.signal, "abort")).toHaveLength(0);
+  });
+
+  it("preserves an already fulfilled payload through the cancellation boundary", async () => {
+    const controller = new AbortController();
+    let reads = 0;
+    const payload = new Proxy(
+      {},
+      {
+        get(target, key, receiver) {
+          if (key === "then" && ++reads > 1)
+            throw new Error("abandoned operation payload was assimilated again");
+          return Reflect.get(target, key, receiver);
+        },
+      },
+    );
+    const fulfilled = Promise.resolve(payload);
+    expect(reads).toBe(1);
+
+    const receipt = await abandonOnAbort(controller.signal, () => fulfilled);
+    expect(receipt.value).toBe(payload);
+    expect(reads).toBe(1);
+    expect(getEventListeners(controller.signal, "abort")).toHaveLength(0);
   });
 
   it("observes synchronous start failures and releases the listener", async () => {
@@ -127,7 +171,7 @@ describe("explicitly abandoning an operation on abort", () => {
       started.resolve();
       return operation.promise;
     });
-    const fulfilled = vi.fn<(value: string) => void>();
+    const fulfilled = vi.fn<(receipt: ResolvedValue<string>) => void>();
     const rejected = vi.fn<(error: unknown) => void>();
     const observed = result.then(fulfilled, rejected);
     await started.promise;
@@ -145,7 +189,7 @@ describe("explicitly abandoning an operation on abort", () => {
   it("settles completion once when the signal aborts in the next microtask", async () => {
     const controller = new AbortController();
     const result = abandonOnAbort(controller.signal, () => Promise.resolve("complete"));
-    const fulfilled = vi.fn<(value: string) => void>(() => {
+    const fulfilled = vi.fn<(receipt: ResolvedValue<string>) => void>(() => {
       queueMicrotask(() => controller.abort(new Error("retired after completion")));
     });
     const rejected = vi.fn<(error: unknown) => void>();
@@ -153,7 +197,7 @@ describe("explicitly abandoning an operation on abort", () => {
     await result.then(fulfilled, rejected);
     await setImmediate();
 
-    expect(fulfilled).toHaveBeenCalledExactlyOnceWith("complete");
+    expect(fulfilled).toHaveBeenCalledExactlyOnceWith({ value: "complete" });
     expect(rejected).not.toHaveBeenCalled();
     expect(controller.signal.aborted).toBe(true);
     expect(getEventListeners(controller.signal, "abort")).toHaveLength(0);

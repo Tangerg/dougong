@@ -59,7 +59,7 @@ export async function lazyPlatform(): Promise<ExampleResult> {
   await platform.trigger(actionActivation(remoteAction));
   const commandId = commands.get()[0];
   if (!commandId) throw new Error("Activation did not publish the command");
-  const output = await commands.use(commandId, (command) => command.run());
+  const { value: output } = await commands.use(commandId, (command) => command.run());
   const after = commands.get().length;
   await platform.remove(registration);
   await platform[asyncDisposeSymbol]();

@@ -8,7 +8,7 @@ import {
 } from "../contracts/errors.js";
 import { abortReason, isAborted, onAbort } from "../internal/abort.js";
 import { normalizePlainRecord, recordFields } from "../internal/record.js";
-import { assertSynchronous } from "../internal/synchronous-result.js";
+import { assertSynchronous, resolveValue, type ResolvedValue } from "../internal/async-result.js";
 import { batchSnapshotNotifications } from "../observation/snapshot-view.js";
 import type {
   LifetimePhase,
@@ -34,7 +34,7 @@ export type {
 } from "./lifetime-diagnostics.js";
 
 export interface Task<T = void> extends AsyncDisposable {
-  readonly result: Promise<T>;
+  readonly result: Promise<ResolvedValue<T>>;
   [Symbol.asyncDispose](): Promise<void>;
 }
 
@@ -46,10 +46,10 @@ export interface LifetimeContext {
   readonly use: <T extends Resource>(resource: T) => T;
   readonly defer: (cleanup: Cleanup) => AsyncDisposable;
   readonly child: (label: string) => ChildLifetime;
-  readonly spawn: <T>(task: BackgroundTask<T>) => Task<T>;
+  readonly spawn: <T>(task: BackgroundTask<T>) => Task<Awaited<T>>;
   readonly acquire: <T extends Resource>(
     factory: (signal: AbortSignal) => Awaitable<T>,
-  ) => Promise<{ readonly resource: T }>;
+  ) => Promise<{ readonly resource: Awaited<T> }>;
   readonly interrupt: (callback: Cleanup) => Disposable;
 }
 
@@ -133,7 +133,7 @@ class CleanupRecord {
     const completion = Promise.withResolvers<void>();
     this.#completion = Object.freeze(completion.promise);
     void Promise.resolve()
-      .then(cleanup)
+      .then(() => resolveValue(cleanup()))
       .then(
         () => {
           this.#cleanup = undefined;
@@ -197,7 +197,7 @@ class PublicationRecord {
 }
 
 class TaskRecord<T> {
-  readonly handle: Task<T>;
+  readonly handle: Task<Awaited<T>>;
   #controller: AbortController | undefined;
   #detach: (() => void) | undefined;
   readonly settled: Promise<void>;
@@ -223,7 +223,7 @@ class TaskRecord<T> {
         });
       }
     };
-    const result = Promise.resolve().then(() => task(controller.signal));
+    const result = Promise.resolve().then(() => resolveValue(task(controller.signal)));
     this.settled = Object.freeze(
       result.then(
         () => this.#settle(),
@@ -471,15 +471,15 @@ export class Lifetime {
     return handle;
   }
 
-  spawn<T>(task: BackgroundTask<T>): Task<T> {
+  spawn<T>(task: BackgroundTask<T>): Task<Awaited<T>> {
     return this.#startTask(task, (error) => this.#reportError(error));
   }
 
-  prepare<T>(task: BackgroundTask<T>): Promise<T> {
+  prepare<T>(task: BackgroundTask<T>): Promise<ResolvedValue<Awaited<T>>> {
     return this.#startTask(task).result;
   }
 
-  #startTask<T>(task: BackgroundTask<T>, report?: (error: unknown) => void): Task<T> {
+  #startTask<T>(task: BackgroundTask<T>, report?: (error: unknown) => void): Task<Awaited<T>> {
     this.#requireActive();
     if (typeof task !== "function") throw new TypeError("Task must be a function");
     const record: TaskRecord<T> = new TaskRecord(task, report, () => {
@@ -493,12 +493,12 @@ export class Lifetime {
 
   acquire<T extends Resource>(
     factory: (signal: AbortSignal) => Awaitable<T>,
-  ): Promise<{ readonly resource: T }> {
+  ): Promise<{ readonly resource: Awaited<T> }> {
     this.#requireActive();
     if (typeof factory !== "function") throw new TypeError("Acquisition must be a function");
     const completion = Promise.resolve()
-      .then(() => factory(this.signal))
-      .then(async (resource) => {
+      .then(() => resolveValue(factory(this.signal)))
+      .then(async ({ value: resource }) => {
         const record = this.#adopt(resource, true);
         if (!this.acceptsWork) {
           const reason = isAborted(this.signal) ? abortReason(this.signal) : createDisposalReason();
@@ -537,7 +537,7 @@ export class Lifetime {
     return publication;
   }
 
-  borrow<T>(callback: () => Awaitable<T>): Promise<T> {
+  borrow<T>(callback: () => Awaitable<T>): Promise<ResolvedValue<Awaited<T>>> {
     this.#requireActive();
     if (typeof callback !== "function") throw new TypeError("Borrow callback must be a function");
     this.#foreground++;
@@ -547,9 +547,8 @@ export class Lifetime {
       this.#changed?.();
     };
     try {
-      const value = callback();
-      const result = new Promise<T>((resolve) => resolve(value));
-      // A finally() chain would adopt its value a second time after releasing the borrow.
+      const result = resolveValue(callback());
+      // The receipt carries data; this reaction alone releases the foreground obligation.
       void result.then(release, release);
       return result;
     } catch (error) {

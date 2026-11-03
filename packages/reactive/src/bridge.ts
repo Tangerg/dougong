@@ -9,6 +9,7 @@ import {
   type Readable,
 } from "./protocol.js";
 import { signal, type ReadonlySignal, type Signal } from "./signals.js";
+import { resolveValue } from "./async-result.js";
 
 export interface BridgeOwner {
   readonly defer: (dispose: () => unknown) => AsyncDisposable;
@@ -70,9 +71,10 @@ class ReadableBridge<T> implements Disposable {
       this.view.get();
     } catch (error) {
       // The synchronous factory unwinds the bridge; the owner's registration joins that same outcome.
-      if (releaseRegistration)
+      const release = releaseRegistration;
+      if (release)
         void Promise.resolve()
-          .then(releaseRegistration)
+          .then(() => resolveValue(release()))
           .catch(() => undefined);
       throw error;
     } finally {

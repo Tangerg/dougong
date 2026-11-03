@@ -1,5 +1,5 @@
 import { assertListener, disposeSymbol, type Disposable, type Readable } from "./protocol.js";
-import { assertSynchronous } from "./synchronous-result.js";
+import { assertSynchronous } from "./async-result.js";
 
 declare const dougongSignal: unique symbol;
 

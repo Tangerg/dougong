@@ -51,7 +51,7 @@ const plan = await host.plan(change);
 await host.apply(plan);
 await host.start();
 
-const message = await host.use(GREETER, (value) => value.greet("Dougong"));
+const { value: message } = await host.use(GREETER, (value) => value.greet("Dougong"));
 console.log(message);
 
 const removal = host.change();
@@ -102,7 +102,7 @@ Contribution snapshots change from Maps of values to frozen, ordered arrays of I
 ```ts
 const commands = host.contributions(COMMANDS);
 for (const id of commands.get()) {
-  const title = await commands.use(id, (command) => command.title);
+  const { value: title } = await commands.use(id, (command) => command.title);
   console.log(title);
 }
 ```
@@ -149,3 +149,7 @@ Custom Loaders implement `load(reference, signal)`. Authorizers receive `{ artif
 Failed or timed-out shutdown retains real resource obligations and quarantines the entire Host. `quarantined` is terminal: replaying start, stop or apply, or constructing a replacement Host, does not prove that old resources were released. Late completion only updates diagnostics. Follow the [quarantine procedure](./transactions.md#quarantine) to stop dispatch, retain diagnostics and handle the old execution boundary.
 
 After upgrading, exercise installation, updates, removal, busy rejection during borrowing, failed-transition restoration and shutdown. Rollback creates new Instances from previous declarations; it does not resurrect old objects or reverse external file and network effects. See the [Core API](../reference/core-api.md) and [Platform specification](../reference/platform.md) for the complete protocols.
+
+## Successful result receipts
+
+`Task.result`, `host.use`, `ContributionView.use` and `SerialQueue.run` now fulfill with a frozen `{ value }` receipt (`ResolvedValue<T>`). Replace `const result = await operation` with `const { value: result } = await operation`; calls that only wait for completion need no destructuring. `acquire` continues to return `{ resource }`. Errors still propagate as Promise rejections. Cross-realm Promises must retain a working public `then`; see [Lifetime and resources](./lifetime.md) for the protocol boundary.

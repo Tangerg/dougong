@@ -85,7 +85,7 @@ describe("activation compilation", () => {
     await platform.activate([registration]);
     expect(host.stateRevision).toBe(before + 1);
     expect(order).toEqual(["load:dependency", "load:root", "setup:dependency", "setup:root"]);
-    expect(await host.use(VALUE, (value) => value.value)).toBe(5);
+    expect((await host.use(VALUE, (value) => value.value)).value).toBe(5);
     expect(dependency.status).toBe("installed");
     expect(platform.preview([registration]).selections.map((item) => item.action)).toEqual([
       "reuse",
@@ -140,7 +140,7 @@ describe("activation compilation", () => {
     expect(registration.selectedArtifact).toBe(next);
     expect(registration.activeOrigin?.manifest.version).toBe("1.0.0");
     expect(registration.installation).toBe(installation);
-    expect(await host.use(VALUE, (value) => value.value)).toBe(1);
+    expect((await host.use(VALUE, (value) => value.value)).value).toBe(1);
     await platform[Symbol.asyncDispose]();
     await host.stop();
   });
@@ -219,7 +219,7 @@ describe("activation compilation", () => {
     expect(registration.selectedArtifact.manifest.version).toBe("2.0.0");
     expect(registration.activeOrigin?.manifest.version).toBe("1.0.0");
     expect(registration.installation).toBe(installation);
-    expect(await host.use(VALUE, (value) => value.value)).toBe(1);
+    expect((await host.use(VALUE, (value) => value.value)).value).toBe(1);
     await platform[Symbol.asyncDispose]();
     await host.stop();
   });
@@ -256,7 +256,7 @@ describe("activation compilation", () => {
     expect(registration.activeOrigin?.manifest.version).toBe("2.0.0");
     expect(observations.some((item) => item.committed === "2.0.0")).toBe(true);
     expect(observations.every((item) => item.committed === item.projected)).toBe(true);
-    expect(await host.use(VALUE, (value) => value.value)).toBe(2);
+    expect((await host.use(VALUE, (value) => value.value)).value).toBe(2);
     await platform[Symbol.asyncDispose]();
     await host.stop();
   });
@@ -313,7 +313,7 @@ describe("activation compilation", () => {
     await platform.activate([next], { remove: [old] });
     expect(host.stateRevision).toBe(before + 1);
     expect(old.status).toBe("removed");
-    expect(await host.use(VALUE, (value) => value.value)).toBe(2);
+    expect((await host.use(VALUE, (value) => value.value)).value).toBe(2);
     await platform[Symbol.asyncDispose]();
     await host.stop();
   });
@@ -531,7 +531,7 @@ describe("activation compilation", () => {
         );
         expect(host.stateRevision).toBe(before);
         expect(setup).toHaveBeenCalledTimes(1);
-        expect(await host.use(VALUE, (value) => value.value)).toBe(1);
+        expect((await host.use(VALUE, (value) => value.value)).value).toBe(1);
         deny = false;
         await change();
         expect(setup).toHaveBeenCalledTimes(2);

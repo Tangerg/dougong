@@ -20,6 +20,7 @@ Add Platform and Reactive when needed. The former `@dougongjs/core` is merged in
 
 - Installation changes follow `ChangeSet → host.plan() → host.apply()`. Installation and Group are stable, read-only identities. Former direct installation, handle update/removal, ready and commit paths are removed.
 - Application code borrows services with `host.use`. Contribution views return ordered IDs and use `ContributionView.use` for reading and execution. Active borrows protect their generations from destructive changes.
+- `Task.result`, `host.use`, `ContributionView.use` and `SerialQueue.run` return `Promise<ResolvedValue<T>>`, delivering successful results in frozen `{ value }` receipts. Cross-realm Promises use their public structural protocol; presentation tags no longer imply a native brand.
 - PluginContext separates `dependencies`, `lifetime`, `events`, `contributions`, `metadata` and `logger`. Configuration fields are named `configuration`, with matching full-length type and error names.
 - Configuration inputs and validator outputs accept immutable data only. Resource objects, Promises, functions, accessors, cycles and sparse arrays are rejected. Planning captures configuration and rollback reuses validated values.
 - Root `LifetimeContext` registers work and resources; use `ChildLifetime` for independently disposable subtrees. Handles use standard disposal symbols. Asynchronous acquisition returns a `{ resource }` receipt.

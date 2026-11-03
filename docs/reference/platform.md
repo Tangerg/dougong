@@ -41,6 +41,10 @@ Manifest 的输入、输出类型和冻结语义由同一验证 schema 定义。
 
 Platform 构造时捕获 Loader 和 Authorizer 的方法，并保留各自的接收对象。Loader 是结构协议；ImportLoader 用同一 realm 的动态导入，MemoryLoader 适合测试与受控模块表。PermissionSet 是声明权限集合的 Authorizer 实现，不提供操作系统隔离。
 
+`ImportLoader` 实现 `Loader<string>`，只接受原始字符串模块定位值，在运行时同样拒绝 `URL` 及其他对象，不执行隐式字符串转换。应用在创建 Artifact 时用 `url.href` 捕获定位值；目标改变应通过新的 Artifact 修订表达。原生模块解析、缓存和求值的取消限制仍然适用，字符串定位值不代表内容完整性或执行隔离保证。见[加载引用示例](../guide/platform.md#在发行声明中捕获模块定位值)。
+
+其他 `Loader<Reference>` 可以定义自己的不透明引用协议，包括对象身份。Platform 不深克隆这种引用；其含义、映射稳定性及完整性保证由对应 Loader 拥有，不能从泛型类型推断。
+
 Authorizer 通过返回或兑现为 `undefined` 批准请求，通过抛错或拒绝 Promise 拒绝请求。两个准入阶段收到其他返回值时都会抛出 TypeError。现有 JavaScript 策略若返回布尔值，应改为条件为假时抛错，条件为真时正常返回。
 
 Core 规划、最终准入、应用或释放期间，新的选择和激活命令以 [`PLATFORM_BUSY`](errors.md) 拒绝。释放 Platform 会取消尚在等待的规划和准入，即使验证器或授权回调本身正在等待这次释放。一旦 Platform 将 Plan 交给 Core 应用，或已开始释放 Core 安装，释放命令也以 [`PLATFORM_BUSY`](errors.md) 拒绝，避免 setup 或清理回调等待自己。此前已接纳的激活仍能完成，交接之前的加载保持并发。

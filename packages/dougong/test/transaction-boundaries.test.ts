@@ -131,7 +131,7 @@ it("keeps old Lifetime capabilities during rejected candidate validation", async
   expect(host.status).toBe("running");
   expect(retainedInstallation.status).toBe("running");
   expect(
-    await host.contributions(items).use(`${retainedInstallation.id}/old`, (value) => value),
+    (await host.contributions(items).use(`${retainedInstallation.id}/old`, (value) => value)).value,
   ).toBe("running");
   await host.stop();
   await expect(retainedContext.events.emit(message, "too late")).rejects.toMatchObject({

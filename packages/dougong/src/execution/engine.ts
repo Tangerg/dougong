@@ -29,6 +29,7 @@ import { SnapshotPublisher, batchSnapshotNotifications } from "../observation/sn
 import { onAbort } from "../internal/abort.js";
 import { SerialQueue } from "../internal/serial-queue.js";
 import { captureDataArray } from "../internal/data-array.js";
+import { resolveValue, type ResolvedValue } from "../internal/async-result.js";
 import { normalizePlainRecord, recordFields } from "../internal/record.js";
 import { ChangeSets, assertId, type ChangeOperation } from "../composition/change-set.js";
 import {
@@ -289,7 +290,7 @@ export class Engine {
   apply(plan: Plan): Promise<ApplyResult> {
     if (this.#isQuarantined()) return Promise.reject(quarantinedHost(this.#state.revision));
     if (this.#transition) return Promise.reject(this.#busyTransition());
-    return this.#commands.run(() => this.#execute(plan));
+    return this.#commands.run(() => this.#execute(plan)).then(({ value }) => value);
   }
 
   start(): Promise<ApplyResult> {
@@ -302,7 +303,7 @@ export class Engine {
   use<T, Result>(
     requirement: Service<T> | OptionalService<T>,
     callback: (value: T | undefined) => Awaitable<Result>,
-  ): Promise<Result> {
+  ): Promise<ResolvedValue<Awaited<Result>>> {
     try {
       if (typeof callback !== "function")
         throw new TypeError("Service callback must be a function");
@@ -315,7 +316,7 @@ export class Engine {
         throw new DougongError(serviceUnavailableCode, "Host is not running");
       const provider = this.#state.graph.providers.get(token.id);
       if (!provider) {
-        if (normalized.kind === "optional") return Promise.resolve(callback(undefined));
+        if (normalized.kind === "optional") return resolveValue(callback(undefined));
         throw new DougongError(serviceUnavailableCode, "No provider for " + token.id);
       }
       if (this.#transition?.affected.has(provider))
@@ -338,33 +339,35 @@ export class Engine {
   #lifecycle(intent: "start" | "stop") {
     if (this.#isQuarantined()) return Promise.reject(quarantinedHost(this.#state.revision));
     if (this.#transition) return Promise.reject(this.#busyTransition());
-    return this.#commands.run(async () => {
-      this.#assertHealthy();
-      if (
-        (intent === "start" && this.#state.phase === "running") ||
-        (intent === "stop" && this.#state.phase === "stopped")
-      ) {
-        return this.#result([]);
-      }
-      // Validation is user code too: reserve the same transition before entering it.
-      if (intent === "start") {
-        this.#transition = {
-          phase: "starting",
-          affected: new Set(this.#state.graph.declarations.keys()),
-          scopes: [],
-        };
-        this.#notify();
-      }
-      try {
-        const prepared = await compileTransition(this.#state, [], intent, this.#contracts);
-        return await this.#execute(this.#plans.issue(prepared, this.#state));
-      } finally {
-        if (this.#transition) {
-          this.#transition = undefined;
+    return this.#commands
+      .run(async () => {
+        this.#assertHealthy();
+        if (
+          (intent === "start" && this.#state.phase === "running") ||
+          (intent === "stop" && this.#state.phase === "stopped")
+        ) {
+          return this.#result([]);
+        }
+        // Validation is user code too: reserve the same transition before entering it.
+        if (intent === "start") {
+          this.#transition = {
+            phase: "starting",
+            affected: new Set(this.#state.graph.declarations.keys()),
+            scopes: [],
+          };
           this.#notify();
         }
-      }
-    });
+        try {
+          const prepared = await compileTransition(this.#state, [], intent, this.#contracts);
+          return await this.#execute(this.#plans.issue(prepared, this.#state));
+        } finally {
+          if (this.#transition) {
+            this.#transition = undefined;
+            this.#notify();
+          }
+        }
+      })
+      .then(({ value }) => value);
   }
 
   async #execute(plan: Plan): Promise<ApplyResult> {
@@ -956,7 +959,7 @@ export class Engine {
     const logger = this.#logger;
     const fallback = (failure: unknown) => {
       try {
-        void Promise.resolve(
+        void resolveValue(
           logger.error(new AggregateError([error, failure], "Host error reporter failed")),
         ).catch(() => undefined);
       } catch {
@@ -965,7 +968,7 @@ export class Engine {
     };
     try {
       const report = this.#onError;
-      void Promise.resolve(report(error)).catch(fallback);
+      void resolveValue(report(error)).catch(fallback);
     } catch (failure) {
       fallback(failure);
     }

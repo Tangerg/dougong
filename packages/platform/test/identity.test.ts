@@ -31,7 +31,7 @@ describe("Registration installation authority", () => {
     expect(foreign.installation).toBeUndefined();
     await second[Symbol.asyncDispose]();
     expect(host.installation(owned.id)).toBe(owned.installation);
-    expect(await host.use(VALUE, (value) => value.value)).toBe(1);
+    expect((await host.use(VALUE, (value) => value.value)).value).toBe(1);
     await first[Symbol.asyncDispose]();
     await host.stop();
   });
@@ -60,7 +60,7 @@ describe("Registration installation authority", () => {
     expect(registrations[loser]!.installation).toBeUndefined();
     expect(registrations[loser]!.activeOrigin).toBeUndefined();
     await platforms[loser]![Symbol.asyncDispose]();
-    expect(await host.use(VALUE, (value) => value.value)).toBe(winner + 1);
+    expect((await host.use(VALUE, (value) => value.value)).value).toBe(winner + 1);
     await platforms[winner]![Symbol.asyncDispose]();
     await host.stop();
   });
@@ -89,7 +89,7 @@ describe("Registration installation authority", () => {
     });
     await platform.remove(registration);
     expect(host.installation(registration.id)).toBe(replacement);
-    expect(await host.use(VALUE, (value) => value.value)).toBe(9);
+    expect((await host.use(VALUE, (value) => value.value)).value).toBe(9);
     await platform[Symbol.asyncDispose]();
     await host.stop();
   });

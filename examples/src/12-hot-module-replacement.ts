@@ -125,6 +125,7 @@ export async function hotModuleReplacement(): Promise<ExampleResult> {
   const snapshots: Array<Promise<string>> = [];
   const labels = async (view: ContributionView<View>, separator: string) =>
     (await Promise.all(view.get().map((id) => view.use(id, (value) => value.label))))
+      .map(({ value }) => value)
       .sort()
       .join(separator);
   const observer = definePlugin({

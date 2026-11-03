@@ -5,3 +5,4 @@ export { normalizePlainRecord, recordFields } from "./internal/record.js";
 export { captureDataArray } from "./internal/data-array.js";
 export { onAbort } from "./internal/abort.js";
 export { captureLogger } from "./contracts/logging.js";
+export { resolveValue } from "./internal/async-result.js";

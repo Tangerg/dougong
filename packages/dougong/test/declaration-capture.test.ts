@@ -115,7 +115,7 @@ it("accepts the same cross-realm Contract identity for provisions, requirements 
   try {
     await host.start();
     expect(received).toHaveBeenCalledExactlyOnceWith(7);
-    expect(await host.use(token, (value) => value)).toBe(7);
+    expect((await host.use(token, (value) => value)).value).toBe(7);
   } finally {
     await host.stop();
   }
@@ -144,7 +144,7 @@ it("runs a foreign-realm Plugin with its own declarations, configuration and pro
   const host = createHost(options);
   try {
     await host.start();
-    expect(await host.use(token, (value) => value)).toBe(8);
+    expect((await host.use(token, (value) => value)).value).toBe(8);
   } finally {
     await host.stop();
   }
@@ -162,7 +162,7 @@ it("captures optional token identity only once during use", async () => {
   });
   await host.start();
   const wrapper = optional(token);
-  expect(await host.use(wrapper, (value) => value)).toBe(7);
+  expect((await host.use(wrapper, (value) => value)).value).toBe(7);
   await host.stop();
 });
 

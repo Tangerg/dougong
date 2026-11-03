@@ -46,6 +46,30 @@ await platform.activate([selected, another], { remove: [obsolete] });
 
 独立 Host 是装配边界；同一 realm 的 ImportLoader 不是权限沙箱。需要不可信代码执行时，另外设计进程、Worker 或 WASM 执行器及其权限、通信和终止协议。
 
+## 在发行声明中捕获模块定位值
+
+内置 `ImportLoader` 只接收字符串模块定位值，也会在运行时拒绝 `URL` 对象。创建 Artifact 时读取 `url.href`，不要把可变 URL 留到异步准入之后再转换：
+
+```ts
+import { createPlatform, ImportLoader } from "@dougongjs/platform";
+
+const importedPlugins = createPlatform({
+  id: "imported-plugins",
+  host,
+  apiVersion: "1.0.0",
+  loader: new ImportLoader(),
+});
+const artifact = importedPlugins.catalog.add({
+  revision: "formatter-content-1",
+  manifest: { name: "formatter", version: "1.0.0" },
+  reference: new URL("./formatter.js", import.meta.url).href,
+});
+```
+
+修改原 URL 不会改变已捕获的字符串。需要改变加载目标时，添加新的 Artifact 修订，再选择并激活它。模块缓存仍遵循原生 import；新的 Artifact 修订不会自动清除同一模块定位值的缓存。
+
+通用 `Loader<Reference>` 仍允许以对象身份表示不透明引用。Platform 保留这种身份，不会深克隆或猜测引用含义；引用如何稳定地指向某个发行物，由对应 Loader 定义。内置 ImportLoader 的字符串契约不改变这些 Loader 的引用模型。
+
 ## 从动作声明派生激活
 
 命令的 ID 与标题归应用的 `ActionDeclaration` 数据所有。示例 08 和 10 从同一声明生成可发现元数据、Contribution 的身份和 `actions.map(actionActivation)` 激活列表；实际 handler 只在 setup 中组合进入贡献。触发器也调用 `actionActivation(action)`，不再维护手写的重复事件字符串。

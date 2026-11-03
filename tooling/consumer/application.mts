@@ -8,8 +8,9 @@ import {
   type ChildLifetime,
   type LifetimeContext,
   type PlanReport,
+  type ResolvedValue,
 } from "dougong";
-import { captureDataArray, ReadonlyMapSnapshot, SerialQueue } from "dougong/advanced";
+import { captureDataArray, ReadonlyMapSnapshot, resolveValue, SerialQueue } from "dougong/advanced";
 import { bridge, computed } from "@dougongjs/reactive";
 import type * as Reactive from "@dougongjs/reactive";
 import { createPlatform, MemoryLoader } from "@dougongjs/platform";
@@ -66,7 +67,7 @@ assert(
   "Contribution discovery must enumerate frozen IDs",
 );
 assert(
-  (await actions.use(ids[0], (run) => run())) === "hello",
+  (await actions.use(ids[0], (run) => run())).value === "hello",
   "Cannot borrow a listed contribution",
 );
 const child: ChildLifetime = owner.child("consumer-work");
@@ -85,7 +86,7 @@ assert(
 await child[Symbol.asyncDispose]();
 assert(childReleases === 1, "Acquired resource did not follow its child Lifetime");
 assert(
-  (await host.use(GREETING, (value) => value.greet("consumer"))) === "Hello, consumer",
+  (await host.use(GREETING, (value) => value.greet("consumer"))).value === "Hello, consumer",
   "Packed core cannot provide a borrowed service",
 );
 
@@ -141,7 +142,7 @@ assert(
 assert(platform.preview(selection).selections.length === 1, "Packed Platform preview differs");
 await platform.activate([selected]);
 assert(
-  (await host.use(REMOTE, (value) => value.value)) === "Hello, remote",
+  (await host.use(REMOTE, (value) => value.value)).value === "Hello, remote",
   "Packed Platform activation did not use the packed core",
 );
 assert(selected.activeOrigin?.revision === "remote-content-1", "Execution origin did not commit");
@@ -174,12 +175,12 @@ try {
 } finally {
   held.resolve();
 }
-assert((await using) === "Hello, remote", "Rejected replacement changed a borrowed instance");
+assert((await using).value === "Hello, remote", "Rejected replacement changed a borrowed instance");
 await platform.activate([selected]);
 const currentOrigin = () => selected.activeOrigin?.revision;
 assert(
   currentOrigin() === next.revision &&
-    (await host.use(REMOTE, (value) => value.value)) === "replacement",
+    (await host.use(REMOTE, (value) => value.value)).value === "replacement",
   "Committed service and delivery origin diverged",
 );
 const change = host.change();
@@ -216,8 +217,10 @@ assert(
   "Packed apply result omitted committed revision or affected installations",
 );
 assert(!("outcome" in applied), "Constant success tag escaped the packed API");
-assert((await new SerialQueue().run(() => 7)) === 7, "Advanced entrypoint is not executable");
+assert((await new SerialQueue().run(() => 7)).value === 7, "Advanced entrypoint is not executable");
 assert(new ReadonlyMapSnapshot([["one", 1]]).get("one") === 1, "Advanced map export differs");
+const resolved: ResolvedValue<number> = await resolveValue(Promise.resolve(7));
+assert(resolved.value === 7 && Object.isFrozen(resolved), "Advanced result receipt differs");
 await platform[Symbol.asyncDispose]();
 await host[Symbol.asyncDispose]();
 assert(released === 1, "Packed resource protocol failed to release exactly once");

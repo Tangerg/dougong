@@ -4,6 +4,7 @@ import { createHost, definePlugin, type InitialInstallation } from "dougong";
 import {
   createPlatform,
   defineManifest,
+  ImportLoader,
   MemoryLoader,
   type Artifact,
   type Authorizer,
@@ -42,6 +43,30 @@ const artifact: Artifact<string> = platform.catalog.add({
 
 const registration: Promise<Registration<string>> = platform.select(artifact);
 void registration;
+
+const importLoader = new ImportLoader();
+const importReference = new URL("data:text/javascript,export default 42");
+importLoader.load(importReference.href, new AbortController().signal);
+// @ts-expect-error Import references must capture their string value before deferred loading.
+importLoader.load(importReference, new AbortController().signal);
+const importPlatform = createPlatform({
+  id: "import-types",
+  host: createHost(),
+  apiVersion: "1.0.0",
+  loader: importLoader,
+});
+const importArtifact = importPlatform.catalog.add({
+  revision: "import-release-1",
+  manifest,
+  reference: importReference.href,
+});
+expectTypeOf(importArtifact).toEqualTypeOf<Artifact<string>>();
+importPlatform.catalog.add({
+  revision: "import-release-2",
+  manifest,
+  // @ts-expect-error Catalog must not infer a mutable URL reference from ImportLoader.
+  reference: importReference,
+});
 
 // @ts-expect-error A string Loader cannot accept arbitrary reference values.
 const unsafePlatform: Platform<unknown> = platform;

@@ -1,5 +1,5 @@
 import { asyncDisposeSymbol, disposeSymbol } from "./disposal-runtime.js";
-import { assertSynchronous } from "./synchronous-result.js";
+import { assertSynchronous } from "./async-result.js";
 
 export {
   assertPromiseRuntime,

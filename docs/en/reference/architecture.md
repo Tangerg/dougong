@@ -38,7 +38,7 @@ Service dependencies appear in `requires`, and resolved values appear in `contex
 
 This can increase the rebuild scope, but consumers reason about ordinary TypeScript values and functions without a proxy changing its target between calls. The binding graph also supports plan explanation, startup ordering and safe shutdown. Dynamic ExtensionPoint membership is not a static Service dependency edge; executing a contribution borrows its owner instead.
 
-Application code uses `host.use(contract, callback)`. The borrow lasts until the callback's full result settles. A change that would destroy that generation rejects with [`HOST_BUSY`](errors.md) before effects while a foreground borrow exists. Once a transition seals entry, affected generations accept no new borrows. This gives references a useful boundary, but TypeScript cannot prevent application code from saving a callback value globally; callers must honor the borrowing protocol.
+Application code uses `host.use(contract, callback)`. The borrow lasts until the callback's full result settles; a frozen `{ value }` receipt delivers the successful result without owning resources or extending the borrow. A change that would destroy that generation rejects with [`HOST_BUSY`](errors.md) before effects while a foreground borrow exists. Once a transition seals entry, affected generations accept no new borrows. This gives references a useful boundary, but TypeScript cannot prevent application code from saving a callback value globally; callers must honor the borrowing protocol.
 
 ## Why planning precedes execution
 

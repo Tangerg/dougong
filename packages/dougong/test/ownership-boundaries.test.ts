@@ -63,7 +63,7 @@ it.each(["historical failure", "prototype", "constructor"])(
     expect(rejected).toMatchObject({ code: "TRANSITION_FAILED", details: { outcome: "restored" } });
     expect(Object.is((rejected as Error).cause, failure)).toBe(true);
     expect(host.status).toBe("running");
-    expect(await host.use(value, (current) => current)).toBe(1);
+    expect((await host.use(value, (current) => current)).value).toBe(1);
     expect(installation.status).toBe("running");
     await host.stop();
   },
@@ -304,7 +304,7 @@ it.each([false, true])(
     resume.resolve();
     expect(await planning).toMatchObject({ code: "CONFIGURATION_INVALID" });
     expect(host.stateRevision).toBe(revision);
-    expect(await host.use(oldService, (value) => value)).toBe(1);
+    expect((await host.use(oldService, (value) => value)).value).toBe(1);
     subscription?.[Symbol.dispose]();
     await host.stop();
   },
@@ -332,7 +332,9 @@ it("captures ContributionStore identity independently of a mutable input token",
   mutable.id = "owned/changed";
   first[Symbol.dispose]();
   const second = retainedContext.contributions.add(original, "second", 2);
-  expect(await host.contributions(original).use("owner/second", (value) => [value])).toEqual([2]);
+  expect(
+    (await host.contributions(original).use("owner/second", (value) => [value])).value,
+  ).toEqual([2]);
   second[Symbol.dispose]();
   await host.stop();
 });

@@ -23,7 +23,7 @@ describe("Catalog and selection ownership", () => {
     expect(platform.catalog.get("sample", "1.0.0")).toBeUndefined();
     expect(registration.selectedArtifact).toBe(artifact);
     expect(registration.activeOrigin?.manifest.version).toBe("1.0.0");
-    expect(await host.use(VALUE, (value) => value.value)).toBe(1);
+    expect((await host.use(VALUE, (value) => value.value)).value).toBe(1);
     await platform[Symbol.asyncDispose]();
     await host.stop();
   });

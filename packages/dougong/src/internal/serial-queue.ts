@@ -1,4 +1,5 @@
 import { isAborted, onAbort } from "./abort.js";
+import { resolveValue, type ResolvedValue } from "./async-result.js";
 
 export class SerialQueue {
   readonly #pending = new Set<() => Promise<void>>();
@@ -6,14 +7,17 @@ export class SerialQueue {
 
   get settled() {
     // A barrier observes only the commands already submitted, even if another command arrives later.
-    return this.run(() => undefined);
+    return this.run(() => undefined).then(() => undefined);
   }
 
-  run<T>(operation: () => T | PromiseLike<T>, signal?: AbortSignal): Promise<T> {
+  run<T>(
+    operation: () => T | PromiseLike<T>,
+    signal?: AbortSignal,
+  ): Promise<ResolvedValue<Awaited<T>>> {
     if (typeof operation !== "function") {
       throw new TypeError("SerialQueue operation must be a function");
     }
-    const result = Promise.withResolvers<T>();
+    const result = Promise.withResolvers<ResolvedValue<Awaited<T>>>();
     const settled = result.promise.then(
       () => undefined,
       () => undefined,
@@ -21,7 +25,7 @@ export class SerialQueue {
     const start = () => {
       detach?.();
       try {
-        result.resolve(operation());
+        void resolveValue(operation()).then(result.resolve, result.reject);
       } catch (error) {
         result.reject(error);
       }

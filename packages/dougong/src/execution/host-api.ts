@@ -13,6 +13,7 @@ import type { HostSnapshot } from "../inspection/diagnostics.js";
 import type { Awaitable } from "../contracts/resource.js";
 import type { Plan, BindingReport } from "../composition/plan.js";
 import type { AnyPlugin } from "../composition/plugin.js";
+import type { ResolvedValue } from "../internal/async-result.js";
 
 export interface HostOptions<
   Declarations extends ReadonlyArray<AnyPlugin> = ReadonlyArray<AnyPlugin>,
@@ -45,11 +46,14 @@ export interface Host {
   apply(plan: Plan): Promise<ApplyResult>;
   start(): Promise<ApplyResult>;
   stop(): Promise<ApplyResult>;
-  use<T, Result>(service: Service<T>, callback: (value: T) => Awaitable<Result>): Promise<Result>;
+  use<T, Result>(
+    service: Service<T>,
+    callback: (value: T) => Awaitable<Result>,
+  ): Promise<ResolvedValue<Awaited<Result>>>;
   use<T, Result>(
     service: OptionalService<T>,
     callback: (value: T | undefined) => Awaitable<Result>,
-  ): Promise<Result>;
+  ): Promise<ResolvedValue<Awaited<Result>>>;
   contributions<T>(point: ExtensionPoint<T>): ContributionView<T>;
   installation(id: string): Installation | undefined;
   group(id: string): Group | undefined;

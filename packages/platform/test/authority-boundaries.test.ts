@@ -124,7 +124,7 @@ it("reconciles contradictory committed metadata instead of validating dependenci
   expect(platform.preview([root]).selections[0]?.action).toBe("update");
   await platform.activate([root]);
   expect(dependency.activeOrigin?.manifest.version).toBe("2.0.0");
-  expect(await host.use(VALUE, (value) => value.value)).toBe(2);
+  expect((await host.use(VALUE, (value) => value.value)).value).toBe(2);
   await platform[Symbol.asyncDispose]();
   await host.stop();
 });

@@ -1,5 +1,5 @@
 import { asyncDisposeSymbol, disposeSymbol } from "../internal/disposal-runtime.js";
-import { assertSynchronous } from "../internal/synchronous-result.js";
+import { assertSynchronous } from "../internal/async-result.js";
 
 export type Awaitable<T> = T | PromiseLike<T>;
 

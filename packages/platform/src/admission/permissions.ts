@@ -1,5 +1,5 @@
 import type { Awaitable } from "dougong";
-import { captureDataArray } from "dougong/advanced";
+import { captureDataArray, resolveValue } from "dougong/advanced";
 import type { ArtifactDescriptor } from "../artifacts/artifact.js";
 import { PermissionDeniedError } from "../errors.js";
 
@@ -23,7 +23,7 @@ export function captureAuthorizer(policy: Authorizer): Authorizer {
 }
 
 async function admitted(result: unknown) {
-  if ((await result) !== undefined)
+  if ((await resolveValue(result)).value !== undefined)
     throw new TypeError(
       "Authorizer must return no value on approval and throw or reject on denial",
     );

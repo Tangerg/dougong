@@ -29,6 +29,16 @@ bridge 在订阅后重新读取以封闭挂接窗口。所有者退出时取消�
 
 公开类型：`Readable`、`Signal`、`ReadonlySignal`、`Disposable`、`AsyncDisposable`、`BridgeOwner`、`ObservationOwner`、`ObservationTask`、`Observer`。`ObservationOwner` 只需提供 `defer`、`child` 和 `spawn`；它返回的子所有者实现标准异步释放协议。父所有者无需公开释放入口。
 
+观察只需要知道排空任务何时结束。`ObservationTask` 没有类型参数，`result` 为 `PromiseLike<unknown>`；`spawn` 接收返回 `void | PromiseLike<void>` 的任务。拥有更多能力的泛型 `spawn` 和携带结果数据的 Task 仍可通过这个窄协议接入，观察不会解释任务的结果载荷。原先显式使用 `ObservationTask<T>` 的类型声明需要移除类型参数。
+
 observer 自身同步登记资源，需要异步工作的回调显式 `generation.spawn`。抛出的失败由该观察任务的所有者报告，旧代次退出失败不会静默启动新代次。
 
 适配器在接入时捕获读取、订阅和取消订阅的方法。观察在接管子所有者、任务和清理句柄时，也会保存各自的释放方法。如果自定义所有者返回的任务可以取消，但没有有效的 `result`，或读取它时抛错，观察创建失败，回滚会调用已接管的任务释放方法。取消订阅失败后，该失败仍然是所有者的释放义务；提前结束观察、排空失败和后续退出都不能通过重复调用将其变成成功。
+
+## 异步结果协议
+
+同步边界检查和异步释放使用同一份结果协议。原型链包含当前模块所在 realm 的 `Promise.prototype` 时，选择原生协议，由内建 `then` 验证品牌并观察实际结算。自有 `then` 不能替代结算，已经履约的载荷也不会再次被解析。`constructor` 或 `Symbol.species` 的失败会原样传播，不会因此重试公开 `then`。子所有者、排空任务和所有者注册的关闭都加入这个实际结果，只有释放完成后才允许替换或宣告观察结束。
+
+其他对象按结构协议处理：只捕获一次公开 `then`，保留调用 receiver，并遵循标准的递归解析语义。`Symbol.toStringTag` 不参与协议选择，带有 `"Promise"` 展示标签的结构 Promise 可以正常接入。
+
+这明确收窄了跨 realm 的承诺：普通外部 Promise 通过合法的公开 `then` 接入；不会推断它的内部原生品牌。隐藏或改变该协议的外部 Promise，需要先在来源 realm 适配为正常结果。如果其履约载荷不能再次被解析，应在来源 realm 把载荷放入普通数据回执，再交给本模块。

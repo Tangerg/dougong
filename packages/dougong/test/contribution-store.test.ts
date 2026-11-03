@@ -33,7 +33,7 @@ describe("ContributionStore invariants", () => {
     expect(() => store.removeContribution("owner/item", foreign as never)).toThrow(
       "not the current claim",
     );
-    expect(await store.use("owner/item", (value) => value)).toBe(1);
+    expect((await store.use("owner/item", (value) => value)).value).toBe(1);
     await lifetime.dispose();
   });
 
@@ -44,11 +44,11 @@ describe("ContributionStore invariants", () => {
     contribution.update(2);
     expect(store.snapshot().length).toBe(0);
     lifetime.publish();
-    expect(await store.use("owner/item", (value) => value)).toBe(2);
+    expect((await store.use("owner/item", (value) => value)).value).toBe(2);
     contribution.update(1);
-    expect(await store.use("owner/item", (value) => value)).toBe(1);
+    expect((await store.use("owner/item", (value) => value)).value).toBe(1);
     lifetime.publish();
-    expect(await store.use("owner/item", (value) => value)).toBe(1);
+    expect((await store.use("owner/item", (value) => value)).value).toBe(1);
     await lifetime.dispose();
   });
 
@@ -120,7 +120,7 @@ describe("ContributionStore invariants", () => {
     expect(() => lifetime.publish()).toThrow(AggregateError);
     subscription[Symbol.dispose]();
     contribution.update(2);
-    expect(await store.use("owner/item", (value) => value)).toBe(2);
+    expect((await store.use("owner/item", (value) => value)).value).toBe(2);
     await lifetime.dispose();
   });
 
@@ -148,8 +148,8 @@ describe("ContributionStore invariants", () => {
     registry.beginBatch();
     lifetime.publish();
     expect(() => registry.endBatch()).toThrow(AggregateError);
-    expect(await firstStore.use("owner/item", (value) => value)).toBe(1);
-    expect(await secondStore.use("owner/item", (value) => value)).toBe(2);
+    expect((await firstStore.use("owner/item", (value) => value)).value).toBe(1);
+    expect((await secondStore.use("owner/item", (value) => value)).value).toBe(2);
     firstSubscription[Symbol.dispose]();
     secondSubscription[Symbol.dispose]();
     await lifetime.dispose();

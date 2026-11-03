@@ -64,39 +64,106 @@ function verifySubscriptions() {
   );
 }
 
+function assertComputedRejectsAsync(value: unknown) {
+  let failure: unknown;
+  try {
+    computed(() => value).get();
+  } catch (error) {
+    failure = error;
+  }
+  assert(
+    failure instanceof TypeError &&
+      failure.message === "Computed signal calculations must be synchronous",
+    "An asynchronous result bypassed the browser computed boundary",
+  );
+}
+
 async function verifySynchronousResults() {
   const iframe = document.createElement("iframe");
   document.body.append(iframe);
   try {
     const foreignWindow = iframe.contentWindow;
     assert(foreignWindow, "Browser consumer could not create a separate Promise realm");
-    for (const promiseConstructor of [Promise, foreignWindow.window.Promise]) {
-      for (const throwing of [false, true]) {
-        const pending = promiseConstructor.withResolvers<void>();
-        const thenDescriptor = throwing
-          ? {
-              get() {
-                throw new Error("Public then cannot replace native Promise settlement");
-              },
-            }
-          : { value: undefined };
-        // oxlint-disable-next-line unicorn/no-thenable -- A Proxy would lose the native brand required by this regression.
-        Object.defineProperty(pending.promise, "then", thenDescriptor);
-        let failure: unknown;
-        try {
-          computed(() => pending.promise).get();
-        } catch (error) {
-          failure = error;
-        }
-        pending.reject(new Error("Decorated native Promise rejection"));
-        assert(
-          failure instanceof TypeError,
-          "A decorated native Promise bypassed the browser synchronous-result boundary",
-        );
+    for (const throwing of [false, true]) {
+      const pending = Promise.withResolvers<void>();
+      let reads = 0;
+      const thenDescriptor = throwing
+        ? {
+            get() {
+              reads++;
+              throw new Error("Public then cannot replace native Promise settlement");
+            },
+          }
+        : { value: undefined };
+      // oxlint-disable-next-line unicorn/no-thenable -- A Proxy would lose the native brand required by this regression.
+      Object.defineProperty(pending.promise, "then", thenDescriptor);
+      assertComputedRejectsAsync(pending.promise);
+      assert(reads === 0, "A local native result exposed its decorated public then getter");
+      pending.reject(new Error("Decorated native Promise rejection"));
+    }
+
+    const foreignPromise = foreignWindow.window.Promise;
+    const ordinary = foreignPromise.withResolvers<void>();
+    assertComputedRejectsAsync(ordinary.promise);
+    ordinary.reject(new Error("Ordinary foreign Promise rejection"));
+
+    const verifyStructuralResults: Array<() => void> = [];
+    for (const tagged of [false, true]) {
+      const pending = foreignPromise.withResolvers<void>();
+      let result: PromiseLike<void> = pending.promise;
+      if (tagged) {
+        result = {
+          // oxlint-disable-next-line unicorn/no-thenable -- A structural Promise forwards the same settlement protocol.
+          then(onFulfilled, onRejected) {
+            return pending.promise.then(onFulfilled, onRejected);
+          },
+        };
+        Object.setPrototypeOf(result, { [Symbol.toStringTag]: "Promise" });
       }
+      const then = result.then;
+      const rejection = new Error("Structural foreign Promise rejection");
+      let reads = 0;
+      let calls = 0;
+      let receiver: unknown;
+      let observedRejection: unknown;
+      // oxlint-disable-next-line unicorn/no-thenable -- The forwarding getter keeps the foreign protocol conforming.
+      Object.defineProperty(result, "then", {
+        get() {
+          reads++;
+          return function (
+            this: PromiseLike<void>,
+            ...callbacks: Parameters<PromiseLike<void>["then"]>
+          ) {
+            calls++;
+            receiver = this;
+            const [onFulfilled, onRejected] = callbacks;
+            assert(
+              typeof onRejected === "function",
+              "A structural result has no rejection observer",
+            );
+            return Reflect.apply(then, this, [
+              onFulfilled,
+              (reason: unknown) => {
+                observedRejection = reason;
+                return onRejected(reason);
+              },
+            ]);
+          };
+        },
+      });
+      assertComputedRejectsAsync(result);
+      assert(reads === 1 && calls === 0, "Structural then was not captured once before invocation");
+      pending.reject(rejection);
+      verifyStructuralResults.push(() => {
+        assert(
+          reads === 1 && calls === 1 && receiver === result && observedRejection === rejection,
+          "The browser consumer changed structural settlement, its receiver, or its capture count",
+        );
+      });
     }
     // Both realms must survive the rejection-reporting task so pageerror can expose a leak.
     await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    for (const verify of verifyStructuralResults) verify();
   } finally {
     iframe.remove();
   }
@@ -184,7 +251,7 @@ async function verifyResources() {
       await platform.activate([registration]);
       assert(
         registration.activeOrigin?.revision === artifact.revision &&
-          (await host.use(counterService, (counter) => counter.value)) === 7,
+          (await host.use(counterService, (counter) => counter.value)).value === 7,
         "Browser activation separated the committed service from its artifact origin",
       );
     } finally {

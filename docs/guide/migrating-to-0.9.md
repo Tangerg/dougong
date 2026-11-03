@@ -51,7 +51,7 @@ const plan = await host.plan(change);
 await host.apply(plan);
 await host.start();
 
-const message = await host.use(GREETER, (value) => value.greet("Dougong"));
+const { value: message } = await host.use(GREETER, (value) => value.greet("Dougong"));
 console.log(message);
 
 const removal = host.change();
@@ -102,7 +102,7 @@ Plan 绑定签发它的 Host 和状态修订，只能应用一次。不要持久
 ```ts
 const commands = host.contributions(COMMANDS);
 for (const id of commands.get()) {
-  const title = await commands.use(id, (command) => command.title);
+  const { value: title } = await commands.use(id, (command) => command.title);
   console.log(title);
 }
 ```
@@ -149,3 +149,7 @@ await deliveryHost[asyncDisposeSymbol]();
 退出失败或超时会保留真实资源义务并隔离整个 Host。`quarantined` 是终止状态；重放 start、stop、apply 或创建新 Host 都不能证明旧资源已释放。迟到完成仅更新诊断。应用应按[隔离后的处置流程](./transactions.md#quarantine) 停止分派、保留诊断并处理旧执行边界。
 
 完成升级后，验证安装、更新、移除、借用中的忙碌拒绝、失败恢复和退出路径。回滚重建旧声明对应的新 Instance，不会恢复旧对象或撤销文件、网络等外部副作用。完整公开协议见 [Core API](../reference/core-api.md) 和 [Platform 规范](../reference/platform.md)。
+
+## 成功结果回执
+
+`Task.result`、`host.use`、`ContributionView.use` 和 `SerialQueue.run` 的成功结果统一为冻结的 `{ value }` 回执（`ResolvedValue<T>`）。将原来的 `const result = await operation` 改为 `const { value: result } = await operation`；只等待完成、不读取结果的调用无需解构。`acquire` 继续使用 `{ resource }`。错误仍通过 Promise 拒绝传播。跨 realm Promise 必须保留正常的公开 `then`；完整的协议范围见[生命周期与资源](./lifetime.md)。

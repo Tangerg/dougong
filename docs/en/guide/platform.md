@@ -46,6 +46,30 @@ Combined additions, updates and removals compile to one Core Plan. `remove` uses
 
 A separate Host is an assembly boundary. ImportLoader in the same realm is not a permission sandbox. Untrusted-code execution requires a separate process, Worker or WASM executor with explicit permissions, communication and termination protocols.
 
+## Capture module specifiers in artifact declarations
+
+The built-in `ImportLoader` accepts only string module specifiers and rejects `URL` objects at runtime. Read `url.href` when declaring an Artifact instead of retaining a mutable URL until asynchronous admission completes:
+
+```ts
+import { createPlatform, ImportLoader } from "@dougongjs/platform";
+
+const importedPlugins = createPlatform({
+  id: "imported-plugins",
+  host,
+  apiVersion: "1.0.0",
+  loader: new ImportLoader(),
+});
+const artifact = importedPlugins.catalog.add({
+  revision: "formatter-content-1",
+  manifest: { name: "formatter", version: "1.0.0" },
+  reference: new URL("./formatter.js", import.meta.url).href,
+});
+```
+
+Mutating the original URL cannot change the captured string. To change the loading target, add another Artifact revision, select it and activate it. Native import caching still applies; a new Artifact revision does not automatically clear the cache for the same module specifier.
+
+The generic `Loader<Reference>` protocol still permits opaque object identities. Platform preserves that identity without deep-cloning it or guessing its meaning; the corresponding Loader defines how its reference stably identifies an artifact. ImportLoader's string contract does not change those Loaders' reference models.
+
 ## Deriving activation from action declarations
 
 Application `ActionDeclaration` data owns command IDs and titles. Examples 08 and 10 derive discoverable metadata, contribution identity and the `actions.map(actionActivation)` list from those same declarations. Setup combines the real handler into each contribution. Triggers call `actionActivation(action)` too, avoiding a second handwritten event list.

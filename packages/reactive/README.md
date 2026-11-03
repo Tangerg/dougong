@@ -22,6 +22,10 @@ subscription[disposeSymbol]();
 
 `observe(owner, readable, observer)` disposes the previous child before building the next one. The structural owner supplies `child`, `defer` and `spawn`; only the returned child needs `Symbol.asyncDispose`; no framework base class is required. Use `generation.spawn` for asynchronous observer work.
 
+`ObservationTask` describes completion only: it is not generic, and its `result` is `PromiseLike<unknown>`. The required `spawn` accepts a task returning `void | PromiseLike<void>`. Owners may provide a richer generic task API without coupling observation to their result payloads.
+
+Results inheriting this module's realm's `Promise.prototype` select the intrinsic native protocol, including decorated local Promises and subclasses. Other results use one captured structural `then`; display tags do not select a protocol. Foreign Promises must expose a conforming public `then`. Adapt decorated foreign results in their origin realm, and box payloads there when another assimilation would change them. See the guide for the precise boundary and disposal guarantees.
+
 ESM; Node.js `^24.22.0 || >=26.10.0`, Chrome/Edge 119+, Firefox 124+, Safari 17.4+.
 
 [Guide](https://tangerg.github.io/dougong/en/guide/reactive)

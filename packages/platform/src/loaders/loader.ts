@@ -3,12 +3,12 @@ export interface Loader<Reference> {
 }
 
 // Same-realm imports provide no isolation; authorization cannot constrain admitted code.
-export class ImportLoader implements Loader<string | URL> {
-  readonly load = async (reference: string | URL, signal: AbortSignal): Promise<unknown> => {
+export class ImportLoader implements Loader<string> {
+  readonly load = async (reference: string, signal: AbortSignal): Promise<unknown> => {
     AbortSignal.prototype.throwIfAborted.call(signal);
-    const specifier =
-      typeof reference === "string" ? reference : URL.prototype.toString.call(reference);
-    const module = await import(/* @vite-ignore */ specifier);
+    if (typeof reference !== "string")
+      throw new TypeError("ImportLoader reference must be a string");
+    const module = await import(/* @vite-ignore */ reference);
     AbortSignal.prototype.throwIfAborted.call(signal);
     return module;
   };

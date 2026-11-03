@@ -23,7 +23,7 @@ const host = createHost({
   installations: [{ id: "greeter", plugin: greeter }],
 });
 await host.start();
-const message = await host.use(GREETER, (service) => service.greet("Dougong"));
+const { value: message } = await host.use(GREETER, (service) => service.greet("Dougong"));
 await host[asyncDisposeSymbol]();
 ```
 

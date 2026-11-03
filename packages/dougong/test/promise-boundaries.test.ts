@@ -82,7 +82,7 @@ it("settles the public service callback result exactly once, within the borrow",
       },
     },
   );
-  expect(await host.use(value, () => result)).toBe(result);
+  expect((await host.use(value, () => result)).value).toBe(result);
   expect(reads).toBe(1);
   await host.stop();
 });

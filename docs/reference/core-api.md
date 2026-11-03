@@ -10,7 +10,7 @@
 | 插件 / Plugins | `definePlugin`, `describePlugin`, `PluginDescriptor`, `PluginConfigurationDescriptor`, `PluginDescriptionOptions`, `Plugin`, `AnyPlugin`, `PluginContext`, `Requirements`, `Provisions`, `ResolvedRequirement`, `ResolvedRequirements`, `ProvidedServices`, `InstanceMetadata` |
 | 安装与计划 / Installation and planning | `ChangeSet`, `Group`, `Installation`, `InstallationOptions`, `InstallationArguments`, `InstallationUpdate`, `InstallationOrigin`, `InitialInstallation`, `Plan`, `PlanReport`, `BindingReport`, `ImpactReason`, `PlanOperation`, `DeclarationSnapshot`, `captureConfiguration`, `ConfigurationValue` |
 | 运行 / Execution | `createHost`, `Host`, `HostOptions`, `ApplyResult`, `HostStatus`, `InstallationState` |
-| 资源 / Resources | `LifetimeContext`, `ChildLifetime`, `LifetimeOwnership`, `Task`, `Cleanup`, `BackgroundTask`, `LifetimePhase`, `LifetimeSnapshot`, `UnresolvedObligation`, `Disposable`, `AsyncDisposable`, `Resource`, `Awaitable`, `disposeSymbol`, `asyncDisposeSymbol` |
+| 资源 / Resources | `LifetimeContext`, `ChildLifetime`, `LifetimeOwnership`, `Task`, `Cleanup`, `BackgroundTask`, `LifetimePhase`, `LifetimeSnapshot`, `UnresolvedObligation`, `Disposable`, `AsyncDisposable`, `Resource`, `Awaitable`, `ResolvedValue`, `disposeSymbol`, `asyncDisposeSymbol` |
 | 事件与贡献 / Events and contributions | `Contribution`, `ContributionView`, `ContributionOperations`, `EventListener`, `EventArguments`, `EventOperations` |
 | 观察与错误 / Observation and errors | `HostSnapshot`, `InstallationSnapshot`, `GroupSnapshot`, `SnapshotView`, `isLogger`, `Logger`, `DougongError`, `ConfigurationValidationError`, `RecordedFailure`, `isError`, `isCancellationReason`, `ErrorSnapshot`, `ErrorDetails` |
 
@@ -65,13 +65,13 @@ await host.stop();
 
 `installation(id)` 与 `group(id)` 只查询已提交声明。Installation 公开只读的 `id`、`groupId`、`status` 与 `origin`；Group 公开 `id` 与 `parentId`。所有变更由 ChangeSet 表达。`InstallationUpdate` 更新配置，或替换 Plugin 并携带配置与来源。
 
-`host.use(token, callback)` 借用当前已提交 Service。`host.contributions(token)` 提供贡献视图。`host.diagnostics.get()` 读取稳定的 Host 快照，`host.diagnostics.subscribe()` 观察其失效通知；`explain(id)` 查询指定安装的服务绑定。标准 `[Symbol.asyncDispose]` 加入 stop。
+`host.use(token, callback)` 借用当前已提交 Service，对于回调的结果类型 `Result` 返回 `Promise<ResolvedValue<Awaited<Result>>>`；成功时解构冻结回执的 `value`，失败时接收原拒绝原因。`host.contributions(token)` 提供贡献视图。`host.diagnostics.get()` 读取稳定的 Host 快照，`host.diagnostics.subscribe()` 观察其失效通知；`explain(id)` 查询指定安装的服务绑定。标准 `[Symbol.asyncDispose]` 加入 stop。
 
 ## 执行与诊断
 
 Host 状态为 `stopped`、`starting`、`running`、`changing`、`stopping`、`quarantined`。隔离是整个 Host 的终止状态，不提供原地恢复；操作边界与替换前提见[隔离后的应用处理](../guide/transactions.md#quarantine)。`Plan.report` 可序列化，不包含模块、函数、真实配置载荷或可变运行对象。`HostSnapshot` 中 Lifetime 也是普通数据快照。
 
-订阅统一 `get/subscribe`，不重放，使用标准 Disposable 取消。`ContributionView.use(id, callback)` 借用贡献所有者；`get()` 仅给出冻结的有序 ID 数组；读取元数据和调用处理函数都通过 `use`。`EventOperations.on/emit` 支持同步或异步监听，emit 等待所有监听结果并汇总失败；每次监听调用借用其所有者。`ContributionOperations.add` 登记带 owner 的贡献。
+订阅统一 `get/subscribe`，不重放，使用标准 Disposable 取消。`ContributionView.use(id, callback)` 借用贡献所有者，同样返回 `Promise<ResolvedValue<Awaited<Result>>>`；`get()` 仅给出冻结的有序 ID 数组；读取元数据和调用处理函数都通过 `use`。`EventOperations.on/emit` 支持同步或异步监听，emit 等待所有监听结果并汇总失败；每次监听调用借用其所有者。`ContributionOperations.add` 登记带 owner 的贡献。
 
 `ErrorDetails` 给出 outcome、phase、stateRevision 和可选的安装、契约、依赖路径与影响范围。`RecordedFailure` 是有界脱离资源图的诊断投影；原始拒绝的 cause 仍由直接调用者接收。
 
@@ -91,9 +91,10 @@ Host 只在选项缺省时使用默认值；显式传入 null 的名字、安装
 | --- | --- |
 | `SnapshotPublisher`、`ReadonlyMapSnapshot` | 发布快照、提供只读集合。 |
 | `batchSnapshotNotifications` | 在一个同步回调中批量发布。返回 Promise 不能延长此次发布边界。 |
-| `SerialQueue` | 顺序执行提交的操作。传给 `run(operation, signal)` 的信号可立即撤回仍在排队的操作。操作开始后，由它自己决定完成结果。 |
+| `SerialQueue` | 顺序执行提交的操作。`run(operation, signal)` 返回 `Promise<ResolvedValue<Awaited<T>>>`，`settled` 只等待完成；信号可立即撤回仍在排队的操作。操作开始后，由它自己决定结算。 |
 | `normalizePlainRecord` | 捕获普通记录的数据字段。插件配置请用 `captureConfiguration`。 |
 | `recordFields<T>()(...keys)` | 从声明类型建立穷尽的允许字段集合，供 `normalizePlainRecord` 使用。 |
+| `resolveValue(value)` | 按共享异步结果协议解析一次，返回 `Promise<ResolvedValue<Awaited<T>>>`；冻结的 `{ value }` 回执保留已完成结果的身份。 |
 | `captureDataArray(input, label)` | 浅拷贝自有的稠密数据索引并冻结数组，不调用输入的方法或迭代器。元素的校验归调用方。 |
 | `captureLogger(logger)` | 接管日志后端时一次捕获四个方法及其原始接收者。 |
 | `onAbort(signal, callback)` | 观察真实取消，回调只接收一次原因；已取消时立即回调。返回的函数用于解除观察。手动派发名为 `abort` 的事件不能取消作用域。 |

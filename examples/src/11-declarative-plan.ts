@@ -80,14 +80,14 @@ export async function declarativePlan(): Promise<ExampleResult> {
   const legacyArtifact = artifact(LEGACY_NAME, "1.0.0", "legacy");
   const toolArtifact = artifact(TOOL_NAME, "1.0.0", "tool");
   await deploy(platform, [original, legacyArtifact]);
-  const before = await host.use(GREETER, (greeter) => greeter.greet());
+  const { value: before } = await host.use(GREETER, (greeter) => greeter.greet());
   const failure = await expectFailure("MODULE_LOAD_FAILED", () =>
     deploy(platform, [broken, toolArtifact]),
   );
-  const afterFailure = await host.use(GREETER, (greeter) => greeter.greet());
+  const { value: afterFailure } = await host.use(GREETER, (greeter) => greeter.greet());
   const legacyAfterFailure = legacyDisposals;
   await deploy(platform, [replacement, toolArtifact]);
-  const afterCommit = await host.use(GREETER, (greeter) => greeter.greet());
+  const { value: afterCommit } = await host.use(GREETER, (greeter) => greeter.greet());
   const legacyAfterCommit = legacyDisposals;
   const deployed = [...platform.diagnostics.get().registrations.keys()].sort().join(", ");
   await platform[asyncDisposeSymbol]();

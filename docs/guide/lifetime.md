@@ -7,7 +7,7 @@ Lifetime 以组合构成资源树。根由 Instance 创建，插件通过 `child
 | `use(resource)` | 捕获标准释放方法，成功登记后返回原资源 |
 | `defer(cleanup)` | 登记最终释放函数，返回可提前释放的句柄 |
 | `child(label)` | 创建由父树拥有的子 Lifetime |
-| `spawn(task)` | 启动可取消后台任务，Task 提供 `result` |
+| `spawn(task)` | 启动可取消后台任务；`result` 以冻结的 `{ value }` 回执完成 |
 | `acquire(factory)` | 创建前登记义务；返回的 Promise 以冻结的 `{ resource }` 回执完成 |
 | `interrupt(interruptWork)` | 登记排空工作之前必须执行的中断操作 |
 | `signal` | 合作式取消信号 |
@@ -17,9 +17,9 @@ Lifetime 以组合构成资源树。根由 Instance 创建，插件通过 `child
 
 同一份已加载的 Core 也只允许一个 Lifetime 接管同一个外部资源对象。重复调用 `use`、并发 `acquire` 或从释放方法的 getter 重入登记都会被拒绝。释放仍在进行、已经超时或已经失败时，原所有者继续承担义务；只有实际释放成功后才能重新接管该对象。调用方应将共享资源交给一个明确的 Lifetime，并通过服务参数传递使用权。
 
-`Symbol.dispose` 必须同步完成；异步释放应使用 `Symbol.asyncDispose`。同步回调返回 Promise 或 thenable 会被拒绝，失败释放仍归原 Lifetime。Core 与 Reactive 的同步结果检查共用一份协议：保留标准 Promise 原型标记的原生 Promise，包括跨 realm 的对象和子类，由内建 `then` 验证并观察实际结算，自有 `then` 或 `Symbol.toStringTag` 不能替代它。检查不执行展示标签的 getter，也不会再次解析原生 Promise 已完成的载荷；普通 thenable 的 `then` 只捕获一次，并保留原 receiver。
+`Symbol.dispose` 必须同步完成；异步释放应使用 `Symbol.asyncDispose`。同步回调返回受支持的 Promise 或 thenable 会被拒绝，失败释放仍归原 Lifetime。Core 与 Reactive 共用同一个异步结果协议：原型链包含当前 realm 的 `Promise.prototype` 时，使用内建 `then` 验证原生品牌并观察实际结算，包括本 realm 的子类；自有 `then` 不能替代这个结算。其他对象只捕获一次可调用的 `then`，保留原 receiver，并按标准结构 thenable 规则递归解析。`Symbol.toStringTag` 只描述展示名称，既不参与协议选择，也不执行其 getter。
 
-该检查不修改传入对象。完全替换 Promise 原型链或篡改其原型标记，不属于原生 Promise 识别保证。Proxy 的反射陷阱可以影响候选检查，伪造 Promise 原型或循环原型链会明确失败。原生 `constructor` 或 `Symbol.species` 阻止观察时，错误直接传播，不降级为同步成功；标准 JavaScript 没有绕过这些钩子的公开观察操作，此时不能保证接住原 Promise 的拒绝。资源所有者仍保留失败的释放义务。
+协议选择不修改传入对象。继承当前 realm 的 `Promise.prototype` 就选择内建协议；没有原生内部状态的伪造对象不能改走结构协议。循环原型链明确失败。内建协议的 `constructor` 或 `Symbol.species` 阻止观察时，错误只传播一次，不尝试另一套协议，此时不能保证接住原 Promise 的拒绝，资源所有者仍保留失败的释放义务。跨 realm 的 Promise 通过其公开 `then` 接入；隐藏或破坏该方法不在保证范围内。若跨 realm 交付的值带有可变或可执行的 `then`，应在来源 realm 先把值放进普通数据容器，再交付该 Promise。完全替换本 realm Promise 的原型链也失去内建协议保证。
 
 退出先封闭入口、撤销发布并传播取消，发起全部中断并等待它们完成，再等待使用中的工作与创建义务，最后逆序释放资源。用 `interrupt` 关闭阻塞读取的通道，用 `defer` 执行任务退出后才能进行的最终销毁。
 
@@ -29,7 +29,9 @@ lifetime.interrupt(() => connection.interruptRead());
 lifetime.spawn((signal) => connection.readUntilClosed(signal));
 ```
 
-工厂结果遵循正常的 Promise 解析规则。接管完成后，`receipt.resource` 就是 Lifetime 捕获释放方法时的那个对象。用回执交付，避免 Promise 再次把资源当作 thenable 解析成别的值。原先直接接收资源的调用方按上例解构 `resource`。
+工厂结果只在上述协议边界解析一次。接管完成后，`receipt.resource` 就是 Lifetime 捕获释放方法时的那个对象。用回执交付，避免 Promise 再次把资源当作 thenable 解析成别的值。原先直接接收资源的调用方按上例解构 `resource`。
+
+`Task<T>.result` 返回 `Promise<ResolvedValue<T>>`，其中 `T` 表示最终数据类型；`host.use` 和 `ContributionView.use` 对于回调结果类型 `Result` 返回 `Promise<ResolvedValue<Awaited<Result>>>`，嵌套的 Promise 类型会先解析再交付。`ResolvedValue<T>` 只有只读的 `value`，成功回执被冻结。调用方通过 `const { value } = await task.result` 或 `const { value } = await host.use(token, callback)` 取得结果。失败仍以原原因拒绝 Promise。回执保存已完成结果的身份，不再次解析它的 `then`，也不新增资源所有者或延长借用。任务与获取仍在登记义务之后异步启动；前台借用的回调仍同步进入。
 
 清理失败不能宣称已经干净退出。Lifetime 保留失败释放和未完成工作；Host 的 `unresolved` 投影仍被保留的运行代次。子树没有成功退出时，不能释放它仍可使用的父资源；同理，未退出消费者的传递提供者必须保留，独立分支则继续安全清理。正在使用的前台借用也不能被强制销毁。
 

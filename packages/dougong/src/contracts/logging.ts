@@ -1,5 +1,5 @@
 import { DougongError, lifetimeDisposedCode } from "./errors.js";
-import { assertSynchronous } from "../internal/synchronous-result.js";
+import { assertSynchronous } from "../internal/async-result.js";
 import { disposeSymbol, type Disposable } from "./resource.js";
 export interface Logger {
   readonly debug: (message: unknown, ...details: unknown[]) => void;

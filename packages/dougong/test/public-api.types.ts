@@ -1,12 +1,25 @@
 import type { StandardJSONSchemaV1, StandardSchemaV1 } from "@standard-schema/spec";
 import { expectTypeOf } from "vitest";
 import * as core from "dougong";
-import { normalizePlainRecord, recordFields, type SnapshotPublisher } from "dougong/advanced";
+import {
+  normalizePlainRecord,
+  recordFields,
+  resolveValue,
+  SerialQueue,
+  type SnapshotPublisher,
+} from "dougong/advanced";
 
 expectTypeOf<ConstructorParameters<typeof core.RecordedFailure>>().toEqualTypeOf<
   [error: unknown, fields?: ReadonlyArray<string>]
 >();
 expectTypeOf<typeof core.isError>().toEqualTypeOf<(value: unknown) => value is Error>();
+expectTypeOf(resolveValue(Promise.resolve(1))).toEqualTypeOf<Promise<core.ResolvedValue<number>>>();
+expectTypeOf(resolveValue<Promise<number>>(Promise.resolve(42))).toEqualTypeOf<
+  Promise<core.ResolvedValue<number>>
+>();
+expectTypeOf(new SerialQueue().run<Promise<number>>(() => Promise.resolve(42))).toEqualTypeOf<
+  Promise<core.ResolvedValue<number>>
+>();
 
 const capturedDeclaration = normalizePlainRecord(
   { name: "declared", payload: { value: 1 } },
@@ -208,10 +221,15 @@ const verifyInstallationTypes = (
   const installation = change.install(erased, { id: "erased", configuration: undefined });
   change.update(installation, { plugin: erased });
   change.remove(installation);
-  expectTypeOf(host.use(CONFIGURATION, (value) => value.length)).toEqualTypeOf<Promise<number>>();
-  expectTypeOf(host.use(core.optional(CONFIGURATION), (value) => value?.length)).toEqualTypeOf<
-    Promise<number | undefined>
+  expectTypeOf(host.use(CONFIGURATION, (value) => value.length)).toEqualTypeOf<
+    Promise<core.ResolvedValue<number>>
   >();
+  expectTypeOf(host.use(core.optional(CONFIGURATION), (value) => value?.length)).toEqualTypeOf<
+    Promise<core.ResolvedValue<number | undefined>>
+  >();
+  expectTypeOf(
+    host.use<string, Promise<number>>(CONFIGURATION, () => Promise.resolve(42)),
+  ).toEqualTypeOf<Promise<core.ResolvedValue<number>>>();
   expectTypeOf(host.plan(change)).toEqualTypeOf<Promise<core.Plan>>();
 };
 void verifyInstallationTypes;
@@ -553,6 +571,27 @@ expectTypeOf<NonNullable<core.HostOptions["onError"]>>().toEqualTypeOf<
 >();
 
 expectTypeOf<ReturnType<core.LifetimeContext["child"]>>().toEqualTypeOf<core.ChildLifetime>();
+expectTypeOf<core.ResolvedValue<number>>().toEqualTypeOf<{ readonly value: number }>();
+expectTypeOf<core.Task<number>["result"]>().toEqualTypeOf<Promise<core.ResolvedValue<number>>>();
+const verifyResultTypes = (lifetime: core.LifetimeContext, values: core.ContributionView<User>) => {
+  expectTypeOf(lifetime.spawn(() => 1).result).toEqualTypeOf<Promise<core.ResolvedValue<number>>>();
+  expectTypeOf(lifetime.spawn(async () => 1).result).toEqualTypeOf<
+    Promise<core.ResolvedValue<number>>
+  >();
+  expectTypeOf(lifetime.spawn<Promise<number>>(() => Promise.resolve(42)).result).toEqualTypeOf<
+    Promise<core.ResolvedValue<number>>
+  >();
+  expectTypeOf(values.use("user", (user) => user.email)).toEqualTypeOf<
+    Promise<core.ResolvedValue<string>>
+  >();
+  expectTypeOf(values.use("user", async (user) => user.email)).toEqualTypeOf<
+    Promise<core.ResolvedValue<string>>
+  >();
+  expectTypeOf(values.use<Promise<number>>("user", () => Promise.resolve(42))).toEqualTypeOf<
+    Promise<core.ResolvedValue<number>>
+  >();
+};
+void verifyResultTypes;
 expectTypeOf<core.ChildLifetime>().toMatchTypeOf<core.AsyncDisposable>();
 // @ts-expect-error An Instance's shutdown authority belongs to its Engine.
 expectTypeOf<core.LifetimeContext[typeof Symbol.asyncDispose]>();

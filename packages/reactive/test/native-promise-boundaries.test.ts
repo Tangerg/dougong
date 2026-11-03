@@ -2,41 +2,55 @@ import { execFileSync } from "node:child_process";
 import { runInNewContext } from "node:vm";
 import { expect, it, vi } from "vitest";
 import { batch, computed, signal } from "../src";
-import { assertSynchronous, captureThenable } from "../src/synchronous-result";
+import { assertSynchronous, captureThenable } from "../src/async-result";
 
 it.each(["batch", "computed", "subscriber"] as const)(
   "rejects a native Promise with a missing or throwing then member at the %s boundary",
   (boundary) => {
-    for (const foreign of [false, true]) {
-      for (const throwing of [false, true]) {
-        const pending = foreign
-          ? (runInNewContext("Promise.withResolvers()") as PromiseWithResolvers<void>)
-          : Promise.withResolvers<void>();
-        const read = vi.fn<() => undefined>(() => {
-          if (throwing) throw new Error("The public then getter is not the settlement owner");
-          return undefined;
-        });
-        // oxlint-disable-next-line unicorn/no-thenable -- A Proxy would lose the native brand required by this regression.
-        Object.defineProperty(pending.promise, "then", { get: read });
-        Object.defineProperty(pending.promise, Symbol.toStringTag, {
-          value: "Hidden native promise",
-        });
-        const source = signal(0);
-        using _subscription = source.subscribe(() => pending.promise);
-        try {
-          expect(() => {
-            if (boundary === "batch") batch(() => pending.promise);
-            else if (boundary === "computed") computed(() => pending.promise).get();
-            else source.set(1);
-          }).toThrow(/must be synchronous/);
-          expect(read).not.toHaveBeenCalled();
-        } finally {
-          pending.resolve();
-        }
+    for (const throwing of [false, true]) {
+      const pending = Promise.withResolvers<void>();
+      const read = vi.fn<() => undefined>(() => {
+        if (throwing) throw new Error("The public then getter is not the settlement owner");
+        return undefined;
+      });
+      // oxlint-disable-next-line unicorn/no-thenable -- A Proxy would lose the native brand required by this regression.
+      Object.defineProperty(pending.promise, "then", { get: read });
+      Object.defineProperty(pending.promise, Symbol.toStringTag, {
+        value: "Hidden native promise",
+      });
+      const source = signal(0);
+      using _subscription = source.subscribe(() => pending.promise);
+      try {
+        expect(() => {
+          if (boundary === "batch") batch(() => pending.promise);
+          else if (boundary === "computed") computed(() => pending.promise).get();
+          else source.set(1);
+        }).toThrow(/must be synchronous/);
+        expect(read).not.toHaveBeenCalled();
+      } finally {
+        pending.resolve();
       }
     }
   },
 );
+
+it("consumes a cross-realm Promise through its captured structural protocol", async () => {
+  const pending = runInNewContext("Promise.withResolvers()") as PromiseWithResolvers<string>;
+  const then = pending.promise.then;
+  const forward = vi.fn<(this: Promise<string>, ...callbacks: unknown[]) => Promise<unknown>>(
+    function (this: Promise<string>, ...callbacks: unknown[]) {
+      return Reflect.apply(then, this, callbacks);
+    },
+  );
+  // oxlint-disable-next-line unicorn/no-thenable -- The forwarding method keeps the foreign protocol conforming.
+  Object.defineProperty(pending.promise, "then", { value: forward });
+  const captured = captureThenable(pending.promise)!;
+  expect(forward).not.toHaveBeenCalled();
+  pending.resolve("foreign value");
+  await expect(captured).resolves.toEqual({ value: "foreign value" });
+  expect(forward).toHaveBeenCalledOnce();
+  expect(forward.mock.contexts[0]).toBe(pending.promise);
+});
 
 it("observes actual native settlement without invoking an overridden then function", async () => {
   const pending = Promise.withResolvers<void>();
@@ -152,23 +166,20 @@ it.each(["constructor", "species"] as const)(
 );
 
 it("observes rejected decorated native Promises without creating another unhandled rejection", () => {
-  const source = new URL("../../../tooling/internal/synchronous-result.ts", import.meta.url);
+  const source = new URL("../../../tooling/internal/async-result.ts", import.meta.url);
   const program = `
-    import { runInNewContext } from "node:vm";
     import { assertSynchronous } from ${JSON.stringify(source.href)};
     const unhandled = [];
     process.on("unhandledRejection", (error) => unhandled.push(error));
     let rejected = 0;
-    for (const foreign of [false, true]) {
-      for (const throwing of [false, true]) {
-        const pending = foreign ? runInNewContext("Promise.withResolvers()") : Promise.withResolvers();
-        Object.defineProperty(pending.promise, "then", throwing
-          ? { get() { throw new Error("public getter failure"); } }
-          : { value: undefined });
-        try { assertSynchronous(pending.promise, "synchronous result required"); }
-        catch (error) { if (error instanceof TypeError) rejected++; else throw error; }
-        pending.reject(new Error("original native rejection"));
-      }
+    for (const throwing of [false, true]) {
+      const pending = Promise.withResolvers();
+      Object.defineProperty(pending.promise, "then", throwing
+        ? { get() { throw new Error("public getter failure"); } }
+        : { value: undefined });
+      try { assertSynchronous(pending.promise, "synchronous result required"); }
+      catch (error) { if (error instanceof TypeError) rejected++; else throw error; }
+      pending.reject(new Error("original native rejection"));
     }
     await new Promise((resolve) => setImmediate(resolve));
     console.log(JSON.stringify({ rejected, unhandled: unhandled.length }));
@@ -177,5 +188,5 @@ it("observes rejected decorated native Promises without creating another unhandl
     encoding: "utf8",
     timeout: 5_000,
   });
-  expect(JSON.parse(output)).toEqual({ rejected: 4, unhandled: 0 });
+  expect(JSON.parse(output)).toEqual({ rejected: 2, unhandled: 0 });
 });

@@ -94,7 +94,7 @@ export async function configurationAndFailure(): Promise<ExampleResult> {
   });
   await host.apply(await host.plan(initial));
   await host.start();
-  const running = await host.use(CACHE, (cache) => cache.capacity);
+  const { value: running } = await host.use(CACHE, (cache) => cache.capacity);
 
   let issues: ReadonlyArray<string>;
   try {
@@ -106,7 +106,7 @@ export async function configurationAndFailure(): Promise<ExampleResult> {
     if (!(error instanceof ConfigurationValidationError)) throw error;
     issues = error.issues.map((issue) => issue.message);
   }
-  const afterInvalidConfiguration = await host.use(CACHE, (cache) => cache.capacity);
+  const { value: afterInvalidConfiguration } = await host.use(CACHE, (cache) => cache.capacity);
 
   const change = host.change();
   change.install(auditPlugin, { id: "audit" });
@@ -115,9 +115,9 @@ export async function configurationAndFailure(): Promise<ExampleResult> {
   const failure = await expectFailure("TRANSITION_FAILED", () => host.apply(plan));
   if (failure.details.outcome !== "restored" || failure.cause !== socketFailure) throw failure;
 
-  const afterRollback = await host.use(CACHE, (cache) => cache.capacity);
+  const { value: afterRollback } = await host.use(CACHE, (cache) => cache.capacity);
   const status = host.status;
-  const auditPublished = await host.use(optional(AUDIT), (audit) => audit !== undefined);
+  const { value: auditPublished } = await host.use(optional(AUDIT), (audit) => audit !== undefined);
   await host.stop();
 
   return exampleResult({

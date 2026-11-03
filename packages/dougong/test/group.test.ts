@@ -25,7 +25,7 @@ it("groups installation ownership without creating another capability namespace"
   change.install(definePlugin({ name: "nested", setup() {} }), { id: "nested", group: child });
   await host.apply(await host.plan(change));
   await host.start();
-  expect(await host.use(serviceB, (result) => result)).toBe(2);
+  expect((await host.use(serviceB, (result) => result)).value).toBe(2);
   const invalid = host.change();
   invalid.removeGroup(parent);
   await expect(host.plan(invalid)).rejects.toMatchObject({ code: "SERVICE_MISSING" });

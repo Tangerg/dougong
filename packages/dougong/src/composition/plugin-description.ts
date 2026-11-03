@@ -1,6 +1,6 @@
 import type { StandardJSONSchemaV1 } from "@standard-schema/spec";
 import { normalizePlainRecord, recordFields } from "../internal/record.js";
-import { assertSynchronous } from "../internal/synchronous-result.js";
+import { assertSynchronous } from "../internal/async-result.js";
 import { captureConfiguration, type ConfigurationValue } from "./configuration.js";
 import { normalizePlugin, type AnyPlugin } from "./plugin.js";
 

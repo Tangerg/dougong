@@ -10,7 +10,7 @@ The main `dougong` package is the actual kernel. Its default surface exposes one
 | 插件 / Plugins | `definePlugin`, `describePlugin`, `PluginDescriptor`, `PluginConfigurationDescriptor`, `PluginDescriptionOptions`, `Plugin`, `AnyPlugin`, `PluginContext`, `Requirements`, `Provisions`, `ResolvedRequirement`, `ResolvedRequirements`, `ProvidedServices`, `InstanceMetadata` |
 | 安装与计划 / Installation and planning | `ChangeSet`, `Group`, `Installation`, `InstallationOptions`, `InstallationArguments`, `InstallationUpdate`, `InstallationOrigin`, `InitialInstallation`, `Plan`, `PlanReport`, `BindingReport`, `ImpactReason`, `PlanOperation`, `DeclarationSnapshot`, `captureConfiguration`, `ConfigurationValue` |
 | 运行 / Execution | `createHost`, `Host`, `HostOptions`, `ApplyResult`, `HostStatus`, `InstallationState` |
-| 资源 / Resources | `LifetimeContext`, `ChildLifetime`, `LifetimeOwnership`, `Task`, `Cleanup`, `BackgroundTask`, `LifetimePhase`, `LifetimeSnapshot`, `UnresolvedObligation`, `Disposable`, `AsyncDisposable`, `Resource`, `Awaitable`, `disposeSymbol`, `asyncDisposeSymbol` |
+| 资源 / Resources | `LifetimeContext`, `ChildLifetime`, `LifetimeOwnership`, `Task`, `Cleanup`, `BackgroundTask`, `LifetimePhase`, `LifetimeSnapshot`, `UnresolvedObligation`, `Disposable`, `AsyncDisposable`, `Resource`, `Awaitable`, `ResolvedValue`, `disposeSymbol`, `asyncDisposeSymbol` |
 | 事件与贡献 / Events and contributions | `Contribution`, `ContributionView`, `ContributionOperations`, `EventListener`, `EventArguments`, `EventOperations` |
 | 观察与错误 / Observation and errors | `HostSnapshot`, `InstallationSnapshot`, `GroupSnapshot`, `SnapshotView`, `isLogger`, `Logger`, `DougongError`, `ConfigurationValidationError`, `RecordedFailure`, `isError`, `isCancellationReason`, `ErrorSnapshot`, `ErrorDetails` |
 
@@ -65,13 +65,13 @@ await host.stop();
 
 `installation(id)` and `group(id)` query committed declarations. Installation exposes read-only `id`, `groupId`, `status` and `origin`; Group exposes `id` and `parentId`. ChangeSet expresses every mutation. `InstallationUpdate` either updates configuration or replaces a Plugin with configuration and origin.
 
-`host.use(token, callback)` borrows a currently committed Service. `host.contributions(token)` exposes a contribution view. `host.diagnostics.get()` reads a stable Host snapshot and `host.diagnostics.subscribe()` observes invalidation; `explain(id)` queries one installation's Service bindings. Standard `[Symbol.asyncDispose]` joins stop.
+`host.use(token, callback)` borrows a currently committed Service and returns `Promise<ResolvedValue<Awaited<Result>>>` for the callback's result type `Result`. Destructure `value` from the frozen success receipt; failures retain their original rejection reason. `host.contributions(token)` exposes a contribution view. `host.diagnostics.get()` reads a stable Host snapshot and `host.diagnostics.subscribe()` observes invalidation; `explain(id)` queries one installation's Service bindings. Standard `[Symbol.asyncDispose]` joins stop.
 
 ## Execution and diagnostics
 
 Host states are `stopped`, `starting`, `running`, `changing`, `stopping` and `quarantined`. Quarantine is terminal for the entire Host, with no in-place recovery. See [Application handling after quarantine](../guide/transactions.md#quarantine) for operation boundaries and replacement preconditions. `Plan.report` is serializable and contains no modules, functions, real configuration payloads or mutable runtime objects. Lifetimes inside `HostSnapshot` are plain data snapshots too.
 
-Subscriptions share `get/subscribe`, do not replay and use standard Disposable cancellation. `ContributionView.use(id, callback)` borrows the contribution owner; `get()` exposes only a frozen, ordered list of IDs. Read metadata and invoke handlers inside `use`. `EventOperations.on/emit` supports synchronous or asynchronous listeners; emit awaits all results and aggregates failures, borrowing each listener's owner until completion. `ContributionOperations.add` registers owned contributions.
+Subscriptions share `get/subscribe`, do not replay and use standard Disposable cancellation. `ContributionView.use(id, callback)` borrows the contribution owner and also returns `Promise<ResolvedValue<Awaited<Result>>>`; `get()` exposes only a frozen, ordered list of IDs. Read metadata and invoke handlers inside `use`. `EventOperations.on/emit` supports synchronous or asynchronous listeners; emit awaits all results and aggregates failures, borrowing each listener's owner until completion. `ContributionOperations.add` registers owned contributions.
 
 `ErrorDetails` carries outcome, phase, stateRevision and optional installation, contract, dependency path and impact. `RecordedFailure` is a bounded diagnostic projection detached from resource graphs; direct callers still receive the cause of the original rejection.
 
@@ -91,9 +91,10 @@ Use `dougong/advanced` for adapters and domain extensions. These primitives expo
 | --- | --- |
 | `SnapshotPublisher`, `ReadonlyMapSnapshot` | Publish snapshots and expose read-only collections. |
 | `batchSnapshotNotifications` | Group publications in one synchronous callback. A returned Promise cannot extend the boundary. |
-| `SerialQueue` | Runs operations in order. The optional signal in `run(operation, signal)` withdraws a waiting operation immediately. Once invoked, the operation owns its result. |
+| `SerialQueue` | Runs operations in order. `run(operation, signal)` returns `Promise<ResolvedValue<Awaited<T>>>`; `settled` only joins completion. The optional signal withdraws a waiting operation immediately. Once invoked, the operation owns its settlement. |
 | `normalizePlainRecord` | Capture the data fields of a plain record. Use `captureConfiguration` when the input is plugin configuration. |
 | `recordFields<T>()(...keys)` | Build an exhaustive accepted-field set from a declaration type for `normalizePlainRecord`. |
+| `resolveValue(value)` | Resolve one asynchronous result through the shared protocol and return `Promise<ResolvedValue<Awaited<T>>>`; the frozen `{ value }` receipt preserves the fulfilled identity. |
 | `captureDataArray(input, label)` | Freeze a shallow copy of dense own index data without invoking the input’s methods or iterator. The caller validates the elements. |
 | `captureLogger(logger)` | Capture the four methods and their original receiver once when adopting a logging backend. |
 | `onAbort(signal, callback)` | Observe genuine cancellation once, passing its reason immediately if already aborted. The returned function detaches the callback. Dispatching an event named `abort` does not cancel a scope. |

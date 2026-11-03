@@ -7,7 +7,7 @@ const root = new URL("../", import.meta.url);
 const check = process.argv.includes("--check");
 for (const filename of [
   "abort.ts",
-  "synchronous-result.ts",
+  "async-result.ts",
   "disposal-runtime.ts",
   ...Object.values(abortListenerPort.targets).map((target) => basename(target)),
 ]) {

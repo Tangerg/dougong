@@ -37,6 +37,22 @@ expectTypeOf<
   ReturnType<reactive.ObservationOwner<MinimalChild>["child"]>
 >().toEqualTypeOf<MinimalChild>();
 
+expectTypeOf<reactive.ObservationTask["result"]>().toEqualTypeOf<PromiseLike<unknown>>();
+expectTypeOf<Parameters<reactive.ObservationOwner["spawn"]>[0]>().toEqualTypeOf<
+  (signal: AbortSignal) => void | PromiseLike<void>
+>();
+
+interface ResultOwner {
+  readonly defer: reactive.ObservationOwner["defer"];
+  readonly child: reactive.ObservationOwner["child"];
+  readonly spawn: <T>(task: (signal: AbortSignal) => T | PromiseLike<T>) => {
+    readonly result: Promise<{ readonly value: T }>;
+    [Symbol.asyncDispose](): Promise<void>;
+  };
+}
+
+expectTypeOf<ResultOwner>().toExtend<reactive.ObservationOwner>();
+
 expectTypeOf<typeof reactive.disposeSymbol>().toEqualTypeOf<typeof Symbol.dispose>();
 expectTypeOf<typeof reactive.asyncDisposeSymbol>().toEqualTypeOf<typeof Symbol.asyncDispose>();
 

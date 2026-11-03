@@ -1,7 +1,8 @@
-import { onAbort } from "dougong/advanced";
+import type { ResolvedValue } from "dougong";
+import { onAbort, resolveValue } from "dougong/advanced";
 
 interface Waiter<T> {
-  resolve: (value: T) => void;
+  resolve: (value: ResolvedValue<T>) => void;
   reject: (reason: unknown) => void;
 }
 
@@ -12,9 +13,9 @@ type PreparationState<T> =
 
 export class Preparation<T> {
   #state: PreparationState<T>;
-  readonly result: Promise<T>;
+  readonly result: Promise<ResolvedValue<T>>;
 
-  private constructor(result: Promise<T>, controller: AbortController) {
+  private constructor(result: Promise<ResolvedValue<T>>, controller: AbortController) {
     this.#state = { controller, waiters: new Set() };
     this.result = result;
     // One reaction per preparation; a cancelled waiter detaches even when external work never settles.
@@ -29,7 +30,7 @@ export class Preparation<T> {
     return new Preparation(
       Promise.resolve().then(() => {
         AbortSignal.prototype.throwIfAborted.call(controller.signal);
-        return run(controller.signal);
+        return resolveValue(run(controller.signal));
       }),
       controller,
     );
@@ -39,12 +40,12 @@ export class Preparation<T> {
   static waitFor<T>(
     run: (signal: AbortSignal) => T | PromiseLike<T>,
     parent: AbortSignal,
-  ): Promise<T> {
+  ): Promise<ResolvedValue<Awaited<T>>> {
     const controller = new AbortController();
-    const work = Promise.withResolvers<T>();
+    const work = Promise.withResolvers<ResolvedValue<Awaited<T>>>();
     const waiter = new Preparation(work.promise, controller).wait(parent);
     try {
-      work.resolve(run(controller.signal));
+      void resolveValue(run(controller.signal)).then(work.resolve, work.reject);
     } catch (error) {
       work.reject(error);
     }
@@ -55,12 +56,12 @@ export class Preparation<T> {
     return this.#state === "cancelled";
   }
 
-  wait(signal: AbortSignal): Promise<T> {
+  wait(signal: AbortSignal): Promise<ResolvedValue<T>> {
     AbortSignal.prototype.throwIfAborted.call(signal);
     const state = this.#state;
     if (state === "settled") return this.result;
     if (state === "cancelled") throw new TypeError("Cannot join a cancelled preparation");
-    const { promise, resolve, reject } = Promise.withResolvers<T>();
+    const { promise, resolve, reject } = Promise.withResolvers<ResolvedValue<T>>();
     const waiter = { resolve, reject };
     state.waiters.add(waiter);
     const detach = onAbort(signal, (reason) => {

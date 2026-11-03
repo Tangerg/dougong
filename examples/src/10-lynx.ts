@@ -38,14 +38,15 @@ const workspaceState = (workspace: string) =>
 const MAIN_WORKSPACE = workspaceState("main");
 
 // Business command identity belongs to this catalog; Core owns only contribution identity.
-function commandEntries(commands: ContributionView<Command>) {
-  return Promise.all(
+async function commandEntries(commands: ContributionView<Command>) {
+  const entries = await Promise.all(
     commands
       .get()
       .map((entry) =>
         commands.use(entry, ({ id, title }) => ({ entry, action: Object.freeze({ id, title }) })),
       ),
   );
+  return entries.map(({ value }) => value);
 }
 
 function explorerPlugin(title: string, relativePath: string) {
@@ -89,10 +90,11 @@ export async function lynxScenario(): Promise<ExampleResult> {
             if (matches.length > 1) throw new TypeError(`Duplicate command '${id}'`);
             const match = matches[0];
             if (!match) throw new Error(`Command '${id}' is unavailable`);
-            return dependencies.commands.use(match.entry, (command) => {
+            const { value: output } = await dependencies.commands.use(match.entry, (command) => {
               if (command.id !== id) throw new Error(`Command '${id}' changed before invocation`);
               return command.run();
             });
+            return output;
           },
         },
       };
@@ -146,18 +148,22 @@ export async function lynxScenario(): Promise<ExampleResult> {
       reference,
     });
   const explorer = await platform.select(artifact("1.0.0", "explorer-v1"));
-  const before = await host.use(
+  const { value: before } = await host.use(
     COMMAND_CATALOG,
     async (commands) => (await commands.list()).length,
   );
   await platform.trigger(actionActivation(openExplorer));
-  const firstOutput = await host.use(COMMAND_CATALOG, (commands) => commands.run(openExplorer.id));
+  const { value: firstOutput } = await host.use(COMMAND_CATALOG, (commands) =>
+    commands.run(openExplorer.id),
+  );
   await platform.select(artifact("1.1.0", "explorer-v2"));
   await platform.activate([explorer]);
-  const secondOutput = await host.use(COMMAND_CATALOG, (commands) => commands.run(openExplorer.id));
+  const { value: secondOutput } = await host.use(COMMAND_CATALOG, (commands) =>
+    commands.run(openExplorer.id),
+  );
   const panel = workspacePanels.get()[0];
   if (panel === undefined) throw new Error("Explorer did not publish its workspace panel");
-  const panelTitle = await workspacePanels.use(panel, (value) => value.title);
+  const { value: panelTitle } = await workspacePanels.use(panel, (value) => value.title);
 
   await platform[asyncDisposeSymbol]();
   const workspace = host.group("workspace-main");
@@ -165,7 +171,7 @@ export async function lynxScenario(): Promise<ExampleResult> {
   const remove = host.change();
   remove.removeGroup(workspace);
   await host.apply(await host.plan(remove));
-  const remainingCommands = await host.use(
+  const { value: remainingCommands } = await host.use(
     COMMAND_CATALOG,
     async (commands) => (await commands.list()).length,
   );

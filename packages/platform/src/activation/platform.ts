@@ -18,6 +18,7 @@ import {
   captureLogger,
   normalizePlainRecord,
   recordFields,
+  resolveValue,
   ReadonlyMapSnapshot,
   SerialQueue,
   SnapshotPublisher,
@@ -407,7 +408,10 @@ class DeliveryPlatform<Reference> implements Platform<Reference> {
           }),
         );
     }
-    const plan = await Preparation.waitFor((signal) => host.plan(change, signal), operation.signal);
+    const { value: plan } = await Preparation.waitFor(
+      (signal) => host.plan(change, signal),
+      operation.signal,
+    );
     const admission = new Map<string, ArtifactDescriptor>(
       pending.map(({ registration, artifact }) => [registration.id, artifact]),
     );
@@ -615,7 +619,9 @@ class DeliveryPlatform<Reference> implements Platform<Reference> {
 
   // A callback inside planning, admission, setup or cleanup cannot await a command queued behind itself.
   #admit<T>(command: () => T, signal?: AbortSignal) {
-    return this.#executing ? Promise.reject<T>(this.#busy()) : this.#queue.run(command, signal);
+    return this.#executing
+      ? Promise.reject<Awaited<T>>(this.#busy())
+      : this.#queue.run(command, signal).then(({ value }) => value);
   }
 
   #busy() {
@@ -625,19 +631,21 @@ class DeliveryPlatform<Reference> implements Platform<Reference> {
   }
 
   #execute<T>(owner: ActivationOperation<Reference> | "disposal", command: () => Promise<T>) {
-    return this.#queue.run(
-      async () => {
-        this.#executing = owner;
-        try {
-          this.#publish();
-          return await command();
-        } finally {
-          this.#executing = undefined;
-          this.#publish();
-        }
-      },
-      owner === "disposal" ? undefined : owner.signal,
-    );
+    return this.#queue
+      .run(
+        async () => {
+          this.#executing = owner;
+          try {
+            this.#publish();
+            return await command();
+          } finally {
+            this.#executing = undefined;
+            this.#publish();
+          }
+        },
+        owner === "disposal" ? undefined : owner.signal,
+      )
+      .then(({ value }) => value);
   }
 
   #publish() {
@@ -705,7 +713,7 @@ function reporter(logger: Logger) {
   return (error: unknown) => {
     try {
       // The terminal sink has no lower reporter, but its rejection must still be observed.
-      void Promise.resolve(logger.error(error)).catch(() => undefined);
+      void resolveValue(logger.error(error)).catch(() => undefined);
     } catch {
       // Observer failures must not change the outcome of a committed operation.
     }

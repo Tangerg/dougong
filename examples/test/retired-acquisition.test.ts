@@ -206,14 +206,23 @@ describe("resource acquisition with explicit waiter retirement", () => {
     const { host, generation, operations, report } = await createFixture();
     const generationSignal = generation.signal;
     const started = Promise.withResolvers<void>();
+    const transferred = Promise.withResolvers<void>();
     const operation = Promise.withResolvers<object>();
     const release = Promise.withResolvers<void>();
     const resource = { id: "transferred" };
     const dispose = vi.fn<(value: object) => Promise<void>>(() => release.promise);
     const delivered = vi.fn<(value: object) => void>();
+    const destination: Pick<LifetimeContext, "signal" | "defer"> = {
+      signal: generation.signal,
+      defer(cleanup) {
+        const registration = generation.defer(cleanup);
+        transferred.resolve();
+        return registration;
+      },
+    };
     const waiter = generation.spawn(async () => {
       const result = await acquireForLifetime(
-        generation,
+        destination,
         operations,
         () => {
           started.resolve();
@@ -227,12 +236,11 @@ describe("resource acquisition with explicit waiter retirement", () => {
     let operationsDisposed = false;
     try {
       await started.promise;
-      // Abort follows ownership transfer but precedes delivery to the waiting generation.
+      // The registration boundary remains meaningful when Promise normalization adds reactions.
       operation.resolve(resource);
-      queueMicrotask(() => {
-        void generation[Symbol.asyncDispose]().then(() => {
-          generationDisposed = true;
-        });
+      await transferred.promise;
+      void generation[Symbol.asyncDispose]().then(() => {
+        generationDisposed = true;
       });
       await setImmediate();
       const draining = operations[Symbol.asyncDispose]().then(() => {
@@ -453,7 +461,7 @@ describe("acquisition failure ownership", () => {
             dispose,
           ),
         );
-        const result = await waiter.result;
+        const { value: result } = await waiter.result;
 
         expect(result).toMatchObject({ status: "failed", error: failure });
         if (result.status !== "failed") throw new Error("Expected a failed acquisition");
@@ -740,14 +748,15 @@ describe("application-selected identity queues", () => {
     const trace: string[] = [];
     const delivered: string[] = [];
     const dispose = vi.fn<(value: string) => void>();
-    const firstStart = vi.fn<() => Promise<string>>(() =>
-      firstIdentity.run(async () => {
+    const firstStart = vi.fn<() => Promise<string>>(async () => {
+      const { value } = await firstIdentity.run(async () => {
         trace.push("a:first:start");
         await operation.promise;
         trace.push("a:first:end");
         return "a:first";
-      }),
-    );
+      });
+      return value;
+    });
     const first = generation.spawn(async () => {
       const result = await acquireForLifetime(generation, operations, firstStart, dispose);
       if (result.status === "acquired") delivered.push(result.value);
@@ -769,11 +778,13 @@ describe("application-selected identity queues", () => {
         const result = await acquireForLifetime(
           next,
           operations,
-          () =>
-            firstIdentity.run(() => {
+          async () => {
+            const { value } = await firstIdentity.run(() => {
               trace.push("a:second:start");
               return "a:second";
-            }),
+            });
+            return value;
+          },
           dispose,
         );
         if (result.status === "acquired") delivered.push(result.value);
@@ -782,11 +793,13 @@ describe("application-selected identity queues", () => {
         const result = await acquireForLifetime(
           next,
           operations,
-          () =>
-            secondIdentity.run(() => {
+          async () => {
+            const { value } = await secondIdentity.run(() => {
               trace.push("b:first:start");
               return "b:first";
-            }),
+            });
+            return value;
+          },
           dispose,
         );
         if (result.status === "acquired") delivered.push(result.value);

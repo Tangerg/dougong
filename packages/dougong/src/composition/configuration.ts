@@ -1,5 +1,6 @@
 import type { StandardSchemaV1 } from "@standard-schema/spec";
 import { onAbort } from "../internal/abort.js";
+import { resolveValue, type ResolvedValue } from "../internal/async-result.js";
 import { normalizePlainRecord } from "../internal/record.js";
 import { captureDataArray } from "../internal/data-array.js";
 import { ConfigurationValidationError } from "../contracts/errors.js";
@@ -67,13 +68,13 @@ export async function resolvePluginConfiguration(
   input: ConfigurationValue | undefined,
   installationId: string,
   validity?: AbortSignal,
-): Promise<{ readonly value: ConfigurationValue | undefined }> {
+): Promise<ResolvedValue<ConfigurationValue | undefined>> {
   validity?.throwIfAborted();
   if (!schema) return Object.freeze({ value: input });
   const response = schema["~standard"].validate(input);
   const result: unknown = validity
-    ? (await readWhileCurrent(response, validity)).result
-    : await response;
+    ? (await readWhileCurrent(response, validity)).value
+    : (await resolveValue(response)).value;
   validity?.throwIfAborted();
   if (!result || (typeof result !== "object" && typeof result !== "function")) {
     throw new TypeError(
@@ -102,17 +103,15 @@ export async function resolvePluginConfiguration(
 }
 
 // Losing a revision detaches this plan; a non-cooperative validator may finish on its own.
-// Box its result so the race cannot repeat thenable assimilation on an application value.
 function readWhileCurrent(response: unknown, validity: AbortSignal) {
-  let waiting: PromiseWithResolvers<{ result: unknown }> | undefined = Promise.withResolvers<{
-    result: unknown;
-  }>();
+  let waiting: PromiseWithResolvers<ResolvedValue<unknown>> | undefined =
+    Promise.withResolvers<ResolvedValue<unknown>>();
   const { promise } = waiting;
   const detach = onAbort(validity, (reason) => {
     waiting?.reject(reason);
     waiting = undefined;
   });
-  void boxValidationResult(response).then(
+  void resolveValue(response).then(
     (result) => waiting?.resolve(result),
     (error) => waiting?.reject(error),
   );
@@ -120,8 +119,4 @@ function readWhileCurrent(response: unknown, validity: AbortSignal) {
     waiting = undefined;
     detach();
   });
-}
-
-async function boxValidationResult(response: unknown) {
-  return { result: await response };
 }

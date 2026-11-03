@@ -46,7 +46,7 @@ export class LoadedModules<Reference> {
         if (loads.get(artifact) === current) loads.delete(artifact);
       });
     }
-    return operation.wait(signal);
+    return operation.wait(signal).then(({ value }) => value);
   }
 
   #ports() {
@@ -86,10 +86,10 @@ async function loadPlugin<Reference>(
   let loaded: unknown;
   try {
     const result = await Preparation.waitFor(
-      (loadSignal) => resolveModule(loader.load(artifact.reference, loadSignal)),
+      (loadSignal) => loader.load(artifact.reference, loadSignal),
       signal,
     );
-    loaded = result.module;
+    loaded = result.value;
   } catch (error) {
     AbortSignal.prototype.throwIfAborted.call(signal);
     throw new PlatformError(
@@ -122,9 +122,4 @@ async function loadPlugin<Reference>(
     );
   }
   return plugin;
-}
-
-// Only the Loader result crosses the thenable boundary. Sharing it with waiters must not resolve it again.
-async function resolveModule(result: unknown) {
-  return { module: await result };
 }

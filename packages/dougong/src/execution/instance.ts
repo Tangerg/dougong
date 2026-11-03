@@ -67,7 +67,7 @@ export class Instance {
       logger: this.lifetime.use(new ScopedLogger(environment.logger, metadata)).handle,
     });
     const { setup } = this.declaration.plugin;
-    const output = await this.lifetime.prepare(() => setup(context, configuration));
+    const { value: output } = await this.lifetime.prepare(() => setup(context, configuration));
     AbortSignal.prototype.throwIfAborted.call(signal);
     const entries = Object.entries(this.declaration.plugin.provides);
     const invalidOutput = (message: string, options?: ErrorOptions) =>
