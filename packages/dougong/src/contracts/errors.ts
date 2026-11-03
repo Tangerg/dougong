@@ -2,6 +2,35 @@ import type { StandardSchemaV1 } from "@standard-schema/spec";
 import { abortReason, isAborted } from "../internal/abort.js";
 import { captureDataArray } from "../internal/data-array.js";
 
+export const lifetimeBusyCode = "BUSY";
+export const changeConflictCode = "CHANGE_CONFLICT";
+export const changeForeignCode = "CHANGE_FOREIGN";
+const configurationInvalidCode = "CONFIGURATION_INVALID";
+export const contractConflictCode = "CONTRACT_CONFLICT";
+export const contributionUnavailableCode = "CONTRIBUTION_UNAVAILABLE";
+export const eventBeforeCommitCode = "EVENT_BEFORE_COMMIT";
+export const groupConflictCode = "GROUP_CONFLICT";
+export const groupCycleCode = "GROUP_CYCLE";
+export const groupForeignCode = "GROUP_FOREIGN";
+export const groupMissingCode = "GROUP_MISSING";
+export const groupRemovedCode = "GROUP_REMOVED";
+export const hostBusyCode = "HOST_BUSY";
+export const hostQuarantinedCode = "HOST_QUARANTINED";
+export const installationConflictCode = "INSTALLATION_CONFLICT";
+export const installationForeignCode = "INSTALLATION_FOREIGN";
+export const installationRemovedCode = "INSTALLATION_REMOVED";
+export const lifetimeDisposedCode = "LIFETIME_DISPOSED";
+export const planConsumedCode = "PLAN_CONSUMED";
+export const planForeignCode = "PLAN_FOREIGN";
+export const planStaleCode = "PLAN_STALE";
+export const providesInvalidCode = "PROVIDES_INVALID";
+export const serviceConflictCode = "SERVICE_CONFLICT";
+export const serviceCycleCode = "SERVICE_CYCLE";
+export const serviceMissingCode = "SERVICE_MISSING";
+export const serviceUnavailableCode = "SERVICE_UNAVAILABLE";
+export const shutdownTimeoutCode = "SHUTDOWN_TIMEOUT";
+export const transitionFailedCode = "TRANSITION_FAILED";
+
 const maximumDiagnosticFields = 8;
 const maximumDiagnosticFieldNameLength = 256;
 const maximumDiagnosticFieldTextLength = 256;
@@ -113,7 +142,7 @@ export class DougongError<Code extends string = string> extends Error {
 }
 
 export function quarantinedHost(revision: number) {
-  return new DougongError("HOST_QUARANTINED", "Host execution is permanently quarantined", {
+  return new DougongError(hostQuarantinedCode, "Host execution is permanently quarantined", {
     details: { outcome: "quarantined", stateRevision: revision },
   });
 }
@@ -390,7 +419,7 @@ export class ConfigurationValidationError extends DougongError {
   ) {
     const snapshot = snapshotValidationIssues(issues);
     super(
-      "CONFIGURATION_INVALID",
+      configurationInvalidCode,
       `Invalid Plugin configuration:\n${snapshot.map((issue) => `  - ${issue.message}`).join("\n")}`,
       options,
     );
@@ -401,8 +430,8 @@ export class ConfigurationValidationError extends DougongError {
 // Copy validator issues so retained errors cannot retain third-party object graphs.
 function snapshotValidationIssues(issues: unknown): ReadonlyArray<StandardSchemaV1.Issue> {
   return Object.freeze(
-    captureDataArray(issues, "Configuration validation issues").map((issue, index) => {
-      if (!issue || typeof issue !== "object") {
+    captureValidationArray(issues, "Configuration validation issues").map((issue, index) => {
+      if (!issue || (typeof issue !== "object" && typeof issue !== "function")) {
         throw new TypeError(`Configuration validation issue at index ${index} must be an object`);
       }
       const candidate = issue as { readonly message?: unknown; readonly path?: unknown };
@@ -423,10 +452,10 @@ function snapshotValidationIssues(issues: unknown): ReadonlyArray<StandardSchema
 
 function snapshotValidationPath(path: unknown, issueIndex: number) {
   return Object.freeze(
-    captureDataArray(path, `Configuration validation issue at index ${issueIndex} path`).map(
+    captureValidationArray(path, `Configuration validation issue at index ${issueIndex} path`).map(
       (part, pathIndex) => {
         if (isPropertyKey(part)) return part;
-        if (!part || typeof part !== "object") {
+        if (!part || (typeof part !== "object" && typeof part !== "function")) {
           throw new TypeError(
             `Configuration validation issue at index ${issueIndex} path segment ${pathIndex} must be a property key`,
           );
@@ -441,6 +470,20 @@ function snapshotValidationPath(path: unknown, issueIndex: number) {
       },
     ),
   );
+}
+
+// Standard Schema arrays may carry metadata or accessors; only their indexed protocol values are retained.
+function captureValidationArray(input: unknown, label: string): ReadonlyArray<unknown> {
+  if (!Array.isArray(input)) throw new TypeError(`${label} must be an array`);
+  const length: unknown = input.length;
+  if (typeof length !== "number" || !Number.isSafeInteger(length) || length < 0)
+    throw new TypeError(`${label} must have a valid array length`);
+  const values: unknown[] = [];
+  for (let index = 0; index < length; index++) {
+    if (!(index in input)) throw new TypeError(`${label} must be a dense array`);
+    values.push(input[index]);
+  }
+  return Object.freeze(values);
 }
 
 function isPropertyKey(value: unknown): value is PropertyKey {

@@ -1,5 +1,7 @@
 import { createHost, definePlugin, service, type Service } from "dougong";
 
+const maximumTimerDelayMilliseconds = 2_147_483_647;
+
 export interface StartupBenchmark {
   readonly plugins: number;
   readonly delayMilliseconds: number;
@@ -84,8 +86,14 @@ export async function benchmarkStartup(
   if (!Number.isInteger(plugins) || plugins < 1) {
     throw new TypeError("Plugin count must be a positive integer");
   }
-  if (!Number.isFinite(delayMilliseconds) || delayMilliseconds < 0) {
-    throw new TypeError("Delay must be a non-negative finite number");
+  if (
+    !Number.isInteger(delayMilliseconds) ||
+    delayMilliseconds < 1 ||
+    delayMilliseconds > maximumTimerDelayMilliseconds
+  ) {
+    throw new TypeError(
+      `Delay must be an integer between 1 and ${maximumTimerDelayMilliseconds} milliseconds`,
+    );
   }
   return Object.freeze({
     plugins,

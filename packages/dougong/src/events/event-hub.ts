@@ -1,5 +1,5 @@
 import { normalizeContract, type ContractIdentity, type Event } from "../contracts/contracts.js";
-import { DougongError } from "../contracts/errors.js";
+import { DougongError, eventBeforeCommitCode, lifetimeDisposedCode } from "../contracts/errors.js";
 import type { Lifetime, LifetimeOwnership } from "../lifetime/lifetime.js";
 import { disposeSymbol, type Disposable, type Publication } from "../contracts/resource.js";
 
@@ -87,7 +87,7 @@ class EventScope implements EventOperations {
     const binding = this.#requireBinding();
     if (!binding.owner.published) {
       throw new DougongError(
-        "EVENT_BEFORE_COMMIT",
+        eventBeforeCommitCode,
         "Candidate setup cannot emit into the committed event graph",
       );
     }
@@ -100,7 +100,7 @@ class EventScope implements EventOperations {
   #requireBinding() {
     const binding = this.#binding;
     if (!binding || !binding.owner.acceptsWork) {
-      throw new DougongError("LIFETIME_DISPOSED", "Event scope is closed");
+      throw new DougongError(lifetimeDisposedCode, "Event scope is closed");
     }
     return binding;
   }

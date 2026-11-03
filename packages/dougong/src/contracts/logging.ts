@@ -1,4 +1,4 @@
-import { DougongError } from "./errors.js";
+import { DougongError, lifetimeDisposedCode } from "./errors.js";
 import { assertSynchronous } from "../internal/synchronous-result.js";
 import { disposeSymbol, type Disposable } from "./resource.js";
 export interface Logger {
@@ -54,7 +54,7 @@ export class ScopedLogger implements Disposable {
 
   #write(level: keyof Logger, message: unknown, details: ReadonlyArray<unknown>) {
     const binding = this.#binding;
-    if (!binding) throw new DougongError("LIFETIME_DISPOSED", "Logger scope has ended");
+    if (!binding) throw new DougongError(lifetimeDisposedCode, "Logger scope has ended");
     assertSynchronous(
       binding.logger[level](message, binding.metadata, ...details),
       "Logger methods must be synchronous",

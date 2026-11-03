@@ -6,7 +6,11 @@ import {
   type ExtensionPoint,
   type Requirement,
 } from "../contracts/contracts.js";
-import { DougongError } from "../contracts/errors.js";
+import {
+  DougongError,
+  contributionUnavailableCode,
+  lifetimeDisposedCode,
+} from "../contracts/errors.js";
 import type { Lifetime, LifetimeOwnership } from "../lifetime/lifetime.js";
 import {
   disposeSymbol,
@@ -88,9 +92,9 @@ class ContributionViewHandle<T> implements ContributionView<T> {
   #requireBinding() {
     const binding = this.#state.binding;
     if (!binding)
-      throw new DougongError("LIFETIME_DISPOSED", "Contribution view has been disposed");
+      throw new DougongError(lifetimeDisposedCode, "Contribution view has been disposed");
     if (binding.owner && !binding.owner.acceptsWork) {
-      throw new DougongError("LIFETIME_DISPOSED", "Contribution view owner is closed");
+      throw new DougongError(lifetimeDisposedCode, "Contribution view owner is closed");
     }
     return binding;
   }
@@ -147,7 +151,7 @@ class ContributionRecord<T> implements Publication {
   use<Result>(callback: (value: T) => Awaitable<Result>): Promise<Result> {
     const state = this.#state;
     if (state.phase === "disposed")
-      throw new DougongError("CONTRIBUTION_UNAVAILABLE", "Contribution is no longer available");
+      throw new DougongError(contributionUnavailableCode, "Contribution is no longer available");
     const { owner, value } = state;
     return owner.borrow(() => callback(value));
   }
@@ -158,7 +162,7 @@ class ContributionRecord<T> implements Publication {
       throw new TypeError(`Contribution '${this.#id}' has been disposed`);
     }
     if (!state.owner.acceptsWork)
-      throw new DougongError("LIFETIME_DISPOSED", "Contribution owner is closed");
+      throw new DougongError(lifetimeDisposedCode, "Contribution owner is closed");
     if (Object.is(state.value, value)) return;
     state.value = value;
     state.store.valueChanged(this.#id, this);
@@ -263,7 +267,7 @@ export class ContributionStore<T> {
   use<Result>(id: string, callback: (value: T) => Awaitable<Result>): Promise<Result> {
     const claim = this.#claims.get(id);
     if (claim?.phase !== "published")
-      throw new DougongError("CONTRIBUTION_UNAVAILABLE", `Contribution '${id}' is not available`);
+      throw new DougongError(contributionUnavailableCode, `Contribution '${id}' is not available`);
     if (typeof callback !== "function")
       throw new TypeError("Contribution callback must be a function");
     return claim.contribution.use(callback);
@@ -543,7 +547,7 @@ class ContributionScope implements ContributionOperations {
   ): Contribution<T> {
     const binding = this.#binding;
     if (!binding || !binding.owner.acceptsWork) {
-      throw new DougongError("LIFETIME_DISPOSED", "Contribution scope is closed");
+      throw new DougongError(lifetimeDisposedCode, "Contribution scope is closed");
     }
     const identity = normalizeContract(token, "extensionPoint");
     const owner = binding.owner.resolveOwner(options);

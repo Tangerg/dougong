@@ -10,6 +10,7 @@ import { runtimeBaseline } from "../runtime-baseline.mjs";
 import { abortListenerPort } from "../packages.mjs";
 import { candidateOutput, packCandidates, writeVerifiedCandidates } from "./package-candidates.mjs";
 import { installConsumerDependencies } from "./install-dependencies.mjs";
+import { verifyBrowserBundle } from "./browser-runner.mjs";
 
 const root = fileURLToPath(new URL("../../", import.meta.url));
 const workspace = mkdtempSync(join(tmpdir(), "dougong-packed-consumer-"));
@@ -32,11 +33,13 @@ try {
   cpSync(join(modules, "@dougongjs/reactive"), join(modules, "@fixture/reactive-copy"), {
     recursive: true,
   });
-  cpSync(new URL("./application.mts", import.meta.url), join(workspace, "application.mts"));
-  cpSync(
-    new URL("./fallback-disposal.mjs", import.meta.url),
-    join(workspace, "fallback-disposal.mjs"),
-  );
+  for (const fixture of [
+    "application.mts",
+    "browser.mts",
+    "fallback-disposal.mjs",
+    "mask-native-disposal.mjs",
+  ])
+    cpSync(new URL(fixture, import.meta.url), join(workspace, fixture));
   writeFileSync(
     join(workspace, "package.json"),
     JSON.stringify({ name: "isolated-consumer", private: true, type: "module" }),
@@ -54,7 +57,7 @@ try {
         outDir: "output",
         types: [],
       },
-      include: ["application.mts"],
+      include: ["application.mts", "browser.mts"],
     }),
   );
   execFileSync(
@@ -68,11 +71,6 @@ try {
       stdio: "inherit",
     });
   }
-  const browserEntry = join(workspace, "browser.mjs");
-  writeFileSync(
-    browserEntry,
-    'export { onAbort } from "dougong/advanced";\nexport { observe } from "@dougongjs/reactive";\n',
-  );
   // Compile the packed files as a browser consumer, including each package's private resolution conditions.
   const browser = await build({
     configFile: false,
@@ -81,11 +79,11 @@ try {
     build: {
       target: runtimeBaseline.buildTargets,
       write: false,
-      lib: { entry: browserEntry, formats: ["es"] },
+      lib: { entry: join(workspace, "browser.mts"), formats: ["es"] },
     },
   });
-  const bundledModules = (Array.isArray(browser) ? browser : [browser])
-    .flatMap((result) => result.output)
+  const output = (Array.isArray(browser) ? browser : [browser]).flatMap((result) => result.output);
+  const bundledModules = output
     .filter((file) => file.type === "chunk")
     .flatMap((chunk) => Object.keys(chunk.modules));
   for (const name of abortListenerPort.packages) {
@@ -98,6 +96,7 @@ try {
   }
   if (bundledModules.some((id) => id.includes("__vite-browser-external")))
     throw new Error("Browser consumer includes a Node-only module");
+  await verifyBrowserBundle(output);
   if (process.env[candidateOutput])
     writeVerifiedCandidates(process.env[candidateOutput], candidates);
 } finally {

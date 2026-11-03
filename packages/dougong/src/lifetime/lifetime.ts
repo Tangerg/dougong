@@ -1,4 +1,11 @@
-import { DougongError, isCancellationReason, RecordedFailure } from "../contracts/errors.js";
+import {
+  DougongError,
+  isCancellationReason,
+  RecordedFailure,
+  lifetimeBusyCode,
+  lifetimeDisposedCode,
+  shutdownTimeoutCode,
+} from "../contracts/errors.js";
 import { abortReason, isAborted, onAbort } from "../internal/abort.js";
 import { normalizePlainRecord, recordFields } from "../internal/record.js";
 import { assertSynchronous } from "../internal/synchronous-result.js";
@@ -546,7 +553,8 @@ export class Lifetime {
   }
 
   seal() {
-    if (this.busy) throw new DougongError("BUSY", "Lifetime has in-flight foreground work");
+    if (this.busy)
+      throw new DougongError(lifetimeBusyCode, "Lifetime has in-flight foreground work");
     this.block();
   }
 
@@ -619,7 +627,7 @@ export class Lifetime {
     void completion.promise.catch(() => undefined);
     const timeout = setTimeout(() => {
       const failure = new DougongError(
-        "SHUTDOWN_TIMEOUT",
+        shutdownTimeoutCode,
         "Lifetime shutdown did not complete before its deadline",
       );
       this.#phase = "quarantined";
@@ -719,7 +727,7 @@ export class Lifetime {
 
   #requireActive() {
     if (!this.acceptsWork) {
-      throw new DougongError("LIFETIME_DISPOSED", "Lifetime is closed to new work");
+      throw new DougongError(lifetimeDisposedCode, "Lifetime is closed to new work");
     }
   }
 }

@@ -10,8 +10,10 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
+import { syncBuiltinESMExports } from "node:module";
 import { basename, dirname, join } from "node:path";
 import { performance } from "node:perf_hooks";
+import timers from "node:timers/promises";
 import {
   candidateOutput,
   packCandidates,
@@ -30,6 +32,29 @@ process.once("exit", () =>
 if (!["immediate", "delayed", "never", "unreadable"].includes(visibility)) {
   throw new TypeError(`Unknown fixture visibility: ${visibility}`);
 }
+
+timers.setTimeout = async (delayMilliseconds) => {
+  if (!Number.isInteger(delayMilliseconds) || delayMilliseconds < 1) {
+    throw new TypeError(`Invalid fixture timer delay: ${delayMilliseconds}`);
+  }
+  appendFileSync(
+    join(workspace, "release-operations.jsonl"),
+    JSON.stringify({ delayMilliseconds, elapsedMilliseconds }) + "\n",
+  );
+  // A synchronous clock advance would conceal a caller that forgot to await the timer.
+  await Promise.resolve();
+  elapsedMilliseconds += delayMilliseconds;
+  if (visibility === "delayed") {
+    const pending = join(workspace, "pending");
+    mkdirSync(join(workspace, "published"), { recursive: true });
+    for (const directory of readdirSync(pending)) {
+      renameSync(join(pending, directory), join(workspace, "published", directory));
+    }
+  } else if (visibility !== "never") {
+    throw new Error(`Unexpected registry polling wait: ${visibility}`);
+  }
+};
+syncBuiltinESMExports();
 
 function packageAt(state, reference) {
   const root = join(workspace, state);
@@ -149,9 +174,9 @@ installReleaseFixture((name, commandArguments, options, nativeSpawn) => {
     name === "git" &&
     (["add", "commit", "push"].includes(commandArguments[0]) ||
       (commandArguments[0] === "tag" && commandArguments.includes("-a")));
-  if (recording || name === "npm" || name === "sleep") {
+  if (recording || name === "npm") {
     appendFileSync(
-      join(workspace, "commands.jsonl"),
+      join(workspace, "release-operations.jsonl"),
       JSON.stringify({
         command: name,
         commandArguments,
@@ -222,7 +247,7 @@ installReleaseFixture((name, commandArguments, options, nativeSpawn) => {
 
   if (name === "pnpm" && commandArguments.length === 1 && commandArguments[0] === "check") {
     appendFileSync(
-      join(workspace, "commands.jsonl"),
+      join(workspace, "release-operations.jsonl"),
       JSON.stringify({
         command: "gate-versions",
         commandArguments: ["reactive", "dougong", "platform"].map(
@@ -374,20 +399,6 @@ installReleaseFixture((name, commandArguments, options, nativeSpawn) => {
     if (race === "registry-bytes" && extracted.status === 0)
       writeFileSync(join(target, "package/dist/index.js"), "export const replaced = true;");
     return extracted;
-  }
-
-  if (name === "sleep" && commandArguments.length === 1) {
-    const duration = Number(commandArguments[0]) * 1000;
-    if (!Number.isFinite(duration) || duration <= 0) process.exit(99);
-    elapsedMilliseconds += duration;
-    if (visibility === "delayed") {
-      const pending = join(workspace, "pending");
-      mkdirSync(join(workspace, "published"), { recursive: true });
-      for (const directory of readdirSync(pending)) {
-        renameSync(join(pending, directory), join(workspace, "published", directory));
-      }
-    } else if (visibility !== "never") process.exit(99);
-    return { status: 0 };
   }
 
   if (name === "npm" && commandArguments[0] === "whoami") return { status: 0, stdout: "fixture" };

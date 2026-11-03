@@ -29,9 +29,9 @@ export type InstallationOptions<Declaration extends AnyPlugin = AnyPlugin> = {
   readonly id: string;
   readonly group?: Group;
   readonly origin?: InstallationOrigin;
-} & ([ConfigurationInputOf<Declaration>] extends [void]
-  ? { readonly configuration?: ConfigurationInputOf<Declaration> }
-  : { readonly configuration: ConfigurationInputOf<Declaration> });
+} & (undefined extends ConfigurationInputOf<Declaration>
+  ? { readonly configuration?: NoInfer<ConfigurationInputOf<Declaration>> }
+  : { readonly configuration: NoInfer<ConfigurationInputOf<Declaration>> });
 
 export type InstallationUpdate<Declaration extends AnyPlugin = AnyPlugin> =
   | {
@@ -59,10 +59,10 @@ export interface ChangeSet {
   removeGroup(group: Group): void;
 }
 
-export interface InitialInstallation {
-  readonly id: string;
-  readonly plugin: AnyPlugin;
-  readonly configuration?: unknown;
-  readonly origin?: InstallationOrigin;
-  readonly groupId?: string;
-}
+export type InitialInstallation<Declaration extends AnyPlugin = AnyPlugin> =
+  Declaration extends unknown
+    ? Omit<InstallationOptions<Declaration>, "group"> & {
+        readonly plugin: Declaration;
+        readonly groupId?: string;
+      }
+    : never;

@@ -1,3 +1,4 @@
+import { setTimeout as scheduleTimeout } from "node:timers";
 import { DougongError } from "dougong";
 import { describe, expect, it, vi } from "vitest";
 import { expectFailure } from "../src/example";
@@ -117,7 +118,38 @@ describe("the startup benchmark", () => {
 
   it("rejects invalid inputs before constructing an application", async () => {
     await expect(benchmarkStartup(0, 1)).rejects.toThrow(TypeError);
-    await expect(benchmarkStartup(1, Number.NaN)).rejects.toThrow(TypeError);
+  });
+
+  it.each([0, -1, 0.5, 1.5, Number.NaN, Infinity, -Infinity, 2_147_483_648])(
+    "rejects a delay the timer cannot represent without coercion: %s",
+    async (delayMilliseconds) => {
+      const schedule = vi.spyOn(globalThis, "setTimeout");
+      await expect(benchmarkStartup(1, delayMilliseconds)).rejects.toThrow(TypeError);
+      expect(schedule).not.toHaveBeenCalled();
+    },
+  );
+
+  it("passes the maximum accepted delay unchanged to both topology timers", async () => {
+    const maximumDelayMilliseconds = 2_147_483_647;
+    const schedule = vi
+      .spyOn(globalThis, "setTimeout")
+      .mockImplementation((callback, delay, ...callbackArguments) =>
+        scheduleTimeout(
+          callback,
+          delay === maximumDelayMilliseconds ? 1 : delay,
+          ...callbackArguments,
+        ),
+      );
+    try {
+      const result = await benchmarkStartup(1, maximumDelayMilliseconds);
+
+      expect(result.delayMilliseconds).toBe(maximumDelayMilliseconds);
+      expect(
+        schedule.mock.calls.filter(([, delay]) => delay === result.delayMilliseconds),
+      ).toHaveLength(2);
+    } finally {
+      schedule.mockRestore();
+    }
   });
 });
 

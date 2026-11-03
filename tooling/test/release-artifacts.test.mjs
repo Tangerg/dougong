@@ -182,7 +182,7 @@ async function runRelease(
           "/published/",
           "/pending/",
           "/remote.git/",
-          "/commands.jsonl",
+          "/release-operations.jsonl",
           "/dist-tags.json",
           "/release-stage",
           "/release-clock.json",
@@ -193,7 +193,7 @@ async function runRelease(
       );
     }
     const pnpm = realPack ? requireExecutable("pnpm") : undefined;
-    const execute = async (interruption, publicationFailure) => {
+    const execute = async (stage, interruption, publicationFailure) => {
       try {
         return await executeRelease(
           [
@@ -206,6 +206,7 @@ async function runRelease(
             ...(oneTimePassword ? [`--otp=${oneTimePassword}`] : []),
           ],
           {
+            stage,
             cwd: workspace,
             env: {
               ...environment,
@@ -237,7 +238,7 @@ async function runRelease(
         }),
       );
     beforeRelease(git, workspace);
-    const interrupted = await execute(interruptAt, publishFailure);
+    const interrupted = await execute("initial attempt", interruptAt, publishFailure);
     const publishedAfterFirstAttempt = publishedManifests();
     const interruptedState = interruptAt
       ? {
@@ -252,7 +253,7 @@ async function runRelease(
         }
       : undefined;
     if (resume) beforeResume(git, workspace);
-    const result = resume ? await execute(undefined) : interrupted;
+    const result = resume ? await execute("resume") : interrupted;
     afterRelease(git, workspace);
     const head = realGit ? git(["rev-parse", "HEAD"]) : undefined;
     for (const [path, contents] of originals) {
@@ -272,9 +273,9 @@ async function runRelease(
           : contents;
       expect(readFileSync(path, "utf8")).toBe(expected);
     }
-    const commands = join(workspace, "commands.jsonl");
-    const calls = existsSync(commands)
-      ? readFileSync(commands, "utf8")
+    const operations = join(workspace, "release-operations.jsonl");
+    const calls = existsSync(operations)
+      ? readFileSync(operations, "utf8")
           .trim()
           .split("\n")
           .map((line) => JSON.parse(line))
@@ -875,7 +876,9 @@ it("recognizes a recorded release after its distribution channel moves", async (
   expect(result.interrupted.status).toBe(0);
   expect(result.status).toBe(0);
   expect(
-    result.calls.filter(({ commandArguments }) => commandArguments[0] === "publish"),
+    result.calls.filter(
+      ({ command, commandArguments }) => command === "npm" && commandArguments[0] === "publish",
+    ),
   ).toHaveLength(packages.length);
 });
 
@@ -988,17 +991,17 @@ it("waits for registry visibility before publishing dependents", async () => {
   expect(result.status).toBe(0);
   expect(Object.keys(result.published)).toEqual(packages);
   const publication = result.calls.filter(
-    ({ command, commandArguments }) =>
-      command === "sleep" ||
+    ({ command, commandArguments, delayMilliseconds }) =>
+      delayMilliseconds !== undefined ||
       (command === "npm" && ["publish", "view"].includes(commandArguments[0])),
   );
   expect(
     publication
       .slice(packages.length)
-      .map(({ command, commandArguments }) =>
-        command === "sleep" ? command : commandArguments[0],
+      .map(({ commandArguments, delayMilliseconds }) =>
+        delayMilliseconds === undefined ? commandArguments[0] : "wait",
       ),
-  ).toEqual(packages.slice(1).flatMap(() => ["publish", "view", "sleep", "view"]));
+  ).toEqual(packages.slice(1).flatMap(() => ["publish", "view", "wait", "view"]));
   expect(result.recorded).toEqual(["commit", "tag", "push"]);
 });
 
@@ -1014,9 +1017,9 @@ it.each(["never", "unreadable"])(
         ({ command, commandArguments }) => command === "npm" && commandArguments[0] === "publish",
       ),
     ).toHaveLength(1);
-    expect(result.calls.filter(({ command }) => command === "sleep")).toHaveLength(
-      visibility === "never" ? 120 : 0,
-    );
+    expect(
+      result.calls.filter(({ delayMilliseconds }) => delayMilliseconds !== undefined),
+    ).toHaveLength(visibility === "never" ? 120 : 0);
     expect(result.stderr).toContain(
       visibility === "never" ? "not readable within 30 minutes" : "E503",
     );
@@ -1057,7 +1060,9 @@ it("terminates a visibility query at the remaining deadline instead of granting 
   expect(result.stderr).toContain("Cannot determine whether");
   expect(result.stderr).toContain("ETIMEDOUT");
   expect(result.recorded).toEqual([]);
-  expect(result.calls.filter(({ command }) => command === "sleep")).toHaveLength(1);
+  expect(
+    result.calls.filter(({ delayMilliseconds }) => delayMilliseconds !== undefined),
+  ).toHaveLength(1);
   const lastQuery = result.calls.findLast(
     ({ command, commandArguments }) => command === "npm" && commandArguments[0] === "view",
   );

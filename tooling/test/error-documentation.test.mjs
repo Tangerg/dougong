@@ -1,5 +1,12 @@
 import { expect, it } from "vitest";
-import { errorDocumentationFailures } from "../architecture/error-code-surface.mjs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import typescript from "typescript";
+import {
+  sourceErrorCodes,
+  errorDocumentationFailures,
+} from "../architecture/error-code-surface.mjs";
 
 const sourceCodes = new Set(["HOST_BUSY", "HOST_QUARANTINED"]);
 const guidePath = "docs/guide/example.md";
@@ -53,4 +60,76 @@ it("checks explicit error constructions without assigning application fields to 
     "documents 'MISSING_CODE', which no source throws",
     "documents 'RETIRED_CODE', which no source throws",
   ]);
+});
+
+it("derives the error catalogue from resolved code types across aliases, conditions and subclasses", () => {
+  const directory = mkdtempSync(join(tmpdir(), "dougong-error-codes-"));
+  try {
+    const definitions = join(directory, "definitions.ts");
+    const entrypoint = join(directory, "index.ts");
+    const consumer = join(directory, "consumer.ts");
+    writeFileSync(
+      definitions,
+      `
+      export const waitingCode = "WAITING";
+      export const closedCode = "CLOSED";
+      export const unusedCode = "UNUSED";
+      export class StructuredError<Code extends string = string> {
+        constructor(readonly code: Code) {}
+      }
+    `,
+    );
+    writeFileSync(entrypoint, `export { StructuredError as Failure } from "./definitions.js";`);
+    writeFileSync(
+      consumer,
+      `
+      import { Failure as RenamedError } from "./index.js";
+      import { waitingCode as pendingCode, closedCode } from "./definitions.js";
+      export function pending(waiting: boolean) {
+        const code = waiting ? pendingCode : closedCode;
+        return new RenamedError(code);
+      }
+      export class InheritedError<Code extends string> extends RenamedError<Code> {}
+      export const inherited = new InheritedError("INHERITED");
+      export class LabelledError extends RenamedError {
+        constructor(label: string) {
+          super("LABELLED");
+        }
+      }
+      export const labelled = new LabelledError("LABEL_IS_NOT_A_CODE");
+      export class TypedError extends RenamedError<"FIRST" | "SECOND"> {
+        constructor(code: "FIRST" | "SECOND") {
+          super(code);
+        }
+      }
+      export const typed = new TypedError("FIRST");
+      class DougongError {
+        constructor(readonly code: "UNRELATED") {}
+      }
+      export const unrelated = new DougongError("UNRELATED");
+    `,
+    );
+    const program = typescript.createProgram([definitions, entrypoint, consumer], {
+      noEmit: true,
+      noLib: true,
+      strict: true,
+      target: typescript.ScriptTarget.Latest,
+      module: typescript.ModuleKind.ESNext,
+      moduleResolution: typescript.ModuleResolutionKind.Bundler,
+    });
+
+    expect([...sourceErrorCodes(program, entrypoint, "Failure")].sort()).toEqual([
+      "CLOSED",
+      "FIRST",
+      "INHERITED",
+      "LABELLED",
+      "SECOND",
+      "WAITING",
+    ]);
+    expect(() => sourceErrorCodes(program, definitions, "waitingCode")).toThrow(
+      "must export error class",
+    );
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
 });

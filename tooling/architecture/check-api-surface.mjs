@@ -5,7 +5,7 @@ import PACKAGES from "./public-api.json" with { type: "json" };
 import { pathToFileURL } from "node:url";
 import typescript from "typescript";
 import { declarationSurface } from "./declaration-surface.mjs";
-import { constructedErrorCode, errorDocumentationFailures } from "./error-code-surface.mjs";
+import { sourceErrorCodes, errorDocumentationFailures } from "./error-code-surface.mjs";
 import { existsSync, globSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { isDeepStrictEqual } from "node:util";
@@ -132,56 +132,29 @@ for (const [name, expectedSurface] of Object.entries(PACKAGES)) {
   }
 }
 
-const ERROR_CODE_PATTERN = /^[A-Z][A-Z_]{3,}$/;
-const sourceCodes = new Set();
-for (const directory of ["packages/dougong/src", "packages/platform/src"]) {
-  for (const file of globSync(`${directory}/**/*.{${sourceExtensions.join(",")}}`)) {
-    const source = typescript.createSourceFile(
-      file,
-      readFileSync(file, "utf8"),
-      typescript.ScriptTarget.Latest,
-      true,
-      typescript.ScriptKind.TS,
-    );
-    const visit = (node) => {
-      if (typescript.isStringLiteralLike(node) && ERROR_CODE_PATTERN.test(node.text)) {
-        const parent = node.parent;
-        const isDeclaredCode =
-          typescript.isLiteralTypeNode(parent) &&
-          typescript.isUnionTypeNode(parent.parent) &&
-          typescript.isTypeAliasDeclaration(parent.parent.parent) &&
-          parent.parent.parent.name.text === "PlatformErrorCode";
-        const isErrorConstruction =
-          parent.arguments?.[0] === node && constructedErrorCode(parent) !== undefined;
-        const isErrorSubclass =
-          typescript.isCallExpression(parent) &&
-          parent.arguments[0] === node &&
-          parent.expression.kind === typescript.SyntaxKind.SuperKeyword;
-        const isTransitionFailure =
-          typescript.isCallExpression(parent) &&
-          parent.arguments[0] === node &&
-          typescript.isPropertyAccessExpression(parent.expression) &&
-          parent.expression.name.text === "#transitionError";
-        const isFailureNormalization =
-          typescript.isCallExpression(parent) &&
-          parent.arguments[1] === node &&
-          typescript.isIdentifier(parent.expression) &&
-          parent.expression.text === "normalizeFailure";
-        if (
-          isDeclaredCode ||
-          isErrorConstruction ||
-          isErrorSubclass ||
-          isTransitionFailure ||
-          isFailureNormalization
-        ) {
-          sourceCodes.add(node.text);
-        }
-      }
-      typescript.forEachChild(node, visit);
-    };
-    visit(source);
-  }
-}
+const sourceConfiguration = typescript.getParsedCommandLineOfConfigFile(
+  "tsconfig.base.json",
+  { noEmit: true },
+  {
+    ...typescript.sys,
+    onUnRecoverableConfigFileDiagnostic: (diagnostic) => {
+      throw new TypeError(typescript.flattenDiagnosticMessageText(diagnostic.messageText, "\n"));
+    },
+  },
+);
+if (!sourceConfiguration || sourceConfiguration.errors.length)
+  throw new TypeError("Cannot read the source compiler configuration");
+const sourceProgram = typescript.createProgram(
+  ["packages/dougong/src", "packages/platform/src"].flatMap((directory) =>
+    globSync(`${directory}/**/*.{${sourceExtensions.join(",")}}`),
+  ),
+  sourceConfiguration.options,
+);
+const sourceCodes = sourceErrorCodes(
+  sourceProgram,
+  "packages/dougong/src/index.ts",
+  "DougongError",
+);
 // Check all pages so retired error codes cannot survive outside the canonical reference table.
 const MARKDOWN_FILES = [
   ...globSync("docs/**/*.md"),

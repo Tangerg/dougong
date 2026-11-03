@@ -43,6 +43,8 @@ describe("Plugin configuration validation", () => {
     ["symbol", Symbol("configuration")],
     ["sparse array", Array(2)],
     ["undefined array item", [undefined]],
+    ["array metadata", Object.assign([1], { source: "configuration" })],
+    ["symbol array metadata", Object.assign([1], { [Symbol("source")]: "configuration" })],
     ["symbol key", { [Symbol("key")]: 1 }],
     ["hidden property", Object.defineProperty({}, "secret", { value: 1 })],
   ])("rejects %s outside the immutable configuration value domain", (_label, value) => {
@@ -299,6 +301,127 @@ describe("Plugin configuration validation", () => {
     expect(error.issues).toEqual([{ message: "port is required", path: ["port"] }]);
     expect(Object.isFrozen(error.issues)).toBe(true);
     expect(error.message).toContain("port is required");
+  });
+
+  it.each([false, true])(
+    "captures callable Standard Schema issues and path segments without invoking them (async: %s)",
+    async (asynchronous) => {
+      const segment = Object.assign(vi.fn<() => void>(), { key: "port" });
+      const issue = Object.assign(vi.fn<() => void>(), {
+        message: "Expected a port",
+        path: [segment],
+      });
+      const result: StandardSchemaV1.FailureResult = { issues: [issue] };
+      const failure = await startWith(
+        schemaReturning(asynchronous ? Promise.resolve(result) : result),
+        {},
+      );
+
+      expect(failure).toBeInstanceOf(ConfigurationValidationError);
+      expect(failure).toMatchObject({
+        code: "CONFIGURATION_INVALID",
+        issues: [{ message: "Expected a port", path: [{ key: "port" }] }],
+      });
+      expect(issue).not.toHaveBeenCalled();
+      expect(segment).not.toHaveBeenCalled();
+      issue.message = "Rewritten";
+      segment.key = "changed";
+      expect((failure as ConfigurationValidationError).issues).toEqual([
+        { message: "Expected a port", path: [{ key: "port" }] },
+      ]);
+    },
+  );
+
+  it("captures inherited issue members and array accessors once, ignoring unrelated metadata", () => {
+    const metadata = vi.fn<() => never>(() => {
+      throw new Error("Metadata must not be read");
+    });
+    const readKey = vi.fn<() => string>(() => "port");
+    class Segment implements StandardSchemaV1.PathSegment {
+      get key() {
+        return readKey();
+      }
+    }
+    const segment = new Segment();
+    const readSegment = vi.fn<() => StandardSchemaV1.PathSegment>(() => segment);
+    const path = Object.defineProperties([segment], {
+      0: { get: readSegment },
+      metadata: { get: metadata },
+      [Symbol.iterator]: { get: metadata },
+    });
+    const readMessage = vi.fn<() => string>(() => "Expected a port");
+    const readPath = vi.fn<() => typeof path>(() => path);
+    class Issue implements StandardSchemaV1.Issue {
+      get message() {
+        return readMessage();
+      }
+      get path() {
+        return readPath();
+      }
+    }
+    const issue = new Issue();
+    const readIssue = vi.fn<() => StandardSchemaV1.Issue>(() => issue);
+    const issues = Object.defineProperties([issue], {
+      0: { get: readIssue },
+      map: { get: metadata },
+      [Symbol("metadata")]: { get: metadata },
+    });
+
+    const failure = new ConfigurationValidationError(issues);
+
+    expect(failure.issues).toEqual([{ message: "Expected a port", path: [{ key: "port" }] }]);
+    for (const read of [readIssue, readMessage, readPath, readSegment, readKey])
+      expect(read).toHaveBeenCalledOnce();
+    expect(metadata).not.toHaveBeenCalled();
+    const capturedIssue = failure.issues[0]!;
+    expect(Object.isFrozen(failure.issues)).toBe(true);
+    expect(Object.isFrozen(capturedIssue)).toBe(true);
+    expect(Object.isFrozen(capturedIssue.path)).toBe(true);
+    expect(Object.isFrozen(capturedIssue.path?.[0])).toBe(true);
+    expect(Reflect.ownKeys(failure.issues)).toEqual(["0", "length"]);
+    expect(Reflect.ownKeys(capturedIssue.path!)).toEqual(["0", "length"]);
+  });
+
+  it("rejects sparse or malformed validation arrays", () => {
+    expect(() => new ConfigurationValidationError(Array(1))).toThrow(/dense array/);
+    expect(
+      () => new ConfigurationValidationError([{ message: "Missing field", path: Array(1) }]),
+    ).toThrow(/dense array/);
+    const issues = new Proxy([], {
+      get(target, key, receiver) {
+        return key === "length" ? Infinity : Reflect.get(target, key, receiver);
+      },
+    });
+    expect(() => new ConfigurationValidationError(issues)).toThrow(/array length/);
+  });
+
+  it("captures validation array indices before protocol accessors can replace later elements", () => {
+    const path: Array<PropertyKey | StandardSchemaV1.PathSegment> = [
+      {
+        get key() {
+          path[1] = "replaced";
+          return "first";
+        },
+      },
+      "second",
+    ];
+    const issues: StandardSchemaV1.Issue[] = [
+      {
+        get message() {
+          issues[1] = { message: "Replaced" };
+          return "First issue";
+        },
+        path,
+      },
+      { message: "Second issue" },
+    ];
+
+    const failure = new ConfigurationValidationError(issues);
+
+    expect(failure.issues).toEqual([
+      { message: "First issue", path: [{ key: "first" }, "second"] },
+      { message: "Second issue" },
+    ]);
   });
 
   it("rejects issue shapes that could not be reported to a caller", () => {

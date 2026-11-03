@@ -1,8 +1,11 @@
 import { asyncDisposeSymbol } from "../contracts/resource.js";
 import { Engine } from "./engine.js";
 import type { Host, HostOptions } from "./host-api.js";
+import type { AnyPlugin } from "../composition/plugin.js";
 
-export function createHost(options?: HostOptions): Host {
+export function createHost<const Declarations extends ReadonlyArray<AnyPlugin>>(
+  options?: HostOptions<Declarations>,
+): Host {
   const engine = new Engine(options);
   return Object.freeze({
     get name() {

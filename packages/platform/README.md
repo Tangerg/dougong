@@ -11,7 +11,7 @@ only the public `dougong` and `dougong/advanced` protocols.
 ## A complete lifecycle
 
 ```ts
-import { createHost, definePlugin, service } from "dougong";
+import { asyncDisposeSymbol, createHost, definePlugin, service } from "dougong";
 import { createPlatform, MemoryLoader } from "@dougongjs/platform";
 
 const COUNTER = service<{ value: number }>("example/counter");
@@ -23,29 +23,35 @@ const counter = definePlugin({
   },
 });
 
-await using host = createHost();
-await host.start();
+const host = createHost();
+try {
+  await host.start();
+  const platform = createPlatform({
+    id: "extensions",
+    host,
+    apiVersion: "1.0.0",
+    loader: new MemoryLoader(new Map([["counter-v1", { default: counter }]])),
+  });
+  try {
+    const artifact = platform.catalog.add({
+      revision: "counter-build-1",
+      manifest: { name: counter.name, version: "1.0.0" },
+      reference: "counter-v1",
+    });
+    const registration = await platform.select(artifact);
 
-await using platform = createPlatform({
-  id: "extensions",
-  host,
-  apiVersion: "1.0.0",
-  loader: new MemoryLoader(new Map([["counter-v1", { default: counter }]])),
-});
+    const preview = platform.preview([registration]);
+    if (preview.blockers.length === 0) {
+      await platform.activate([registration]);
+    }
 
-const artifact = platform.catalog.add({
-  revision: "counter-build-1",
-  manifest: { name: counter.name, version: "1.0.0" },
-  reference: "counter-v1",
-});
-const registration = await platform.select(artifact);
-
-const preview = platform.preview([registration]);
-if (preview.blockers.length === 0) {
-  await platform.activate([registration]);
+    console.log(await host.use(COUNTER, counter => counter.value));
+  } finally {
+    await platform[asyncDisposeSymbol]();
+  }
+} finally {
+  await host[asyncDisposeSymbol]();
 }
-
-console.log(await host.use(COUNTER, counter => counter.value));
 ```
 
 `select` records a target without loading or running code. `activate` loads the complete
@@ -53,8 +59,9 @@ selected dependency closure and submits one Core plan. `trigger("startup")` acti
 matching roots in the same way. Module loading and configuration validation remain explicit
 deferred checks in the metadata-only preview.
 
-The scope disposes Platform before Host. For explicit disposal across the supported runtimes,
-import `asyncDisposeSymbol` from `dougong` and await `platform[asyncDisposeSymbol]()`.
+The example disposes Platform before Host using the exported disposal key across supported runtimes.
+`await using` additionally requires a compatible runtime or compiler and the disposal symbols
+expected by its helpers. Exporting a disposal key does not install global `Symbol` properties.
 
 ## Availability, selection and committed source
 

@@ -1,4 +1,4 @@
-import { DougongError } from "../contracts/errors.js";
+import { DougongError, installationConflictCode } from "../contracts/errors.js";
 import type { InstallationState } from "../contracts/status.js";
 import type { Installation, InstallationOrigin } from "./declarations.js";
 import { normalizePlugin, type AnyPlugin, type NormalizedPlugin } from "./plugin.js";
@@ -13,7 +13,7 @@ export interface InstallationDeclaration {
 
 export function claimInstallationId(ids: Set<string>, id: string) {
   if (ids.has(id))
-    throw new DougongError("INSTALLATION_CONFLICT", "Installation id is already installed: " + id);
+    throw new DougongError(installationConflictCode, "Installation id is already installed: " + id);
   ids.add(id);
 }
 

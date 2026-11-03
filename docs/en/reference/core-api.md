@@ -24,6 +24,10 @@ Contract identities use their own data fields. A token from another JavaScript r
 
 `HostOptions` contains `name`, initial `installations`, initial `groups`, logging and error-reporting ports, and shutdown timeout. Installation IDs are unique within a Host. Group IDs are stable identities declared by the application.
 
+`createHost` infers configuration input from each Plugin in the initial list, preserving each pairing in heterogeneous lists. `InitialInstallation<typeof plugin>` and `InstallationOptions<typeof plugin>` derive their configuration requirement from the same Plugin type. Configuration may be omitted when its input accepts `undefined`, including `void`, optional inputs and schema defaults; otherwise it is required. Schema output belongs to setup, while installation declarations still require the schema input. Configuration cannot widen the inferred Plugin type to pass type checking.
+
+To retain typed Host options, use `HostOptions<readonly [typeof firstPlugin, typeof secondPlugin]>` for a heterogeneous list. Explicit `AnyPlugin` declarations or `HostOptions` without a type argument erase the concrete input type for dynamic loading boundaries. Unknown configuration still follows the existing data capture and schema validation path, without separate configuration state.
+
 ```ts
 const change = host.change();
 const group = change.group("workspace");

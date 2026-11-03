@@ -68,6 +68,30 @@ it("includes child stderr in a failing pack command's diagnostic", async () => {
   expect(result).toEqual({ message: "Command failed: pnpm pack\nlauncher failed", status: 1 });
 });
 
+it.each(["inherit", "ignore"])(
+  "preserves %s stderr descriptors in release diagnostics",
+  async (disposition) => {
+    const source = `
+    import childProcess from "node:child_process";
+    import { installCommandFixture } from ${JSON.stringify(fixture)};
+    installCommandFixture(() => ({ status: 1, stderr: Buffer.from("capture failed") }));
+    try {
+      childProcess.execFileSync("git", ["status"], { stdio: ["ignore", "pipe", ${JSON.stringify(disposition)}] });
+    } catch (error) {
+      console.log(JSON.stringify({ status: error.status, stderr: error.stderr }));
+    }
+  `;
+    const result = await executeRelease(["--input-type=module", "--eval", source], {
+      cwd: process.cwd(),
+      env: process.env,
+    });
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).toBe(disposition === "inherit" ? "capture failed" : "");
+    expect(JSON.parse(result.stdout)).toEqual({ status: 1, stderr: null });
+  },
+);
+
 it("refuses to simulate a command in a missing working directory", async () => {
   const result = await evaluate(`
     import childProcess from "node:child_process";

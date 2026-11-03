@@ -12,10 +12,18 @@ import type { SnapshotView } from "../observation/snapshot-view.js";
 import type { HostSnapshot } from "../inspection/diagnostics.js";
 import type { Awaitable } from "../contracts/resource.js";
 import type { Plan, BindingReport } from "../composition/plan.js";
+import type { AnyPlugin } from "../composition/plugin.js";
 
-export interface HostOptions {
+export interface HostOptions<
+  Declarations extends ReadonlyArray<AnyPlugin> = ReadonlyArray<AnyPlugin>,
+> {
   readonly name?: string;
-  readonly installations?: ReadonlyArray<InitialInstallation>;
+  // Infer Plugins before checking their configuration so union-typed arrays retain each pairing.
+  readonly installations?: {
+    readonly [Index in keyof Declarations]: {
+      readonly plugin: Declarations[Index];
+    } & NoInfer<InitialInstallation<Declarations[Index]>>;
+  };
   readonly groups?: ReadonlyArray<{ readonly id: string; readonly parentId?: string }>;
   readonly logger?: Logger;
   readonly onError?: (error: unknown) => Awaitable<void>;

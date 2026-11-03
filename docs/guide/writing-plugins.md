@@ -2,7 +2,7 @@
 
 `definePlugin` 接受 `name`、可选的 Standard Schema `configuration`、`requires`、`provides` 与 `setup`。setup 的返回值必须准确匹配提供声明。配置通过 `setup(context, configuration)` 的第二个参数传入。同一份 Core 会直接复用 `definePlugin` 产出的不可变声明，供多个 Installation 装配。传入可变声明时，每次仍会重新捕获其字段。
 
-配置验证结果遵循 Standard Schema 的结构协议：`issues` 和 `value` 可以是继承的成员或访问器，Core 按需要各捕获一次。存在非 `undefined` 的 `issues` 即拒绝配置；成功的 `value` 再进入不可变数据捕获。结果对象可以通过访问器提供协议成员，但最终配置值本身仍须满足纯数据约束。
+配置验证结果遵循 Standard Schema 的结构协议：结果、Issue 和 PathSegment 的协议成员可以来自继承或访问器，Core 按需要各捕获一次。携带所需字段的函数对象也可实现这些协议，Core 不会调用它们。`issues` 和 `path` 的稠密数组按索引捕获，无关元数据不会被读取或保留。存在非 `undefined` 的 `issues` 即拒绝配置；成功的 `value` 再进入不可变数据捕获，最终配置值本身仍须满足纯数据约束。
 
 ```ts
 const COMMANDS = extensionPoint<{ title: string; run(): Promise<string> }>("editor/commands");

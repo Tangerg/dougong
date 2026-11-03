@@ -1,4 +1,10 @@
-import { DougongError, quarantinedHost } from "../contracts/errors.js";
+import {
+  DougongError,
+  quarantinedHost,
+  planConsumedCode,
+  planForeignCode,
+  planStaleCode,
+} from "../contracts/errors.js";
 import type { InstallationGraph } from "./installation-graph.js";
 import {
   PendingInstallations,
@@ -76,7 +82,7 @@ interface PlanBase {
 }
 
 function stalePlan(expectedRevision: number, stateRevision: number) {
-  return new DougongError("PLAN_STALE", "Host state changed during or after planning", {
+  return new DougongError(planStaleCode, "Host state changed during or after planning", {
     details: { outcome: "rejected", expectedRevision, stateRevision },
   });
 }
@@ -107,9 +113,9 @@ export class PlanAuthority {
   read(plan: Plan, revision: number): PreparedTransition {
     const issued = this.#issued.get(plan);
     if (issued === undefined)
-      throw new DougongError("PLAN_FOREIGN", "Plan was not issued by this Host");
+      throw new DougongError(planForeignCode, "Plan was not issued by this Host");
     if (issued === "consumed")
-      throw new DougongError("PLAN_CONSUMED", "Plan has already been executed");
+      throw new DougongError(planConsumedCode, "Plan has already been executed");
     const prepared = this.#prepared.get(plan);
     if (!prepared) {
       this.consume(plan);

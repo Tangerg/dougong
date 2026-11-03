@@ -47,6 +47,26 @@ async function runRelease(
   }
 }
 
+it.each(["win32", "freebsd"])(
+  "rejects the unsupported release platform %s before touching the workspace",
+  async (platform) => {
+    const preloadPlatform =
+      "data:text/javascript," +
+      encodeURIComponent(
+        `Object.defineProperty(process, "platform", { value: ${JSON.stringify(platform)} });`,
+      );
+    const result = await executeRelease(
+      ["--import", preloadPlatform, release, version, "--dry-run"],
+      { stage: "platform preflight", cwd: tmpdir(), env: { ...process.env, PATH: "" } },
+    );
+
+    expect(result.status).toBe(1);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toContain("Releases require Linux or macOS");
+    expect(result.stderr).toContain("git, npm and pnpm executables on PATH");
+  },
+);
+
 it.each(["E503", "ENOTFOUND", "E401"])(
   "stops release preflight when the registry reports %s",
   async (code) => {

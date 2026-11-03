@@ -40,11 +40,12 @@ it("reuses an owned declaration while independently capturing each mutable input
 it("captures update configuration when staged and validator output when planned", async () => {
   const seen: unknown[] = [];
   const output = { value: 1 };
+  const schema: StandardSchemaV1<{ input: number }, { value: number }> = {
+    "~standard": { version: 1, vendor: "test", validate: () => ({ value: output }) },
+  };
   const plugin = definePlugin({
     name: "capture",
-    configuration: {
-      "~standard": { version: 1 as const, vendor: "test", validate: () => ({ value: output }) },
-    },
+    configuration: schema,
     setup(_context, configuration) {
       seen.push(configuration);
     },
@@ -165,7 +166,7 @@ it("captures optional token identity only once during use", async () => {
   await host.stop();
 });
 
-it("rejects executable array fields without substituting fabricated declarations or issues", () => {
+it("does not execute custom iterators on declarations or validation issues", () => {
   const iterator = vi.fn<() => Generator<{ message: string }>>(function* () {
     yield { message: "substituted" };
   });
@@ -174,7 +175,7 @@ it("rejects executable array fields without substituting fabricated declarations
     expect(() => createHost({ [key]: array })).toThrow(/dense/);
   }
   const issues = Object.assign([{ message: "real" }], { [Symbol.iterator]: iterator });
-  expect(() => new ConfigurationValidationError(issues)).toThrow(/dense/);
+  expect(new ConfigurationValidationError(issues).issues).toEqual([{ message: "real" }]);
   expect(iterator).not.toHaveBeenCalled();
 });
 

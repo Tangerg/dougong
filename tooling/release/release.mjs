@@ -17,6 +17,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { performance } from "node:perf_hooks";
+import { setTimeout as delay } from "node:timers/promises";
 import { prerelease, valid, validRange } from "semver";
 import { packageArchiveIn, readPackageFiles } from "../package-archive.mjs";
 import { packageName, publishedDirectories } from "../packages.mjs";
@@ -89,6 +90,10 @@ function replaceManifest(directory, expected, replacement, onReplaced) {
   } finally {
     rmSync(temporary, { recursive: true, force: true });
   }
+}
+
+if (process.platform !== "linux" && process.platform !== "darwin") {
+  fail("Releases require Linux or macOS with git, npm and pnpm executables on PATH");
 }
 
 let input;
@@ -574,7 +579,7 @@ console.log(
 );
 
 // Await registry visibility before publishing dependents because successful uploads can remain temporarily unreadable.
-function awaitRegistry(name) {
+async function waitForRegistryVisibility(name) {
   const deadline = performance.now() + registryVisibilityTimeoutMilliseconds;
   let announced = false;
   while (true) {
@@ -589,16 +594,7 @@ function awaitRegistry(name) {
     }
     const remainingAfterQuery = Math.floor(deadline - performance.now());
     if (remainingAfterQuery <= 0) return false;
-    const wait = Math.min(registryPollIntervalMilliseconds, remainingAfterQuery);
-    try {
-      execFileSync("sleep", [String(wait / millisecondsPerSecond)], {
-        timeout: remainingAfterQuery,
-        killSignal: "SIGKILL",
-      });
-    } catch (error) {
-      if (error.code === "ETIMEDOUT") return false;
-      throw error;
-    }
+    await delay(Math.min(registryPollIntervalMilliseconds, remainingAfterQuery));
   }
 }
 
@@ -632,7 +628,7 @@ for (const { directory, name, distributionTag } of PACKAGES) {
   if (oneTimePassword !== undefined) publishArguments.push(`--otp=${oneTimePassword}`);
   assertRemoteReleaseReferences();
   const result = spawnSync("npm", npmArguments(name, publishArguments), { stdio: "inherit" });
-  if (result.status === 0 && !awaitRegistry(name)) {
+  if (result.status === 0 && !(await waitForRegistryVisibility(name))) {
     console.error(
       `\n✗ ${name}: npm accepted ${version}, but it was not readable within ${registryVisibilityTimeoutMilliseconds / millisecondsPerMinute} minutes; processing may still be pending.`,
     );

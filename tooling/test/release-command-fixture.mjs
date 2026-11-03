@@ -94,9 +94,12 @@ export function installCommandFixture(handle) {
       const value = result[channel];
       if (value === null || value === undefined) continue;
       const bytes = Buffer.isBuffer(value) ? value : Buffer.from(value);
-      if (options.stdio === "inherit") process[channel].write(bytes);
+      const disposition = Array.isArray(options.stdio)
+        ? options.stdio[process[channel].fd]
+        : options.stdio;
+      if (disposition === "inherit") process[channel].write(bytes);
       result[channel] =
-        options.stdio === "inherit" || options.stdio === "ignore"
+        disposition === "inherit" || disposition === "ignore"
           ? null
           : options.encoding
             ? bytes.toString(options.encoding)

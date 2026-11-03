@@ -1,6 +1,11 @@
 import type { ContractKind } from "../contracts/contracts.js";
 import { rememberContractKind } from "../contracts/contract-registry.js";
-import { DougongError } from "../contracts/errors.js";
+import {
+  DougongError,
+  serviceConflictCode,
+  serviceCycleCode,
+  serviceMissingCode,
+} from "../contracts/errors.js";
 import type { InstallationDeclaration, InstallationRecord } from "./installation.js";
 
 // Immutable candidate plans preserve the previous declaration versions for rollback.
@@ -77,7 +82,7 @@ function collectProviders(
       const previous = providers.get(token.id);
       if (previous) {
         throw new DougongError(
-          "SERVICE_CONFLICT",
+          serviceConflictCode,
           `Service '${token.id}' is provided by both '${previous.id}' and '${installation.id}'`,
           {
             details: {
@@ -112,14 +117,14 @@ function connectRequirements(
       if (!provider) {
         if (requirement.kind === "optional") continue;
         throw new DougongError(
-          "SERVICE_MISSING",
+          serviceMissingCode,
           `Installation '${installation.id}' requires missing Service '${token.id}'`,
           { details: { outcome: "rejected", installation: installation.id, contract: token.id } },
         );
       }
       if (provider === installation) {
         throw new DougongError(
-          "SERVICE_CYCLE",
+          serviceCycleCode,
           `Installation '${installation.id}' cannot require Service '${token.id}' that it provides`,
           {
             details: {
@@ -170,7 +175,7 @@ function sortDependencies(
   if (order.length !== installations.length) {
     const cycle = findDependencyCycle(dependents, indegree);
     throw new DougongError(
-      "SERVICE_CYCLE",
+      serviceCycleCode,
       `Installation dependency cycle: ${cycle.map((installation) => installation.id).join(" -> ")}`,
       {
         details: {

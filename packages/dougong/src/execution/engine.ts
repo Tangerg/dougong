@@ -6,6 +6,14 @@ import {
   quarantinedHost,
   RecordedFailure,
   type ErrorSnapshot,
+  groupConflictCode,
+  groupForeignCode,
+  groupMissingCode,
+  hostBusyCode,
+  hostQuarantinedCode,
+  installationForeignCode,
+  serviceUnavailableCode,
+  transitionFailedCode,
 } from "../contracts/errors.js";
 import {
   normalizeRequirement,
@@ -165,7 +173,7 @@ export class Engine {
       assertId(group.id, "Group id");
       if (group.parentId !== undefined) assertId(group.parentId, "Parent Group id");
       if (groupParents.has(group.id))
-        throw new DougongError("GROUP_CONFLICT", "Duplicate initial Group: " + group.id);
+        throw new DougongError(groupConflictCode, "Duplicate initial Group: " + group.id);
       groupParents.set(group.id, group.parentId as string | undefined);
     }
     const groups = buildInitialGroups(groupParents, (id, parent) => this.#createGroup(id, parent));
@@ -180,7 +188,7 @@ export class Engine {
       const group =
         initial.groupId === undefined ? undefined : groups.get(initial.groupId as string);
       if (initial.groupId !== undefined && !group)
-        throw new DougongError("GROUP_MISSING", "Initial Group is missing: " + initial.groupId);
+        throw new DougongError(groupMissingCode, "Initial Group is missing: " + initial.groupId);
       const record = this.#createInstallation(initial.id, group);
       declarations.set(
         record,
@@ -238,7 +246,7 @@ export class Engine {
       createGroup: (id, parent) => this.#createGroup(id, parent),
       resolveGroup: (handle) => {
         const group = this.#groups.get(handle);
-        if (!group) throw new DougongError("GROUP_FOREIGN", "Group belongs to another Host");
+        if (!group) throw new DougongError(groupForeignCode, "Group belongs to another Host");
         return group;
       },
     });
@@ -304,17 +312,17 @@ export class Engine {
       this.#contracts.assertCompatible(token);
       this.#assertHealthy();
       if (this.#state.phase !== "running")
-        throw new DougongError("SERVICE_UNAVAILABLE", "Host is not running");
+        throw new DougongError(serviceUnavailableCode, "Host is not running");
       const provider = this.#state.graph.providers.get(token.id);
       if (!provider) {
         if (normalized.kind === "optional") return Promise.resolve(callback(undefined));
-        throw new DougongError("SERVICE_UNAVAILABLE", "No provider for " + token.id);
+        throw new DougongError(serviceUnavailableCode, "No provider for " + token.id);
       }
       if (this.#transition?.affected.has(provider))
-        throw new DougongError("SERVICE_UNAVAILABLE", "Service is changing: " + token.id);
+        throw new DougongError(serviceUnavailableCode, "Service is changing: " + token.id);
       const instance = this.#state.instances.get(provider);
       if (!instance)
-        throw new DougongError("SERVICE_UNAVAILABLE", "Service is not running: " + token.id);
+        throw new DougongError(serviceUnavailableCode, "Service is not running: " + token.id);
       return instance.use<T, Result>(token.id, callback);
     } catch (error) {
       return Promise.reject(error);
@@ -372,7 +380,7 @@ export class Engine {
       .flatMap((record) => previous.instances.get(record) ?? []);
     for (const instance of affectedInstances) {
       if (instance.lifetime.busy) {
-        throw new DougongError("HOST_BUSY", "Affected work is still in flight", {
+        throw new DougongError(hostBusyCode, "Affected work is still in flight", {
           details: {
             outcome: "rejected",
             installation: instance.installation.id,
@@ -390,19 +398,17 @@ export class Engine {
       throw error;
     }
     for (const instance of affectedInstances) instance.lifetime.seal();
-    this.#transition = {
-      phase:
-        prepared.report.intent === "start"
-          ? "starting"
-          : prepared.report.intent === "stop"
-            ? "stopping"
-            : "changing",
+    const reserved = this.#transition;
+    // Startup validation and preparation share one visible transition; scopes are not snapshot state.
+    this.#transition = reserved ?? {
+      phase: prepared.report.intent === "stop" ? "stopping" : "changing",
       affected: prepared.affected,
-      scopes: [previous],
+      scopes: [],
     };
+    this.#transition.scopes.push(previous);
     // Diagnostics observers may register new contributions synchronously at transition ingress.
     this.#contributions.beginBatch();
-    this.#notify();
+    if (!reserved) this.#notify();
     try {
       if (previous.phase === "stopped" && prepared.report.intent !== "start") {
         writer.commit();
@@ -457,7 +463,6 @@ export class Engine {
             error: new RecordedFailure(failure).snapshot,
           });
           throw this.#transitionError(
-            "TRANSITION_FAILED",
             "Startup failed",
             failure,
             "restored",
@@ -467,7 +472,6 @@ export class Engine {
         }
         await this.#restore(previous, retained, prepared, failure);
         throw this.#transitionError(
-          "TRANSITION_FAILED",
           "Change failed; previous declarations were restored",
           failure,
           "restored",
@@ -689,7 +693,6 @@ export class Engine {
       // A concurrent operation owns its failure receipt, not another Host health transition.
       return work.then((quarantine) =>
         this.#transitionError(
-          "HOST_QUARANTINED",
           "Operation failed while Host was quarantined",
           new AggregateError([...errors, quarantine], "Execution failed during quarantine"),
           "quarantined",
@@ -718,7 +721,6 @@ export class Engine {
       });
       this.#notify();
       return this.#transitionError(
-        "HOST_QUARANTINED",
         "Host is quarantined after execution could not establish a healthy state",
         cause,
         "quarantined",
@@ -791,13 +793,13 @@ export class Engine {
   }
 
   #transitionError(
-    code: string,
     message: string,
     cause: unknown,
     outcome: "restored" | "quarantined",
     affectedInstallations: ReadonlyArray<string>,
     phase: FailurePhase,
   ) {
+    const code = outcome === "restored" ? transitionFailedCode : hostQuarantinedCode;
     return new DougongError(code, message, {
       cause,
       details: {
@@ -825,7 +827,7 @@ export class Engine {
   }
 
   #busyTransition() {
-    return new DougongError("HOST_BUSY", "Another Host transition is in progress", {
+    return new DougongError(hostBusyCode, "Another Host transition is in progress", {
       details: { outcome: "rejected", stateRevision: this.#state.revision },
     });
   }
@@ -859,7 +861,7 @@ export class Engine {
   #resolveInstallation(handle: object) {
     const record = this.#installations.get(handle);
     if (!record)
-      throw new DougongError("INSTALLATION_FOREIGN", "Installation belongs to another Host");
+      throw new DougongError(installationForeignCode, "Installation belongs to another Host");
     return record;
   }
 

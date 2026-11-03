@@ -24,6 +24,10 @@
 
 `HostOptions` 包含 `name`、初始 `installations`、初始 `groups`、日志与错误报告端口和退出超时。每个 Installation ID 在 Host 中唯一，Group ID 也是应用声明的稳定身份。
 
+`createHost` 按初始列表中的每个 Plugin 推断其配置输入；异构列表也保留各自的配对。`InitialInstallation<typeof plugin>` 和 `InstallationOptions<typeof plugin>` 从同一 Plugin 类型派生配置要求。输入允许 `undefined` 时可以省略配置，包括 `void`、可选输入与 schema 默认值；否则必须提供配置。schema 转换后的输出只供 setup 使用，安装声明仍须提供转换前的输入。配置不能反向扩宽 Plugin 类型来通过检查。
+
+保存带类型的 Host 选项时，可用 `HostOptions<readonly [typeof firstPlugin, typeof secondPlugin]>` 描述异构列表。显式使用 `AnyPlugin` 或不带类型参数的 `HostOptions` 会擦除具体输入类型，适用于动态加载边界；未知配置仍经过原有的数据捕获与 schema 验证，不增加独立的配置状态。
+
 ```ts
 const change = host.change();
 const group = change.group("workspace");

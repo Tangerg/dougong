@@ -1,4 +1,4 @@
-import { DougongError, quarantinedHost } from "../contracts/errors.js";
+import { DougongError, quarantinedHost, changeForeignCode } from "../contracts/errors.js";
 import { captureConfiguration, type ConfigurationValue } from "./configuration.js";
 import { normalizePlugin, type AnyPlugin, type NormalizedPlugin } from "./plugin.js";
 import { normalizePlainRecord, recordFields } from "../internal/record.js";
@@ -84,7 +84,7 @@ export class ChangeSets {
     const state = registry.get(change);
     if (!state)
       throw new DougongError(
-        "CHANGE_FOREIGN",
+        changeForeignCode,
         "ChangeSet belongs to another Host or was already planned",
       );
     registry.delete(change);

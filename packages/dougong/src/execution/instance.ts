@@ -1,5 +1,5 @@
 import type { ContractRegistryWriter } from "../contracts/contract-registry.js";
-import { DougongError } from "../contracts/errors.js";
+import { DougongError, providesInvalidCode, serviceUnavailableCode } from "../contracts/errors.js";
 import { ScopedLogger, type Logger } from "../contracts/logging.js";
 import type { EventHub } from "../events/event-hub.js";
 import type { ContributionRegistry } from "../contributions/contribution-store.js";
@@ -71,7 +71,7 @@ export class Instance {
     AbortSignal.prototype.throwIfAborted.call(signal);
     const entries = Object.entries(this.declaration.plugin.provides);
     const invalidOutput = (message: string, options?: ErrorOptions) =>
-      new DougongError("PROVIDES_INVALID", message, {
+      new DougongError(providesInvalidCode, message, {
         ...options,
         details: { installation: this.installation.id },
       });
@@ -97,7 +97,7 @@ export class Instance {
 
   read(serviceId: string): unknown {
     if (!this.#services.has(serviceId))
-      throw new DougongError("SERVICE_UNAVAILABLE", "Service has not been prepared: " + serviceId);
+      throw new DougongError(serviceUnavailableCode, "Service has not been prepared: " + serviceId);
     return this.#services.get(serviceId);
   }
 

@@ -4,7 +4,13 @@ import { createHost, definePlugin, optional, service, type Plan } from "../src/i
 
 const value = service<number>("plan/value");
 const provider = (number: number) =>
-  definePlugin({ name: "provider", provides: { value }, setup: () => ({ value: number }) });
+  definePlugin({
+    name: "provider",
+    provides: { value },
+    setup: (_context, _configuration: { readonly secret: string } | undefined) => ({
+      value: number,
+    }),
+  });
 
 it("explains declaration origins, both binding states and publication order without configuration values", async () => {
   const consumer = definePlugin({

@@ -1,12 +1,5 @@
 import assert from "node:assert/strict";
-
-// Native keys are nonconfigurable in Node. Model a runtime without them before loading any package.
-const masked = Symbol.bind(undefined);
-const descriptors = Object.getOwnPropertyDescriptors(Symbol);
-delete descriptors.dispose;
-delete descriptors.asyncDispose;
-Object.defineProperties(masked, descriptors);
-globalThis.Symbol = masked;
+import "./mask-native-disposal.mjs";
 
 const { bridge, signal, disposeSymbol, asyncDisposeSymbol } = await import("@dougongjs/reactive");
 const value = signal(0);

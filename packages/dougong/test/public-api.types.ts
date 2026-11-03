@@ -165,6 +165,7 @@ const parsed = core.definePlugin({
   name: "surface.parsed-configuration",
   configuration: schema,
   setup(_context, value) {
+    expectTypeOf(value).toEqualTypeOf<number>();
     void value.toFixed();
   },
 });
@@ -213,6 +214,107 @@ const verifyInstallationTypes = (
   expectTypeOf(host.plan(change)).toEqualTypeOf<Promise<core.Plan>>();
 };
 void verifyInstallationTypes;
+
+const text = core.definePlugin<string>({ name: "initial.text", setup() {} });
+const number = core.definePlugin<number>({ name: "initial.number", setup() {} });
+const unconfigured = core.definePlugin({ name: "initial.unconfigured", setup() {} });
+const optional = core.definePlugin<string | undefined>({ name: "initial.optional", setup() {} });
+const unknown = core.definePlugin<unknown>({ name: "initial.unknown", setup() {} });
+
+expectTypeOf(core.createHost()).toEqualTypeOf<core.Host>();
+core.createHost({ name: "empty", installations: [] });
+core.createHost({
+  installations: [
+    { id: "text", plugin: text, configuration: "text" },
+    { id: "number", plugin: number, configuration: 42 },
+    { id: "parsed", plugin: parsed, configuration: "42" },
+    { id: "unconfigured", plugin: unconfigured },
+    { id: "explicit-void", plugin: unconfigured, configuration: undefined },
+    { id: "optional", plugin: optional },
+    { id: "explicit-optional", plugin: optional, configuration: "text" },
+    { id: "unknown", plugin: unknown },
+    { id: "explicit-unknown", plugin: unknown, configuration: { value: 42 } },
+  ],
+});
+
+// @ts-expect-error Initial configuration is required when the Plugin input excludes undefined.
+core.createHost({ installations: [{ id: "text", plugin: text }] });
+// @ts-expect-error Configuration cannot widen the Plugin inferred from its own declaration.
+core.createHost({ installations: [{ id: "text", plugin: text, configuration: 42 }] });
+// @ts-expect-error Setup's transformed output cannot replace the schema's input.
+core.createHost({ installations: [{ id: "parsed", plugin: parsed, configuration: 42 }] });
+// @ts-expect-error Void does not authorize arbitrary configuration.
+core.createHost({ installations: [{ id: "void", plugin: unconfigured, configuration: "text" }] });
+// @ts-expect-error An optional input remains constrained when provided.
+core.createHost({ installations: [{ id: "optional", plugin: optional, configuration: 42 }] });
+
+const initial: core.InitialInstallation<typeof parsed> = {
+  id: "parsed",
+  plugin: parsed,
+  configuration: "42",
+  groupId: "workspace",
+  origin: { revision: "initial" },
+};
+core.createHost({ groups: [{ id: "workspace" }], installations: [initial] });
+// @ts-expect-error Explicit InitialInstallation annotations preserve required schema input.
+const missingInitial: core.InitialInstallation<typeof parsed> = { id: "parsed", plugin: parsed };
+void missingInitial;
+
+const options: core.HostOptions<readonly [typeof text, typeof number]> = {
+  installations: [
+    { id: "text", plugin: text, configuration: "text" },
+    { id: "number", plugin: number, configuration: 42 },
+  ],
+};
+core.createHost(options);
+
+const mixed = [
+  { id: "text", plugin: text, configuration: "text" },
+  { id: "number", plugin: number, configuration: 42 },
+];
+core.createHost({ installations: mixed });
+const readonlyMixed = [
+  { id: "text", plugin: text, configuration: "text" },
+  { id: "number", plugin: number, configuration: 42 },
+] as const;
+core.createHost({ installations: readonlyMixed });
+
+const crossed = [
+  { id: "text", plugin: text, configuration: 42 },
+  { id: "number", plugin: number, configuration: "text" },
+];
+// @ts-expect-error A heterogeneous array must retain each Plugin's own input, not their union.
+core.createHost({ installations: crossed });
+const readonlyCrossed = [
+  { id: "text", plugin: text, configuration: 42 },
+  { id: "number", plugin: number, configuration: "text" },
+] as const;
+// @ts-expect-error Readonly tuples must not admit cross-paired configuration either.
+core.createHost({ installations: readonlyCrossed });
+
+function verifyDynamicInput(plugin: core.AnyPlugin, input: unknown) {
+  const options: core.HostOptions = {
+    installations: [{ id: "dynamic", plugin, configuration: input }],
+  };
+  core.createHost(options);
+  core.createHost({ installations: [{ id: "dynamic", plugin }] });
+}
+void verifyDynamicInput;
+
+function rejectUncorrelatedInput(plugin: typeof text | typeof number) {
+  // @ts-expect-error A union Plugin does not establish which configuration input applies.
+  core.createHost({ installations: [{ id: "uncertain", plugin, configuration: "text" }] });
+}
+void rejectUncorrelatedInput;
+
+const change = core.createHost().change();
+change.install(unconfigured, { id: "void" });
+change.install(optional, { id: "optional" });
+change.install(unknown, { id: "unknown" });
+// @ts-expect-error ChangeSet uses the same required-input rule as initial declarations.
+change.install(text, { id: "required" });
+// @ts-expect-error Optional configuration cannot widen the declared input.
+change.install(optional, { id: "wrong-optional", configuration: 42 });
 
 expectTypeOf<core.Installation["status"]>().toEqualTypeOf<core.InstallationState>();
 expectTypeOf<core.HostSnapshot["error"]>().toEqualTypeOf<core.ErrorSnapshot | undefined>();

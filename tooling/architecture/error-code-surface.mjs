@@ -5,7 +5,57 @@ const referenceTables = new Set(
   ["docs/reference/errors.md", "docs/en/reference/errors.md"].map((path) => resolve("/", path)),
 );
 
-export function constructedErrorCode(node) {
+export function sourceErrorCodes(program, modulePath, exportName) {
+  const checker = program.getTypeChecker();
+  const source = program.getSourceFile(modulePath);
+  const moduleSymbol = source && checker.getSymbolAtLocation(source);
+  const exportedSymbol =
+    moduleSymbol &&
+    checker.getExportsOfModule(moduleSymbol).find(({ name }) => name === exportName);
+  const errorSymbol =
+    exportedSymbol &&
+    (exportedSymbol.flags & typescript.SymbolFlags.Alias
+      ? checker.getAliasedSymbol(exportedSymbol)
+      : exportedSymbol);
+  const errorClass = errorSymbol?.valueDeclaration;
+  if (!errorClass || !typescript.isClassDeclaration(errorClass))
+    throw new TypeError(`${modulePath} must export error class '${exportName}'`);
+
+  const codes = new Set();
+  const collect = (type) => {
+    if (type.isStringLiteral()) codes.add(type.value);
+    else if (type.isUnion()) for (const member of type.types) collect(member);
+  };
+  const isErrorType = (type) => {
+    const symbol = type.getSymbol();
+    if (!symbol) return false;
+    if (symbol === errorSymbol) return true;
+    const declaredType = checker.getDeclaredTypeOfSymbol(symbol);
+    return declaredType.isClassOrInterface() && declaredType.getBaseTypes().some(isErrorType);
+  };
+  const visit = (node) => {
+    if (typescript.isNewExpression(node)) {
+      const type = checker.getTypeAtLocation(node);
+      if (isErrorType(type)) {
+        // A derived constructor can take a label first; its inherited code type names the error protocol.
+        const code = checker.getPropertyOfType(type, "code");
+        if (code) collect(checker.getTypeOfSymbolAtLocation(code, node));
+      }
+    } else if (
+      typescript.isCallExpression(node) &&
+      node.expression.kind === typescript.SyntaxKind.SuperKeyword
+    ) {
+      const constructor = checker.getResolvedSignature(node)?.declaration;
+      if (constructor?.parent === errorClass && node.arguments[0])
+        collect(checker.getTypeAtLocation(node.arguments[0]));
+    }
+    typescript.forEachChild(node, visit);
+  };
+  for (const file of program.getRootFileNames()) visit(program.getSourceFile(file));
+  return codes;
+}
+
+function constructedErrorCode(node) {
   if (
     !typescript.isNewExpression(node) ||
     !typescript.isIdentifier(node.expression) ||

@@ -1,4 +1,6 @@
-import { createHost, definePlugin } from "dougong";
+import { z } from "zod";
+import { expectTypeOf } from "vitest";
+import { createHost, definePlugin, type InitialInstallation } from "dougong";
 import {
   createPlatform,
   defineManifest,
@@ -80,3 +82,58 @@ async function usePlatform() {
 }
 
 void usePlatform;
+
+const defaultSchema = z.number().default(42);
+const optionalSchema = z.string().optional();
+const transformSchema = z.string().transform(Number);
+const defaulted = definePlugin({
+  name: "initial.defaulted",
+  configuration: defaultSchema,
+  setup(_context, value) {
+    expectTypeOf(value).toEqualTypeOf<z.output<typeof defaultSchema>>();
+  },
+});
+const optional = definePlugin({
+  name: "initial.optional",
+  configuration: optionalSchema,
+  setup(_context, value) {
+    expectTypeOf(value).toEqualTypeOf<string | undefined>();
+  },
+});
+const transformed = definePlugin({
+  name: "initial.transformed",
+  configuration: transformSchema,
+  setup(_context, value) {
+    expectTypeOf(value).toEqualTypeOf<number>();
+  },
+});
+
+expectTypeOf<InitialInstallation<typeof defaulted>["configuration"]>().toEqualTypeOf<
+  z.input<typeof defaultSchema>
+>();
+expectTypeOf<InitialInstallation<typeof transformed>["configuration"]>().toEqualTypeOf<
+  z.input<typeof transformSchema>
+>();
+createHost({
+  installations: [
+    { id: "defaulted", plugin: defaulted },
+    { id: "explicit-default", plugin: defaulted, configuration: undefined },
+    { id: "configured", plugin: defaulted, configuration: 7 },
+    { id: "optional", plugin: optional },
+    { id: "text", plugin: optional, configuration: "text" },
+    { id: "transformed", plugin: transformed, configuration: "42" },
+  ],
+});
+// @ts-expect-error A default permits omission without accepting a different input type.
+createHost({ installations: [{ id: "wrong-default", plugin: defaulted, configuration: "42" }] });
+// @ts-expect-error Transform output cannot substitute for the declared input.
+createHost({ installations: [{ id: "wrong-transform", plugin: transformed, configuration: 42 }] });
+// @ts-expect-error Transform input is still required without a default or optional input.
+createHost({ installations: [{ id: "missing-transform", plugin: transformed }] });
+
+const change = createHost().change();
+change.install(defaulted, { id: "defaulted" });
+change.install(optional, { id: "optional" });
+change.install(transformed, { id: "transformed", configuration: "42" });
+// @ts-expect-error Both installation paths use the same input constraint.
+change.install(defaulted, { id: "wrong-default", configuration: "42" });

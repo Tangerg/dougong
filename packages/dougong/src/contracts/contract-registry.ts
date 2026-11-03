@@ -1,5 +1,5 @@
 import type { ContractIdentity, ContractKind } from "./contracts.js";
-import { DougongError } from "./errors.js";
+import { DougongError, contractConflictCode } from "./errors.js";
 
 // A Host must keep each Contract id bound to one kind even after its last Installation leaves.
 
@@ -84,7 +84,7 @@ function assertCompatibleKind(
   const previous = kinds.get(contract.id);
   if (previous && previous !== contract.kind) {
     throw new DougongError(
-      "CONTRACT_CONFLICT",
+      contractConflictCode,
       `Contract '${contract.id}' is used as both '${previous}' and '${contract.kind}'`,
     );
   }

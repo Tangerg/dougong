@@ -1,4 +1,11 @@
-import { DougongError } from "../contracts/errors.js";
+import {
+  DougongError,
+  changeConflictCode,
+  groupConflictCode,
+  groupMissingCode,
+  groupRemovedCode,
+  installationRemovedCode,
+} from "../contracts/errors.js";
 import type { ContractRegistry } from "../contracts/contract-registry.js";
 import { InstallationGraph } from "./installation-graph.js";
 import { resolvePluginConfiguration, type ConfigurationValue } from "./configuration.js";
@@ -46,7 +53,7 @@ export async function compileTransition(
     if (operation.kind === "group") {
       if (groups.has(operation.group.id))
         throw new DougongError(
-          "GROUP_CONFLICT",
+          groupConflictCode,
           "Group id is already installed: " + operation.group.id,
         );
       groups.set(operation.group.id, operation.group);
@@ -54,7 +61,7 @@ export async function compileTransition(
     }
     if (operation.kind === "remove-group") {
       if (current.groups.get(operation.group.id) !== operation.group)
-        throw new DougongError("GROUP_REMOVED", "Group is not committed: " + operation.group.id);
+        throw new DougongError(groupRemovedCode, "Group is not committed: " + operation.group.id);
       removedGroups.add(operation.group);
       continue;
     }
@@ -67,7 +74,7 @@ export async function compileTransition(
       const previous = declarations.get(record);
       if (!previous)
         throw new DougongError(
-          "INSTALLATION_REMOVED",
+          installationRemovedCode,
           "Installation is not committed: " + record.id,
         );
       if (operation.kind === "remove") {
@@ -97,7 +104,7 @@ export async function compileTransition(
     for (const group of removedGroups) {
       if (current.groups.get(group.id) !== group)
         throw new DougongError(
-          "CHANGE_CONFLICT",
+          changeConflictCode,
           "Group creation conflicts with ancestor removal: " + group.id,
         );
       groups.delete(group.id);
@@ -107,7 +114,7 @@ export async function compileTransition(
       if (!record.group || !removedGroups.has(record.group)) continue;
       if (direct.has(record))
         throw new DougongError(
-          "CHANGE_CONFLICT",
+          changeConflictCode,
           "Installation change conflicts with Group removal: " + record.id,
         );
       declarations.delete(record);
@@ -206,12 +213,12 @@ function assertGroups(
     // Every Group is created with an existing immutable parent. Membership of the direct edge suffices.
     const parent = group.parent;
     if (parent && groups.get(parent.id) !== parent)
-      throw new DougongError("GROUP_MISSING", "Group parent is not committed: " + parent.id);
+      throw new DougongError(groupMissingCode, "Group parent is not committed: " + parent.id);
   }
   for (const record of declarations.keys()) {
     if (record.group && groups.get(record.group.id) !== record.group)
       throw new DougongError(
-        "GROUP_MISSING",
+        groupMissingCode,
         "Installation Group is not committed: " + record.group.id,
       );
   }

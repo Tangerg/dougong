@@ -1,4 +1,4 @@
-import { DougongError } from "../contracts/errors.js";
+import { DougongError, groupCycleCode, groupMissingCode } from "../contracts/errors.js";
 import type { Group } from "./declarations.js";
 
 export class GroupNode {
@@ -25,9 +25,9 @@ export function buildInitialGroups(
     let cursor: string | undefined = id;
     while (cursor !== undefined && !groups.has(cursor)) {
       if (!parents.has(cursor))
-        throw new DougongError("GROUP_MISSING", "Initial Group is missing: " + cursor);
+        throw new DougongError(groupMissingCode, "Initial Group is missing: " + cursor);
       if (chain.has(cursor))
-        throw new DougongError("GROUP_CYCLE", "Group ownership must be acyclic");
+        throw new DougongError(groupCycleCode, "Group ownership must be acyclic");
       chain.add(cursor);
       cursor = parents.get(cursor);
     }
