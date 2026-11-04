@@ -2,11 +2,13 @@ import type { StandardJSONSchemaV1, StandardSchemaV1 } from "@standard-schema/sp
 import { expectTypeOf } from "vitest";
 import * as core from "dougong";
 import {
+  batchSnapshotNotifications,
+  captureLogger,
   normalizePlainRecord,
   recordFields,
   resolveValue,
   SerialQueue,
-  type SnapshotPublisher,
+  SnapshotPublisher,
 } from "dougong/advanced";
 
 expectTypeOf<ConstructorParameters<typeof core.RecordedFailure>>().toEqualTypeOf<
@@ -566,6 +568,55 @@ type NarrowLogger = {
   error(message: string): void;
 };
 expectTypeOf<NarrowLogger extends core.Logger ? true : false>().toEqualTypeOf<false>();
+
+function verifyLoggerReturns(dynamicLogger: unknown) {
+  const synchronousMethod: () => void = () => undefined;
+  const synchronousLogger: core.Logger = {
+    debug: synchronousMethod,
+    info: synchronousMethod,
+    warn: synchronousMethod,
+    error: synchronousMethod,
+  };
+  const asynchronousMethod = async () => undefined;
+  core.createHost({ logger: synchronousLogger });
+  core.createHost({ logger: captureLogger(synchronousLogger) });
+  core.createHost({ logger: console });
+  core.createHost({ logger: captureLogger(console) });
+  // @ts-expect-error Instance debug calls cannot return an asynchronous result.
+  core.createHost({ logger: { ...synchronousLogger, debug: asynchronousMethod } });
+  // @ts-expect-error Instance info calls cannot return an asynchronous result.
+  core.createHost({ logger: { ...synchronousLogger, info: asynchronousMethod } });
+  // @ts-expect-error Instance warning calls cannot return an asynchronous result.
+  core.createHost({ logger: { ...synchronousLogger, warn: asynchronousMethod } });
+  // @ts-expect-error Instance error calls cannot return an asynchronous result.
+  core.createHost({ logger: { ...synchronousLogger, error: asynchronousMethod } });
+
+  const captured = captureLogger({
+    debug: synchronousMethod,
+    info: Object.assign(() => "recorded" as const, { backend: true }),
+    warn: synchronousMethod,
+    error: asynchronousMethod,
+  });
+  expectTypeOf<ReturnType<typeof captured.debug>>().toEqualTypeOf<void>();
+  expectTypeOf<ReturnType<typeof captured.info>>().toEqualTypeOf<"recorded">();
+  expectTypeOf<ReturnType<typeof captured.error>>().toEqualTypeOf<Promise<undefined>>();
+  // @ts-expect-error Captured methods do not retain the backend function's own properties.
+  void captured.info.backend;
+  // @ts-expect-error Capturing mixed methods must not erase an asynchronous return to void.
+  core.createHost({ logger: captured });
+
+  const capturedDynamic = captureLogger(dynamicLogger);
+  expectTypeOf<ReturnType<typeof capturedDynamic.error>>().toEqualTypeOf<unknown>();
+  // @ts-expect-error Capturing method shape cannot prove unknown calls will be synchronous.
+  core.createHost({ logger: capturedDynamic });
+  if (core.isLogger(dynamicLogger)) {
+    expectTypeOf<ReturnType<typeof dynamicLogger.error>>().toEqualTypeOf<unknown>();
+    // @ts-expect-error A shape guard cannot prove unknown calls will be synchronous.
+    core.createHost({ logger: dynamicLogger });
+  }
+}
+void verifyLoggerReturns;
+
 expectTypeOf<NonNullable<core.HostOptions["onError"]>>().toEqualTypeOf<
   (error: unknown) => core.Awaitable<void>
 >();
@@ -627,6 +678,31 @@ if (description.configuration.status === "available") {
 }
 
 const plannedDeclaration: core.DeclarationSnapshot = { pluginName: "planned", origin: undefined };
+// @ts-expect-error Required Service bindings always identify their provider in an executable graph.
+const missingRequiredProvider: core.BindingReport = {
+  installation: "planned",
+  contract: "planned/value",
+  optional: false,
+  provider: undefined,
+};
+const unresolvedOptionalProvider: core.BindingReport = {
+  installation: "planned",
+  contract: "planned/value",
+  optional: true,
+  provider: undefined,
+};
+void missingRequiredProvider;
+void unresolvedOptionalProvider;
+
+function verifyBindingProvider(binding: core.BindingReport) {
+  if (binding.optional) {
+    expectTypeOf(binding.provider).toEqualTypeOf<string | undefined>();
+  } else {
+    expectTypeOf(binding.provider).toEqualTypeOf<string>();
+  }
+}
+void verifyBindingProvider;
+
 const missingInstalledDeclaration: core.PlanOperation = {
   kind: "install",
   id: "planned",
@@ -686,3 +762,120 @@ function verifyReportCorrelations(operation: core.PlanOperation, reason: core.Im
   }
 }
 void verifyReportCorrelations;
+
+function verifySynchronousSnapshotCallbacks(
+  view: core.SnapshotView<number>,
+  contributions: core.ContributionView<string>,
+  asynchronous: PromiseLike<void>,
+  uncertain: boolean,
+  synchronous: () => void,
+) {
+  new SnapshotPublisher(() => 0, synchronous);
+  new SnapshotPublisher<number>(() => 0, synchronous);
+  new SnapshotPublisher(
+    () => 0,
+    (error) => {
+      expectTypeOf(error).toEqualTypeOf<unknown>();
+    },
+  );
+  new SnapshotPublisher(
+    () => 0,
+    // @ts-expect-error Snapshot error reporting must finish inside the failed notification.
+    async () => undefined,
+  );
+  new SnapshotPublisher<number>(
+    () => 0,
+    // @ts-expect-error Explicit snapshot types cannot erase an asynchronous reporter result.
+    async () => undefined,
+  );
+  new SnapshotPublisher(
+    () => 0,
+    // @ts-expect-error Structural PromiseLike reporters cannot extend the notification boundary.
+    () => asynchronous,
+  );
+  new SnapshotPublisher(
+    () => 0,
+    // @ts-expect-error Snapshot error reporters perform side effects without a business result.
+    () => 1,
+  );
+
+  view.subscribe(() => undefined);
+  view.subscribe(() => 1);
+  view.subscribe(() => (uncertain ? 1 : "unavailable"));
+  view.subscribe(() => ({ pending: asynchronous }));
+  view.subscribe(synchronous);
+  view.subscribe<void>(synchronous);
+  contributions.subscribe(() => undefined);
+  batchSnapshotNotifications(() => undefined);
+  batchSnapshotNotifications(() => 1);
+  batchSnapshotNotifications(() => (uncertain ? 1 : "unavailable"));
+  batchSnapshotNotifications(() => ({ pending: asynchronous }));
+  batchSnapshotNotifications(synchronous);
+  batchSnapshotNotifications<void>(synchronous);
+
+  // @ts-expect-error Snapshot notifications cannot own an asynchronous subscriber continuation.
+  view.subscribe(async () => undefined);
+  // @ts-expect-error Explicit void cannot erase a visible asynchronous subscriber result.
+  view.subscribe<void>(async () => undefined);
+  // @ts-expect-error Structural PromiseLike callbacks cannot extend a snapshot notification.
+  view.subscribe(() => asynchronous);
+  // @ts-expect-error Every subscriber branch must finish within the notification boundary.
+  view.subscribe(() => (uncertain ? undefined : asynchronous));
+  // @ts-expect-error Contribution views use the same synchronous snapshot protocol.
+  contributions.subscribe(async () => undefined);
+  // @ts-expect-error A publication batch ends before an asynchronous callback settles.
+  batchSnapshotNotifications(async () => undefined);
+  // @ts-expect-error Explicit void cannot erase a visible asynchronous publication result.
+  batchSnapshotNotifications<void>(async () => undefined);
+  // @ts-expect-error Structural PromiseLike callbacks cannot extend the publication batch.
+  batchSnapshotNotifications(() => asynchronous);
+  // @ts-expect-error Every publication batch branch must finish before the batch is closed.
+  batchSnapshotNotifications(() => (uncertain ? undefined : asynchronous));
+}
+void verifySynchronousSnapshotCallbacks;
+
+function verifySnapshotThenableCallbacks(
+  view: core.SnapshotView<number>,
+  contributions: core.ContributionView<string>,
+  completing: { readonly then: (fulfill: (value: number) => void) => void },
+  optionalThen: { readonly then?: (fulfill: (value: number) => void) => void },
+  mixedThen: { readonly then: string | ((fulfill: (value: number) => void) => void) },
+  indexedThen: Readonly<Record<string, (fulfill: (value: number) => void) => void>>,
+  textThenData: { readonly then: string },
+  undefinedThenData: { readonly then: undefined },
+  data: { readonly then?: string },
+  uncertain: boolean,
+) {
+  view.subscribe(() => textThenData);
+  view.subscribe(() => undefinedThenData);
+  view.subscribe(() => data);
+  view.subscribe(() => ({ pending: completing }));
+  batchSnapshotNotifications(() => textThenData);
+  batchSnapshotNotifications(() => undefinedThenData);
+  batchSnapshotNotifications(() => data);
+  batchSnapshotNotifications(() => ({ pending: completing }));
+
+  // @ts-expect-error Runtime thenable adoption does not require PromiseLike's chained return type.
+  view.subscribe(() => completing);
+  // @ts-expect-error An optional callable then can still begin asynchronous work.
+  view.subscribe(() => optionalThen);
+  // @ts-expect-error Every possible then property must be non-callable at a synchronous boundary.
+  view.subscribe(() => mixedThen);
+  // @ts-expect-error A synchronous alternative does not authorize a thenable result.
+  view.subscribe(() => (uncertain ? 0 : completing));
+  // @ts-expect-error Contribution subscriptions share the SnapshotView thenable boundary.
+  contributions.subscribe(() => completing);
+  // @ts-expect-error A string index signature can also declare a callable then property.
+  view.subscribe(() => indexedThen);
+  // @ts-expect-error Publication must finish before any thenable continuation, regardless of its signature.
+  batchSnapshotNotifications(() => completing);
+  // @ts-expect-error Optional thenables cannot extend a publication batch.
+  batchSnapshotNotifications(() => optionalThen);
+  // @ts-expect-error A callable then branch cannot extend a publication batch.
+  batchSnapshotNotifications(() => mixedThen);
+  // @ts-expect-error An indexed callable then cannot extend a publication batch.
+  batchSnapshotNotifications(() => indexedThen);
+  // @ts-expect-error Every publication result branch must be synchronous.
+  batchSnapshotNotifications(() => (uncertain ? undefined : completing));
+}
+void verifySnapshotThenableCallbacks;

@@ -35,7 +35,9 @@ const COMMANDS = extensionPoint<Command>("examples/lynx/commands");
 const PANELS = extensionPoint<Panel>("examples/lynx/panels");
 const workspaceState = (workspace: string) =>
   service<WorkspaceState>(`examples/lynx/workspaces/${encodeURIComponent(workspace)}/state`);
-const MAIN_WORKSPACE = workspaceState("main");
+const mainWorkspace: WorkspaceState = Object.freeze({ id: "main", root: "/workspace" });
+const workspaceGroupId = `workspace-${mainWorkspace.id}`;
+const MAIN_WORKSPACE = workspaceState(mainWorkspace.id);
 
 // Business command identity belongs to this catalog; Core owns only contribution identity.
 async function commandEntries(commands: ContributionView<Command>) {
@@ -103,7 +105,7 @@ export async function lynxScenario(): Promise<ExampleResult> {
   const state = definePlugin({
     name: "examples.lynx.workspace-state",
     provides: { workspace: MAIN_WORKSPACE },
-    setup: () => ({ workspace: { id: "main", root: "/workspace" } }),
+    setup: () => ({ workspace: mainWorkspace }),
   });
   const shell = definePlugin({
     name: "examples.lynx.workspace-shell",
@@ -115,12 +117,12 @@ export async function lynxScenario(): Promise<ExampleResult> {
   });
   const host = createHost({
     name: "lynx-example",
-    groups: [{ id: "workspace-main" }],
+    groups: [{ id: workspaceGroupId }],
     installations: [
       { id: "filesystem", plugin: filesystem },
       { id: "catalog", plugin: catalog },
-      { id: "workspace-state", plugin: state, groupId: "workspace-main" },
-      { id: "workspace-shell", plugin: shell, groupId: "workspace-main" },
+      { id: "workspace-state", plugin: state, groupId: workspaceGroupId },
+      { id: "workspace-shell", plugin: shell, groupId: workspaceGroupId },
     ],
   });
   await host.start();
@@ -166,7 +168,7 @@ export async function lynxScenario(): Promise<ExampleResult> {
   const { value: panelTitle } = await workspacePanels.use(panel, (value) => value.title);
 
   await platform[asyncDisposeSymbol]();
-  const workspace = host.group("workspace-main");
+  const workspace = host.group(workspaceGroupId);
   if (!workspace) throw new Error("Workspace ownership group is missing");
   const remove = host.change();
   remove.removeGroup(workspace);

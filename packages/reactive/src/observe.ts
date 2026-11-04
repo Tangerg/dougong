@@ -7,7 +7,12 @@ import {
   type AsyncDisposable,
   type Readable,
 } from "./protocol.js";
-import { assertSynchronous, captureThenable, resolveValue } from "./async-result.js";
+import {
+  assertSynchronous,
+  captureThenable,
+  resolveValue,
+  type SynchronousResult,
+} from "./async-result.js";
 
 // Serialize replacement so the previous resource owner finishes before the next observer begins.
 
@@ -21,7 +26,10 @@ export interface ObservationOwner<Child extends AsyncDisposable = AsyncDisposabl
   readonly spawn: (task: (signal: AbortSignal) => void | PromiseLike<void>) => ObservationTask;
 }
 
-export type Observer<T, Child extends AsyncDisposable> = (value: T, lifetime: Child) => void;
+export type Observer<T, Child extends AsyncDisposable, Result = void> = (
+  value: T,
+  lifetime: Child,
+) => SynchronousResult<Result>;
 
 type Release = () => PromiseLike<void>;
 
@@ -30,7 +38,7 @@ type ObservedValue<T> = { readonly present: false } | { readonly present: true; 
 interface ObservationBinding<T, Child extends AsyncDisposable> {
   readonly owner: ObservationOwner<Child>;
   readonly source: Readable<T>;
-  readonly observer: Observer<T, Child>;
+  readonly observer: (value: T, lifetime: Child) => unknown;
 }
 
 type ObservationState<T, Child extends AsyncDisposable> =
@@ -54,7 +62,11 @@ class Observation<T, Child extends AsyncDisposable> {
   #wakeDrain: (() => void) | undefined;
   #disposePromise: Promise<void> | undefined;
 
-  constructor(owner: ObservationOwner<Child>, source: Readable<T>, observer: Observer<T, Child>) {
+  constructor(
+    owner: ObservationOwner<Child>,
+    source: Readable<T>,
+    observer: ObservationBinding<T, Child>["observer"],
+  ) {
     this.#state = { phase: "active", binding: { owner, source, observer } };
   }
 
@@ -266,10 +278,10 @@ class Observation<T, Child extends AsyncDisposable> {
   }
 }
 
-export function observe<T, Child extends AsyncDisposable>(
+export function observe<T, Child extends AsyncDisposable, Result = void>(
   owner: ObservationOwner<Child>,
   source: Readable<T>,
-  observer: Observer<T, Child>,
+  observer: Observer<T, Child, Result>,
 ): AsyncDisposable {
   const readable = captureReadable(source, "observe()");
   if (typeof observer !== "function") throw new TypeError("Observer must be a function");

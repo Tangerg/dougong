@@ -1,5 +1,5 @@
 import { assertListener, disposeSymbol, type Disposable, type Readable } from "./protocol.js";
-import { assertSynchronous } from "./async-result.js";
+import { assertSynchronous, type SynchronousResult } from "./async-result.js";
 
 declare const dougongSignal: unique symbol;
 
@@ -12,7 +12,6 @@ export interface Signal<T> extends ReadonlySignal<T> {
 }
 
 type Listener = () => void;
-type SynchronousResult<T> = T & Exclude<T, PromiseLike<unknown>>;
 interface ListenerSlot {
   readonly kind: "dependency" | "observer";
   listener: Listener | undefined;

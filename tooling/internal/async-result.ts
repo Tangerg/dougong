@@ -1,6 +1,18 @@
 const localPromisePrototype = Promise.prototype;
 const nativePromiseThen = localPromisePrototype.then;
 
+type WithoutCallableThen<T> = T extends object
+  ? "then" extends keyof T
+    ? Extract<T["then"], (...arguments_: never[]) => unknown> extends never
+      ? T
+      : never
+    : T
+  : T;
+
+// Filtering must not narrow the inferred result of a synchronous union. Keeping void's undefined
+// value explicit also prevents its permissive return assignment from admitting async callbacks.
+export type SynchronousResult<T> = (T & NoInfer<WithoutCallableThen<T>>) | (T & undefined);
+
 export interface ResolvedValue<T> {
   readonly value: T;
 }

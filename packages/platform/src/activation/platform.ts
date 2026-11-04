@@ -101,7 +101,7 @@ export interface PlatformOptions<Reference> {
   readonly apiVersion: string;
   readonly loader: Loader<Reference>;
   readonly authorizer?: Authorizer;
-  readonly logger?: Logger;
+  readonly logger?: Logger<unknown>;
 }
 
 interface PlatformPorts {
@@ -741,7 +741,7 @@ function diagnosticView<T>(
   });
 }
 
-function reporter(logger: Logger) {
+function reporter(logger: Logger<unknown>) {
   return (error: unknown) => {
     try {
       // The terminal sink has no lower reporter, but its rejection must still be observed.

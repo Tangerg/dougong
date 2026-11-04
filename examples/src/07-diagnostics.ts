@@ -30,7 +30,8 @@ export async function diagnostics(): Promise<ExampleResult> {
     name: "examples.diagnostics.workbench",
     provides: { workbench: WORKBENCH },
     setup({ lifetime, contributions }) {
-      contributions.add(PANELS, "outline", { id: "outline" });
+      const panel: Panel = { id: "outline" };
+      contributions.add(PANELS, panel.id, panel);
       const session = lifetime.child("session");
       session.defer(() => undefined);
       indexing = lifetime.spawn(() => gate.promise);

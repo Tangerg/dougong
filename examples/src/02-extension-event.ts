@@ -39,7 +39,7 @@ export async function extensionAndEvent(): Promise<ExampleResult> {
     name: "examples.commands.hello",
     setup(context) {
       const commandId = "hello";
-      contribution = context.contributions.add(COMMANDS, "hello", {
+      contribution = context.contributions.add(COMMANDS, commandId, {
         id: commandId,
         run: () => context.events.emit(COMMAND_EXECUTED, { id: commandId }),
       });

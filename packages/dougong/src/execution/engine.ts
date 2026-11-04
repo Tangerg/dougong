@@ -124,8 +124,8 @@ class PreparationFailures {
 
 export class Engine {
   readonly name: string;
-  readonly #logger: Logger;
-  readonly #onError: (error: unknown) => Awaitable<void>;
+  readonly #logger: Logger<unknown>;
+  readonly #onError: (error: unknown) => unknown;
   readonly #shutdownTimeoutMilliseconds: number | undefined;
   readonly #contracts = new ContractRegistry();
   readonly #events = new EventHub();
@@ -154,7 +154,7 @@ export class Engine {
     this.#logger = captureLogger(input.logger === undefined ? console : input.logger);
     this.#onError = (input.onError ?? ((error: unknown) => this.#logger.error(error))) as (
       error: unknown,
-    ) => Awaitable<void>;
+    ) => unknown;
     this.#shutdownTimeoutMilliseconds = shutdownTimeout(input.shutdownTimeoutMilliseconds);
     this.#contributions = new ContributionRegistry((error) => this.#report(error));
     const declarations = new Map<InstallationRecord, InstallationDeclaration>();

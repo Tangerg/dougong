@@ -87,7 +87,7 @@ it.each(promiseDecorations)(
           logError(error);
           return logging.promise;
         },
-      },
+      } as never,
     });
     const platform = createPlatform({
       id: "reporter",

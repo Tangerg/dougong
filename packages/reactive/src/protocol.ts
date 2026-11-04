@@ -1,5 +1,5 @@
 import { asyncDisposeSymbol, disposeSymbol } from "./disposal-runtime.js";
-import { assertSynchronous } from "./async-result.js";
+import { assertSynchronous, type SynchronousResult } from "./async-result.js";
 
 export {
   assertPromiseRuntime,
@@ -18,7 +18,7 @@ export interface AsyncDisposable {
 
 export interface Readable<T> {
   get(): T;
-  subscribe(listener: () => void): Disposable;
+  subscribe<Result>(listener: () => SynchronousResult<Result>): Disposable;
 }
 
 export function captureReadable<T>(source: Readable<T>, operation: string): Readable<T> {

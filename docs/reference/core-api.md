@@ -73,6 +73,10 @@ Host 状态为 `stopped`、`starting`、`running`、`changing`、`stopping`、`q
 
 订阅统一 `get/subscribe`，不重放，使用标准 Disposable 取消。`ContributionView.use(id, callback)` 借用贡献所有者，同样返回 `Promise<ResolvedValue<Awaited<Result>>>`；`get()` 仅给出冻结的有序 ID 数组；读取元数据和调用处理函数都通过 `use`。`EventOperations.on/emit` 支持同步或异步监听，emit 等待所有监听结果并汇总失败；每次监听调用借用其所有者。`ContributionOperations.add` 登记带 owner 的贡献。
 
+`SnapshotView.subscribe` 与 `batchSnapshotNotifications` 的回调必须同步完成。公开类型拒绝直接返回 Promise、PromiseLike、可能带有可调用 `then` 的对象，以及包含这些异步分支的联合结果；普通同步返回值与包含 Promise 的数据对象仍然允许。动态输入或已经被上游声明为 `() => void` 的回调仍由运行时校验，已经开始的异步续体无法撤回。需要后台工作时，在同步通知中显式调用 `Lifetime.spawn`。
+
+`SnapshotPublisher` 的错误报告函数也必须同步完成，并且只执行报告副作用，不返回业务结果。若简写回调意外返回 `Array.push` 的计数，改用不返回值的代码块，例如 `error => { errors.push(error); }`。同步抛出的报告错误会与原订阅错误一起保留；动态输入仍经过运行时同步校验。
+
 `ErrorDetails` 给出 outcome、phase、stateRevision 和可选的安装、契约、依赖路径与影响范围。`RecordedFailure` 是有界脱离资源图的诊断投影；原始拒绝的 cause 仍由直接调用者接收。
 
 `isCancellationReason` 按原生信号的取消原因身份分类，不把任意同名错误视为取消；带有同一原因的 `AbortError.cause` 数据属性也可建立因果。完整契约见[生命周期与资源](../guide/lifetime.md)。
@@ -82,6 +86,10 @@ Host 状态为 `stopped`、`starting`、`running`、`changing`、`stopping`、`q
 从上一版 API 更新时，将已删除的 Host inspect 方法替换为 `host.diagnostics.get()`。删除对旧 ApplyResult outcome 字段的判断；await 正常完成后处理成功，catch 中处理失败及结构化 details。不提供别名或兼容适配器。
 
 Host 只在选项缺省时使用默认值；显式传入 null 的名字、安装列表或分组列表会被拒绝。声明、配置和 Service 提供值记录都接受空原型及其他 realm 的原生 Object 原型。配置捕获只读取共享输入对象一次并冻结结果；循环引用和过深嵌套仍然拒绝。插件可单独传递 `context.logger` 的日志函数，释放日志作用域的权限归 Instance。Host 创建时一次性捕获日志方法，保留原后端作为接收者；错误兜底同样使用捕获的方法。
+
+`Logger<Result>` 描述四个日志方法的返回合同，默认要求同步完成且无业务返回值。`HostOptions.logger` 与 `context.logger` 使用这个默认合同；异步的 Host 错误报告应交给 `onError`。Platform 的日志仅用于终端错误接收，使用 `Logger<unknown>`，允许异步或其它被忽略的返回值，并观察其失败而不改写已提交结果。Core 的终端兜底同样防御动态输入产生的异步失败，但这不放宽插件作用域的同步要求。
+
+`isLogger` 只确认四个方法的形状，收窄到 `Logger<unknown>`，不能证明它们同步。`captureLogger` 保留已知输入逐个方法的返回类型；未知输入得到 `Logger<unknown>`。两者都不能把未知或异步后端转换成同步后端。上游已经擦除为 `void` 的返回信息仍由作用域日志的运行时检查保护。
 
 ## 高级组合原语
 
@@ -96,7 +104,7 @@ Host 只在选项缺省时使用默认值；显式传入 null 的名字、安装
 | `recordFields<T>()(...keys)` | 从声明类型建立穷尽的允许字段集合，供 `normalizePlainRecord` 使用。 |
 | `resolveValue(value)` | 按共享异步结果协议解析一次，返回 `Promise<ResolvedValue<Awaited<T>>>`；冻结的 `{ value }` 回执保留已完成结果的身份。 |
 | `captureDataArray(input, label)` | 浅拷贝自有的稠密数据索引并冻结数组，不调用输入的方法或迭代器。元素的校验归调用方。 |
-| `captureLogger(logger)` | 接管日志后端时一次捕获四个方法及其原始接收者。 |
+| `captureLogger(logger)` | 接管日志后端时一次捕获四个方法及其原始接收者，保留已知方法的返回类型；未知输入只证明方法形状。 |
 | `onAbort(signal, callback)` | 观察真实取消，回调只接收一次原因；已取消时立即回调。返回的函数用于解除观察。手动派发名为 `abort` 的事件不能取消作用域。 |
 
 `recordFields` 在编译期要求每个字段都被列出，包括可选字段和联合声明各分支的字段，并拒绝额外字段。元组每项必须是一个确定字段，不能用可能取多个字段名的联合值代替穷尽枚举。不接受无法证明完整性的宽化数组、数字或符号键，以及开放索引签名。它声明允许出现哪些字段；必填性和值的校验仍归对应输入边界。
@@ -112,3 +120,5 @@ Node 与浏览器使用同一份公开 API 组合：源信号的原生监听器�
 `describePlugin(plugin, { jsonSchemaTarget })` 从 Plugin 的同一声明投影 `PluginDescriptor`，供文档、UI 与代理读取。描述不执行 setup 或 validate，不推测擦除后的 TypeScript 接口。`PluginConfigurationDescriptor.status` 区分 `none`（无配置）、`unavailable`（有验证器但无 JSON Schema 出口）、`available`（提供标准 JSON Schema 出口）；默认 target 为 `draft-2020-12`。使用 Standard Schema 1.1 的 Standard JSON Schema 协议导出输入与输出描述，无法导出的 schema 如实标记 unavailable。
 
 `PlanReport.bindings.before/after` 展示绑定前后差异，`prepareOrder`、`stopOrder`、`publishOrder` 分别说明准备、停止与发布顺序。安装类 `PlanOperation` 携带 before/after `DeclarationSnapshot`，其中只含 pluginName 与公开 origin，不含配置载荷；分组操作只描述 id 与 parentId。`ImpactReason.previousProvider` 与 provider 保留提供者变化原因，包括可选依赖的提供者移除。
+
+`BindingReport.optional` 同时判别提供者是否可以缺失：`optional: false` 的 `provider` 必为字符串；只有 `optional: true` 才允许 `provider: undefined`。必需 Service 的提供者缺失时，图构建直接拒绝，不会生成这种报告。`Host.explain()`、诊断快照和 Plan 使用同一个绑定类型。

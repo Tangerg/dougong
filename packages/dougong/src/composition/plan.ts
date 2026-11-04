@@ -17,12 +17,13 @@ import type { InstallationOrigin } from "./declarations.js";
 import type { ChangeOperation } from "./change-set.js";
 
 export type TransitionIntent = "change" | "start" | "stop";
-export interface BindingReport {
+export type BindingReport = {
   readonly installation: string;
   readonly contract: string;
-  readonly optional: boolean;
-  readonly provider: string | undefined;
-}
+} & (
+  | { readonly optional: false; readonly provider: string }
+  | { readonly optional: true; readonly provider: string | undefined }
+);
 export type DirectImpactKind = "installed" | "updated" | "removed" | "start" | "stop";
 type ProviderChange =
   | { readonly provider: string; readonly previousProvider?: string }
@@ -214,12 +215,14 @@ export function describeBindings(
       Object.values(graph.declarationFor(installation).plugin.requires).flatMap((requirement) => {
         if (requirement.kind === "extensionPoint") return [];
         const token = requirement.kind === "optional" ? requirement.service : requirement;
+        const provider = graph.providers.get(token.id);
         return [
           Object.freeze({
             installation: installation.id,
             contract: token.id,
-            optional: requirement.kind === "optional",
-            provider: graph.providers.get(token.id)?.id,
+            ...(requirement.kind === "optional"
+              ? { optional: true as const, provider: provider?.id }
+              : { optional: false as const, provider: provider!.id }),
           }),
         ];
       }),

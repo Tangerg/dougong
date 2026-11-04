@@ -153,3 +153,19 @@ await deliveryHost[asyncDisposeSymbol]();
 ## 成功结果回执
 
 `Task.result`、`host.use`、`ContributionView.use` 和 `SerialQueue.run` 的成功结果统一为冻结的 `{ value }` 回执（`ResolvedValue<T>`）。将原来的 `const result = await operation` 改为 `const { value: result } = await operation`；只等待完成、不读取结果的调用无需解构。`acquire` 继续使用 `{ resource }`。错误仍通过 Promise 拒绝传播。跨 realm Promise 必须保留正常的公开 `then`；完整的协议范围见[生命周期与资源](./lifetime.md)。
+
+## 同步通知与绑定报告
+
+快照和响应式源的 `subscribe`、`batchSnapshotNotifications`、`batch`、`computed` 与 `observe` 现在在类型边界拒绝可识别的异步返回，包括显式指定 `void` 的调用。订阅和观察回调应同步完成登记，把异步工作交给 `lifetime.spawn`。不要通过强制断言掩盖异步回调；已经擦除为 `unknown`、`any` 或 `() => void` 的返回信息仍需要运行时检查。
+
+`Observer<T, Child, Result>` 的第三个参数描述同步返回值，默认 `void`。普通 `observe(...)` 调用会自动推断；显式指定前两个类型参数且需要返回数据时，补充第三个参数，或将只用于通知的回调改为不返回值。
+
+`SnapshotPublisher` 的错误报告器是同步的副作用回调，不返回业务值。将 `error => errors.push(error)` 改为 `error => { errors.push(error); }`；不要传入异步报告器。已有的同步 `void` 函数仍可直接传入。
+
+`BindingReport` 通过 `optional` 区分绑定：`optional: false` 必须有字符串 `provider`，只有可选绑定允许没有提供者。手写报告和测试数据应保持这个关联；在 `!binding.optional` 分支中可以直接使用字符串提供者，无需非空断言。
+
+## 日志后端的返回合同
+
+`Logger` 默认要求四个方法同步完成且无业务返回值，Host 的日志后端与插件作用域使用这个合同。直接的异步方法会被类型边界拒绝；将异步 Host 错误报告移到 `onError`。意外返回计数等值的日志简写应改成无返回代码块。Platform 的终端日志使用 `Logger<unknown>`，继续接受并观察异步结果。
+
+`captureLogger` 不再擦除已知方法的返回类型；`captureLogger(unknown)` 和 `isLogger` 只得到 `Logger<unknown>`。不能再凭方法存在就把后端当作同步日志使用，应在集成边界明确它的实际合同。已经被上游擦除为 `void` 的类型信息无法恢复，作用域日志仍保留运行时同步检查。

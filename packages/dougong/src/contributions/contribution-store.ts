@@ -61,7 +61,7 @@ interface ContributionViewState<T> {
 class ContributionViewHandle<T> implements ContributionView<T> {
   readonly #state: ContributionViewState<T>;
   readonly get: () => ReadonlyArray<string>;
-  readonly subscribe: (listener: () => void) => Disposable;
+  readonly subscribe: SnapshotView<ReadonlyArray<string>>["subscribe"];
   readonly use: <Result>(
     id: string,
     callback: (value: T) => Awaitable<Result>,

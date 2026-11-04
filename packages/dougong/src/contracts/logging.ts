@@ -1,18 +1,26 @@
 import { DougongError, lifetimeDisposedCode } from "./errors.js";
-import { assertSynchronous } from "../internal/async-result.js";
+import { assertSynchronous, type SynchronousResult } from "../internal/async-result.js";
 import { disposeSymbol, type Disposable } from "./resource.js";
-export interface Logger {
-  readonly debug: (message: unknown, ...details: unknown[]) => void;
-  readonly info: (message: unknown, ...details: unknown[]) => void;
-  readonly warn: (message: unknown, ...details: unknown[]) => void;
-  readonly error: (message: unknown, ...details: unknown[]) => void;
+export interface Logger<Result = SynchronousResult<void>> {
+  readonly debug: (message: unknown, ...details: unknown[]) => Result;
+  readonly info: (message: unknown, ...details: unknown[]) => Result;
+  readonly warn: (message: unknown, ...details: unknown[]) => Result;
+  readonly error: (message: unknown, ...details: unknown[]) => Result;
 }
 
-export function captureLogger(value: unknown): Logger {
+export function captureLogger<Input extends Logger<unknown>>(
+  value: Input,
+): {
+  readonly [Level in keyof Logger]: (
+    ...arguments_: Parameters<Logger<unknown>[Level]>
+  ) => ReturnType<Input[Level]>;
+};
+export function captureLogger(value: unknown): Logger<unknown>;
+export function captureLogger(value: unknown): Logger<unknown> {
   if (!value || (typeof value !== "object" && typeof value !== "function"))
     throw new TypeError("Logger must implement debug/info/warn/error");
-  const capture = (level: keyof Logger): Logger[typeof level] => {
-    const method = (value as Partial<Logger>)[level];
+  const capture = (level: keyof Logger): Logger<unknown>[typeof level] => {
+    const method = (value as Partial<Logger<unknown>>)[level];
     if (typeof method !== "function")
       throw new TypeError("Logger must implement debug/info/warn/error");
     return (...messageArguments) => Reflect.apply(method, value, messageArguments);
@@ -25,7 +33,7 @@ export function captureLogger(value: unknown): Logger {
   });
 }
 
-export function isLogger(value: unknown): value is Logger {
+export function isLogger(value: unknown): value is Logger<unknown> {
   try {
     captureLogger(value);
     return true;
@@ -42,9 +50,10 @@ export class ScopedLogger implements Disposable {
     error: (message, ...details) => this.#write("error", message, details),
   });
   #binding:
-    { readonly logger: Logger; readonly metadata: Readonly<Record<string, unknown>> } | undefined;
+    | { readonly logger: Logger<unknown>; readonly metadata: Readonly<Record<string, unknown>> }
+    | undefined;
 
-  constructor(logger: Logger, metadata: Readonly<Record<string, unknown>>) {
+  constructor(logger: Logger<unknown>, metadata: Readonly<Record<string, unknown>>) {
     this.#binding = { logger, metadata };
   }
 

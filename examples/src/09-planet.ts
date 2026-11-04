@@ -64,14 +64,15 @@ export async function planetScenario(): Promise<ExampleResult> {
   const localSource = definePlugin({
     name: "examples.planet.source.local",
     setup(context) {
-      context.contributions.add(MEDIA_SOURCES, "local", {
+      const source: MediaSource = {
         id: "local",
         score: () => 10,
         async resolve(query, signal) {
           signal.throwIfAborted();
           return `file:///music/${query}.flac`;
         },
-      });
+      };
+      context.contributions.add(MEDIA_SOURCES, source.id, source);
     },
   });
   const playerPlugin = definePlugin({
@@ -137,14 +138,15 @@ export async function planetScenario(): Promise<ExampleResult> {
   const remoteSource = definePlugin({
     name: "examples.planet.source.remote",
     setup(context) {
-      context.contributions.add(MEDIA_SOURCES, "remote", {
+      const source: MediaSource = {
         id: "remote",
         score: () => 100,
         async resolve(query, signal) {
           signal.throwIfAborted();
           return `https://media.example/${encodeURIComponent(query)}`;
         },
-      });
+      };
+      context.contributions.add(MEDIA_SOURCES, source.id, source);
     },
   });
 

@@ -4,7 +4,7 @@
 
 For explicit disposal, import `disposeSymbol` or `asyncDisposeSymbol` from `@dougongjs/reactive`. These keys also work on supported runtimes without native disposal symbols.
 
-Callbacks passed to `batch` and `computed` must finish synchronously. Their public types reject direct Promise or PromiseLike results, including unions with an asynchronous branch; runtime validation still checks dynamic inputs. A rejected async callback may already have produced effects, and the batch cannot revoke its continuation. Promises may remain data, as in `signal(promise)` or `computed(() => ({ pending: promise }))`. Use Lifetime `spawn` to own asynchronous work and join its shutdown.
+Callbacks passed to `batch`, `computed`, `subscribe` and `observe` must finish synchronously. Their public types reject direct Promise or PromiseLike results, including unions with an asynchronous branch; an explicit `void` type argument cannot discard an asynchronous result. Runtime validation still checks inputs already erased to `unknown`, `any` or a void-returning function type. A rejected async callback may already have produced effects, and the batch cannot revoke its continuation. Promises may remain data, as in `signal(promise)` or `computed(() => ({ pending: promise }))`. Use Lifetime `spawn` to own asynchronous work and join its shutdown.
 
 ```ts
 import { bridge, computed, observe, signal } from "@dougongjs/reactive";
@@ -34,6 +34,8 @@ Public types: `Readable`, `Signal`, `ReadonlySignal`, `Disposable`, `AsyncDispos
 Observation only needs the drain task's completion. `ObservationTask` has no type parameter and exposes `result: PromiseLike<unknown>`; `spawn` accepts a task returning `void | PromiseLike<void>`. An owner with a generic `spawn` or a Task carrying result data still satisfies this narrower protocol. Observation does not interpret that payload. Existing declarations using `ObservationTask<T>` must remove the type argument.
 
 Observers register resources synchronously. Use `generation.spawn` for asynchronous work. The observation task's owner reports failures; a failed old-generation exit never silently starts a replacement.
+
+`observe` normally infers the value, child owner and callback result, accepting both callbacks without a return and callbacks such as `value => values.push(value)`. Explicit `Observer<T, Child>` declarations and calls supplying only `observe<T, Child>` default to a synchronous `void` result. Supply a third `Result` type or let the call infer it when retaining another synchronous return type. Do not annotate an asynchronous callback as `void` to bypass static checking.
 
 The adapters capture the accepted source methods and subscription disposer. Observation also captures each child, task and cleanup handle’s disposer when it takes ownership. If a custom owner returns a cancellable task whose `result` is missing or throws, construction fails and rollback invokes that task’s captured disposer. A failed unsubscribe remains a release obligation of the owner: early termination, drain failure and later shutdown cannot turn it into success by running it again.
 

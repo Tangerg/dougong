@@ -39,7 +39,7 @@ importers:
         specifier: ^3.9.6
         version: 3.9.10
       semver:
-        specifier: ^7.7.4
+        specifier: ^7.8.5
         version: 7.8.5
       tar:
         specifier: ^7.5.22
@@ -88,7 +88,7 @@ importers:
         specifier: workspace:*
         version: link:../dougong
       semver:
-        specifier: ^7.7.4
+        specifier: ^7.8.5
         version: 7.8.5
       zod:
         specifier: ^4.6.7

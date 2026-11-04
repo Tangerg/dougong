@@ -306,7 +306,7 @@ describe("SnapshotPublisher", () => {
     const publisher = new SnapshotPublisher(() => 0, report);
     const failure = new Error("asynchronous subscriber failed");
     const rejected = Promise.reject(failure);
-    publisher.view.subscribe(() => rejected);
+    publisher.view.subscribe((() => rejected) as never);
 
     publisher.invalidate();
 
@@ -356,10 +356,7 @@ describe("SnapshotPublisher", () => {
     const subscriberFailure = new Error("subscriber failed");
     const reporterFailure = new Error("asynchronous reporter failed");
     const rejected = Promise.reject(reporterFailure);
-    const publisher = new SnapshotPublisher(
-      () => 0,
-      () => rejected,
-    );
+    const publisher = new SnapshotPublisher(() => 0, (() => rejected) as never);
     publisher.view.subscribe(() => {
       throw subscriberFailure;
     });
@@ -549,8 +546,8 @@ function captureError(operation: () => void) {
 
 it("rejects an asynchronous notification batch without losing its rejection", () => {
   expect(() =>
-    batchSnapshotNotifications(async () => {
+    batchSnapshotNotifications((async () => {
       throw new Error("late failure");
-    }),
+    }) as never),
   ).toThrow("batches must be synchronous");
 });

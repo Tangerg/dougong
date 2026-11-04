@@ -306,15 +306,9 @@ async function release(session) {
     const authenticated = new Set();
     for (const [name, registry] of registries) {
       if (authenticated.has(registry)) continue;
-      const whoami = await session.execute("npm", npmArguments(name, ["whoami"]), {
-        encoding: "utf8",
-      });
-      if (whoami.status !== 0)
-        throw new Error(
-          "not logged in to the target npm registry; run npm login for that registry first",
-        );
+      const identity = await session.capture("npm", npmArguments(name, ["whoami"]));
       authenticated.add(registry);
-      console.log(`  publishing as ${whoami.stdout.trim()}`);
+      console.log(`  publishing as ${identity}`);
     }
   }
 
@@ -558,22 +552,22 @@ async function release(session) {
     const publishArguments = ["publish", upload, "--access", "public", `--tag=${distributionTag}`];
     if (oneTimePassword !== undefined) publishArguments.push(`--otp=${oneTimePassword}`);
     await assertRemoteReleaseReferences();
-    const result = await session.execute("npm", npmArguments(name, publishArguments), {
-      stdio: "inherit",
-    });
-    if (result.status === 0 && !(await waitForRegistryVisibility(name))) {
+    try {
+      await session.run("npm", npmArguments(name, publishArguments));
+    } catch (cause) {
+      if (session.signal.aborted) throw cause;
+      if (published.length) {
+        console.error(`  Already on the registry: ${published.join(", ")}`);
+      }
+      console.error(`  Fix the cause and re-run \`${resumeCommand}\`; it resumes from here.`);
+      throw new Error(`${name} failed to publish.`, { cause });
+    }
+    if (!(await waitForRegistryVisibility(name))) {
       if (published.length) console.error(`  Already published: ${published.join(", ")}`);
       console.error(`  Re-running \`${resumeCommand}\` resumes from here.`);
       throw new Error(
         `${name}: npm accepted ${version}, but it was not readable within ${registryVisibilityTimeoutMilliseconds / millisecondsPerMinute} minutes; processing may still be pending.`,
       );
-    }
-    if (result.status !== 0) {
-      if (published.length) {
-        console.error(`  Already on the registry: ${published.join(", ")}`);
-      }
-      console.error(`  Fix the cause and re-run \`${resumeCommand}\`; it resumes from here.`);
-      throw new Error(`${name} failed to publish.`, { cause: result.error });
     }
     await verifyRegistryContents(name, candidate.files);
     await assertDistributionTag(name, distributionTag);
@@ -662,7 +656,7 @@ async function release(session) {
     throw new Error(
       `Git did not confirm the atomic push. Re-run \`${resumeCommand}\` to inspect the remote state and resume.`,
     );
-  if (refresh.status !== 0)
+  if (refresh.error || refresh.status !== 0)
     console.warn("Release pushed; fetch origin to refresh local tracking refs.");
 
   console.log(`\n[32m✓ Dougong ${version} released[0m`);

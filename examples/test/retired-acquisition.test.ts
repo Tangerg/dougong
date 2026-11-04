@@ -588,9 +588,12 @@ describe("acquisition failure ownership", () => {
       debug: vi.fn<Logger["debug"]>(),
       info: vi.fn<Logger["info"]>(),
       warn: vi.fn<Logger["warn"]>(),
-      error: vi.fn<Logger["error"]>(() => Promise.reject(terminalFailure)),
-    } satisfies Logger;
-    const { host, generation, operations } = await createFixture({ onError: reporter, logger });
+      error: vi.fn<Logger<Promise<never>>["error"]>(() => Promise.reject(terminalFailure)),
+    } satisfies Logger<unknown>;
+    const { host, generation, operations } = await createFixture({
+      onError: reporter,
+      logger: logger as never,
+    });
     const operation = Promise.withResolvers<object>();
     const started = Promise.withResolvers<void>();
     const unhandled = vi.fn<(reason: unknown, promise: Promise<unknown>) => void>();

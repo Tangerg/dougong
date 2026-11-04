@@ -1,17 +1,19 @@
 // Asynchronous snapshot subscribers could resume against a state newer than the notification they received.
 
 import { disposeSymbol, type Disposable } from "../contracts/resource.js";
-import { assertSynchronous } from "../internal/async-result.js";
+import { assertSynchronous, type SynchronousResult } from "../internal/async-result.js";
 import { RecordedFailure } from "../contracts/errors.js";
 
 export interface SnapshotView<T> {
   get(): T;
-  subscribe(listener: () => void): Disposable;
+  subscribe<Result>(listener: () => SynchronousResult<Result>): Disposable;
 }
+
+type SnapshotErrorReporter = (error: unknown) => SynchronousResult<void>;
 
 interface SnapshotSubscriptionBinding {
   readonly listener: () => void;
-  readonly report: (error: unknown) => void;
+  readonly report: SnapshotErrorReporter;
   readonly detach: (subscription: SnapshotSubscription) => void;
 }
 
@@ -26,7 +28,7 @@ const pendingSubscriptions = new Set<SnapshotSubscription>();
 let batchDepth = 0;
 let flushing = false;
 
-export function batchSnapshotNotifications(operation: () => void) {
+export function batchSnapshotNotifications<Result>(operation: () => SynchronousResult<Result>) {
   batchDepth++;
   const errors: unknown[] = [];
   try {
@@ -70,7 +72,7 @@ type SnapshotPublisherState<T> =
   | {
       readonly phase: "active";
       readonly read: () => T;
-      readonly report: (error: unknown) => void;
+      readonly report: SnapshotErrorReporter;
     }
   | { readonly phase: "disposed" };
 
@@ -85,7 +87,7 @@ export class SnapshotPublisher<T> implements Disposable {
   #dirty = false;
   #reading = false;
 
-  constructor(read: () => T, report: (error: unknown) => void) {
+  constructor(read: () => T, report: SnapshotErrorReporter) {
     if (typeof read !== "function") throw new TypeError("Snapshot reader must be a function");
     if (typeof report !== "function") {
       throw new TypeError("Snapshot error reporter must be a function");
@@ -176,7 +178,7 @@ export class SnapshotPublisher<T> implements Disposable {
 class SnapshotSubscription implements Disposable {
   constructor(
     listener: () => void,
-    report: (error: unknown) => void,
+    report: SnapshotErrorReporter,
     detach: (subscription: SnapshotSubscription) => void,
   ) {
     snapshotSubscriptionBindings.set(this, { listener, report, detach });

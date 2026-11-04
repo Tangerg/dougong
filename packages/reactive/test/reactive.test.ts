@@ -158,7 +158,7 @@ describe("signal", () => {
     const value = signal(0);
     const failure = new Error("async subscriber failed");
     const rejected = Promise.reject(failure);
-    value.subscribe(() => rejected);
+    value.subscribe((): unknown => rejected);
 
     expect(() => value.set(1)).toThrow("Signal subscribers must be synchronous");
     await expect(rejected).rejects.toBe(failure);

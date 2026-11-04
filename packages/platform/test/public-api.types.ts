@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { expectTypeOf } from "vitest";
-import { createHost, definePlugin, type InitialInstallation } from "dougong";
+import { createHost, definePlugin, type InitialInstallation, type Logger } from "dougong";
 import {
   createPlatform,
   defineManifest,
@@ -10,6 +10,7 @@ import {
   type Authorizer,
   type ManifestInput,
   type Platform,
+  type PlatformOptions,
   type Registration,
 } from "@dougongjs/platform";
 
@@ -25,7 +26,14 @@ const platform = createPlatform({
   host: createHost(),
   apiVersion: "1.0.0",
   loader: new MemoryLoader(new Map([["module", { default: plugin }]])),
+  logger: {
+    debug() {},
+    info: () => 1,
+    warn() {},
+    async error() {},
+  },
 });
+expectTypeOf<NonNullable<PlatformOptions<unknown>["logger"]>>().toEqualTypeOf<Logger<unknown>>();
 
 const declaration = {
   name: plugin.name,

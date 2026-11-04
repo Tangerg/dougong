@@ -483,6 +483,9 @@ installReleaseFixture((name, commandArguments, options, nativeSpawn, execute) =>
     return extracted;
   }
 
-  if (name === "npm" && commandArguments[0] === "whoami") return { status: 0, stdout: "fixture" };
+  if (name === "npm" && commandArguments[0] === "whoami") {
+    const oversized = process.env.DOUGONG_RELEASE_OVERSIZED_IDENTITY === "true";
+    return { status: 0, stdout: oversized ? "x".repeat(2 ** 21) : "fixture" };
+  }
   process.exit(99);
 });

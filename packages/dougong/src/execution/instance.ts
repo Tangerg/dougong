@@ -11,7 +11,7 @@ import type { Awaitable } from "../contracts/resource.js";
 
 export interface InstanceEnvironment {
   readonly hostName: string;
-  readonly logger: Logger;
+  readonly logger: Logger<unknown>;
   readonly report: (error: unknown) => void;
   readonly releaseFailed: (failure: ReleaseFailure) => void;
   readonly changed: () => void;

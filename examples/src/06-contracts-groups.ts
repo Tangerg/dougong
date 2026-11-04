@@ -8,8 +8,10 @@ interface WorkspaceStore {
 
 const workspaceStore = (workspace: string) =>
   service<WorkspaceStore>(`examples/workspaces/${encodeURIComponent(workspace)}/store`);
-const ALPHA_STORE = workspaceStore("alpha");
-const BETA_STORE = workspaceStore("beta");
+const alphaWorkspaceId = "alpha";
+const betaWorkspaceId = "beta";
+const ALPHA_STORE = workspaceStore(alphaWorkspaceId);
+const BETA_STORE = workspaceStore(betaWorkspaceId);
 
 function storePlugin(name: string, token: Service<WorkspaceStore>, workspace: string) {
   return definePlugin({
@@ -33,14 +35,14 @@ export async function contractsAndGroups(): Promise<ExampleResult> {
   const trace: string[] = [];
   const host = createHost({ name: "contracts-groups" });
   const initial = host.change();
-  const alpha = initial.group("alpha");
-  const beta = initial.group("beta");
+  const alpha = initial.group(alphaWorkspaceId);
+  const beta = initial.group(betaWorkspaceId);
   const alphaProvider = initial.install(
-    storePlugin("examples.workspaces.alpha.store", ALPHA_STORE, "alpha"),
+    storePlugin("examples.workspaces.alpha.store", ALPHA_STORE, alphaWorkspaceId),
     { id: "alpha-store", group: alpha, configuration: 1 },
   );
   const betaProvider = initial.install(
-    storePlugin("examples.workspaces.beta.store", BETA_STORE, "beta"),
+    storePlugin("examples.workspaces.beta.store", BETA_STORE, betaWorkspaceId),
     { id: "beta-store", group: beta, configuration: 1 },
   );
   initial.install(readerPlugin("examples.workspaces.alpha.reader", ALPHA_STORE, trace), {

@@ -69,7 +69,7 @@ describe("manifest declarations", () => {
     },
   );
 
-  it.each(["broken", "0.0.0 || broken", "^1.0.0 || >=2.0.0 broken"])(
+  it.each(["broken", "0.0.0 || broken", "^1.0.0 || >=2.0.0 broken", "1.x.2", "1.*.2"])(
     "checks every semver branch %j",
     (range) => {
       expect(() => defineManifest({ name: "range", version: "1.0.0", apiVersion: range })).toThrow(

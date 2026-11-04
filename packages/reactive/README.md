@@ -20,6 +20,8 @@ subscription[disposeSymbol]();
 
 `Readable<T>` exposes `get()` and `subscribe()`. The subscription implements standard `Symbol.dispose`; callbacks notify changes without replay. `bridge(owner, readable)` adapts another module copy or implementation into the local dependency graph. Its subscription and terminal detachment belong to the supplied owner through `defer`.
 
+`batch`, `computed`, `subscribe` and `observe` require synchronous callbacks in both their types and runtime checks. Direct Promise results, PromiseLike results and mixed asynchronous branches are rejected, including when a caller explicitly supplies `void`. Ordinary synchronous return values remain inferred; `Observer<T, Child, Result>` can describe an explicit non-void result. Values whose type was already erased still receive the runtime check.
+
 `observe(owner, readable, observer)` disposes the previous child before building the next one. The structural owner supplies `child`, `defer` and `spawn`; only the returned child needs `Symbol.asyncDispose`; no framework base class is required. Use `generation.spawn` for asynchronous observer work.
 
 `ObservationTask` describes completion only: it is not generic, and its `result` is `PromiseLike<unknown>`. The required `spawn` accepts a task returning `void | PromiseLike<void>`. Owners may provide a richer generic task API without coupling observation to their result payloads.

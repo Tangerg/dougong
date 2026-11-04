@@ -4,7 +4,7 @@
 
 显式释放订阅或观察时，从 `@dougongjs/reactive` 导入 `disposeSymbol` 或 `asyncDisposeSymbol`。这些键在缺少原生释放符号的运行环境中也可用。
 
-`batch` 与 `computed` 的回调必须同步完成。公开类型拒绝直接返回 Promise、PromiseLike，以及包含异步分支的联合结果；动态输入仍由运行时校验。异步回调在被拒绝前可能已经产生副作用，后续续体也不能由批次撤回。Promise 可以作为数据保存，例如 `signal(promise)` 或 `computed(() => ({ pending: promise }))`；需要异步工作时，通过 Lifetime 的 `spawn` 管理其退出义务。
+`batch`、`computed`、`subscribe` 与 `observe` 的回调必须同步完成。公开类型拒绝直接返回 Promise、PromiseLike，以及包含异步分支的联合结果；显式指定 `void` 也不能隐藏异步返回。已经擦除为 `unknown`、`any` 或无返回函数类型的动态输入仍由运行时校验。异步回调在被拒绝前可能已经产生副作用，后续续体也不能由批次撤回。Promise 可以作为数据保存，例如 `signal(promise)` 或 `computed(() => ({ pending: promise }))`；需要异步工作时，通过 Lifetime 的 `spawn` 管理其退出义务。
 
 ```ts
 import { bridge, computed, observe, signal } from "@dougongjs/reactive";
@@ -34,6 +34,8 @@ bridge 在订阅后重新读取以封闭挂接窗口。所有者退出时取消�
 观察只需要知道排空任务何时结束。`ObservationTask` 没有类型参数，`result` 为 `PromiseLike<unknown>`；`spawn` 接收返回 `void | PromiseLike<void>` 的任务。拥有更多能力的泛型 `spawn` 和携带结果数据的 Task 仍可通过这个窄协议接入，观察不会解释任务的结果载荷。原先显式使用 `ObservationTask<T>` 的类型声明需要移除类型参数。
 
 observer 自身同步登记资源，需要异步工作的回调显式 `generation.spawn`。抛出的失败由该观察任务的所有者报告，旧代次退出失败不会静默启动新代次。
+
+`observe` 默认推断值、子所有者和回调结果类型，普通无返回回调与 `value => values.push(value)` 都可使用。显式声明 `Observer<T, Child>` 或只给 `observe<T, Child>` 两个类型参数时，结果默认为同步 `void`；需要保留其他同步返回类型的声明应给出第三个 `Result`，或让调用自行推断。不要把异步回调标记为 `void` 来绕过类型检查。
 
 适配器在接入时捕获读取、订阅和取消订阅的方法。观察在接管子所有者、任务和清理句柄时，也会保存各自的释放方法。如果自定义所有者返回的任务可以取消，但没有有效的 `result`，或读取它时抛错，观察创建失败，回滚会调用已接管的任务释放方法。取消订阅失败后，该失败仍然是所有者的释放义务；提前结束观察、排空失败和后续退出都不能通过重复调用将其变成成功。
 

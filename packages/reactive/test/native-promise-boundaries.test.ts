@@ -19,7 +19,7 @@ it.each(["batch", "computed", "subscriber"] as const)(
         value: "Hidden native promise",
       });
       const source = signal(0);
-      using _subscription = source.subscribe(() => pending.promise);
+      using _subscription = source.subscribe((): unknown => pending.promise);
       try {
         expect(() => {
           if (boundary === "batch") batch((): unknown => pending.promise);

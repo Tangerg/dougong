@@ -59,6 +59,7 @@ async function runRelease(
     publishedArchivePrefix = "",
     dryRun = true,
     realPack = false,
+    oversizedIdentity = false,
     publishFailure,
     concurrentEdit,
     visibility = "immediate",
@@ -232,6 +233,7 @@ async function runRelease(
               DOUGONG_RELEASE_PACKED_OVERRIDES: JSON.stringify(packedOverrides),
               DOUGONG_RELEASE_REAL_GIT: realGit ?? "",
               DOUGONG_RELEASE_REAL_PNPM: pnpm ?? "",
+              DOUGONG_RELEASE_OVERSIZED_IDENTITY: String(oversizedIdentity),
               DOUGONG_RELEASE_PUBLISH_FAILURE: publicationFailure ?? "",
               DOUGONG_RELEASE_CONCURRENT_EDIT: concurrentEdit ?? "",
               DOUGONG_RELEASE_VISIBILITY: visibility,
@@ -377,6 +379,19 @@ it.each([
   expect(result.status).toBe(1);
   expect(result.stderr).toContain(file);
   expect(result.stdout).not.toContain("contents match");
+});
+
+it("rejects failed identity capture even when the npm process exits successfully", async () => {
+  const result = await runRelease(() => undefined, {
+    dryRun: false,
+    publishedPackages: [],
+    oversizedIdentity: true,
+  });
+  expect(result.status).toBe(1);
+  expect(result.stderr).toContain("exceeded");
+  expect(result.stdout).not.toContain("Bumping versions");
+  expect(result.published).toEqual({});
+  expect(result.recorded).toEqual([]);
 });
 
 it.each([false, true])(
