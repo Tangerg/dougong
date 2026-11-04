@@ -1,0 +1,307 @@
+import { spawn } from "node:child_process";
+import {
+  chmodSync,
+  lstatSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  renameSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join, resolve } from "node:path";
+import { clearTimeout, setTimeout } from "node:timers";
+import { setImmediate as nextTurn } from "node:timers/promises";
+
+const terminationSignals = ["SIGINT", "SIGTERM", "SIGHUP"];
+const maximumCapturedBytes = 1024 * 1024;
+
+class ReleaseCancellation extends Error {
+  constructor(signal) {
+    super(`Release interrupted by ${signal}`);
+    this.signal = signal;
+  }
+}
+
+export class ReleaseSession {
+  #cancellation = new AbortController();
+  #command;
+  #source;
+  #replacedManifests = new Set();
+  #stage;
+
+  constructor() {
+    for (const signal of terminationSignals) process.on(signal, this.#cancel);
+  }
+
+  get signal() {
+    return this.#cancellation.signal;
+  }
+
+  #cancel = (signal) => {
+    if (!this.signal.aborted) this.#cancellation.abort(new ReleaseCancellation(signal));
+  };
+
+  async execute(command, commandArguments, options = {}) {
+    return this.#execute(command, commandArguments, options);
+  }
+
+  async run(command, commandArguments, options = {}) {
+    const result = await this.execute(command, commandArguments, { stdio: "inherit", ...options });
+    assertCommandSucceeded(command, commandArguments, result);
+    return result;
+  }
+
+  async capture(command, commandArguments, options = {}) {
+    const result = await this.run(command, commandArguments, {
+      stdio: ["ignore", "pipe", "inherit"],
+      encoding: "utf8",
+      ...options,
+    });
+    return result.stdout.trim();
+  }
+
+  async #execute(command, commandArguments, options, cancellable = true) {
+    // A signal received during synchronous archive inspection must be delivered before another command starts.
+    await nextTurn();
+    if (cancellable) this.signal.throwIfAborted();
+    if (this.#command) throw new Error("A release command is already running");
+
+    const {
+      encoding,
+      stdio = "pipe",
+      timeout = 0,
+      killSignal = "SIGTERM",
+      ...spawnOptions
+    } = options;
+    const descriptors = Array.isArray(stdio) ? stdio : [stdio, stdio, stdio];
+    const failures = [];
+    let child;
+    const terminate = (signal) => {
+      if (child?.pid === undefined) return;
+      try {
+        process.kill(-child.pid, signal);
+      } catch (error) {
+        if (error.code !== "ESRCH") failures.push(error);
+      }
+    };
+    const cancel = () => terminate(this.signal.reason.signal);
+    // The command group can still own output after its leader exits; its deadline belongs to this same join.
+    const deadlineTimer =
+      timeout > 0
+        ? setTimeout(() => {
+            failures.push(
+              Object.assign(new Error(`${command} timed out after ${timeout} ms (ETIMEDOUT)`), {
+                code: "ETIMEDOUT",
+              }),
+            );
+            terminate(killSignal);
+          }, timeout)
+        : undefined;
+    let result;
+    try {
+      child = spawn(command, commandArguments, {
+        ...spawnOptions,
+        detached: true,
+        // Shared pipes keep close pending while ordinary command descendants still own their output.
+        stdio: [descriptors[0] === "inherit" ? "inherit" : "ignore", "pipe", "pipe"],
+      });
+      const output = ["stdout", "stderr"].map((channel, index) => {
+        const chunks = [];
+        let length = 0;
+        const disposition = descriptors[index + 1];
+        if (disposition === "inherit") child[channel].pipe(process[channel], { end: false });
+        else if (disposition === "pipe") {
+          child[channel].on("data", (bytes) => {
+            length += bytes.length;
+            if (length <= maximumCapturedBytes) chunks.push(bytes);
+            else if (length - bytes.length <= maximumCapturedBytes) {
+              failures.push(
+                new Error(`${command} ${channel} exceeded ${maximumCapturedBytes} bytes`),
+              );
+              terminate("SIGKILL");
+            }
+          });
+        } else child[channel].resume();
+        return () => {
+          if (descriptors[index + 1] !== "pipe") return null;
+          const bytes = Buffer.concat(chunks);
+          return encoding ? bytes.toString(encoding) : bytes;
+        };
+      });
+      const completion = new Promise((resolveCompletion) => {
+        child.on("error", (error) => failures.push(error));
+        child.once("close", (status, signal) => {
+          resolveCompletion({
+            status,
+            signal,
+            stdout: output[0](),
+            stderr: output[1](),
+            error:
+              failures.length > 1 ? new AggregateError(failures, `${command} failed`) : failures[0],
+          });
+        });
+      });
+      this.#command = { completion, terminate };
+      if (cancellable) this.signal.addEventListener("abort", cancel, { once: true });
+      result = await completion;
+    } finally {
+      clearTimeout(deadlineTimer);
+      this.signal.removeEventListener("abort", cancel);
+      this.#command = undefined;
+    }
+    await nextTurn();
+    if (cancellable) {
+      if (this.signal.aborted && result.error) {
+        throw new AggregateError([this.signal.reason, result.error], "Release command interrupted");
+      }
+      this.signal.throwIfAborted();
+    }
+    return result;
+  }
+
+  async atSource(source) {
+    return this.#atSource(source, true);
+  }
+
+  async #atSource({ branch, head }, cancellable) {
+    const query = async (commandArguments) => {
+      const result = await this.#execute(
+        "git",
+        commandArguments,
+        { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
+        cancellable,
+      );
+      assertCommandSucceeded("git", commandArguments, result);
+      return result.stdout.trim();
+    };
+    return (
+      (await query(["rev-parse", "--abbrev-ref", "HEAD"])) === branch &&
+      (await query(["rev-parse", "HEAD"])) === head
+    );
+  }
+
+  replaceManifests(entries, source) {
+    this.signal.throwIfAborted();
+    this.#source = source;
+    for (const entry of entries) {
+      replaceManifest(entry.directory, entry.original, entry.versioned, () =>
+        this.#replacedManifests.add(entry),
+      );
+      console.log(`  ${entry.name} → ${JSON.parse(entry.versioned).version}`);
+    }
+  }
+
+  async restoreManifests() {
+    const owned = [...this.#replacedManifests];
+    this.#replacedManifests.clear();
+    if (!owned.length) return true;
+    // Cancellation stops publication, not the read-only Git check needed to respect another checkout owner.
+    if (!(await this.#atSource(this.#source, false))) return false;
+    const errors = [];
+    for (const { directory, original, versioned } of owned) {
+      try {
+        if (!readFileSync(manifestPath(directory)).equals(original)) {
+          replaceManifest(directory, versioned, original);
+        }
+      } catch (cause) {
+        errors.push(new Error(`Could not restore ${directory}/package.json`, { cause }));
+      }
+    }
+    if (errors.length) throw new AggregateError(errors, "Release manifest restoration failed");
+    return true;
+  }
+
+  recordManifests() {
+    this.#replacedManifests.clear();
+  }
+
+  createStage() {
+    this.signal.throwIfAborted();
+    if (this.#stage !== undefined) throw new Error("Release staging directory already exists");
+    this.#stage = mkdtempSync(join(tmpdir(), "dougong-release-"));
+    return this.#stage;
+  }
+
+  retainStage() {
+    this.signal.throwIfAborted();
+    this.#stage = undefined;
+  }
+
+  async close() {
+    await nextTurn();
+    const command = this.#command;
+    if (command) {
+      command.terminate(this.signal.reason?.signal ?? "SIGTERM");
+      await command.completion;
+    }
+    try {
+      if (!(await this.restoreManifests())) {
+        throw new Error(
+          "Checkout moved; leaving manifests untouched. Inspect Git before resuming.",
+        );
+      }
+    } catch (error) {
+      console.error(error);
+      process.exitCode = 1;
+    }
+    if (this.#stage !== undefined) {
+      try {
+        rmSync(this.#stage, { recursive: true, force: true });
+        this.#stage = undefined;
+      } catch (error) {
+        console.error(error);
+        process.exitCode = 1;
+      }
+    }
+    await nextTurn();
+    for (const signal of terminationSignals) process.removeListener(signal, this.#cancel);
+    if (this.signal.aborted) process.kill(process.pid, this.signal.reason.signal);
+  }
+}
+
+function assertCommandSucceeded(command, commandArguments, result) {
+  if (result.error)
+    throw new Error(`${command} could not complete: ${result.error.message}`, {
+      cause: result.error,
+    });
+  if (result.status !== 0) {
+    const outcome = result.signal ? `signal ${result.signal}` : String(result.status);
+    const detail = result.stderr?.length ? `\n${result.stderr}` : "";
+    throw new Error(`${command} ${commandArguments[0]} exited with ${outcome}${detail}`);
+  }
+}
+
+export function manifestPath(directory) {
+  if (
+    !lstatSync(directory).isDirectory() ||
+    realpathSync(directory) !== join(realpathSync("."), directory)
+  ) {
+    throw new Error(`Package root must be a directory inside this workspace: ${directory}`);
+  }
+  const file = resolve(directory, "package.json");
+  if (!lstatSync(file).isFile())
+    throw new Error(`Release manifest must be a regular file: ${file}`);
+  return file;
+}
+
+function replaceManifest(directory, expected, replacement, onReplaced) {
+  const path = manifestPath(directory);
+  const temporary = mkdtempSync(join(dirname(path), ".release-manifest-"));
+  try {
+    const file = join(temporary, "package.json");
+    writeFileSync(file, replacement);
+    chmodSync(file, statSync(path).mode);
+    if (!readFileSync(manifestPath(directory)).equals(expected)) {
+      throw new Error(
+        `${directory}/package.json changed during release; preserving external edits`,
+      );
+    }
+    renameSync(file, path);
+    onReplaced?.();
+  } finally {
+    rmSync(temporary, { recursive: true, force: true });
+  }
+}

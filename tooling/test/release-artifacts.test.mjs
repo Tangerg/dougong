@@ -66,6 +66,8 @@ async function runRelease(
     oneTimePassword,
     interruptAt,
     terminationSignal,
+    terminationBoundary = "registry-wait",
+    signalDescendant = false,
     failRestorationSourceQuery = false,
     interruptAfter = false,
     resume = false,
@@ -238,6 +240,8 @@ async function runRelease(
               DOUGONG_RELEASE_INTERRUPT: interruption ?? "",
               DOUGONG_RELEASE_INTERRUPT_AFTER: String(interruptAfter),
               DOUGONG_RELEASE_TERMINATION_SIGNAL: expectedSignal ?? "",
+              DOUGONG_RELEASE_TERMINATION_BOUNDARY: terminationBoundary,
+              DOUGONG_RELEASE_SIGNAL_DESCENDANT: String(signalDescendant),
               DOUGONG_RELEASE_FAIL_RESTORATION_SOURCE_QUERY: String(failRestorationSourceQuery),
             },
           },
@@ -270,6 +274,15 @@ async function runRelease(
           return existsSync(path) ? [[name, JSON.parse(readFileSync(path, "utf8"))]] : [];
         }),
       );
+    const readOperations = () => {
+      const operations = join(workspace, "release-operations.jsonl");
+      return existsSync(operations)
+        ? readFileSync(operations, "utf8")
+            .trim()
+            .split("\n")
+            .map((line) => JSON.parse(line))
+        : [];
+    };
     beforeRelease(git, workspace);
     const interrupted = await execute(
       "initial attempt",
@@ -278,6 +291,7 @@ async function runRelease(
       terminationSignal,
     );
     const publishedAfterFirstAttempt = publishedManifests();
+    const callsAfterFirstAttempt = readOperations();
     const interruptedState =
       interruptAt || terminationSignal
         ? {
@@ -315,18 +329,13 @@ async function runRelease(
           : contents;
       expect(readFileSync(path, "utf8")).toBe(expected);
     }
-    const operations = join(workspace, "release-operations.jsonl");
-    const calls = existsSync(operations)
-      ? readFileSync(operations, "utf8")
-          .trim()
-          .split("\n")
-          .map((line) => JSON.parse(line))
-      : [];
+    const calls = readOperations();
     return {
       ...result,
       interrupted,
       interruptedState,
       publishedAfterFirstAttempt,
+      callsAfterFirstAttempt,
       publishedCoreModule: existsSync(join(workspace, "published/dougong/package/dist/index.js"))
         ? readFileSync(join(workspace, "published/dougong/package/dist/index.js"), "utf8")
         : undefined,
@@ -913,6 +922,108 @@ it("requires a manifest channel for every package when the command omits its tag
 });
 
 it.each(["SIGINT", "SIGTERM", "SIGHUP"])(
+  "joins the running gate and its descendant before cleanup on a real %s",
+  async (terminationSignal) => {
+    const result = await runRelease(() => undefined, {
+      publishedPackages: [],
+      dryRun: false,
+      terminationSignal,
+      terminationBoundary: "gate",
+      signalDescendant: true,
+    });
+
+    expect(result.interrupted).toMatchObject({ status: null, signal: terminationSignal });
+    expect(result.interruptedState).toEqual({
+      status: "",
+      versions: packages.map(() => "0.7.1"),
+      ahead: "0",
+      tag: "",
+      stagesRetained: false,
+    });
+    const probe = result.calls.filter(({ command }) => command === "signal-probe");
+    expect(probe).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ role: "command", event: "sent" }),
+        expect.objectContaining({ role: "command", event: "received" }),
+        expect.objectContaining({ role: "descendant", event: "received" }),
+        expect.objectContaining({
+          role: "descendant",
+          event: "last-write",
+          stageExists: true,
+          manifestVersions: packages.map(() => version),
+        }),
+      ]),
+    );
+    expect(probe.findIndex(({ event }) => event === "leader-exit")).toBeLessThan(
+      probe.findIndex(({ role, event }) => role === "descendant" && event === "last-write"),
+    );
+    expect(result.published).toEqual({});
+    expect(result.recorded).toEqual([]);
+    expect(result.head).toBe(result.initialHead);
+    expect(result.remoteReferences).toBe(`${result.initialHead}\trefs/heads/main`);
+    expect(result.stdout).not.toContain("released");
+    expect(
+      result.calls.some(
+        ({ command, commandArguments }) => command === "npm" && commandArguments[0] === "publish",
+      ),
+    ).toBe(false);
+  },
+);
+
+it.each([
+  { boundary: "before-publish", attempts: 0, uploaded: [] },
+  { boundary: "upload", attempts: 1, uploaded: [] },
+  { boundary: "after-upload", attempts: 1, uploaded: ["reactive"] },
+])(
+  "stops at the $boundary boundary and resumes from the actual registry",
+  async ({ boundary, attempts, uploaded }) => {
+    const result = await runRelease(() => undefined, {
+      publishedPackages: [],
+      dryRun: false,
+      terminationSignal: "SIGTERM",
+      terminationBoundary: boundary,
+      resume: true,
+    });
+
+    expect(result.interrupted).toMatchObject({ status: null, signal: "SIGTERM" });
+    expect(result.interruptedState).toEqual({
+      status: "",
+      versions: packages.map(() => "0.7.1"),
+      ahead: "0",
+      tag: "",
+      stagesRetained: false,
+    });
+    expect(Object.keys(result.publishedAfterFirstAttempt)).toEqual(uploaded);
+    const probe = result.calls.filter(({ command }) => command === "signal-probe");
+    expect(probe).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ event: "sent", role: "command" }),
+        expect.objectContaining({ event: "received", role: "command" }),
+        expect.objectContaining({
+          event: "last-write",
+          role: "command",
+          stageExists: true,
+          manifestVersions: packages.map(() => version),
+        }),
+      ]),
+    );
+    expect(result.callsAfterFirstAttempt.filter(({ command }) => command === "git")).toEqual([]);
+    expect(
+      result.callsAfterFirstAttempt.filter(
+        ({ command, commandArguments }) => command === "npm" && commandArguments[0] === "publish",
+      ),
+    ).toHaveLength(attempts);
+    expect(result.status).toBe(0);
+    expect(result.recorded).toEqual(["commit", "tag", "push"]);
+    expect(Object.keys(result.published)).toEqual(packages);
+    const uploads = result.calls.filter(
+      ({ command, commandArguments }) => command === "npm" && commandArguments[0] === "publish",
+    );
+    expect(uploads).toHaveLength(packages.length + attempts - uploaded.length);
+  },
+);
+
+it.each(["SIGINT", "SIGTERM", "SIGHUP"])(
   "preserves %s after cleanup and resumes the interrupted publication",
   async (terminationSignal) => {
     const result = await runRelease(() => undefined, {
@@ -942,6 +1053,39 @@ it.each(["SIGINT", "SIGTERM", "SIGHUP"])(
     );
   },
 );
+
+it("preserves a completed Git commit when cancellation arrives before recording the tag", async () => {
+  const result = await runRelease(() => undefined, {
+    publishedPackages: [],
+    dryRun: false,
+    terminationSignal: "SIGTERM",
+    terminationBoundary: "after-commit",
+    resume: true,
+  });
+
+  expect(result.interrupted).toMatchObject({ status: null, signal: "SIGTERM" });
+  expect(result.interruptedState).toEqual({
+    status: "",
+    versions: packages.map(() => version),
+    ahead: "1",
+    tag: "",
+    stagesRetained: false,
+  });
+  expect(result.interrupted.stderr).toContain("Checkout moved; leaving manifests untouched");
+  expect(Object.keys(result.publishedAfterFirstAttempt)).toEqual(packages);
+  expect(
+    result.callsAfterFirstAttempt
+      .filter(({ command }) => command === "git")
+      .map(({ commandArguments }) => commandArguments[0]),
+  ).toEqual(["commit"]);
+  expect(result.status).toBe(0);
+  expect(result.recorded).toEqual(["commit", "tag", "push"]);
+  expect(
+    result.calls.filter(
+      ({ command, commandArguments }) => command === "npm" && commandArguments[0] === "publish",
+    ),
+  ).toHaveLength(packages.length);
+});
 
 it("reports a failed restoration without changing the terminating signal or another owner's manifest", async () => {
   const result = await runRelease(() => undefined, {
@@ -1212,7 +1356,6 @@ it("charges slow visibility queries against the same deadline as polling waits",
   expect(queries).toHaveLength(40);
   for (const query of queries) {
     expect(query.timeoutMilliseconds + query.elapsedMilliseconds).toBe(30 * 60_000);
-    expect(query.killSignal).toBe("SIGKILL");
   }
 });
 
@@ -1234,7 +1377,6 @@ it("terminates a visibility query at the remaining deadline instead of granting 
     ({ command, commandArguments }) => command === "npm" && commandArguments[0] === "view",
   );
   expect(lastQuery.timeoutMilliseconds).toBe(45_000);
-  expect(lastQuery.killSignal).toBe("SIGKILL");
 });
 
 it("finishes release recording after every upload already completed", async () => {

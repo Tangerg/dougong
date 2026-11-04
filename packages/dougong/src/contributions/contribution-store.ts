@@ -15,6 +15,7 @@ import type { Lifetime, LifetimeOwnership } from "../lifetime/lifetime.js";
 import type { ResolvedValue } from "../internal/async-result.js";
 import {
   disposeSymbol,
+  markOwnedControlHandle,
   type Disposable,
   type Publication,
   type Awaitable,
@@ -146,7 +147,7 @@ class ContributionRecord<T> implements Publication {
   ) {
     this.#id = id;
     this.#state = { phase: "active", store, value: initialValue, owner, detachFromOwner };
-    this.handle = new ContributionHandle(this);
+    this.handle = markOwnedControlHandle(new ContributionHandle(this));
   }
 
   publish() {
@@ -307,6 +308,7 @@ export class ContributionStore<T> {
     });
     try {
       releaseFromOwner = own(subscription);
+      markOwnedControlHandle(subscription);
     } catch (error) {
       subscription[disposeSymbol]();
       throw error;

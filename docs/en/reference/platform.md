@@ -12,7 +12,7 @@ Type exports: `Platform`, `PlatformOptions`, `PlatformStatus`, `Registration`, `
 | `catalog.get(name, revision)` / `catalog.list()` | Reads known Artifacts |
 | `catalog.remove(artifact)` | Removes a discovery record |
 | `registrations()` | Enumerates a frozen array of current Registration handles for commands |
-| `select(artifact)` | Sets Registration selection intent |
+| `select(artifacts)` | Admits the complete selection batch and returns frozen Registration handles in input order |
 | `preview(registrations, { remove })` | Checks declaration data and lists deferred checks |
 | `activate(registrations, { remove, signal })` | Admits, loads and compiles one Core Plan |
 | `trigger(event, options)` | Derives activation targets from selected Manifests |
@@ -25,9 +25,15 @@ An Artifact's `revision` is a caller-supplied content or release identity, never
 
 Discovery and preview are synchronous. Selection, activation, triggering and removal always return a Promise, including for invalid input. A trigger matches the selections in effect when that command is admitted; an earlier queued selection is included even if its caller has not yet awaited it.
 
+`select` captures the array's own indexed data when submitted and rechecks the complete batch for Catalog identity, availability and unique names when the queued command runs. An invalid member leaves every selection unchanged; an empty batch changes nothing. All targets are selected before diagnostic observers are notified or superseded operations are cancelled. Other Registrations keep their selections, and removal remains explicit. Withdrawing a Catalog entry after acceptance does not undo selected intent.
+
+Artifact and Registration are nominal handles issued by Catalog and Platform respectively; an ordinary structural object cannot stand in for either handle. Runtime ownership checks still require the original identity from the current Catalog or Platform. A type brand cannot establish which instance issued a handle. Manifest, ArtifactInput and diagnostic snapshots remain data declarations or read-only projections.
+
 ## States and boundaries
 
-Platform states are `active/disposing/disposed`. Registration states are `selected/activating/removing/installed/failed/quarantined/removed`, reflecting selection, active operations and Core execution facts. An aborted caller does not replace the last real failure; a successful activation of the current selection clears it. The root and removal arrays capture their own indexed data slots once. Sparse arrays and accessors are rejected without invoking getters.
+Platform states are `active/disposing/disposed`. Registration states are `selected/activating/removing/installed/failed/quarantined/removed`, reflecting selection, active operations and Core execution facts. An aborted caller does not replace the last real failure; a successful activation of the current selection clears it. Selection, activation root and removal arrays capture their own indexed data slots once. Sparse arrays and accessors are rejected without invoking getters.
+
+Diagnostics materialize snapshots when read or observed by a subscriber. Consecutive unobserved selections do not repeatedly traverse every Registration. Unchanged snapshots preserve identity, and unrelated Core activity does not notify Platform observers. A subscription establishes its comparison baseline from the current state. Disposal retains a final snapshot and detaches runtime resources.
 
 `ActivationPreview.deferred` explicitly contains admission, module_validation, configuration_validation, core_binding and setup. Preview is not proof that runtime validation passed. Activation captures selection revision and Artifact identity and rechecks after preparation; stale work cannot overwrite a newer selection.
 

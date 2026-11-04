@@ -1,8 +1,11 @@
 import typescript from "typescript";
-import { dirname, resolve } from "node:path";
+import { posix } from "node:path";
+import { documentationTarget } from "./markdown-document.mjs";
 
 const referenceTables = new Set(
-  ["docs/reference/errors.md", "docs/en/reference/errors.md"].map((path) => resolve("/", path)),
+  ["docs/reference/errors.md", "docs/en/reference/errors.md"].map((path) =>
+    posix.resolve("/", path),
+  ),
 );
 
 export function sourceErrorCodes(program, modulePath, exportName) {
@@ -82,25 +85,17 @@ function constructedErrorCodes(source, codes) {
   visit(tree);
 }
 
-export function errorDocumentationFailures(documentPath, text, sourceCodes) {
-  const referenceTable = referenceTables.has(resolve("/", documentPath));
+export function errorDocumentationFailures(documentPath, document, sourceCodes) {
+  const referenceTable = referenceTables.has(posix.resolve("/", documentPath));
   const referenced = new Set();
-  const prose = text.replace(
-    /(?:^|\n)(`{3,}|~{3,})([^\n]*)\n([\s\S]*?)\n\1(?=\n|$)/g,
-    (_block, _fence, language, source) => {
-      if (/^\s*(?:[cm]?[jt]sx?|typescript|javascript)\b/i.test(language))
-        constructedErrorCodes(source, referenced);
-      return "\n";
-    },
-  );
+  for (const source of document.scriptBlocks()) constructedErrorCodes(source, referenced);
   // A link names the error domain; capitalization alone cannot distinguish HTTP from an error code.
-  for (const [, code, target] of prose.matchAll(/\[`([^`\n]+)`\]\(([^\s)]+)\)/g)) {
-    if (URL.canParse(target) || target.startsWith("//")) continue;
-    const referencePath = resolve("/", dirname(documentPath), target.split("#", 1)[0]);
-    if (referenceTables.has(referencePath)) referenced.add(code);
+  for (const { target, codes } of document.links()) {
+    const referencePath = documentationTarget(documentPath, target);
+    if (referenceTables.has(referencePath)) for (const code of codes) referenced.add(code);
   }
   const catalogued = new Set(
-    referenceTable ? [...prose.matchAll(/^\|\s*`([^`\n]+)`\s*\|/gm)].map(([, code]) => code) : [],
+    referenceTable ? document.tableRows().flatMap((row) => row[0]?.codes ?? []) : [],
   );
   const failures = [];
   for (const code of new Set([...referenced, ...catalogued])) {

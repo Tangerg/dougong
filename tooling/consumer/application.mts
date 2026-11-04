@@ -127,13 +127,13 @@ const platform = createPlatform({
     ]),
   ),
 });
-const selected = await platform.select(
+const [selected] = await platform.select([
   platform.catalog.add({
     revision: "remote-content-1",
     manifest: { name: remote.name, version: "1.0.0" },
     reference: "module",
   }),
-);
+]);
 const selection = captureDataArray([selected], "Registrations");
 assert(
   selection[0] === selected && Object.isFrozen(selection),
@@ -160,7 +160,10 @@ const using = host.use(REMOTE, async (value) => {
   return value.value;
 });
 try {
-  assert((await platform.select(next)) === selected, "Reselection changed registration identity");
+  assert(
+    (await platform.select([next]))[0] === selected,
+    "Reselection changed registration identity",
+  );
   const [attempt] = await Promise.allSettled([platform.activate([selected])]);
   assert(
     attempt.status === "rejected" &&

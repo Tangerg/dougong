@@ -76,7 +76,9 @@ export interface Platform<Reference> extends AsyncDisposable {
   readonly catalog: Catalog<Reference>;
   readonly diagnostics: SnapshotView<PlatformSnapshot>;
   registrations(): ReadonlyArray<Registration<Reference>>;
-  readonly select: (artifact: Artifact<Reference>) => Promise<Registration<Reference>>;
+  readonly select: <const Artifacts extends ReadonlyArray<Artifact<Reference>>>(
+    artifacts: Artifacts,
+  ) => Promise<{ readonly [Index in keyof Artifacts]: Registration<Reference> }>;
   preview(
     registrations: ReadonlyArray<Registration<Reference>>,
     options?: ActivationPreviewOptions<Reference>,
@@ -201,7 +203,10 @@ class DeliveryPlatform<Reference> implements Platform<Reference> {
       assertPlacement: () => this.#assertPlacement(),
     });
     this.#projection = this.#snapshot();
-    this.#publisher = new SnapshotPublisher(() => this.#projection, reporter(capturedLogger));
+    this.#publisher = new SnapshotPublisher(
+      () => (this.#projection = this.#snapshot(this.#projection)),
+      reporter(capturedLogger),
+    );
     this.#hostSnapshot = host.diagnostics.get();
     const binding = { synchronize: (() => this.#synchronize()) as (() => void) | undefined };
     this.#viewBinding = binding;
@@ -218,24 +223,30 @@ class DeliveryPlatform<Reference> implements Platform<Reference> {
     return Object.freeze([...this.#registrations.values()].map((record) => record.facade));
   }
 
-  readonly select = async (artifact: Artifact<Reference>) => {
+  readonly select: Platform<Reference>["select"] = async (artifacts) => {
     this.#assertActive();
-    this.#catalog.assertAvailable(artifact);
+    const captured = captureDataArray(artifacts, "Selection artifacts");
+    this.#assertSelectable(captured);
     return this.#admit(() => {
       this.#assertActive();
-      this.#catalog.assertAvailable(artifact);
-      let registration = this.#registrations.get(artifact.manifest.name);
-      if (registration) {
-        if (registration.select(artifact)) {
-          this.#supersede([registration]);
+      this.#assertSelectable(captured);
+      const changed: RegistrationRecord<Reference>[] = [];
+      const selected = captured.map((artifact) => {
+        let registration = this.#registrations.get(artifact.manifest.name);
+        if (registration) {
+          if (registration.select(artifact)) changed.push(registration);
+        } else {
+          registration = new RegistrationRecord(this.id, artifact, this.#registrationPort);
+          this.#registrations.set(registration.name, registration);
+          this.#handles.set(registration.facade, registration);
+          changed.push(registration);
         }
-      } else {
-        registration = new RegistrationRecord(this.id, artifact, this.#registrationPort);
-        this.#registrations.set(registration.name, registration);
-        this.#handles.set(registration.facade, registration);
-        this.#publish();
-      }
-      return registration.facade;
+        return registration.facade;
+      });
+      if (changed.length) this.#supersede(changed);
+      return Object.freeze(selected) as {
+        readonly [Index in keyof typeof artifacts]: Registration<Reference>;
+      };
     });
   };
 
@@ -524,8 +535,11 @@ class DeliveryPlatform<Reference> implements Platform<Reference> {
     try {
       subscription?.[disposeSymbol]();
     } finally {
-      this.#publish();
-      this.#publisher[disposeSymbol]();
+      try {
+        this.#publisher.invalidate();
+      } finally {
+        this.#publisher[disposeSymbol]();
+      }
     }
   }
 
@@ -562,6 +576,16 @@ class DeliveryPlatform<Reference> implements Platform<Reference> {
   #resolveRemoval(registrations: ReadonlyArray<Registration<Reference>> | undefined) {
     if (registrations === undefined) return [];
     return this.#resolveAll(registrations, "Removed registrations");
+  }
+
+  #assertSelectable(artifacts: ReadonlyArray<Artifact<Reference>>) {
+    const names = new Set<string>();
+    for (const artifact of artifacts) {
+      this.#catalog.assertAvailable(artifact);
+      const name = artifact.manifest.name;
+      if (names.has(name)) throw new TypeError(`Duplicate selected Registration '${name}'`);
+      names.add(name);
+    }
   }
 
   #resolveAll(
@@ -649,10 +673,8 @@ class DeliveryPlatform<Reference> implements Platform<Reference> {
   }
 
   #publish() {
-    if (this.#state.phase !== "disposed") this.#hostSnapshot = this.#ports().host.diagnostics.get();
-    const projection = this.#snapshot(this.#projection);
-    if (projection === this.#projection) return;
-    this.#projection = projection;
+    if (this.#state.phase === "disposed") return;
+    this.#hostSnapshot = this.#ports().host.diagnostics.get();
     this.#publisher.invalidate();
   }
 
@@ -700,12 +722,22 @@ function diagnosticView<T>(
   view: SnapshotView<T>,
   binding: { synchronize: (() => void) | undefined },
 ): SnapshotView<T> {
+  const get = () => {
+    binding.synchronize?.();
+    return view.get();
+  };
   return Object.freeze({
-    get: () => {
-      binding.synchronize?.();
-      return view.get();
+    get,
+    subscribe(listener: () => void) {
+      if (typeof listener !== "function") return view.subscribe(listener);
+      let previous = get();
+      return view.subscribe(() => {
+        const current = get();
+        if (current === previous) return;
+        previous = current;
+        return listener();
+      });
     },
-    subscribe: view.subscribe,
   });
 }
 

@@ -26,6 +26,6 @@ subscription[disposeSymbol]();
 
 Results inheriting this module's realm's `Promise.prototype` select the intrinsic native protocol, including decorated local Promises and subclasses. Other results use one captured structural `then`; display tags do not select a protocol. Foreign Promises must expose a conforming public `then`. Adapt decorated foreign results in their origin realm, and box payloads there when another assimilation would change them. See the guide for the precise boundary and disposal guarantees.
 
-ESM; Node.js `^24.22.0 || >=26.10.0`, Chrome/Edge 119+, Firefox 124+, Safari 17.4+.
+ESM; <!-- runtime-baseline:start -->Node.js `^24.22.0 || >=26.10.0`, Chrome ≥ 119, Edge ≥ 119, Firefox ≥ 124, Safari ≥ 17.4<!-- runtime-baseline:end -->.
 
 [Guide](https://tangerg.github.io/dougong/en/guide/reactive)

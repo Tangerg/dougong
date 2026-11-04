@@ -23,7 +23,7 @@ const artifact = platform.catalog.add({
   },
   reference: "formatter-module",
 });
-const registration = await platform.select(artifact);
+const [registration] = await platform.select([artifact]);
 const preview = platform.preview([registration]);
 await platform.trigger("command:format");
 await platform[asyncDisposeSymbol]();
@@ -36,11 +36,13 @@ Authorization has two precise boundaries: `load` before module evaluation, and `
 To update, add another Artifact and select it. Selection intent may lead execution. A native change can alter the committed Manifest even on the same Installation with the same revision; the next activation restores the selected declaration before treating dependent versions as satisfied. `selectedArtifact` and `activeOrigin` express that difference without copying an additional active Manifest.
 
 ```ts
-const selected = await platform.select(nextArtifact);
+const [selected] = await platform.select([nextArtifact]);
 await platform.activate([selected, another], { remove: [obsolete] });
 ```
 
 Applications can reconcile selections with `platform.registrations()` instead of maintaining another name-to-handle registry. Use diagnostics to render state, and this read-only membership list to select command targets.
+
+Submit related targets as one `select([firstArtifact, secondArtifact])` request. Platform validates the complete batch before changing selections and returns Registrations in input order. A foreign or withdrawn Artifact, or duplicate name, rejects the whole batch. Subscription and cancellation callbacks see the complete new selection. An empty batch changes nothing, and omitted Registrations are not implicitly removed.
 
 Combined additions, updates and removals compile to one Core Plan. `remove` uses the same execution path. Deleting a Catalog entry forgets discovery data; it does not implicitly remove selected or running capabilities.
 

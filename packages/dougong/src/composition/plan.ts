@@ -14,6 +14,7 @@ import {
 import type { GroupNode } from "./group.js";
 import type { ConfigurationValue } from "./configuration.js";
 import type { InstallationOrigin } from "./declarations.js";
+import type { ChangeOperation } from "./change-set.js";
 
 export type TransitionIntent = "change" | "start" | "stop";
 export interface BindingReport {
@@ -22,23 +23,45 @@ export interface BindingReport {
   readonly optional: boolean;
   readonly provider: string | undefined;
 }
-export interface ImpactReason {
-  readonly installation: string;
-  readonly kind: "installed" | "updated" | "removed" | "provider_changed" | "start" | "stop";
-  readonly contract?: string;
-  readonly provider?: string;
-  readonly previousProvider?: string;
-}
+export type DirectImpactKind = "installed" | "updated" | "removed" | "start" | "stop";
+type ProviderChange =
+  | { readonly provider: string; readonly previousProvider?: string }
+  | { readonly provider?: never; readonly previousProvider: string };
+export type ImpactReason =
+  | {
+      readonly installation: string;
+      readonly kind: DirectImpactKind;
+      readonly contract?: never;
+      readonly provider?: never;
+      readonly previousProvider?: never;
+    }
+  | ({
+      readonly installation: string;
+      readonly kind: "provider_changed";
+      readonly contract: string;
+    } & ProviderChange);
 export interface DeclarationSnapshot {
   readonly pluginName: string;
   readonly origin: InstallationOrigin | undefined;
 }
 export type PlanOperation =
   | {
-      readonly kind: "install" | "update" | "remove";
+      readonly kind: "install";
       readonly id: string;
-      readonly before: DeclarationSnapshot | undefined;
-      readonly after: DeclarationSnapshot | undefined;
+      readonly before: undefined;
+      readonly after: DeclarationSnapshot;
+    }
+  | {
+      readonly kind: "update";
+      readonly id: string;
+      readonly before: DeclarationSnapshot;
+      readonly after: DeclarationSnapshot;
+    }
+  | {
+      readonly kind: "remove";
+      readonly id: string;
+      readonly before: DeclarationSnapshot;
+      readonly after: undefined;
     }
   | {
       readonly kind: "group" | "remove-group";
@@ -141,6 +164,47 @@ export class PlanAuthority {
   }
 }
 
+export function describeOperations(
+  operations: ReadonlyArray<ChangeOperation>,
+  previous: InstallationGraph,
+  candidate: InstallationGraph,
+): ReadonlyArray<PlanOperation> {
+  return Object.freeze(
+    operations.map((operation): PlanOperation => {
+      switch (operation.kind) {
+        case "install":
+          return Object.freeze({
+            kind: operation.kind,
+            id: operation.installation.id,
+            before: undefined,
+            after: describeDeclaration(candidate.declarationFor(operation.installation)),
+          });
+        case "update":
+          return Object.freeze({
+            kind: operation.kind,
+            id: operation.installation.id,
+            before: describeDeclaration(previous.declarationFor(operation.installation)),
+            after: describeDeclaration(candidate.declarationFor(operation.installation)),
+          });
+        case "remove":
+          return Object.freeze({
+            kind: operation.kind,
+            id: operation.installation.id,
+            before: describeDeclaration(previous.declarationFor(operation.installation)),
+            after: undefined,
+          });
+        case "group":
+        case "remove-group":
+          return Object.freeze({
+            kind: operation.kind,
+            id: operation.group.id,
+            parentId: operation.group.parentId,
+          });
+      }
+    }),
+  );
+}
+
 export function describeBindings(
   graph: InstallationGraph,
   installations: ReadonlyArray<InstallationRecord> = graph.order,
@@ -167,7 +231,7 @@ export function describeImpact(
   previous: InstallationGraph,
   candidate: InstallationGraph,
   affected: ReadonlySet<InstallationRecord>,
-  direct: ReadonlyMap<InstallationRecord, ImpactReason["kind"]>,
+  direct: ReadonlyMap<InstallationRecord, DirectImpactKind>,
 ): ReadonlyArray<ImpactReason> {
   const reasons: ImpactReason[] = [];
   for (const installation of affected) {
@@ -184,18 +248,24 @@ export function describeImpact(
       const contract = (requirement.kind === "optional" ? requirement.service : requirement).id;
       const previousProvider = previous.providers.get(contract);
       const provider = candidate.providers.get(contract);
-      if (
-        !(previousProvider && affected.has(previousProvider)) &&
-        !(provider && affected.has(provider))
-      )
-        continue;
+      let providers: ProviderChange;
+      if (provider && affected.has(provider)) {
+        providers = {
+          provider: provider.id,
+          ...(previousProvider && { previousProvider: previousProvider.id }),
+        };
+      } else if (previousProvider && affected.has(previousProvider)) {
+        providers = {
+          previousProvider: previousProvider.id,
+          ...(provider && { provider: provider.id }),
+        };
+      } else continue;
       reasons.push(
         Object.freeze({
           installation: installation.id,
           kind: "provider_changed",
           contract,
-          ...(previousProvider === undefined ? {} : { previousProvider: previousProvider.id }),
-          ...(provider === undefined ? {} : { provider: provider.id }),
+          ...providers,
         }),
       );
     }
@@ -203,11 +273,6 @@ export function describeImpact(
   return Object.freeze(reasons);
 }
 
-export function describeDeclaration(
-  declaration: InstallationDeclaration | undefined,
-): DeclarationSnapshot | undefined {
-  return (
-    declaration &&
-    Object.freeze({ pluginName: declaration.plugin.name, origin: declaration.origin })
-  );
+function describeDeclaration(declaration: InstallationDeclaration): DeclarationSnapshot {
+  return Object.freeze({ pluginName: declaration.plugin.name, origin: declaration.origin });
 }

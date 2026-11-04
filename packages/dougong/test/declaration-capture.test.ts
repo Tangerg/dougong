@@ -82,6 +82,52 @@ it("replaces source atomically with implementation and preserves it for configur
   expect(id.origin).toBeUndefined();
 });
 
+it.each(["omitted", "replacement-undefined", "configuration-undefined"] as const)(
+  "preserves the configuration and origin meaning of a %s update",
+  async (mode) => {
+    const received: string[] = [];
+    const schema: StandardSchemaV1<string | undefined, string> = {
+      "~standard": {
+        version: 1,
+        vendor: "test",
+        validate: (input) => ({ value: input === undefined ? "default" : String(input) }),
+      },
+    };
+    const original = definePlugin({
+      name: "original",
+      configuration: schema,
+      setup(_context, value) {
+        received.push(value);
+      },
+    });
+    const replacement = definePlugin({
+      name: "replacement",
+      configuration: schema,
+      setup(_context, value) {
+        received.push(value);
+      },
+    });
+    const origin = { revision: "original" };
+    const host = createHost({
+      installations: [{ id: "configured", plugin: original, configuration: "captured", origin }],
+    });
+    try {
+      await host.start();
+      const installation = host.installation("configured")!;
+      const change = host.change();
+      if (mode === "omitted") change.update(installation, { plugin: replacement });
+      else if (mode === "replacement-undefined")
+        change.update(installation, { plugin: replacement, configuration: undefined });
+      else change.update(installation, { configuration: undefined });
+      await host.apply(await host.plan(change));
+      expect(received).toEqual(["captured", mode === "omitted" ? "captured" : "default"]);
+      expect(installation.origin).toEqual(mode === "configuration-undefined" ? origin : undefined);
+    } finally {
+      await host.stop();
+    }
+  },
+);
+
 it("rejects executable identity data rather than invoking getters", () => {
   const getter = vi.fn<() => string>(() => "unsafe");
   const token = Object.defineProperty({ kind: "service" }, "id", { get: getter, enumerable: true });

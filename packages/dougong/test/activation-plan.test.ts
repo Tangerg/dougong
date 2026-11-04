@@ -12,6 +12,92 @@ const provider = (number: number) =>
     }),
   });
 
+it("reports the exact declarations and provider identities for each change kind", async () => {
+  const host = createHost({
+    installations: [
+      {
+        id: "consumer",
+        plugin: definePlugin({
+          name: "consumer",
+          requires: { value: optional(value) },
+          setup() {},
+        }),
+      },
+    ],
+  });
+  try {
+    await host.start();
+    const install = host.change();
+    const installation = install.install(provider(1), { id: "provider" });
+    const installing = await host.plan(install);
+    expect(installing.report.operations).toEqual([
+      {
+        kind: "install",
+        id: "provider",
+        before: undefined,
+        after: { pluginName: "provider", origin: undefined },
+      },
+    ]);
+    expect(installing.report.reasons).toEqual([
+      { installation: "provider", kind: "installed" },
+      {
+        installation: "consumer",
+        kind: "provider_changed",
+        contract: value.id,
+        provider: "provider",
+      },
+    ]);
+    await host.apply(installing);
+
+    const update = host.change();
+    update.update(installation, { plugin: provider(2), origin: { revision: "next" } });
+    const updating = await host.plan(update);
+    expect(updating.report.operations).toEqual([
+      {
+        kind: "update",
+        id: "provider",
+        before: { pluginName: "provider", origin: undefined },
+        after: { pluginName: "provider", origin: { revision: "next" } },
+      },
+    ]);
+    expect(updating.report.reasons).toEqual([
+      { installation: "provider", kind: "updated" },
+      {
+        installation: "consumer",
+        kind: "provider_changed",
+        contract: value.id,
+        previousProvider: "provider",
+        provider: "provider",
+      },
+    ]);
+    await host.apply(updating);
+
+    const remove = host.change();
+    remove.remove(installation);
+    const removing = await host.plan(remove);
+    expect(removing.report.operations).toEqual([
+      {
+        kind: "remove",
+        id: "provider",
+        before: { pluginName: "provider", origin: { revision: "next" } },
+        after: undefined,
+      },
+    ]);
+    expect(removing.report.reasons).toEqual([
+      { installation: "provider", kind: "removed" },
+      {
+        installation: "consumer",
+        kind: "provider_changed",
+        contract: value.id,
+        previousProvider: "provider",
+      },
+    ]);
+    await host.apply(removing);
+  } finally {
+    await host.stop();
+  }
+});
+
 it("explains declaration origins, both binding states and publication order without configuration values", async () => {
   const consumer = definePlugin({
     name: "consumer",

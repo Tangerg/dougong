@@ -23,7 +23,7 @@ const artifact = platform.catalog.add({
   },
   reference: "formatter-module",
 });
-const registration = await platform.select(artifact);
+const [registration] = await platform.select([artifact]);
 const preview = platform.preview([registration]);
 await platform.trigger("command:format");
 await platform[asyncDisposeSymbol]();
@@ -36,11 +36,13 @@ await platform[asyncDisposeSymbol]();
 更新先添加新 Artifact，再 select；选择意图可以领先于实际执行。即便 Installation 和 revision 相同，原生 Core 变更也可能改写已提交的 Manifest。下次激活会先纠正不一致，而不会把尚未安装的版本当作已满足依赖。通过 `selectedArtifact` 与 `activeOrigin` 显式表达这种差异，不复制“已激活 Manifest”。
 
 ```ts
-const selected = await platform.select(nextArtifact);
+const [selected] = await platform.select([nextArtifact]);
 await platform.activate([selected, another], { remove: [obsolete] });
 ```
 
 应用可以通过 `platform.registrations()` 核对当前选择，不需要自行维护另一份“名称 → 句柄”注册表。诊断用于渲染状态，当前句柄列表用于明确命令目标。
+
+将一组关联目标作为一次 `select([firstArtifact, secondArtifact])` 请求提交。Platform 在改变选择前验证整个集合，并按输入顺序返回 Registration；外来、已撤回或同名的 Artifact 会使整组拒绝。订阅回调和取消回调只能看到完整的新选择。空数组不改变选择，未列出的 Registration 也不会被隐式移除。
 
 同次增、改、删编译成一笔 Core Plan。`remove` 也复用该执行路径。Catalog 删除只忘记发现记录，不隐式删除已经选择或运行的能力。
 

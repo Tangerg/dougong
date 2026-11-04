@@ -131,13 +131,13 @@ async function abandonPreparation(
       },
     },
   });
-  const chosen = await platform.select(
+  const [chosen] = await platform.select([
     platform.catalog.add({
       revision: "v1",
       manifest: { name: "example", version: "1.0.0" },
       reference,
     }),
-  );
+  ]);
   const activation = platform.activate([chosen]).catch((error: unknown) => error);
   await entered.promise;
   await platform[Symbol.asyncDispose]();

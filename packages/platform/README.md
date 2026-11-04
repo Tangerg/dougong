@@ -38,7 +38,7 @@ try {
       manifest: { name: counter.name, version: "1.0.0" },
       reference: "counter-v1",
     });
-    const registration = await platform.select(artifact);
+    const [registration] = await platform.select([artifact]);
 
     const preview = platform.preview([registration]);
     if (preview.blockers.length === 0) {
@@ -54,7 +54,12 @@ try {
 }
 ```
 
-`select` records a target without loading or running code. `activate` loads the complete
+`select` accepts a complete batch of targets without loading or running code. It captures
+the input when submitted and checks every Artifact's Catalog identity, availability and
+unique name again when admitted. Invalid batches change no selections. The returned frozen
+Registration array preserves input order, and all selections are visible before observers
+or cancellation callbacks run. An empty batch changes nothing; omitted Registrations remain
+selected until explicitly removed. `activate` loads the complete
 selected dependency closure and submits one Core plan. `trigger("startup")` activates all
 matching roots in the same way. Module loading and configuration validation remain explicit
 deferred checks in the metadata-only preview.
@@ -81,7 +86,10 @@ resolution and any integrity guarantees it advertises.
 Use `platform.registrations()` to enumerate the current Registration handles for commands.
 The frozen array captures membership at the time of the call; removed handles never acquire
 authority over later selections. Diagnostic snapshots carry data, not command handles.
-Platform snapshots retain identity and do not notify observers for unrelated Core activity.
+Artifact and Registration handles are issued by their Catalog and Platform. Their nominal
+types reject ordinary object construction; runtime identity checks still enforce ownership
+by the current instance. Platform snapshots materialize when read or observed, retain
+identity when unchanged and do not notify observers for unrelated Core activity.
 
 Module caching follows Artifact reachability. A withdrawn Artifact which is no longer selected
 or otherwise retained does not pin its loaded plugin for the lifetime of the Platform.

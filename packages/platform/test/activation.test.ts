@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { createHost, definePlugin, optional, service, type AnyPlugin } from "dougong";
 import { createPlatform, MemoryLoader, type Platform } from "../src";
 import { ActivationPlan } from "../src/activation/plan";
+import { ArtifactCatalog } from "../src/catalog/catalog";
 import { RegistrationRecord } from "../src/catalog/registration";
 import { add, deferred, emptyPlugin, fixture, select, VALUE, valuePlugin } from "./fixtures";
 
@@ -133,7 +134,7 @@ describe("activation compilation", () => {
     await platform.activate([registration]);
     const installation = registration.installation;
     const next = add(platform, "sample", "missing", "2.0.0");
-    await platform.select(next);
+    await platform.select([next]);
     await expect(platform.activate([registration])).rejects.toMatchObject({
       code: "MODULE_LOAD_FAILED",
     });
@@ -211,7 +212,7 @@ describe("activation compilation", () => {
     const installation = registration.installation;
     const next = add(platform, "sample", "two", "2.0.0");
     permitted = next.revision;
-    await platform.select(next);
+    await platform.select([next]);
     await expect(platform.activate([registration])).rejects.toMatchObject({
       code: "TRANSITION_FAILED",
     });
@@ -251,7 +252,7 @@ describe("activation compilation", () => {
     const registration = await select(platform, "sample", "one");
     await host.start();
     await platform.activate([registration]);
-    await platform.select(add(platform, "sample", "two", "2.0.0"));
+    await platform.select([add(platform, "sample", "two", "2.0.0")]);
     await platform.activate([registration]);
     expect(registration.activeOrigin?.manifest.version).toBe("2.0.0");
     expect(observations.some((item) => item.committed === "2.0.0")).toBe(true);
@@ -275,18 +276,18 @@ describe("activation compilation", () => {
     });
     await host.start();
     await platform.activate([consumer]);
-    await platform.select(add(platform, "dependency", "dependency-second", "2.0.0"));
+    await platform.select([add(platform, "dependency", "dependency-second", "2.0.0")]);
     expect(platform.preview([dependency]).blockers[0]?.code).toBe(
       "REGISTRATION_DEPENDENCY_INCOMPATIBLE",
     );
     await expect(platform.activate([dependency])).rejects.toMatchObject({
       code: "REGISTRATION_DEPENDENCY_INCOMPATIBLE",
     });
-    await platform.select(
+    await platform.select([
       add(platform, "consumer", "consumer2", "2.0.0", {
         manifest: { name: "consumer", version: "2.0.0", dependencies: { dependency: "^2" } },
       }),
-    );
+    ]);
     const before = host.stateRevision;
     await platform.activate([consumer]);
     expect(host.stateRevision).toBe(before + 1);
@@ -389,7 +390,7 @@ describe("activation compilation", () => {
       dependencies: { dependency: "^1" },
     });
     await platform.activate([consumer]);
-    await platform.select(add(platform, "dependency", "dependency", "2.0.0"));
+    await platform.select([add(platform, "dependency", "dependency", "2.0.0")]);
     const next = await select(platform, "next", "next", { dependencies: { absent: "*" } });
     const report = platform.preview([dependency, next]);
     expect(report.blockers.map((item) => item.code)).toEqual([
@@ -517,8 +518,8 @@ describe("activation compilation", () => {
       const registration = await select(platform, "consumer", "consumer1");
       await host.start();
       await platform.activate([provider, registration]);
-      await platform.select(add(platform, "consumer", "consumer2", "2.0.0"));
-      await platform.select(add(platform, "provider", "provider2", "2.0.0"));
+      await platform.select([add(platform, "consumer", "consumer2", "2.0.0")]);
+      await platform.select([add(platform, "provider", "provider2", "2.0.0")]);
       const change = () =>
         command === "update" ? platform.activate([provider]) : platform.remove(provider);
       try {
@@ -675,6 +676,7 @@ describe("activation compilation", () => {
 
 it("plans deep delivery closures without consuming the JS call stack or copying every ancestor path", () => {
   const records = new Map<string, RegistrationRecord<string>>();
+  const catalog = new ArtifactCatalog<string>("1.0.0");
   const count = 9000;
   for (let index = 0; index < count; index++) {
     const name = String(index);
@@ -682,7 +684,7 @@ it("plans deep delivery closures without consuming the JS call stack or copying 
       name,
       new RegistrationRecord(
         "deep",
-        {
+        catalog.add({
           revision: "one",
           configuration: undefined,
           reference: name,
@@ -694,7 +696,7 @@ it("plans deep delivery closures without consuming the JS call stack or copying 
             permissions: [],
             dependencies: index + 1 === count ? {} : { [String(index + 1)]: "*" },
           },
-        },
+        }),
         { installation: () => undefined, operation: () => undefined },
       ),
     );
@@ -707,10 +709,13 @@ it("plans deep delivery closures without consuming the JS call stack or copying 
   expect(plan.selections.at(-1)?.registration).toBe(root);
   const last = records.get(String(count - 1))!;
   const artifact = last.selectedArtifact;
-  last.select({
-    ...artifact,
-    manifest: { ...artifact.manifest, dependencies: { [String(count - 2)]: "*" } },
-  });
+  last.select(
+    catalog.add({
+      ...artifact,
+      revision: "two",
+      manifest: { ...artifact.manifest, dependencies: { [String(count - 2)]: "*" } },
+    }),
+  );
   expect(new ActivationPlan(records, [root]).report.blockers[0]?.dependencyPath).toEqual(
     [count - 1, count - 2, count - 1].map(String),
   );

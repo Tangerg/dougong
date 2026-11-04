@@ -51,11 +51,12 @@ export async function select<Reference>(
   reference: Reference,
   manifest: Partial<ManifestInput> = {},
 ) {
-  return platform.select(
+  const [registration] = await platform.select([
     add(platform, name, reference, manifest.version ?? "1.0.0", {
       manifest: { name, version: "1.0.0", ...manifest },
     }),
-  );
+  ]);
+  return registration;
 }
 
 export function deferred<T = void>() {

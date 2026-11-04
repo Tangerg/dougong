@@ -85,6 +85,7 @@ it("attempts the remaining restorations and reports a manifest it cannot restore
   expect(result.manifests.platform).toBe(result.originals.platform);
   expect(result.stderr).toContain("packages/reactive/package.json");
   expect(result.stderr).toContain("fixture manifest restoration failure");
+  expect(result.stderr).toContain("pnpm check exited with 1");
   expect(result.stdout).not.toContain("versions restored");
 });
 

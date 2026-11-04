@@ -26,7 +26,7 @@ import { createPlatform } from "@dougongjs/platform";
 import { bridge, computed, observe, signal } from "@dougongjs/reactive";
 ```
 
-Packages remain ESM and require Node.js `^24.22.0 || >=26.10.0`. Browser support starts at Chrome/Edge 119, Firefox 124 and Safari 17.4. TypeScript consumers need the `ES2024`, `DOM` and `ESNext.Disposable` libraries. Native browser modules must also retain the shipped `runtime/` directory and map its private import; see [getting started](./getting-started.md#native-browser-modules).
+Packages remain ESM and support <!-- runtime-baseline:start -->Node.js `^24.22.0 || >=26.10.0`, Chrome ≥ 119, Edge ≥ 119, Firefox ≥ 124, Safari ≥ 17.4<!-- runtime-baseline:end -->. TypeScript consumers need the `ES2024`, `DOM` and `ESNext.Disposable` libraries. Native browser modules must also retain the shipped `runtime/` directory and map its private import; see [getting started](./getting-started.md#native-browser-modules).
 
 ## 2. Replace installation commands with planning and execution
 
@@ -131,7 +131,7 @@ const artifact = platform.catalog.add({
   manifest: { name: greeter.name, version: "1.0.0" },
   reference: "greeter-module",
 });
-const registration = await platform.select(artifact);
+const [registration] = await platform.select([artifact]);
 await platform.activate([registration]);
 await deliveryHost.use(GREETER, (value) => value.greet("Dougong"));
 await platform[asyncDisposeSymbol]();

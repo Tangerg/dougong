@@ -16,7 +16,10 @@ export interface ArtifactDescriptor {
   readonly manifest: Manifest;
 }
 
+declare const artifactBrand: unique symbol;
+
 export interface Artifact<Reference> extends ArtifactDescriptor {
+  readonly [artifactBrand]: true;
   readonly reference: Reference;
   readonly configuration: ConfigurationValue | undefined;
 }
@@ -93,7 +96,7 @@ export function captureArtifact<Reference>(
     manifest,
     reference: declaration.reference,
     configuration: captureConfiguration(declaration.configuration),
-  });
+  }) as Artifact<Reference>;
 }
 
 export function assertCompatibleManifest(apiVersion: string, manifest: Manifest) {

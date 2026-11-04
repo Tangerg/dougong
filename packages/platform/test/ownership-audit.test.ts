@@ -6,11 +6,11 @@ import { add, emptyPlugin, fixture, nextTurn, select } from "./fixtures";
 it("enumerates current command handles independently of historical snapshots", async () => {
   const { platform } = fixture();
   const artifact = add(platform, "sample", "module");
-  const first = await platform.select(artifact);
+  const [first] = await platform.select([artifact]);
   const previous = platform.registrations();
   expect(Object.isFrozen(previous)).toBe(true);
   await platform.remove(first);
-  const second = await platform.select(artifact);
+  const [second] = await platform.select([artifact]);
   expect(previous[0]).toBe(first);
   expect(platform.registrations()[0]).toBe(second);
   expect(second).not.toBe(first);
@@ -24,7 +24,7 @@ it("preserves Platform snapshot identity and notifications across unrelated Core
   const before = platform.diagnostics.get();
   const changed = vi.fn<() => void>();
   using _subscription = platform.diagnostics.subscribe(changed);
-  await platform.select(registration.selectedArtifact);
+  await platform.select([registration.selectedArtifact]);
   await host.start();
   const change = host.change();
   change.install(emptyPlugin("native"), { id: "native" });
@@ -100,7 +100,7 @@ it.each(["validation", "admission", "setup", "release"] as const)(
             ? platform.remove(registration)
             : phase === "admission"
               ? platform.activate([])
-              : platform.select(registration.selectedArtifact);
+              : platform.select([registration.selectedArtifact]);
       outcome = await Promise.race([
         attempt.then(
           () => "resolved",
@@ -158,7 +158,7 @@ it("does not pin withdrawn artifact references or loaded plugins for a live Plat
     const plugin = emptyPlugin("retired");
     const reference = { plugin };
     const artifact = add(platform, "retired", reference);
-    const registration = await platform.select(artifact);
+    const [registration] = await platform.select([artifact]);
     await platform.activate([registration]);
     await platform.remove(registration);
     platform.catalog.remove(artifact);

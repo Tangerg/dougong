@@ -13,7 +13,7 @@ Lifetimes compose into a resource tree. Each Instance creates a root; plugins cr
 | `signal` | Cooperative cancellation |
 | `child[Symbol.asyncDispose]()` | Closes the child subtree you created and joins its single shutdown |
 
-A child Lifetime belongs to the parent that created it. Within one loaded copy of Core, `use` and `acquire` reject an existing child handle. Across separately bundled copies, keep the child with its original parent. Its handle can still end the subtree early.
+A child Lifetime belongs to the parent that created it. Tasks, `defer`, `interrupt`, Event listeners, Contributions, and contribution view subscriptions with a Lifetime owner also return handles that control their original registration. Within one loaded copy of Core, `use` and `acquire` reject these handles, regardless of which Lifetime is targeted or whether the handle has completed. Call the handle's standard disposal method directly to end the original operation or unregister it without creating another release obligation. Across separately bundled copies, keep each handle with its original owner.
 
 Within one loaded Core, an external resource object can also have only one Lifetime owner. Repeated `use`, competing `acquire` calls, and registration reentered through a disposal-method getter are rejected. Pending, timed-out, or failed cleanup keeps its original obligation; the same object can be adopted again only after the actual release succeeds. Give shared resources one explicit Lifetime and pass access through Service parameters.
 
@@ -22,6 +22,8 @@ Within one loaded Core, an external resource object can also have only one Lifet
 Protocol selection does not modify the input. Inheriting this realm's `Promise.prototype` selects the intrinsic protocol; a forged object without native internal state cannot switch to the structural protocol. Cyclic prototype chains fail explicitly. If intrinsic observation fails through `constructor` or `Symbol.species`, the original error propagates once without trying another protocol. Observing the original Promise's rejection cannot be guaranteed in that case, and the resource owner retains its failed release obligation. Promises from another realm use their public `then`; hiding or breaking that method falls outside the guarantee. To deliver a value with a mutable or executable `then` across realms, place it in an ordinary data container in the source realm before delivering its Promise. Replacing a local Promise's entire prototype chain also removes the intrinsic-protocol guarantee.
 
 Shutdown seals entry, withdraws publications and broadcasts cancellation, starts all interruptions and waits for them together, joins active work and acquisitions, then releases resources in reverse order. Use `interrupt` to break a blocking read and `defer` for final destruction that must wait for tasks to finish.
+
+Closing entry and cancelling admitted work are distinct stages. Engine seals affected Instances before waiting for consumers in dependency order, so a provider may be sealed while its signal is still active. New `acquire` calls are rejected, but an acquisition already registered can complete and deliver its resource for a consumer's final flush. Only genuine cancellation of the original signal reclaims a late resource and rejects with that signal's original reason. Independent factory failures still propagate as errors.
 
 ```ts
 const { resource: connection } = await lifetime.acquire(async (signal) => openConnection(signal));

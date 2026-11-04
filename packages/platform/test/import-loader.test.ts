@@ -14,7 +14,7 @@ it.each(["selection", "admission"] as const)(
     const { host, platform, info, entered, resume } = importFixture(initialVersion);
     const initial = add(platform, name, reference.href, initialVersion);
     if (phase === "selection") reference.href = replacementSpecifier;
-    const registration = await platform.select(initial);
+    const [registration] = await platform.select([initial]);
     await host.start();
     const activation = platform.activate([registration]);
     try {
@@ -30,7 +30,7 @@ it.each(["selection", "admission"] as const)(
       const installation = registration.installation;
 
       const replacement = add(platform, name, reference.href, replacementVersion);
-      expect(await platform.select(replacement)).toBe(registration);
+      expect((await platform.select([replacement]))[0]).toBe(registration);
       expect(registration.selectionRevision).toBe(2);
       expect(registration.activeOrigin?.revision).toBe(initialVersion);
       await platform.activate([registration]);
@@ -55,9 +55,9 @@ it("rejects a mutable JavaScript artifact reference after admission without inst
   const initialVersion = "1.0.0";
   const reference = new URL(moduleSpecifier(name, initialVersion));
   const { host, platform, info, entered, resume } = importFixture(initialVersion);
-  const registration = await platform.select(
+  const [registration] = await platform.select([
     add(platform, name, reference as never, initialVersion),
-  );
+  ]);
   await host.start();
   const activation = platform.activate([registration]).catch((error: unknown) => error);
   try {

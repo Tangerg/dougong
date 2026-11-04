@@ -147,7 +147,7 @@ export async function lynxScenario(): Promise<ExampleResult> {
       },
       reference,
     });
-  const explorer = await platform.select(artifact("1.0.0", "explorer-v1"));
+  const [explorer] = await platform.select([artifact("1.0.0", "explorer-v1")]);
   const { value: before } = await host.use(
     COMMAND_CATALOG,
     async (commands) => (await commands.list()).length,
@@ -156,7 +156,7 @@ export async function lynxScenario(): Promise<ExampleResult> {
   const { value: firstOutput } = await host.use(COMMAND_CATALOG, (commands) =>
     commands.run(openExplorer.id),
   );
-  await platform.select(artifact("1.1.0", "explorer-v2"));
+  await platform.select([artifact("1.1.0", "explorer-v2")]);
   await platform.activate([explorer]);
   const { value: secondOutput } = await host.use(COMMAND_CATALOG, (commands) =>
     commands.run(openExplorer.id),

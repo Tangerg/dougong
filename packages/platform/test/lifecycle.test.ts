@@ -58,7 +58,7 @@ describe("Platform lifecycle", () => {
     const first = platform[Symbol.asyncDispose]();
     expect(platform[Symbol.asyncDispose]()).toBe(first);
     expect(platform.status).toBe("disposing");
-    await expect(platform.select(registration.selectedArtifact)).rejects.toThrow(
+    await expect(platform.select([registration.selectedArtifact])).rejects.toThrow(
       expect.objectContaining({ code: "PLATFORM_UNAVAILABLE" }),
     );
     await first;
@@ -347,7 +347,7 @@ describe("Platform lifecycle", () => {
 
   it("does not preserve ambiguous legacy registration properties", async () => {
     const { platform } = fixture();
-    const registration = await platform.select(add(platform, "sample", "one"));
+    const [registration] = await platform.select([add(platform, "sample", "one")]);
     expect("manifest" in registration).toBe(false);
     expect("update" in registration).toBe(false);
     expect("activate" in registration).toBe(false);
@@ -390,7 +390,7 @@ it.each(["remove", "dispose"] as const)(
     await host.start();
     const registration = await select(platform, "sample", "one");
     await platform.activate([registration]);
-    await platform.select(add(platform, "sample", "two", "2.0.0"));
+    await platform.select([add(platform, "sample", "two", "2.0.0")]);
     const preparing = platform.activate([registration]).catch((error: unknown) => error);
     await loading.promise;
     const closing =

@@ -10,6 +10,8 @@ When migrating Registration diagnostics, read `snapshot.fields?.manifestName` an
 
 A native Error from another realm retains its message and causes. When cleanup throws during unwinding, the recorder reads the own data fields `error` and `suppressed` even if the application has renamed the error. Both branches share the diagnostic depth and size budget.
 
+Contribution IDs describe the committed collection snapshot, not guaranteed availability at the moment of borrowing. While an existing contribution update awaits batch publication, `view.get()` can still contain its ID and `view.use()` rejects with `CONTRIBUTION_UNAVAILABLE`. Reread and borrow after a publication notification from `view.subscribe()`; pending publication does not mean permanent removal and does not justify a busy retry loop. A closed owner can also reject borrowing with `LIFETIME_DISPOSED`; handle that according to the owning Lifetime or Host's shutdown state.
+
 | Code | Meaning and response |
 | --- | --- |
 | `ACTIVATION_FAILED` | Activation execution failed; inspect cause and the structured Core outcome. |
@@ -23,7 +25,7 @@ A native Error from another realm retains its message and causes. When cleanup t
 | `CHANGE_FOREIGN` | The ChangeSet belongs to another Host. |
 | `CONFIGURATION_INVALID` | Standard Schema validation failed; inspect issues and correct the input. |
 | `CONTRACT_CONFLICT` | The same Contract ID was used for incompatible contract kinds. |
-| `CONTRIBUTION_UNAVAILABLE` | The contribution was withdrawn or its owner no longer accepts calls. |
+| `CONTRIBUTION_UNAVAILABLE` | The contribution has not been published, an update awaits batch publication, or it was withdrawn. Reread the available collection after a publication notification before borrowing again. |
 | `EVENT_BEFORE_COMMIT` | Candidate setup cannot emit externally before commit. |
 | `GROUP_CONFLICT` | Group identity or declarations conflict. |
 | `GROUP_CYCLE` | Group parent declarations contain a cycle. |

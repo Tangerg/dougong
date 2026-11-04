@@ -68,6 +68,41 @@ it("includes child stderr in a failing pack command's diagnostic", async () => {
   expect(result).toEqual({ message: "Command failed: pnpm pack\nlauncher failed", status: 1 });
 });
 
+it.each([
+  { label: "captured output", source: 'process.stdout.write("out"); process.stderr.write("err")' },
+  { label: "nonzero exit", source: 'process.stderr.write("failure"); process.exit(7)' },
+  { label: "signal termination", source: 'process.kill(process.pid, "SIGTERM")' },
+  { label: "launch failure", missing: true, source: "" },
+])("preserves asynchronous command results for $label", async ({ source, missing }) => {
+  const result = await evaluate(`
+    import childProcess from "node:child_process";
+    import { installCommandFixture } from ${JSON.stringify(fixture)};
+    const command = ${missing ? 'process.execPath + "-missing"' : "process.execPath"};
+    const commandArguments = ["-e", ${JSON.stringify(source)}];
+    const response = childProcess.spawnSync(command, commandArguments);
+    const collect = (child) => {
+      const stdout = [];
+      const stderr = [];
+      let failure;
+      child.stdout?.on("data", (bytes) => stdout.push(bytes));
+      child.stderr?.on("data", (bytes) => stderr.push(bytes));
+      child.once("error", (error) => { failure = error; });
+      return new Promise((resolve) => child.once("close", (status, signal) => resolve({
+        status,
+        signal,
+        stdout: child.stdout ? Buffer.concat(stdout) : null,
+        stderr: child.stderr ? Buffer.concat(stderr) : null,
+        error: failure?.code,
+      })));
+    };
+    const native = await collect(childProcess.spawn(command, commandArguments));
+    installCommandFixture(() => response);
+    const simulated = await collect(childProcess.spawn(command, commandArguments));
+    console.log(JSON.stringify({ native, simulated }));
+  `);
+  expect(result.simulated).toEqual(result.native);
+});
+
 it.each(["inherit", "ignore"])(
   "preserves %s stderr descriptors in release diagnostics",
   async (disposition) => {

@@ -7,13 +7,22 @@ import typescript from "typescript";
 import { declarationSurface } from "./declaration-surface.mjs";
 import { sourceErrorCodes, errorDocumentationFailures } from "./error-code-surface.mjs";
 import { existsSync, globSync, readFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { relative, resolve } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { loadConfigFromFile } from "vite";
+import {
+  createMarkdownRenderer,
+  disposeMdItInstance,
+  resolveConfig as resolveDocumentationConfiguration,
+} from "vitepress";
+import { resolveConfig as resolveTestConfiguration } from "vitest/node";
+import { documentationTarget, MarkdownDocument } from "./markdown-document.mjs";
+import { coverageDocumentationFailures, sidebarRoutes } from "./configuration-surface.mjs";
 import { abbreviatedDeclaration, retiredVocabulary } from "./vocabulary.mjs";
 import { packageEntrypoints, publishedDirectories } from "../packages.mjs";
 import { architectureRules, sourceExtensions } from "./rules.mjs";
 import { runtimeBaseline } from "../runtime-baseline.mjs";
+import { runtimeProjectionChanges } from "../runtime-projections.mjs";
 
 const retiredIdentifiers = new Set(retiredVocabulary);
 const publicImports = Object.keys(PACKAGES);
@@ -30,33 +39,12 @@ function difference(actual, expected) {
 const failures = [];
 const surfaces = new Map();
 
-const publishedManifestPaths = publishedDirectories.map((directory) => `${directory}/package.json`);
-const runtimeManifestPaths = ["package.json", ...publishedManifestPaths, "examples/package.json"];
-for (const manifestPath of runtimeManifestPaths) {
-  const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
-  if (JSON.stringify(manifest.engines) !== JSON.stringify(runtimeBaseline.engines)) {
-    failures.push(`${manifestPath}: engines differs from tooling/runtime-baseline.mjs`);
-  }
-}
-for (const documentPath of [
-  "README.md",
-  "README.en.md",
-  "docs/guide/getting-started.md",
-  "docs/en/guide/getting-started.md",
-  "docs/guide/migrating-to-0.9.md",
-  "docs/en/guide/migrating-to-0.9.md",
-  "packages/dougong/README.md",
-  "packages/reactive/README.md",
-]) {
-  if (!readFileSync(documentPath, "utf8").includes(`Node.js \`${runtimeBaseline.engines.node}\``))
-    failures.push(`${documentPath}: Node.js range differs from tooling/runtime-baseline.mjs`);
-}
-for (const manifestPath of ["package.json", ...publishedManifestPaths]) {
-  const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
-  if (JSON.stringify(manifest.browserslist) !== JSON.stringify(runtimeBaseline.browserslist)) {
-    failures.push(`${manifestPath}: browserslist differs from tooling/runtime-baseline.mjs`);
-  }
-}
+for (const { path } of runtimeProjectionChanges(
+  new URL("./", pathToFileURL(resolve("package.json"))),
+))
+  failures.push(
+    `${path}: runtime projection differs from tooling/runtime-baseline.mjs; run pnpm generate:runtime`,
+  );
 for (const directory of [...publishedDirectories, "examples"]) {
   const configurationPath = `${directory}/vite.config.ts`;
   const configuration = await loadConfigFromFile(
@@ -165,19 +153,39 @@ const MARKDOWN_FILES = [
   "README.en.md",
 ];
 
-// Derive navigation from Markdown pages so a second inventory cannot silently drift.
-const navigationSource = readFileSync("docs/.vitepress/config.mts", "utf8");
-const configuredRoutes = [...navigationSource.matchAll(/\blink:\s*"([^"]+)"/g)].map(
-  ([, route]) => route.split("#", 1)[0],
+const documentationConfiguration = await resolveDocumentationConfiguration(
+  resolve("docs"),
+  "build",
+  "production",
 );
+const renderer = await createMarkdownRenderer(
+  documentationConfiguration.srcDir,
+  documentationConfiguration.markdown,
+  documentationConfiguration.site.base,
+  documentationConfiguration.logger,
+  documentationConfiguration.publicDir,
+);
+const documents = new Map(
+  MARKDOWN_FILES.filter((path) => !path.includes(".vitepress")).map((path) => [
+    path,
+    new MarkdownDocument(renderer, readFileSync(path, "utf8"), {
+      path: resolve(path),
+      relativePath: relative(documentationConfiguration.srcDir, resolve(path)),
+    }),
+  ]),
+);
+
+// Derive navigation from Markdown pages so a second inventory cannot silently drift.
 for (const locale of [
   {
+    key: "root",
     name: "Chinese",
     prefix: "",
     home: "docs/index.md",
     pages: ["docs/guide/*.md", "docs/reference/*.md", "docs/examples.md"],
   },
   {
+    key: "en",
     name: "English",
     prefix: "en/",
     home: "docs/en/index.md",
@@ -189,28 +197,39 @@ for (const locale of [
       .flatMap((pattern) => globSync(pattern))
       .map((file) => `/${file.slice("docs/".length, -".md".length)}`),
   );
-  const sidebar = new Set(
-    configuredRoutes.filter(
-      (route) =>
-        route.startsWith(`/${locale.prefix}guide/`) ||
-        route.startsWith(`/${locale.prefix}reference/`) ||
-        route === `/${locale.prefix}examples`,
-    ),
-  );
+  const configuration = documentationConfiguration.site.locales[locale.key].themeConfig;
+  const configuredSidebar =
+    configuration?.sidebar ?? documentationConfiguration.site.themeConfig.sidebar;
+  const sidebar = new Set();
+  for (const route of expected) {
+    const routes = sidebarRoutes(configuredSidebar, route);
+    if (!routes.has(route)) failures.push(`${locale.name} sidebar: omits '${route}'`);
+    for (const target of routes) sidebar.add(target);
+  }
   const homepage = new Set(
-    [...readFileSync(locale.home, "utf8").matchAll(/\]\(\.\/([^\s)#]+\.md)(?:#[^)]*)?\)/g)].map(
-      ([, target]) => `/${locale.prefix}${target.slice(0, -".md".length)}`,
-    ),
+    documents
+      .get(locale.home)
+      .links()
+      .map(({ target }) => documentationTarget(locale.home, target))
+      .filter((target) => target?.startsWith("/docs/"))
+      .map((target) => target.slice("/docs".length, -".md".length)),
   );
   for (const [surface, routes] of [
     ["sidebar", sidebar],
     ["homepage", homepage],
   ]) {
     for (const route of expected) {
-      if (!routes.has(route)) failures.push(`${locale.name} ${surface}: omits '${route}'`);
+      if (surface === "homepage" && !routes.has(route))
+        failures.push(`${locale.name} ${surface}: omits '${route}'`);
     }
     for (const route of routes) {
-      if (!expected.has(route)) failures.push(`${locale.name} ${surface}: stale route '${route}'`);
+      if (
+        (route.startsWith(`/${locale.prefix}guide/`) ||
+          route.startsWith(`/${locale.prefix}reference/`) ||
+          route === `/${locale.prefix}examples`) &&
+        !expected.has(route)
+      )
+        failures.push(`${locale.name} ${surface}: stale route '${route}'`);
     }
   }
 }
@@ -220,21 +239,22 @@ const retiredDocumentationPatterns = [...retiredIdentifiers].map((term) => [
   new RegExp(`(?<![\\w$-])${escapeRegExp(term)}(?![\\w$-])`),
 ]);
 
-for (const documentPath of MARKDOWN_FILES) {
-  if (documentPath.includes(".vitepress")) continue;
-  const text = readFileSync(documentPath, "utf8");
-  const code = markdownCode(text).join("\n");
+for (const [documentPath, document] of documents) {
+  const code = document.codeFragments().join("\n");
   for (const [term, pattern] of retiredDocumentationPatterns) {
     if (pattern.test(code)) failures.push(`${documentPath}: uses retired code term '${term}'`);
   }
-  for (const failure of errorDocumentationFailures(documentPath, text, sourceCodes))
+  for (const failure of errorDocumentationFailures(documentPath, document, sourceCodes))
     failures.push(`${documentPath}: ${failure}`);
 }
 
 const GUARD_PAGES = ["docs/reference/guards.md", "docs/en/reference/guards.md"];
 for (const page of GUARD_PAGES) {
   const documented = new Set(
-    [...readFileSync(page, "utf8").matchAll(/^\| `([^`]+)` \|/gm)].map(([, id]) => id),
+    documents
+      .get(page)
+      .tableRows()
+      .flatMap((row) => row[0]?.codes ?? []),
   );
   for (const id of architectureRules)
     if (!documented.has(id)) failures.push(`${page}: architecture rule '${id}' is not documented`);
@@ -242,47 +262,16 @@ for (const page of GUARD_PAGES) {
     if (!architectureRules.has(id)) failures.push(`${page}: obsolete architecture rule '${id}'`);
 }
 
-const coverageSource = readFileSync("vitest.config.ts", "utf8");
-const coverageThresholds = new Map();
-for (const match of coverageSource.matchAll(
-  /"packages\/(dougong|platform|reactive)\/src\/\*\*":\s*\{([^}]+)\}/g,
-)) {
-  const [, packageName, body] = match;
-  const values = Object.fromEntries(
-    [...body.matchAll(/(statements|branches|functions|lines):\s*(\d+)/g)].map(([, key, value]) => [
-      key,
-      Number(value),
-    ]),
-  );
-  coverageThresholds.set(packageName, values);
-}
-for (const packageName of ["dougong", "platform", "reactive"]) {
-  const values = coverageThresholds.get(packageName);
-  if (!values || Object.keys(values).length !== 4) {
-    failures.push(`vitest.config.ts: cannot derive ${packageName} coverage thresholds`);
-    continue;
-  }
-  const expectedRow = `| ${packageName} | ${values.statements} | ${values.branches} | ${values.functions} | ${values.lines} |`;
+const testConfiguration = await resolveTestConfiguration();
+for (const directory of publishedDirectories) {
   for (const page of GUARD_PAGES) {
-    if (!readFileSync(page, "utf8").includes(expectedRow)) {
-      failures.push(`${page}: coverage row for ${packageName} differs from vitest.config.ts`);
-    }
+    for (const failure of coverageDocumentationFailures(
+      testConfiguration.test.coverage.thresholds,
+      directory,
+      documents.get(page),
+    ))
+      failures.push(`${page}: ${failure}`);
   }
-}
-
-function markdownCode(text) {
-  const fragments = [];
-  const prose = text.replace(
-    /(?:^|\n)(`{3,}|~{3,})([^\n]*)\n([\s\S]*?)\n\1(?=\n|$)/g,
-    (_block, _fence, languageTag, code) => {
-      if (/^\s*(?:[cm]?[jt]sx?|typescript|javascript|json)\b/i.test(languageTag)) {
-        fragments.push(code);
-      }
-      return "\n";
-    },
-  );
-  for (const match of prose.matchAll(/`([^`\n]+)`/g)) fragments.push(match[1]);
-  return fragments;
 }
 
 function escapeRegExp(value) {
@@ -315,9 +304,10 @@ for (const [packageName, languages] of Object.entries(PUBLIC_DOCUMENTATION)) {
   for (const [language, documentPaths] of languages) {
     const documented = new Set(
       documentPaths.flatMap((documentPath) =>
-        markdownCode(readFileSync(documentPath, "utf8")).flatMap((code) =>
-          [...code.matchAll(/[$A-Z_a-z][$\w]*/g)].map(([name]) => name),
-        ),
+        documents
+          .get(documentPath)
+          .codeFragments()
+          .flatMap((code) => [...code.matchAll(/[$A-Z_a-z][$\w]*/g)].map(([name]) => name)),
       ),
     );
     for (const name of exported) {
@@ -327,6 +317,8 @@ for (const [packageName, languages] of Object.entries(PUBLIC_DOCUMENTATION)) {
     }
   }
 }
+
+disposeMdItInstance();
 
 if (failures.length) {
   console.error("Public API surface guard failed:\n");

@@ -50,6 +50,21 @@ async function release(resource: Resource) {
 }
 
 describe("lifetime retention", () => {
+  it("does not retain a completed Task payload after rejecting another owner", async () => {
+    const owner = new Lifetime({ label: "task-owner", report() {} });
+    const other = new Lifetime({ label: "other", report() {} });
+    try {
+      const reference = await rejectedTaskAdoption(owner, other);
+      expect(owner.snapshot().tasks).toBe(0);
+      expect(other.snapshot().cleanups).toBe(0);
+      await collect([reference]);
+      expect(reference.deref()).toBeUndefined();
+      expect(other.phase).toBe("active");
+    } finally {
+      await Promise.all([owner.dispose(), other.dispose()]);
+    }
+  });
+
   it("detaches terminal resources while their parent is still active", async () => {
     const owner = new Lifetime({ label: "active", report: () => undefined });
     const events = new EventHub().scope(owner, () => undefined);
@@ -172,6 +187,14 @@ describe("lifetime retention", () => {
     expect(fixture.group.id).toBe("unapplied");
   });
 });
+
+async function rejectedTaskAdoption(owner: Lifetime, other: Lifetime) {
+  const payload = { description: "completed task result" };
+  const task = owner.spawn(() => payload);
+  expect(() => other.use(task)).toThrow(TypeError);
+  await task.result;
+  return new WeakRef(payload);
+}
 
 async function createAndReleaseResources(
   owner: Lifetime,

@@ -19,7 +19,9 @@ import type {
 import {
   asyncDisposeSymbol,
   captureDisposer,
+  claimResource,
   disposeSymbol,
+  markOwnedControlHandle,
   type AsyncDisposable,
   type Awaitable,
   type Disposable,
@@ -63,7 +65,6 @@ export interface LifetimeOwnership {
 
 const ownershipFields = recordFields<LifetimeOwnership>()("lifetime");
 const lifetimeAuthorities = new WeakMap<object, Lifetime>();
-const claimedResources = new WeakSet<Resource>();
 
 export interface LifetimeOptions {
   readonly label: string;
@@ -233,10 +234,12 @@ class TaskRecord<T> {
         },
       ),
     );
-    this.handle = Object.freeze({
-      result,
-      [asyncDisposeSymbol]: this.#dispose.bind(this),
-    });
+    this.handle = markOwnedControlHandle(
+      Object.freeze({
+        result,
+        [asyncDisposeSymbol]: this.#dispose.bind(this),
+      }),
+    );
   }
 
   #settle() {
@@ -418,33 +421,31 @@ export class Lifetime {
     if (!reservedAcquisition) this.#requireActive();
     if (lifetimeAuthorities.has(resource))
       throw new TypeError("Lifetime handles cannot be adopted as resources");
-    if (claimedResources.has(resource))
-      throw new TypeError("Resource already has a Lifetime owner");
     // A protocol getter may reenter adoption before the release record exists.
-    claimedResources.add(resource);
+    const releaseClaim = claimResource(resource);
     let release: Cleanup;
     try {
       release = captureDisposer(resource);
       if (!reservedAcquisition) this.#requireActive();
     } catch (error) {
-      claimedResources.delete(resource);
+      releaseClaim();
       throw error;
     }
-    return this.#own(release, "cleanup", resource);
+    return this.#own(release, "cleanup", releaseClaim);
   }
 
   defer(cleanup: Cleanup): AsyncDisposable {
     this.#requireActive();
     if (typeof cleanup !== "function") throw new TypeError("Cleanup must be a function");
     const record = this.#own(cleanup, "cleanup");
-    return Object.freeze({ [asyncDisposeSymbol]: () => record.dispose() });
+    return markOwnedControlHandle(Object.freeze({ [asyncDisposeSymbol]: () => record.dispose() }));
   }
 
   interrupt(callback: Cleanup): Disposable {
     this.#requireActive();
     if (typeof callback !== "function") throw new TypeError("Interrupt must be a function");
     const record = this.#own(callback, "interrupt");
-    return Object.freeze({ [disposeSymbol]: () => record.forget() });
+    return markOwnedControlHandle(Object.freeze({ [disposeSymbol]: () => record.forget() }));
   }
 
   child(label: string): ChildLifetime {
@@ -500,8 +501,9 @@ export class Lifetime {
       .then(() => resolveValue(factory(this.signal)))
       .then(async ({ value: resource }) => {
         const record = this.#adopt(resource, true);
-        if (!this.acceptsWork) {
-          const reason = isAborted(this.signal) ? abortReason(this.signal) : createDisposalReason();
+        // Sealing closes ingress while consumers can still depend on already admitted acquisitions.
+        if (isAborted(this.signal)) {
+          const reason = abortReason(this.signal);
           await record.dispose();
           throw reason;
         }
@@ -705,7 +707,7 @@ export class Lifetime {
     }
   }
 
-  #own(cleanup: Cleanup, kind: "cleanup" | "interrupt", resource?: Resource) {
+  #own(cleanup: Cleanup, kind: "cleanup" | "interrupt", releaseClaim?: () => void) {
     const records = kind === "cleanup" ? this.#cleanups : this.#interrupts;
     let record: CleanupRecord;
     record = new CleanupRecord(
@@ -714,7 +716,7 @@ export class Lifetime {
       cleanup,
       () => {
         records.delete(record);
-        if (resource !== undefined) claimedResources.delete(resource);
+        releaseClaim?.();
         this.#changed?.();
       },
       (error) => this.#notifyReleaseFailure(error, kind),

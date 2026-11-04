@@ -247,7 +247,7 @@ async function verifyResources() {
         manifest: { name: counter.name, version: "1.0.0" },
         reference,
       });
-      const registration = await platform.select(artifact);
+      const [registration] = await platform.select([artifact]);
       await platform.activate([registration]);
       assert(
         registration.activeOrigin?.revision === artifact.revision &&

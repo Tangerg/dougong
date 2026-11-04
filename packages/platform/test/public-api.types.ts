@@ -41,8 +41,38 @@ const artifact: Artifact<string> = platform.catalog.add({
   reference: "module",
 });
 
-const registration: Promise<Registration<string>> = platform.select(artifact);
-void registration;
+const registrations: Promise<readonly [Registration<string>]> = platform.select([artifact]);
+void registrations;
+expectTypeOf(platform.select([])).toEqualTypeOf<Promise<readonly []>>();
+const artifacts: ReadonlyArray<Artifact<string>> = [artifact];
+expectTypeOf(platform.select(artifacts)).toEqualTypeOf<
+  Promise<ReadonlyArray<Registration<string>>>
+>();
+
+// @ts-expect-error Selection accepts one complete batch, including singleton requests.
+platform.select(artifact);
+
+const fabricatedArtifact = {
+  revision: "fabricated",
+  manifest: defineManifest({ name: "fabricated", version: "1.0.0" }),
+  reference: "module",
+  configuration: undefined,
+};
+// @ts-expect-error Only Catalog-issued identities are Artifact handles.
+platform.select([fabricatedArtifact]);
+
+const fabricatedRegistration = {
+  id: "fabricated",
+  name: artifact.manifest.name,
+  selectedArtifact: artifact,
+  selectionRevision: 1,
+  activeOrigin: undefined,
+  installation: undefined,
+  status: "selected",
+  error: undefined,
+} as const;
+// @ts-expect-error Only Platform-issued identities are Registration handles.
+platform.activate([fabricatedRegistration]);
 
 const importLoader = new ImportLoader();
 const importReference = new URL("data:text/javascript,export default 42");
@@ -95,13 +125,13 @@ async function usePlatform() {
     apiVersion: "1.0.0",
     loader: new MemoryLoader(new Map<string, unknown>()),
   });
-  const selected = await owned.select(
+  const [selected] = await owned.select([
     owned.catalog.add({
       revision: "r1",
       manifest: { name: "scope", version: "1.0.0" },
       reference: "module",
     }),
-  );
+  ]);
   owned.preview([selected], { remove: [] });
   await owned.activate([selected], { signal: new AbortController().signal, remove: [] });
 }

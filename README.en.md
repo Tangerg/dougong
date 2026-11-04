@@ -47,7 +47,7 @@ pnpm examples
 pnpm docs:dev
 ```
 
-Runtime and development: Node.js `^24.22.0 || >=26.10.0`, Chrome/Edge 119+, Firefox 124+, Safari 17.4+. Use the pinned pnpm version. Published packages are ESM.
+Runtime and development: <!-- runtime-baseline:start -->Node.js `^24.22.0 || >=26.10.0`, Chrome ≥ 119, Edge ≥ 119, Firefox ≥ 124, Safari ≥ 17.4<!-- runtime-baseline:end -->. Use the pinned pnpm version. Published packages are ESM.
 
 [Documentation](https://tangerg.github.io/dougong/en/) · [Architecture](./docs/en/reference/architecture.md) · [Examples](./docs/en/examples.md) · [Contributing rules](./AGENTS.md)
 

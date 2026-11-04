@@ -4,6 +4,8 @@
 
 For explicit disposal, import `disposeSymbol` or `asyncDisposeSymbol` from `@dougongjs/reactive`. These keys also work on supported runtimes without native disposal symbols.
 
+Callbacks passed to `batch` and `computed` must finish synchronously. Their public types reject direct Promise or PromiseLike results, including unions with an asynchronous branch; runtime validation still checks dynamic inputs. A rejected async callback may already have produced effects, and the batch cannot revoke its continuation. Promises may remain data, as in `signal(promise)` or `computed(() => ({ pending: promise }))`. Use Lifetime `spawn` to own asynchronous work and join its shutdown.
+
 ```ts
 import { bridge, computed, observe, signal } from "@dougongjs/reactive";
 

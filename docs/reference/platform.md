@@ -12,7 +12,7 @@
 | `catalog.get(name, revision)` / `catalog.list()` | 查阅已知 Artifact |
 | `catalog.remove(artifact)` | 移除发现记录 |
 | `registrations()` | 枚举当前可用于命令的 Registration 句柄，返回冻结数组 |
-| `select(artifact)` | 设置 Registration 的选择意图 |
+| `select(artifacts)` | 整组接纳选择意图，按输入顺序返回冻结的 Registration 数组 |
 | `preview(registrations, { remove })` | 数据层检查和延迟验证清单 |
 | `activate(registrations, { remove, signal })` | 准入、加载并编译为一笔 Core Plan |
 | `trigger(event, options)` | 从已选 Manifest 派生激活集合 |
@@ -25,9 +25,15 @@ Artifact 的 `revision` 是调用方给定的内容或发行身份；没有依�
 
 发现与预览是同步操作；选择、激活、触发与移除始终返回 Promise，输入不合法也通过拒绝报告。事件匹配和计划捕获使用同一批已接纳的选择；即使调用方尚未 await，排在触发命令之前的选择也已生效。
 
+`select` 在提交时捕获数组自己的索引数据，并在排队命令执行时重新检查整个集合的 Catalog 身份、可用性和名称唯一性。任一成员不合法，整组都不改变选择；空数组不改变任何选择。所有目标都完成选择后才通知诊断订阅者或取消过期操作。其他 Registration 保持原选择，移除须显式提交。接纳后的 Catalog 撤回不会撤销已经选择的意图。
+
+Artifact 和 Registration 是由 Catalog、Platform 分别签发的名义句柄，普通结构对象不能作为这些句柄使用。运行时仍按对象身份检查所属 Catalog 或 Platform；类型标记不能证明某个句柄属于当前实例。Manifest、ArtifactInput 和诊断快照仍是数据声明或只读投影。
+
 ## 状态和边界
 
-Platform 状态为 `active/disposing/disposed`。Registration 状态为 `selected/activating/removing/installed/failed/quarantined/removed`，反映选择、正在执行的操作及 Core 执行事实。调用方取消不会覆盖上次实际失败；当前选择激活成功后清除该错误。激活目标及移除列表只捕获数组自己的索引数据。稀疏数组和访问器会被拒绝，不会调用 getter。
+Platform 状态为 `active/disposing/disposed`。Registration 状态为 `selected/activating/removing/installed/failed/quarantined/removed`，反映选择、正在执行的操作及 Core 执行事实。调用方取消不会覆盖上次实际失败；当前选择激活成功后清除该错误。选择、激活目标及移除列表只捕获数组自己的索引数据。稀疏数组和访问器会被拒绝，不会调用 getter。
+
+诊断快照在读取或被订阅观察时物化；没有观察者的连续选择不会反复遍历全部 Registration。未变化的快照保持同一对象身份，无关 Core 活动不会通知 Platform 观察者。订阅从当前状态建立比较基线，释放后保留最终快照并断开运行资源。
 
 `ActivationPreview.deferred` 明确包含 admission、module_validation、configuration_validation、core_binding、setup。预览不是运行验证通过的凭证。activate 捕获选择版本与 Artifact 身份，准备完成后再次核对，过期结果不能覆盖新选择。
 

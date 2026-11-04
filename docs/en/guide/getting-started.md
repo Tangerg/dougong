@@ -29,7 +29,7 @@ await host[asyncDisposeSymbol]();
 
 A Service's string ID is its shared identity; its TypeScript parameter describes the value protocol. A Plugin is a reusable declaration, an Installation is a stable position in the application, and an Instance is one running generation. Application code borrows that generation through `host.use`; the borrow ends when the callback's result settles.
 
-Runtime and repository development support Node.js `^24.22.0 || >=26.10.0`, Chrome 119, Edge 119, Firefox 124 and Safari 17.4 or later. Packages are ESM and accept the standard `Symbol.dispose` and `Symbol.asyncDispose` resource protocols. Use the pinned pnpm version.
+Runtime and repository development support <!-- runtime-baseline:start -->Node.js `^24.22.0 || >=26.10.0`, Chrome ≥ 119, Edge ≥ 119, Firefox ≥ 124, Safari ≥ 17.4<!-- runtime-baseline:end -->. Packages are ESM and accept the standard `Symbol.dispose` and `Symbol.asyncDispose` resource protocols. Use the pinned pnpm version.
 
 Cancellation listeners compose a private dependent with the public `AbortSignal.any` API, so synthetic source events and propagation-stopping listeners cannot interfere. The Node.js floor also preserves native state reads and collection of unused dependency graphs; older releases have no compatibility branch. See the upstream implementations in [Node.js 24.22.0](https://github.com/nodejs/node/blob/v24.22.0/lib/internal/abort_controller.js) and [26.10.0](https://github.com/nodejs/node/blob/v26.10.0/lib/internal/abort_controller.js).
 

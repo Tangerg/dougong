@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   asyncDisposeSymbol,
   createHost,
@@ -6,7 +6,7 @@ import {
   disposeSymbol,
   type AnyPlugin,
 } from "dougong";
-import type { Loader } from "@dougongjs/platform";
+import type { Artifact, Loader } from "@dougongjs/platform";
 import { DeploymentController } from "../src/deployment-controller";
 
 interface ModuleReference {
@@ -172,7 +172,7 @@ describe("deployment requests", () => {
     const second = artifact("shared", "B");
 
     await expect(deployment.deploy([first, second])).rejects.toThrow(
-      "Duplicate desired Registration 'shared'",
+      "Duplicate selected Registration 'shared'",
     );
     expect(deployment.diagnostics.get().registrations.size).toBe(0);
     await expect(deployment.deploy([first])).resolves.toMatchObject({
@@ -185,6 +185,80 @@ describe("deployment requests", () => {
     await expect(deployment.deploy([])).resolves.toBeUndefined();
     expect(commits.map((commit) => commit.artifacts)).toEqual([["shared@A"], []]);
     expect(deployment.diagnostics.get().registrations.size).toBe(0);
+  });
+
+  it("rejects a later foreign Artifact without changing any earlier selection or commit", async () => {
+    await using fixture = await createFixture();
+    await using foreign = await createFixture();
+    const { deployment, artifact, commits } = fixture;
+    const original = artifact("shared", "A");
+    const replacement = artifact("shared", "B");
+    const outsider = foreign.artifact("outsider", "one");
+    await deployment.deploy([original]);
+    const before = deployment.diagnostics.get();
+
+    await expect(deployment.deploy([replacement, outsider])).rejects.toMatchObject({
+      code: "ARTIFACT_UNAVAILABLE",
+    });
+
+    expect(deployment.diagnostics.get()).toBe(before);
+    expect(commits.map((commit) => commit.artifacts)).toEqual([["shared@A"]]);
+    await deployment.deploy([replacement]);
+    expect(commits.map((commit) => commit.artifacts)).toEqual([["shared@A"], ["shared@B"]]);
+  });
+
+  it("leaves identity validation to Platform without reading an unowned Artifact", async () => {
+    await using fixture = await createFixture();
+    const { deployment, artifact, commits } = fixture;
+    const first = artifact("first", "one");
+    const getter = vi.fn<() => typeof first.manifest>(() => first.manifest);
+    const forged = Object.defineProperty({}, "manifest", {
+      get: getter,
+    }) as Artifact<ModuleReference>;
+
+    await expect(deployment.deploy([first, forged])).rejects.toMatchObject({
+      code: "ARTIFACT_UNAVAILABLE",
+    });
+
+    expect(getter).not.toHaveBeenCalled();
+    expect(deployment.diagnostics.get().registrations.size).toBe(0);
+    expect(commits).toEqual([]);
+  });
+
+  it("finishes batch selection before a diagnostic observer can withdraw a later Artifact", async () => {
+    await using fixture = await createFixture();
+    const { deployment, artifact, commits } = fixture;
+    const left = artifact("left", "A");
+    const right = artifact("right", "A");
+    const nextLeft = artifact("left", "B");
+    const nextRight = artifact("right", "B");
+    await deployment.deploy([left, right]);
+    const observed: string[][] = [];
+    const subscription = deployment.diagnostics.subscribe(() => {
+      const snapshot = deployment.diagnostics.get();
+      if (snapshot.registrations.get("left")?.selectedArtifact.revision !== nextLeft.revision)
+        return;
+      observed.push(
+        [...snapshot.registrations.values()].map(
+          (registration) => `${registration.name}@${registration.selectedArtifact.revision}`,
+        ),
+      );
+      if (deployment.catalog.get(nextRight.manifest.name, nextRight.revision))
+        deployment.catalog.remove(nextRight);
+    });
+    try {
+      await deployment.deploy([nextLeft, nextRight]);
+
+      expect(observed.length).toBeGreaterThan(0);
+      for (const selection of observed) expect(selection).toEqual(["left@B", "right@B"]);
+      expect(deployment.catalog.get(nextRight.manifest.name, nextRight.revision)).toBeUndefined();
+      expect(commits.map((commit) => commit.artifacts)).toEqual([
+        ["left@A", "right@A"],
+        ["left@B", "right@B"],
+      ]);
+    } finally {
+      subscription[disposeSymbol]();
+    }
   });
 
   it("disposes during loading and rejects queued deployments while leaving Host ownership intact", async () => {

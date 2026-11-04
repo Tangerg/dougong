@@ -37,7 +37,7 @@ describe("selection and activation races", () => {
     const first = platform.activate([registration]);
     const firstResult = first.catch((error: unknown) => error);
     await entered.promise;
-    await platform.select(add(platform, "sample", "new", "2.0.0"));
+    await platform.select([add(platform, "sample", "new", "2.0.0")]);
     expect(host.stateRevision).toBe(before);
     expect(await firstResult).toMatchObject({ code: "SELECTION_SUPERSEDED" });
     await platform.activate([registration]);
@@ -187,11 +187,11 @@ describe("selection and activation races", () => {
     const activation = platform.activate([registration]);
     await entered.promise;
     const next = add(platform, "sample", "new", "2.0.0");
-    await expect(platform.select(next)).rejects.toMatchObject({ code: "PLATFORM_BUSY" });
+    await expect(platform.select([next])).rejects.toMatchObject({ code: "PLATFORM_BUSY" });
     expect(registration.selectedArtifact.revision).toBe("1.0.0");
     release.resolve();
     await activation;
-    await platform.select(next);
+    await platform.select([next]);
     expect(registration.selectedArtifact.revision).toBe("2.0.0");
     expect(registration.activeOrigin?.revision).toBe("1.0.0");
     expect((await host.use(VALUE, (value) => value.value)).value).toBe(1);
@@ -304,9 +304,9 @@ describe("selection and activation races", () => {
       },
     });
     const artifact = add(platform, "sample", "one");
-    const first = await platform.select(artifact);
+    const [first] = await platform.select([artifact]);
     await platform.remove(first);
-    const second = await platform.select(artifact);
+    const [second] = await platform.select([artifact]);
     expect(second).not.toBe(first);
     await expect(platform.remove(first)).rejects.toMatchObject({
       code: "REGISTRATION_UNAVAILABLE",
@@ -366,7 +366,7 @@ it.each([true, false])(
     const replacement = add(platform, "sample", "module", "2.0.0", {
       manifest: { name: "sample", version: "2.0.0", activation: matches ? ["open"] : [] },
     });
-    await Promise.all([platform.select(replacement), platform.trigger("open")]);
+    await Promise.all([platform.select([replacement]), platform.trigger("open")]);
     expect(first.activeOrigin?.revision).toBe(matches ? "2.0.0" : undefined);
     expect(host.installation(first.id)).toBe(matches ? first.installation : undefined);
     await platform[Symbol.asyncDispose]();
@@ -458,7 +458,7 @@ it.each(["select", "remove", "dispose"] as const)(
     const attempt = platform.activate([first]).catch((error: unknown) => error);
     try {
       await entered.promise;
-      if (command === "select") await platform.select(add(platform, "a", "updated", "2.0.0"));
+      if (command === "select") await platform.select([add(platform, "a", "updated", "2.0.0")]);
       else if (command === "remove") await platform.remove(first, second);
       else await platform[Symbol.asyncDispose]();
       await attempt;

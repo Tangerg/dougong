@@ -29,7 +29,7 @@ await host[asyncDisposeSymbol]();
 
 Service 的字符串 ID 是共享身份；其 TypeScript 类型描述值协议。Plugin 是可重复安装的声明，Installation 是带有稳定 ID 的安装位置，Instance 是一次执行产生的运行代次。应用通过 `host.use` 借用当前代次，回调返回的 Promise 完成后释放借用。
 
-运行与源码开发支持 Node.js `^24.22.0 || >=26.10.0`，以及 Chrome 119、Edge 119、Firefox 124、Safari 17.4 及以上。发行物是 ESM，释放协议使用标准 `Symbol.dispose` 与 `Symbol.asyncDispose`。使用仓库固定的 pnpm 版本。
+运行与源码开发支持 <!-- runtime-baseline:start -->Node.js `^24.22.0 || >=26.10.0`, Chrome ≥ 119, Edge ≥ 119, Firefox ≥ 124, Safari ≥ 17.4<!-- runtime-baseline:end -->。发行物是 ESM，释放协议使用标准 `Symbol.dispose` 与 `Symbol.asyncDispose`。使用仓库固定的 pnpm 版本。
 
 取消监听通过公开的 `AbortSignal.any` 创建私有依赖信号，既不受原信号上的合成事件影响，也不受其他监听器阻断。Node.js 的最低版本同时保证原生状态读取与未使用依赖图的回收；旧版本不再提供兼容分支。对应上游实现可核对 [Node.js 24.22.0](https://github.com/nodejs/node/blob/v24.22.0/lib/internal/abort_controller.js) 与 [26.10.0](https://github.com/nodejs/node/blob/v26.10.0/lib/internal/abort_controller.js)。
 

@@ -22,8 +22,8 @@ it.each(["batch", "computed", "subscriber"] as const)(
       using _subscription = source.subscribe(() => pending.promise);
       try {
         expect(() => {
-          if (boundary === "batch") batch(() => pending.promise);
-          else if (boundary === "computed") computed(() => pending.promise).get();
+          if (boundary === "batch") batch((): unknown => pending.promise);
+          else if (boundary === "computed") computed((): unknown => pending.promise).get();
           else source.set(1);
         }).toThrow(/must be synchronous/);
         expect(read).not.toHaveBeenCalled();
@@ -90,7 +90,7 @@ it("does not assimilate a native Promise's already fulfilled payload again", asy
   );
   const fulfilled = Promise.resolve(payload);
   expect(reads).toBe(1);
-  expect(() => batch(() => fulfilled)).toThrow("Reactive batches must be synchronous");
+  expect(() => batch((): unknown => fulfilled)).toThrow("Reactive batches must be synchronous");
   await new Promise<void>((resolve) => setImmediate(resolve));
   expect(reads).toBe(1);
 });
@@ -111,7 +111,7 @@ it("ignores an own presentation getter on a native Promise", () => {
   });
   const fulfilled = Promise.resolve();
   Object.defineProperty(fulfilled, Symbol.toStringTag, { get: tag });
-  expect(() => batch(() => fulfilled)).toThrow("Reactive batches must be synchronous");
+  expect(() => batch((): unknown => fulfilled)).toThrow("Reactive batches must be synchronous");
   expect(tag).not.toHaveBeenCalled();
 });
 
@@ -124,7 +124,7 @@ it("observes a Promise subclass through one species lookup", async () => {
     }
   }
   const fulfilled = new NativeResult((resolve) => resolve(undefined));
-  expect(() => batch(() => fulfilled)).toThrow("Reactive batches must be synchronous");
+  expect(() => batch((): unknown => fulfilled)).toThrow("Reactive batches must be synchronous");
   await new Promise<void>((resolve) => setImmediate(resolve));
   expect(reads).toBe(1);
 });

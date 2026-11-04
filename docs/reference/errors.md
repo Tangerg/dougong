@@ -10,6 +10,8 @@
 
 来自其他 Realm 的原生 Error 可以保留消息和原因链。当资源清理和执行体都抛错时，记录器从错误自身的数据字段 `error` 和 `suppressed` 读取两条失败原因，应用可以自定义错误名称。两条分支共用同一份诊断深度和大小预算。
 
+贡献视图的 ID 来自已提交集合的快照，不保证借用瞬间仍可用。已有贡献更新后等待批次发布时，`view.get()` 仍可能包含其 ID，而 `view.use()` 会以 `CONTRIBUTION_UNAVAILABLE` 拒绝。等待 `view.subscribe()` 的发布通知后重新读取并借用；不要把暂未发布等同于永久删除，也不要忙重试。若所有者已经封闭，借用还可能以 `LIFETIME_DISPOSED` 拒绝，此时应按所属 Lifetime 或 Host 的退出状态处理。
+
 | 错误码 | 含义与处理 |
 | --- | --- |
 | `ACTIVATION_FAILED` | 激活执行失败；检查 cause 与 Core 的结构化执行结果。 |
@@ -23,7 +25,7 @@
 | `CHANGE_FOREIGN` | ChangeSet 不属于该 Host。 |
 | `CONFIGURATION_INVALID` | Standard Schema 验证失败，读取 issues 修正输入。 |
 | `CONTRACT_CONFLICT` | 同一 Contract ID 被赋予不同契约类别。 |
-| `CONTRIBUTION_UNAVAILABLE` | 贡献已经撤销或其所有者不再接受调用。 |
+| `CONTRIBUTION_UNAVAILABLE` | 贡献尚未发布、更新后等待批次发布，或已经撤销。等待发布通知后重新读取可用集合，再决定是否借用。 |
 | `EVENT_BEFORE_COMMIT` | 候选 setup 尚未提交，不能向外广播事件。 |
 | `GROUP_CONFLICT` | 分组 ID 或声明重复冲突。 |
 | `GROUP_CYCLE` | 分组父子声明形成环。 |

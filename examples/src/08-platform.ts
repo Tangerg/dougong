@@ -42,7 +42,7 @@ export async function lazyPlatform(): Promise<ExampleResult> {
     authorizer: new PermissionSet(["network"]),
     loader: new MemoryLoader(new Map([["remote", { default: active }]])),
   });
-  const registration = await platform.select(
+  const [registration] = await platform.select([
     platform.catalog.add({
       revision: "remote-content-1",
       manifest: {
@@ -53,7 +53,7 @@ export async function lazyPlatform(): Promise<ExampleResult> {
       },
       reference: "remote",
     }),
-  );
+  ]);
   const preview = platform.preview([registration]);
   const before = commands.get().length;
   await platform.trigger(actionActivation(remoteAction));

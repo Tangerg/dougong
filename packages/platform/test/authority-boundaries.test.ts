@@ -97,7 +97,7 @@ it("binds the selectable command to the Platform that issued it", async () => {
   const { platform } = fixture();
   const choose = platform.select;
   const artifact = add(platform, "sample", "module");
-  expect((await choose(artifact)).selectedArtifact).toBe(artifact);
+  expect((await choose([artifact]))[0].selectedArtifact).toBe(artifact);
   await platform[Symbol.asyncDispose]();
 });
 

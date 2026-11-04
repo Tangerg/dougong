@@ -35,7 +35,8 @@
     "release": "node tooling/release/release.mjs",
     "prepare": "husky",
     "generate:internal": "node tooling/generate-internal.mjs",
-    "check:generated": "node tooling/generate-internal.mjs --check",
+    "generate:runtime": "node tooling/generate-runtime.mjs",
+    "check:generated": "node tooling/generate-internal.mjs --check && node tooling/generate-runtime.mjs --check",
     "check:consumer": "node tooling/consumer/check-consumer.mjs"
   },
   "lint-staged": {

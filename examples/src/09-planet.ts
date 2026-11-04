@@ -169,7 +169,7 @@ export async function planetScenario(): Promise<ExampleResult> {
     authorizer: new PermissionSet(["network"]),
     loader: new MemoryLoader(new Map([[remoteReference, { default: remoteSource }]])),
   });
-  const remote = await platform.select(
+  const [remote] = await platform.select([
     platform.catalog.add({
       revision: "remote-content-1",
       manifest: {
@@ -180,7 +180,7 @@ export async function planetScenario(): Promise<ExampleResult> {
       },
       reference: remoteReference,
     }),
-  );
+  ]);
 
   await host.use(PLAYER, (player) => player.play("intro"));
   await platform.trigger(remoteActivation);

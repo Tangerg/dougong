@@ -12,6 +12,7 @@ export interface Signal<T> extends ReadonlySignal<T> {
 }
 
 type Listener = () => void;
+type SynchronousResult<T> = T & Exclude<T, PromiseLike<unknown>>;
 interface ListenerSlot {
   readonly kind: "dependency" | "observer";
   listener: Listener | undefined;
@@ -121,7 +122,7 @@ function throwListenerFailures(errors: unknown[]) {
 }
 
 // Queue subscriptions rather than callbacks so distinct subscriptions are never merged.
-export function batch<T>(callback: () => T): T {
+export function batch<T>(callback: () => SynchronousResult<T>): T {
   if (typeof callback !== "function") throw new TypeError("batch() expects a function");
   batchDepth++;
 
@@ -159,7 +160,7 @@ export function signal<T>(initialValue: T): Signal<T> {
   return new SignalNode(initialValue).view;
 }
 
-export function computed<T>(calculate: () => T): ReadonlySignal<T> {
+export function computed<T>(calculate: () => SynchronousResult<T>): ReadonlySignal<T> {
   if (typeof calculate !== "function") throw new TypeError("computed() expects a function");
   return new ComputedNode(calculate).view;
 }
@@ -208,7 +209,7 @@ type ComputedResult<T> =
   | { readonly phase: "value"; readonly value: T }
   | { readonly phase: "error"; readonly error: unknown };
 
-// Unobserved computed nodes hold no subscriptions, preventing unused derived values from retaining their sources.
+// Unobserved computed nodes hold no subscriptions, so live sources cannot retain unused derived values.
 class ComputedNode<T> implements ReactiveNode {
   readonly #calculate: () => T;
   readonly #listeners = new Set<ListenerSlot>();

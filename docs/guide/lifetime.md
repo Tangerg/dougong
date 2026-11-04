@@ -13,7 +13,7 @@ Lifetime 以组合构成资源树。根由 Instance 创建，插件通过 `child
 | `signal` | 合作式取消信号 |
 | `child[Symbol.asyncDispose]()` | 提前关闭自己创建的子树，加入同一次退出 |
 
-子 Lifetime 的释放义务属于创建它的父 Lifetime。同一份已加载的 Core 中，`use` 和 `acquire` 会拒绝再次接管已有子句柄。独立打包的 Core 副本各自识别句柄，跨副本使用时仍应由原来的父 Lifetime 负责释放。需要提前关闭子树时，释放 `child` 返回的句柄即可。
+子 Lifetime 的释放义务属于创建它的父 Lifetime。Task、`defer`、`interrupt`、事件监听、Contribution，以及已有 Lifetime 所有者的贡献视图订阅，其返回句柄也只控制原来的登记。同一份已加载的 Core 中，`use` 和 `acquire` 拒绝再次接管这些句柄，无论目标是否为原 Lifetime，也无论句柄是否已经完成。直接调用句柄的标准释放方法即可提前结束原操作或解除登记，不会创建第二条释放义务。独立打包的 Core 副本各自识别句柄，跨副本使用时仍应由原所有者负责释放。
 
 同一份已加载的 Core 也只允许一个 Lifetime 接管同一个外部资源对象。重复调用 `use`、并发 `acquire` 或从释放方法的 getter 重入登记都会被拒绝。释放仍在进行、已经超时或已经失败时，原所有者继续承担义务；只有实际释放成功后才能重新接管该对象。调用方应将共享资源交给一个明确的 Lifetime，并通过服务参数传递使用权。
 
@@ -22,6 +22,8 @@ Lifetime 以组合构成资源树。根由 Instance 创建，插件通过 `child
 协议选择不修改传入对象。继承当前 realm 的 `Promise.prototype` 就选择内建协议；没有原生内部状态的伪造对象不能改走结构协议。循环原型链明确失败。内建协议的 `constructor` 或 `Symbol.species` 阻止观察时，错误只传播一次，不尝试另一套协议，此时不能保证接住原 Promise 的拒绝，资源所有者仍保留失败的释放义务。跨 realm 的 Promise 通过其公开 `then` 接入；隐藏或破坏该方法不在保证范围内。若跨 realm 交付的值带有可变或可执行的 `then`，应在来源 realm 先把值放进普通数据容器，再交付该 Promise。完全替换本 realm Promise 的原型链也失去内建协议保证。
 
 退出先封闭入口、撤销发布并传播取消，发起全部中断并等待它们完成，再等待使用中的工作与创建义务，最后逆序释放资源。用 `interrupt` 关闭阻塞读取的通道，用 `defer` 执行任务退出后才能进行的最终销毁。
+
+封闭新入口与取消已有工作是两个不同阶段。Engine 先封闭受影响代次，再按依赖顺序等待消费者退出，因此提供者可能已 sealed，但 signal 尚未取消。此时新的 `acquire` 仍会被拒绝；此前已登记的获取可以完成并交付资源，让消费者完成最后的 flush。只有原 signal 真正取消后，迟到资源才会被回收，并以该 signal 的原始原因拒绝。工厂的独立失败仍按实际错误传播。
 
 ```ts
 const { resource: connection } = await lifetime.acquire(async (signal) => openConnection(signal));

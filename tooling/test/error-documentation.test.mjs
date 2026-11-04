@@ -1,8 +1,10 @@
-import { expect, it } from "vitest";
+import { afterAll, expect, it } from "vitest";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import typescript from "typescript";
+import { createMarkdownRenderer, disposeMdItInstance } from "vitepress";
+import { MarkdownDocument } from "../architecture/markdown-document.mjs";
 import {
   sourceErrorCodes,
   errorDocumentationFailures,
@@ -10,10 +12,13 @@ import {
 
 const sourceCodes = new Set(["HOST_BUSY", "HOST_QUARANTINED"]);
 const guidePath = "docs/guide/example.md";
+const renderer = await createMarkdownRenderer("docs");
+afterAll(() => disposeMdItInstance());
+const document = (text) => new MarkdownDocument(renderer, text, { path: guidePath });
 
 it("keeps technical terminology outside the error-code domain", () => {
   const text = "Use `HTTP`, `HEAD`, and `APP_PORT` when describing transport and configuration.";
-  expect(errorDocumentationFailures(guidePath, text, sourceCodes)).toEqual([]);
+  expect(errorDocumentationFailures(guidePath, document(text), sourceCodes)).toEqual([]);
 });
 
 it("rejects unknown or retired explicitly linked error references", () => {
@@ -25,7 +30,7 @@ it("rejects unknown or retired explicitly linked error references", () => {
     "[`HTTP`](https://example.test/errors.md)",
     "[`HTTP`](./errors.md)",
   ].join("\n");
-  expect(errorDocumentationFailures(guidePath, text, sourceCodes)).toEqual([
+  expect(errorDocumentationFailures(guidePath, document(text), sourceCodes)).toEqual([
     "documents 'HOST_BSY', which no source throws",
     "documents 'PLUGIN_CYCLE', which no source throws",
   ]);
@@ -37,9 +42,12 @@ it("requires the canonical table to cover every source code, independent of pros
     "| --- | --- |",
     "| `HOST_BUSY` | Wait for active work. |",
     "| `HOST_BSY` | Misspelled. |",
+    "",
     "[`HOST_QUARANTINED`](./errors.md)",
   ].join("\n");
-  expect(errorDocumentationFailures("docs/reference/errors.md", text, sourceCodes)).toEqual([
+  expect(
+    errorDocumentationFailures("docs/reference/errors.md", document(text), sourceCodes),
+  ).toEqual([
     "documents 'HOST_BSY', which no source throws",
     "error code 'HOST_QUARANTINED' is not documented",
   ]);
@@ -56,10 +64,27 @@ it("checks explicit error constructions without assigning application fields to 
     'const transport = "HTTP";',
     "```",
   ].join("\n");
-  expect(errorDocumentationFailures(guidePath, source, sourceCodes)).toEqual([
+  expect(errorDocumentationFailures(guidePath, document(source), sourceCodes)).toEqual([
     "documents 'MISSING_CODE', which no source throws",
     "documents 'RETIRED_CODE', which no source throws",
   ]);
+});
+
+it.each([
+  ['```ts\nthrow new DougongError("MISSING_CODE", "Example");\n````'],
+  ['~~~typescript\nthrow new DougongError("MISSING_CODE", "Example");\n~~~~~'],
+  ['> ```ts\n> throw new DougongError("MISSING_CODE", "Example");\n> ````'],
+  ["[``MISSING_CODE``][errors]\n\n[errors]: ../reference/errors.md"],
+  ["[`MISSING_CODE`](../reference/errors.md?from=guide#failure)"],
+  ["[`MISSING_CODE`](/reference/errors.md)"],
+  ["[`MISSING_CODE`](/reference/errors)"],
+  ["[`MISSING_CODE`](/reference/errors.html)"],
+])("checks rendered code and reference links through the shared Markdown syntax", (source) => {
+  const parsed = document(source);
+  expect(errorDocumentationFailures(guidePath, parsed, sourceCodes)).toEqual([
+    "documents 'MISSING_CODE', which no source throws",
+  ]);
+  expect(parsed.codeFragments().join("\n")).toContain("MISSING_CODE");
 });
 
 it("derives the error catalogue from resolved code types across aliases, conditions and subclasses", () => {

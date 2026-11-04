@@ -32,6 +32,20 @@ const installationUpdateFields = recordFields<InstallationUpdate>()(
   "origin",
 );
 
+type NormalizedInstallationUpdate =
+  | {
+      readonly kind: "replace";
+      readonly plugin: NormalizedPlugin;
+      readonly configuration?: ConfigurationValue | undefined;
+      readonly origin: InstallationOrigin | undefined;
+    }
+  | {
+      readonly kind: "configure";
+      readonly configuration: ConfigurationValue | undefined;
+      readonly plugin?: never;
+      readonly origin?: never;
+    };
+
 export type ChangeOperation =
   | {
       readonly kind: "install";
@@ -41,11 +55,7 @@ export type ChangeOperation =
   | {
       readonly kind: "update";
       readonly installation: InstallationRecord;
-      readonly update: Readonly<{
-        plugin?: NormalizedPlugin;
-        configuration?: ConfigurationValue | undefined;
-        origin?: InstallationOrigin | undefined;
-      }>;
+      readonly update: NormalizedInstallationUpdate;
     }
   | { readonly kind: "remove"; readonly installation: InstallationRecord }
   | { readonly kind: "group"; readonly group: GroupNode }
@@ -155,15 +165,14 @@ class ChangeSetDraft {
       throw new TypeError("Installation update requires plugin or configuration");
     if (!hasPlugin && Object.hasOwn(input, "origin"))
       throw new TypeError("Origin can only change with its Plugin");
-    const replacement = {
-      ...(hasPlugin
-        ? {
-            plugin: normalizePlugin(input.plugin as AnyPlugin),
-            origin: captureOrigin(input.origin),
-          }
-        : {}),
-      ...(hasConfiguration ? { configuration: captureConfiguration(input.configuration) } : {}),
-    };
+    const replacement: NormalizedInstallationUpdate = hasPlugin
+      ? {
+          kind: "replace",
+          plugin: normalizePlugin(input.plugin as AnyPlugin),
+          origin: captureOrigin(input.origin),
+          ...(hasConfiguration ? { configuration: captureConfiguration(input.configuration) } : {}),
+        }
+      : { kind: "configure", configuration: captureConfiguration(input.configuration) };
     const record = port.resolve(installation);
     this.#stage(record, {
       kind: "update",

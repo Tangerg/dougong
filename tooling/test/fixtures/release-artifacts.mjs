@@ -13,6 +13,8 @@ import { tmpdir } from "node:os";
 import { syncBuiltinESMExports } from "node:module";
 import { basename, dirname, join } from "node:path";
 import { performance } from "node:perf_hooks";
+import { fileURLToPath } from "node:url";
+import commandTimers from "node:timers";
 import timers from "node:timers/promises";
 import {
   candidateOutput,
@@ -24,6 +26,21 @@ import { cleanReleaseGit, installReleaseFixture } from "../release-command-fixtu
 const workspace = process.cwd();
 const visibility = process.env.DOUGONG_RELEASE_VISIBILITY;
 const queryMilliseconds = Number(process.env.DOUGONG_RELEASE_QUERY_MILLISECONDS ?? 0);
+const terminationBoundary = process.env.DOUGONG_RELEASE_TERMINATION_BOUNDARY ?? "registry-wait";
+const terminationSignal = process.env.DOUGONG_RELEASE_TERMINATION_SIGNAL;
+const nativeDelay = timers.setTimeout;
+const nativeSetTimeout = commandTimers.setTimeout;
+const nativeClearTimeout = commandTimers.clearTimeout;
+const commandDeadlines = new Map();
+commandTimers.setTimeout = (callback, milliseconds, ...arguments_) => {
+  const timer = nativeSetTimeout(callback, milliseconds, ...arguments_);
+  commandDeadlines.set(timer, milliseconds);
+  return timer;
+};
+commandTimers.clearTimeout = (timer) => {
+  commandDeadlines.delete(timer);
+  nativeClearTimeout(timer);
+};
 let elapsedMilliseconds = 0;
 let terminationRequested = false;
 Object.defineProperty(performance, "now", { value: () => elapsedMilliseconds });
@@ -36,7 +53,7 @@ if (!["immediate", "delayed", "never", "unreadable"].includes(visibility)) {
   throw new TypeError(`Unknown fixture visibility: ${visibility}`);
 }
 
-timers.setTimeout = async (delayMilliseconds) => {
+timers.setTimeout = async (delayMilliseconds, _value, options) => {
   if (!Number.isInteger(delayMilliseconds) || delayMilliseconds < 1) {
     throw new TypeError(`Invalid fixture timer delay: ${delayMilliseconds}`);
   }
@@ -56,17 +73,17 @@ timers.setTimeout = async (delayMilliseconds) => {
   } else if (visibility !== "never") {
     throw new Error(`Unexpected registry polling wait: ${visibility}`);
   }
-  const terminationSignal = process.env.DOUGONG_RELEASE_TERMINATION_SIGNAL;
-  if (terminationSignal) {
+  if (terminationSignal && terminationBoundary === "registry-wait") {
     if (!["SIGINT", "SIGTERM", "SIGHUP"].includes(terminationSignal)) {
       throw new TypeError(`Unknown release termination signal: ${terminationSignal}`);
     }
     recordClock();
     terminationRequested = true;
     process.kill(process.pid, terminationSignal);
-    // Keep the real release suspended until the signal reaches its installed handler.
-    const terminationWaitIntervalMilliseconds = 1_000;
-    await new Promise(() => setInterval(() => undefined, terminationWaitIntervalMilliseconds));
+    // Cancellation must unwind the real wait before the session can join its cleanup.
+    const terminationWaitMilliseconds = 1_000;
+    await nativeDelay(terminationWaitMilliseconds, undefined, options);
+    throw new Error("Release did not interrupt its registry wait");
   }
 };
 syncBuiltinESMExports();
@@ -90,7 +107,31 @@ function registryTags() {
 let injected = false;
 let sourceComparisons = 0;
 let previousPack;
-installReleaseFixture((name, commandArguments, options, nativeSpawn) => {
+function signalProbe(execute, options, boundary) {
+  if (!terminationSignal || terminationRequested || terminationBoundary !== boundary) return;
+  terminationRequested = true;
+  recordClock();
+  const stage = readFileSync(join(workspace, "release-stage"), "utf8");
+  return execute(
+    process.execPath,
+    [
+      fileURLToPath(new URL("./release-signal-child.mjs", import.meta.url)),
+      JSON.stringify({
+        parent: process.pid,
+        signal: terminationSignal,
+        workspace,
+        stage,
+        boundary,
+        descendant: process.env.DOUGONG_RELEASE_SIGNAL_DESCENDANT === "true",
+      }),
+    ],
+    options,
+  );
+}
+
+installReleaseFixture((name, commandArguments, options, nativeSpawn, execute) => {
+  if (commandDeadlines.size > 1) throw new Error("Release commands must share one active deadline");
+  const timeoutMilliseconds = commandDeadlines.values().next().value;
   const race = process.env.DOUGONG_RELEASE_CONCURRENT_EDIT;
   const git = process.env.DOUGONG_RELEASE_REAL_GIT;
   if (race && git && !injected) {
@@ -198,12 +239,19 @@ installReleaseFixture((name, commandArguments, options, nativeSpawn) => {
         registryArguments: options.registryArguments,
         gitConfigurationArguments: options.gitConfigurationArguments,
         elapsedMilliseconds,
-        timeoutMilliseconds: options.timeout,
-        killSignal: options.killSignal,
+        timeoutMilliseconds,
       }) + "\n",
     );
   }
   if (name === "git") {
+    if (
+      commandArguments[0] === "ls-remote" &&
+      commandArguments[1] === "--refs" &&
+      existsSync(join(workspace, "release-stage"))
+    ) {
+      const interrupted = signalProbe(execute, options, "before-publish");
+      if (interrupted) return interrupted;
+    }
     if (
       terminationRequested &&
       process.env.DOUGONG_RELEASE_FAIL_RESTORATION_SOURCE_QUERY === "true" &&
@@ -223,6 +271,10 @@ installReleaseFixture((name, commandArguments, options, nativeSpawn) => {
         [...options.gitConfigurationArguments, ...commandArguments],
         { ...options, stdio: "pipe" },
       );
+      if (result.status === 0 && commandArguments[0] === "commit") {
+        const interrupted = signalProbe(execute, options, "after-commit");
+        if (interrupted) return interrupted;
+      }
       if (
         race === "preflight-source" &&
         !injected &&
@@ -286,6 +338,8 @@ installReleaseFixture((name, commandArguments, options, nativeSpawn) => {
       if (race === "alter-receipt")
         writeFileSync(join(output, "reactive", "reactive.tgz"), "wrong bytes");
     }
+    const interrupted = signalProbe(execute, options, "gate");
+    if (interrupted) return interrupted;
     return { status: 0 };
   }
 
@@ -360,11 +414,10 @@ installReleaseFixture((name, commandArguments, options, nativeSpawn) => {
     )
       process.exit(99);
     if (packageAt("pending", commandArguments[1])) {
-      if (Number.isFinite(options.timeout) && queryMilliseconds >= options.timeout) {
-        elapsedMilliseconds += options.timeout;
+      if (Number.isFinite(timeoutMilliseconds) && queryMilliseconds >= timeoutMilliseconds) {
+        elapsedMilliseconds += timeoutMilliseconds;
         return {
           status: null,
-          signal: options.killSignal,
           error: Object.assign(new Error("npm query ETIMEDOUT"), { code: "ETIMEDOUT" }),
         };
       }
@@ -382,6 +435,8 @@ installReleaseFixture((name, commandArguments, options, nativeSpawn) => {
   }
 
   if (name === "npm" && commandArguments[0] === "publish") {
+    const interrupted = signalProbe(execute, options, "upload");
+    if (interrupted) return interrupted;
     const flags = commandArguments.slice(4);
     if (!flags[0]?.startsWith("--tag=")) {
       throw new Error("Release publication must pin an explicit npm distribution tag");
@@ -421,6 +476,10 @@ installReleaseFixture((name, commandArguments, options, nativeSpawn) => {
     }
     if (race === "registry-bytes" && extracted.status === 0)
       writeFileSync(join(target, "package/dist/index.js"), "export const replaced = true;");
+    if (extracted.status === 0) {
+      const interrupted = signalProbe(execute, options, "after-upload");
+      if (interrupted) return interrupted;
+    }
     return extracted;
   }
 

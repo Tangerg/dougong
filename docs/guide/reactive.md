@@ -4,6 +4,8 @@
 
 显式释放订阅或观察时，从 `@dougongjs/reactive` 导入 `disposeSymbol` 或 `asyncDisposeSymbol`。这些键在缺少原生释放符号的运行环境中也可用。
 
+`batch` 与 `computed` 的回调必须同步完成。公开类型拒绝直接返回 Promise、PromiseLike，以及包含异步分支的联合结果；动态输入仍由运行时校验。异步回调在被拒绝前可能已经产生副作用，后续续体也不能由批次撤回。Promise 可以作为数据保存，例如 `signal(promise)` 或 `computed(() => ({ pending: promise }))`；需要异步工作时，通过 Lifetime 的 `spawn` 管理其退出义务。
+
 ```ts
 import { bridge, computed, observe, signal } from "@dougongjs/reactive";
 

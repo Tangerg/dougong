@@ -1,7 +1,12 @@
 import { normalizeContract, type ContractIdentity, type Event } from "../contracts/contracts.js";
 import { DougongError, eventBeforeCommitCode, lifetimeDisposedCode } from "../contracts/errors.js";
 import type { Lifetime, LifetimeOwnership } from "../lifetime/lifetime.js";
-import { disposeSymbol, type Disposable, type Publication } from "../contracts/resource.js";
+import {
+  disposeSymbol,
+  markOwnedControlHandle,
+  type Disposable,
+  type Publication,
+} from "../contracts/resource.js";
 
 export type EventListener<T> = (payload: T) => unknown;
 export type EventArguments<T> = [T] extends [void] ? [payload?: T] : [payload: T];
@@ -32,7 +37,9 @@ class ListenerRegistration<T> implements Publication {
   ) {
     this.#eventId = eventId;
     this.#binding = { hub, listener, owner, detach };
-    this.handle = Object.freeze({ [disposeSymbol]: () => this[disposeSymbol]() });
+    this.handle = markOwnedControlHandle(
+      Object.freeze({ [disposeSymbol]: () => this[disposeSymbol]() }),
+    );
   }
 
   publish() {

@@ -220,7 +220,7 @@ describe("signal", () => {
 
   it("rejects asynchronous batch callbacks", async () => {
     expect(() =>
-      batch(async () => {
+      batch<unknown>(async () => {
         throw new Error("async batch failure");
       }),
     ).toThrow("Reactive batches must be synchronous");
@@ -384,7 +384,7 @@ describe("computed", () => {
 
   it("rejects asynchronous computed calculations", async () => {
     const value = signal(1);
-    const derived = computed(async () => {
+    const derived = computed<unknown>(async () => {
       value.get();
       throw new Error("async computed failure");
     });

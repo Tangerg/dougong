@@ -10,7 +10,7 @@ const identifier = z
   .string()
   .min(1)
   .refine((value) => value.trim() === value, {
-    message: "cannot start or end with whitespace",
+    error: "cannot start or end with whitespace",
   });
 
 // Both components of an Installation ID are URI encoded; malformed UTF-16 cannot identify a Registration.
@@ -25,12 +25,11 @@ export function isRegistrationIdPart(value: unknown): value is string {
 
 const registrationName = z
   .string()
-  .refine(isRegistrationIdPart, "must be a non-empty trimmed Unicode identifier");
+  .refine(isRegistrationIdPart, { error: "must be a non-empty trimmed Unicode identifier" });
 
-const versionRange = identifier.refine(
-  (range) => validRange(range) !== null,
-  "must be a valid semantic version range",
-);
+const versionRange = identifier.refine((range) => validRange(range) !== null, {
+  error: "must be a valid semantic version range",
+});
 
 // A Map validates arbitrary Registration names without invoking or stripping Object prototype keys.
 const dependencyRanges = z
@@ -41,15 +40,14 @@ const dependencyRanges = z
   .transform((dependencies) => Object.fromEntries(dependencies));
 
 const manifestSchema = z
-  .object({
+  .strictObject({
     name: registrationName,
-    version: identifier.refine(isConcreteVersion, "must be a valid semantic version"),
+    version: identifier.refine(isConcreteVersion, { error: "must be a valid semantic version" }),
     apiVersion: versionRange.default("*"),
     activation: z.array(identifier).default(["startup"]).readonly(),
     permissions: z.array(identifier).default([]).readonly(),
     dependencies: dependencyRanges.default({}).readonly(),
   })
-  .strict()
   .readonly();
 
 export type Manifest = z.output<typeof manifestSchema>;

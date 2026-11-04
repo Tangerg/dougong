@@ -26,7 +26,7 @@ import { createPlatform } from "@dougongjs/platform";
 import { bridge, computed, observe, signal } from "@dougongjs/reactive";
 ```
 
-发行物仍为 ESM，要求 Node.js `^24.22.0 || >=26.10.0`；浏览器最低版本为 Chrome/Edge 119、Firefox 124、Safari 17.4。TypeScript 使用 `ES2024`、`DOM` 和 `ESNext.Disposable` 库。原生浏览器模块还需要保留包内的 `runtime/` 并配置私有导入映射，见[快速开始](./getting-started.md#浏览器原生-esm)。
+发行物仍为 ESM，运行版本要求为 <!-- runtime-baseline:start -->Node.js `^24.22.0 || >=26.10.0`, Chrome ≥ 119, Edge ≥ 119, Firefox ≥ 124, Safari ≥ 17.4<!-- runtime-baseline:end -->。TypeScript 使用 `ES2024`、`DOM` 和 `ESNext.Disposable` 库。原生浏览器模块还需要保留包内的 `runtime/` 并配置私有导入映射，见[快速开始](./getting-started.md#浏览器原生-esm)。
 
 ## 2. 将安装命令改为计划与执行
 
@@ -131,7 +131,7 @@ const artifact = platform.catalog.add({
   manifest: { name: greeter.name, version: "1.0.0" },
   reference: "greeter-module",
 });
-const registration = await platform.select(artifact);
+const [registration] = await platform.select([artifact]);
 await platform.activate([registration]);
 await deliveryHost.use(GREETER, (value) => value.greet("Dougong"));
 await platform[asyncDisposeSymbol]();

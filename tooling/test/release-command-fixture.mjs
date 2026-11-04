@@ -1,6 +1,8 @@
 import childProcess from "node:child_process";
+import { EventEmitter } from "node:events";
 import { statSync } from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
+import { PassThrough } from "node:stream";
 
 // Dry-run and preflight fixtures observe the same clean branch, destination and absent tag.
 export function cleanReleaseGit(commandArguments, { gitConfigurationArguments = [] } = {}) {
@@ -35,7 +37,7 @@ export function cleanReleaseGit(commandArguments, { gitConfigurationArguments = 
 
 export function installReleaseFixture(handle) {
   const configured = JSON.parse(process.env.DOUGONG_RELEASE_REGISTRIES ?? "{}");
-  installCommandFixture((name, args, options, spawn) => {
+  installCommandFixture((name, args, options, spawnSync, spawn) => {
     if (name === "git") {
       let command = 0;
       while (args[command] === "-c") command += 2;
@@ -43,10 +45,11 @@ export function installReleaseFixture(handle) {
         name,
         args.slice(command),
         { ...options, gitConfigurationArguments: args.slice(0, command) },
+        spawnSync,
         spawn,
       );
     }
-    if (name !== "npm") return handle(name, args, options, spawn);
+    if (name !== "npm") return handle(name, args, options, spawnSync, spawn);
     if (args[0] === "config" && args[1] === "get" && args.length === 3) {
       const defaults = { registry: "https://registry.npmjs.org/", scope: "" };
       return { status: 0, stdout: configured[args[2]] ?? defaults[args[2]] ?? "undefined" };
@@ -56,6 +59,7 @@ export function installReleaseFixture(handle) {
       name,
       args.slice(command),
       { ...options, registryArguments: args.slice(0, command) },
+      spawnSync,
       spawn,
     );
   });
@@ -63,17 +67,21 @@ export function installReleaseFixture(handle) {
 
 // Keep one isolated release process; simulated commands must not boot another runtime per call.
 export function installCommandFixture(handle) {
-  const nativeSpawn = childProcess.spawnSync;
-  childProcess.spawnSync = (command, commandArguments, options = {}) => {
+  const nativeSpawnSync = childProcess.spawnSync;
+  const nativeSpawn = childProcess.spawn;
+  const dispatch = (command, commandArguments, options, execute) => {
     const workingDirectory = options.cwd ?? process.cwd();
     if (!statSync(workingDirectory).isDirectory())
       throw new TypeError(`Working directory path is not a directory: ${workingDirectory}`);
-    const response = handle(
+    return handle(
       command,
       commandArguments,
       { ...options, cwd: workingDirectory },
-      nativeSpawn,
+      nativeSpawnSync,
+      execute,
     );
+  };
+  const resultOf = (command, response, options) => {
     if (
       !response ||
       (response.error || response.signal
@@ -106,6 +114,30 @@ export function installCommandFixture(handle) {
             : bytes;
     }
     return result;
+  };
+  childProcess.spawnSync = (command, commandArguments, options = {}) =>
+    resultOf(command, dispatch(command, commandArguments, options, nativeSpawnSync), options);
+  childProcess.spawn = (command, commandArguments, options = {}) => {
+    const response = dispatch(command, commandArguments, options, nativeSpawn);
+    if (response instanceof childProcess.ChildProcess) return response;
+    const result = resultOf(command, response, options);
+    const child = new EventEmitter();
+    child.stdout = result.stdout === null ? null : new PassThrough();
+    child.stderr = result.stderr === null ? null : new PassThrough();
+    child.exitCode = null;
+    child.signalCode = null;
+    setImmediate(() => {
+      if (result.error) child.emit("error", result.error);
+      child.stdout?.end(result.stdout);
+      child.stderr?.end(result.stderr);
+      const launchFailed = result.error && result.signal === null;
+      const status = launchFailed ? (result.error.errno ?? result.status) : result.status;
+      child.exitCode = status;
+      child.signalCode = result.signal;
+      if (!launchFailed) child.emit("exit", status, result.signal);
+      setImmediate(() => child.emit("close", status, result.signal));
+    });
+    return child;
   };
   childProcess.execFileSync = (command, commandArguments, options = {}) => {
     const result = childProcess.spawnSync(command, commandArguments, options);

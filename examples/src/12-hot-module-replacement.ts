@@ -5,13 +5,7 @@ import {
   extensionPoint,
   type ContributionView,
 } from "dougong";
-import {
-  createPlatform,
-  MemoryLoader,
-  type Registration,
-  type Artifact,
-  type Platform,
-} from "@dougongjs/platform";
+import { createPlatform, MemoryLoader, type Artifact, type Platform } from "@dougongjs/platform";
 import { exampleResult, type ExampleResult } from "./example.js";
 
 interface View {
@@ -160,13 +154,15 @@ export async function hotModuleReplacement(): Promise<ExampleResult> {
     loader: new MemoryLoader<string>(modules),
   });
 
-  for (const [name, reference] of [
-    [OUTLINE, "outline-v1"],
-    [SEARCH, "search-v1"],
-    [THEME, "theme-v1"],
-  ] as const) {
-    await platform.select(artifact(platform, name, "1.0.0", reference));
-  }
+  await platform.select(
+    (
+      [
+        [OUTLINE, "outline-v1"],
+        [SEARCH, "search-v1"],
+        [THEME, "theme-v1"],
+      ] as const
+    ).map(([name, reference]) => artifact(platform, name, "1.0.0", reference)),
+  );
   await platform.trigger("startup");
   const before = await labels(views, ", ");
 
@@ -184,14 +180,15 @@ export async function hotModuleReplacement(): Promise<ExampleResult> {
     [THEME, artifact(platform, THEME, "2.0.0", "theme-v2")],
   ]);
   const selected = new Set(platform.registrations().map((registration) => registration.name));
-  const targets: Registration<string>[] = [];
-  for (const name of invalidation.registrations) {
-    const replacement = replacements.get(name);
-    if (!selected.has(name) || !replacement) {
-      throw new TypeError(`Hot module replacement plan is incomplete for Registration '${name}'`);
-    }
-    targets.push(await platform.select(replacement));
-  }
+  const targets = await platform.select(
+    invalidation.registrations.map((name) => {
+      const replacement = replacements.get(name);
+      if (!selected.has(name) || !replacement) {
+        throw new TypeError(`Hot module replacement plan is incomplete for Registration '${name}'`);
+      }
+      return replacement;
+    }),
+  );
   await Promise.all(snapshots);
   snapshots.length = 0;
   await platform.activate(targets);

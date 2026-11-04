@@ -19,8 +19,8 @@ import {
 import {
   describeBindings,
   describeImpact,
-  describeDeclaration,
-  type ImpactReason,
+  describeOperations,
+  type DirectImpactKind,
   type PreparedTransition,
   type TransitionIntent,
 } from "./plan.js";
@@ -46,7 +46,7 @@ export async function compileTransition(
   const declarations = new Map(current.graph.declarations);
   const groups = new Map(current.groups);
   const ids = new Set(current.graph.byId.keys());
-  const direct = new Map<InstallationRecord, ImpactReason["kind"]>();
+  const direct = new Map<InstallationRecord, DirectImpactKind>();
   const removedGroups = new Set<GroupNode>();
 
   for (const operation of operations) {
@@ -82,16 +82,19 @@ export async function compileTransition(
         direct.set(record, "removed");
       } else {
         const replacement = operation.update;
-        const changedPlugin = Object.hasOwn(replacement, "plugin");
         declarations.set(
           record,
-          Object.freeze({
-            plugin: replacement.plugin ?? previous.plugin,
-            configuration: Object.hasOwn(replacement, "configuration")
-              ? replacement.configuration
-              : previous.configuration,
-            origin: changedPlugin ? replacement.origin : previous.origin,
-          }),
+          Object.freeze(
+            replacement.kind === "replace"
+              ? {
+                  plugin: replacement.plugin,
+                  configuration: Object.hasOwn(replacement, "configuration")
+                    ? replacement.configuration
+                    : previous.configuration,
+                  origin: replacement.origin,
+                }
+              : { ...previous, configuration: replacement.configuration },
+          ),
         );
         direct.set(record, "updated");
       }
@@ -159,22 +162,7 @@ export async function compileTransition(
   const report = Object.freeze({
     baseStateRevision: current.revision,
     intent,
-    operations: Object.freeze(
-      operations.map((operation) =>
-        "installation" in operation
-          ? Object.freeze({
-              kind: operation.kind,
-              id: operation.installation.id,
-              before: describeDeclaration(current.graph.declarations.get(operation.installation)),
-              after: describeDeclaration(declarations.get(operation.installation)),
-            })
-          : Object.freeze({
-              kind: operation.kind,
-              id: operation.group.id,
-              parentId: operation.group.parentId,
-            }),
-      ),
-    ),
+    operations: describeOperations(operations, current.graph, graph),
     bindings: Object.freeze({
       before: describeBindings(current.graph),
       after: describeBindings(graph),

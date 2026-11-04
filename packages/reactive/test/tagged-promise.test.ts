@@ -46,7 +46,7 @@ it("accepts a structural Promise without treating its display tag as native auth
 
 it("rejects tagged asynchronous batch results through the synchronous contract", async () => {
   const tagged = new TaggedPromise(Promise.resolve());
-  expect(() => batch(() => tagged)).toThrow("Reactive batches must be synchronous");
+  expect(() => batch((): unknown => tagged)).toThrow("Reactive batches must be synchronous");
   await new Promise<void>((resolve) => setImmediate(resolve));
   expect(tagged.thenCalls).toBe(1);
 });

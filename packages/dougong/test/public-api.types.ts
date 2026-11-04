@@ -625,3 +625,64 @@ if (description.configuration.status === "available") {
     Readonly<Record<string, core.ConfigurationValue>>
   >();
 }
+
+const plannedDeclaration: core.DeclarationSnapshot = { pluginName: "planned", origin: undefined };
+const missingInstalledDeclaration: core.PlanOperation = {
+  kind: "install",
+  id: "planned",
+  before: undefined,
+  // @ts-expect-error Installation requires the declaration that will be installed.
+  after: undefined,
+};
+const retainedRemovedDeclaration: core.PlanOperation = {
+  kind: "remove",
+  id: "planned",
+  before: plannedDeclaration,
+  // @ts-expect-error Removal cannot have a declaration after the change.
+  after: plannedDeclaration,
+};
+// @ts-expect-error Provider changes must identify their Contract.
+const missingChangedContract: core.ImpactReason = {
+  installation: "planned",
+  kind: "provider_changed",
+  provider: "provider",
+};
+// @ts-expect-error A provider change must identify at least one actual provider.
+const missingChangedProviders: core.ImpactReason = {
+  installation: "planned",
+  kind: "provider_changed",
+  contract: "planned/value",
+};
+// @ts-expect-error Direct declaration changes do not carry provider-change fields.
+const providerOnDirectReason: core.ImpactReason = {
+  installation: "planned",
+  kind: "updated",
+  provider: "provider",
+};
+void missingInstalledDeclaration;
+void retainedRemovedDeclaration;
+void missingChangedContract;
+void missingChangedProviders;
+void providerOnDirectReason;
+
+function verifyReportCorrelations(operation: core.PlanOperation, reason: core.ImpactReason) {
+  if (operation.kind === "install") {
+    expectTypeOf(operation.before).toEqualTypeOf<undefined>();
+    expectTypeOf(operation.after.pluginName).toEqualTypeOf<string>();
+  } else if (operation.kind === "update") {
+    expectTypeOf(operation.before.pluginName).toEqualTypeOf<string>();
+    expectTypeOf(operation.after.pluginName).toEqualTypeOf<string>();
+  } else if (operation.kind === "remove") {
+    expectTypeOf(operation.before.pluginName).toEqualTypeOf<string>();
+    expectTypeOf(operation.after).toEqualTypeOf<undefined>();
+  }
+  if (reason.kind === "provider_changed") {
+    expectTypeOf(reason.contract.toUpperCase()).toEqualTypeOf<string>();
+    expectTypeOf(reason.provider ?? reason.previousProvider).toEqualTypeOf<string>();
+  } else {
+    expectTypeOf(reason.contract).toEqualTypeOf<undefined>();
+    expectTypeOf(reason.provider).toEqualTypeOf<undefined>();
+    expectTypeOf(reason.previousProvider).toEqualTypeOf<undefined>();
+  }
+}
+void verifyReportCorrelations;

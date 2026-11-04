@@ -7,7 +7,6 @@ import {
   type Platform,
   type PlatformOptions,
   type PlatformSnapshot,
-  type Registration,
 } from "@dougongjs/platform";
 
 export class DeploymentController<Reference> implements AsyncDisposable {
@@ -26,18 +25,12 @@ export class DeploymentController<Reference> implements AsyncDisposable {
   // Callbacks inside a request cannot await a later deployment that is queued behind themselves.
   async deploy(desired: ReadonlyArray<Artifact<Reference>>): Promise<ApplyResult | undefined> {
     const artifacts = captureDataArray(desired, "Desired deployment artifacts");
-    const names = new Set<string>();
-    for (const artifact of artifacts) {
-      const name = artifact.manifest.name;
-      if (names.has(name)) throw new TypeError(`Duplicate desired Registration '${name}'`);
-      names.add(name);
-    }
     const { value } = await this.#requests.run(async () => {
-      const targets: Registration<Reference>[] = [];
-      for (const artifact of artifacts) targets.push(await this.#platform.select(artifact));
+      const targets = await this.#platform.select(artifacts);
+      const retained = new Set(targets);
       const remove = this.#platform
         .registrations()
-        .filter((registration) => !names.has(registration.name));
+        .filter((registration) => !retained.has(registration));
       return this.#platform.activate(targets, { remove });
     });
     return value;

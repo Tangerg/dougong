@@ -10,7 +10,7 @@ describe("Catalog and selection ownership", () => {
     const artifact = add(platform, "sample", "one");
     expect(platform.catalog.get("sample", "1.0.0")).toBe(artifact);
     expect(platform.diagnostics.get().registrations.size).toBe(0);
-    const registration = await platform.select(artifact);
+    const [registration] = await platform.select([artifact]);
     expect(registration.selectedArtifact).toBe(artifact);
     expect(registration.selectionRevision).toBe(1);
     expect(registration.activeOrigin).toBeUndefined();
@@ -42,10 +42,10 @@ describe("Catalog and selection ownership", () => {
     const first = fixture().platform;
     const second = fixture().platform;
     const artifact = add(first, "sample", "one");
-    await expect(second.select(artifact)).rejects.toThrow(
+    await expect(second.select([artifact])).rejects.toThrow(
       expect.objectContaining({ code: "ARTIFACT_UNAVAILABLE" }),
     );
-    await expect(first.select({ ...artifact })).rejects.toThrow(
+    await expect(first.select([{ ...artifact }])).rejects.toThrow(
       expect.objectContaining({ code: "ARTIFACT_UNAVAILABLE" }),
     );
     expect(() => second.catalog.remove(artifact)).toThrow(
@@ -68,7 +68,7 @@ describe("Catalog and selection ownership", () => {
     const revoked = Proxy.revocable({}, {});
     revoked.revoke();
     for (const artifact of [forged, revoked.proxy, undefined]) {
-      await expect(platform.select(artifact as never)).rejects.toThrow(
+      await expect(platform.select([artifact as never])).rejects.toThrow(
         expect.objectContaining({ code: "ARTIFACT_UNAVAILABLE" }),
       );
     }
@@ -108,7 +108,7 @@ describe("Catalog and selection ownership", () => {
     const configuration = { nested: { count: 1 } };
     const artifact = add(platform, "configuration", "configuration", "1.0.0", { configuration });
     configuration.nested.count = 8;
-    const registration = await platform.select(artifact);
+    const [registration] = await platform.select([artifact]);
     await host.start();
     await platform.activate([registration]);
     expect(received).toEqual({ nested: { count: 1 } });
@@ -131,11 +131,11 @@ describe("Catalog and selection ownership", () => {
     const { host, platform } = fixture();
     const one = add(platform, "sample", "one");
     const two = add(platform, "sample", "two", "2.0.0");
-    const registration = await platform.select(one);
+    const [registration] = await platform.select([one]);
     const coreRevision = host.stateRevision;
-    expect(await platform.select(one)).toBe(registration);
+    expect((await platform.select([one]))[0]).toBe(registration);
     expect(registration.selectionRevision).toBe(1);
-    expect(await platform.select(two)).toBe(registration);
+    expect((await platform.select([two]))[0]).toBe(registration);
     expect(registration.selectionRevision).toBe(2);
     expect(registration.selectedArtifact).toBe(two);
     expect(host.stateRevision).toBe(coreRevision);

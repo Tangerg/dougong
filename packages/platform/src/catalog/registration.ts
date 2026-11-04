@@ -12,7 +12,10 @@ import { PlatformError, registrationUnavailableCode, selectionSupersededCode } f
 export type RegistrationStatus =
   "selected" | "activating" | "removing" | "installed" | "failed" | "quarantined" | "removed";
 
+declare const registrationBrand: unique symbol;
+
 export interface Registration<Reference> {
+  readonly [registrationBrand]: true;
   readonly id: string;
   readonly name: string;
   readonly selectedArtifact: Artifact<Reference>;
@@ -63,6 +66,7 @@ type RegistrationState<Reference> =
     };
 
 class RegistrationFacade<Reference> implements Registration<Reference> {
+  declare readonly [registrationBrand]: true;
   readonly #record: RegistrationRecord<Reference>;
 
   constructor(record: RegistrationRecord<Reference>) {
