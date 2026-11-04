@@ -18,7 +18,7 @@ import { dirname, join, resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { performance } from "node:perf_hooks";
 import { setTimeout as delay } from "node:timers/promises";
-import { prerelease, valid, validRange } from "semver";
+import { valid, validRange } from "semver";
 import { packageArchiveIn, readPackageFiles } from "../package-archive.mjs";
 import { packageName, publishedDirectories } from "../packages.mjs";
 import {
@@ -138,13 +138,12 @@ const PACKAGES = publishedDirectories.map((directory) => {
   const manifest = JSON.parse(original);
   const name = packageName(manifest.name);
   const distributionTag = values.tag === undefined ? manifest.publishConfig?.tag : values.tag;
-  if (distributionTag === undefined && prerelease(version))
-    fail(`${name}: a prerelease needs --tag=<dist-tag> or publishConfig.tag`);
+  if (distributionTag === undefined)
+    fail(`${name}: a release needs --tag=<dist-tag> or publishConfig.tag`);
   if (
-    distributionTag !== undefined &&
-    (typeof distributionTag !== "string" ||
-      !/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/u.test(distributionTag) ||
-      validRange(distributionTag) !== null)
+    typeof distributionTag !== "string" ||
+    !/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/u.test(distributionTag) ||
+    validRange(distributionTag) !== null
   )
     fail(`${name}: invalid npm dist-tag; use a channel name such as next or beta`);
   return {
@@ -299,19 +298,19 @@ function packageScope(name) {
   return name.startsWith("@") ? name.split("/")[0] : undefined;
 }
 
-function resolveRegistry({ name, publishConfig }) {
+function resolveRegistry({ name, publishConfig: publishConfiguration }) {
   const scope = packageScope(name);
   const scoped = (scopeName) => {
     if (!scopeName) return undefined;
     if (typeof scopeName !== "string" || !/^@?[^@:/\s]+$/u.test(scopeName))
       fail(`${name}: invalid npm registry scope`);
     const key = scopeName.replace(/^@?/u, "@") + ":registry";
-    return publishConfig?.[key] ?? npmSetting(key);
+    return publishConfiguration?.[key] ?? npmSetting(key);
   };
   const raw =
     scoped(scope) ??
-    scoped(publishConfig?.scope ?? npmSetting("scope")) ??
-    publishConfig?.registry ??
+    scoped(publishConfiguration?.scope ?? npmSetting("scope")) ??
+    publishConfiguration?.registry ??
     npmSetting("registry");
   const url = typeof raw === "string" ? URL.parse(raw) : null;
   if (
@@ -329,7 +328,7 @@ function resolveRegistry({ name, publishConfig }) {
 }
 
 const registries = new Map(PACKAGES.map((entry) => [entry.name, resolveRegistry(entry)]));
-function npmArguments(name, args) {
+function npmArguments(name, commandArguments) {
   const registry = registries.get(name);
   const scope = packageScope(name);
   // npm gives a scope-specific registry priority even over --registry. Lock both selectors for every operation.
@@ -337,7 +336,7 @@ function npmArguments(name, args) {
     "--scope=",
     "--registry=" + registry,
     ...(scope ? [`--${scope}:registry=${registry}`] : []),
-    ...args,
+    ...commandArguments,
   ];
 }
 
@@ -400,9 +399,10 @@ if (alreadyPublished.size) {
 }
 
 function atReleaseSource() {
+  const queryOptions = { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] };
   return (
-    capture("git", ["rev-parse", "--abbrev-ref", "HEAD"]) === branch &&
-    capture("git", ["rev-parse", "HEAD"]) === head
+    execFileSync("git", ["rev-parse", "--abbrev-ref", "HEAD"], queryOptions).trim() === branch &&
+    execFileSync("git", ["rev-parse", "HEAD"], queryOptions).trim() === head
   );
 }
 
@@ -414,6 +414,8 @@ step("Bumping versions");
 
 // Rollback owns an entry only once the atomic replacement succeeded.
 const replacedManifests = new Set();
+let stage;
+let keepStage = false;
 
 function restoreManifests() {
   const owned = [...replacedManifests];
@@ -434,34 +436,48 @@ function restoreManifests() {
   return true;
 }
 
-process.on("exit", (code) => {
-  if (code !== 0 && replacedManifests.size) {
+function cleanupRelease() {
+  const errors = [];
+  if (replacedManifests.size) {
     try {
-      if (!restoreManifests())
+      if (!restoreManifests()) {
         console.error("Checkout moved; leaving manifests untouched. Inspect Git before resuming.");
+        process.exitCode = 1;
+      }
     } catch (error) {
-      console.error(error);
+      errors.push(error);
     }
   }
-});
-
-// Signals bypass the exit hook, so interrupted releases need their own restoration path.
-for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) {
-  process.on(signal, () => {
-    if (replacedManifests.size) {
-      try {
-        const restored = restoreManifests();
-        console.error(
-          restored
-            ? "\n  interrupted — package.json versions restored"
-            : `\n  interrupted — checkout moved; manifests left untouched, inspect Git before resuming`,
-        );
-      } catch (error) {
-        console.error(error);
-      }
+  if (stage !== undefined && !keepStage) {
+    const directory = stage;
+    stage = undefined;
+    try {
+      rmSync(directory, { recursive: true, force: true });
+    } catch (error) {
+      errors.push(error);
     }
-    process.exit(130);
-  });
+  }
+  if (errors.length) {
+    for (const error of errors) console.error(error);
+    process.exitCode = 1;
+  }
+}
+
+process.once("exit", cleanupRelease);
+
+// Native signal termination bypasses exit hooks; release owned resources before restoring that signal's default action.
+for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) {
+  const terminate = () => {
+    try {
+      cleanupRelease();
+    } catch (error) {
+      console.error(error);
+    } finally {
+      process.removeListener(signal, terminate);
+      process.kill(process.pid, signal);
+    }
+  };
+  process.on(signal, terminate);
 }
 
 for (const entry of PACKAGES) {
@@ -473,11 +489,7 @@ for (const entry of PACKAGES) {
 
 step("Running the full gate (pnpm check) on the release versions");
 
-const stage = mkdtempSync(join(tmpdir(), "dougong-release-"));
-let keepStage = false;
-process.once("exit", () => {
-  if (!keepStage) rmSync(stage, { recursive: true, force: true });
-});
+stage = mkdtempSync(join(tmpdir(), "dougong-release-"));
 run("pnpm", ["check"], { env: { ...process.env, [candidateOutput]: stage } });
 assertPublicationInputs("accept verified packages");
 const pathsOutsideManifests = [
@@ -493,7 +505,7 @@ const versions = new Map(PACKAGES.map(({ name }) => [name, version]));
 
 function assertDistributionTag(name, distributionTag) {
   // Channels can move after a completed release. The remote Git tag owns its historical record.
-  if (distributionTag === undefined || remoteTag) return;
+  if (remoteTag) return;
   const tags = JSON.parse(
     capture(
       "npm",
@@ -530,19 +542,23 @@ function writeCandidate(candidate, directory) {
   return path;
 }
 
+const packageNameColumnWidth = 22;
+const packageSizeColumnWidth = 7;
 for (const { directory, name, distributionTag, versioned } of PACKAGES) {
   const { files: candidateFiles, bytes } = candidates.get(directory);
   verifyManifest(JSON.parse(versioned), JSON.parse(candidateFiles.get("package.json")), versions);
   if (alreadyPublished.has(name)) {
     verifyRegistryContents(name, candidateFiles);
     assertDistributionTag(name, distributionTag);
-    console.log(`  ${name.padEnd(22)} ${"skip".padStart(7)}     already published, contents match`);
+    console.log(
+      `  ${name.padEnd(packageNameColumnWidth)} ${"skip".padStart(packageSizeColumnWidth)}     already published, contents match`,
+    );
     continue;
   }
 
   const size = (bytes.byteLength / 1024).toFixed(1);
   console.log(
-    `  ${name.padEnd(22)} ${size.padStart(7)} KB  ${version}${distributionTag ? ` (--tag=${distributionTag})` : ""}`,
+    `  ${name.padEnd(packageNameColumnWidth)} ${size.padStart(packageSizeColumnWidth)} KB  ${version} (--tag=${distributionTag})`,
   );
 }
 
@@ -623,8 +639,7 @@ for (const { directory, name, distributionTag } of PACKAGES) {
   assertPublicationInputs("publish " + name);
   const candidate = candidates.get(directory);
   const upload = writeCandidate(candidate, mkdtempSync(join(stage, "upload-")));
-  const publishArguments = ["publish", upload, "--access", "public"];
-  if (distributionTag !== undefined) publishArguments.push(`--tag=${distributionTag}`);
+  const publishArguments = ["publish", upload, "--access", "public", `--tag=${distributionTag}`];
   if (oneTimePassword !== undefined) publishArguments.push(`--otp=${oneTimePassword}`);
   assertRemoteReleaseReferences();
   const result = spawnSync("npm", npmArguments(name, publishArguments), { stdio: "inherit" });

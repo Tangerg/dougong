@@ -19,7 +19,7 @@ Type exports: `Platform`, `PlatformOptions`, `PlatformStatus`, `Registration`, `
 | `remove(...registrations)` | Reuses the same Core Plan execution for removal |
 | `[Symbol.asyncDispose]()` | Cancels pending activation and removes execution owned by this Platform |
 
-`PlatformOptions.id` distinguishes delivery namespaces in a shared Host. Optional `group` must already be committed in the given Host. The host declares `apiVersion`; checking Manifest ranges is an admission concern.
+`PlatformOptions.id` distinguishes delivery namespaces in a shared Host. Optional `group` must already be committed in the given Host. Application code supplies the application API version through `PlatformOptions.apiVersion`. Platform captures that version and checks the compatibility range declared by `Manifest.apiVersion`. Host is the Core execution boundary.
 
 An Artifact's `revision` is a caller-supplied content or release identity, never a clock-generated version. Reuse requires the revision and validated Manifest of the same committed Installation to match the selection. The order of dependencies, activation events and permissions does not affect that match. Registration's `selectionRevision` rejects stale activation. `activeOrigin` derives from Installation origin, which is already correct inside Core commit notifications.
 

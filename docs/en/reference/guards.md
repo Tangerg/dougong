@@ -22,11 +22,13 @@ The browser consumer is built from the inspected tarballs and runs in Chromium, 
 | `exports.public` | Cross-package imports use formal public entrypoints |
 | `modules.esm` | Relative source imports carry runtime extensions so emitted declarations support NodeNext |
 | `reactive.independent` | Reactive has zero external dependencies |
-| `vocabulary.current` | Rejects retired vocabulary and checks project-owned declarations for abbreviated names |
+| `vocabulary.current` | Rejects retired vocabulary in runtime libraries and public APIs; checks project-owned production declarations in runtime libraries, examples and tooling for abbreviated names |
 | `logging.port` | Library logging uses the Logger port |
 | `policy.explicit` | Library policy does not read ambient clocks or entropy |
 | `lifetime.owner` | Lifetime roots belong to execution or an existing tree |
 | `contracts.owner` | Fixed Contract IDs have one defining owner |
+
+The vocabulary rule preserves original external API import names and tool protocol fields. Project-owned aliases still require full names. Tests and test fixtures are excluded from production declarations.
 
 ## Coverage floors
 
@@ -58,6 +60,8 @@ Each package has one registry destination for the release. Resolution follows np
 
 Each published manifest lists the literal files or directories to ship. Packing must preserve those files, including additional assets outside `dist/`, and cannot introduce other files or metadata. Workspace dependency ranges are resolved to the versions under test; package-manager authoring data and packaging hooks need not ship. The ESM build derives external dependencies and subpaths from each package’s manifest. The declaration check uses TypeScript’s module namespace to distinguish a constructor from a type-only re-export of the same class.
 
-Prereleases require an npm distribution tag for each package. Run `pnpm release 0.7.2-alpha.1 --tag=next --dry-run` to verify, then omit `--dry-run` to publish. The CLI tag overrides each package’s `publishConfig.tag`. Channel names start with an ASCII letter or digit and may include letters, digits, dots, underscores and hyphens. SemVer ranges are reserved. Resume a partial upload with the same tag. For an unfinished release, the verified archives and each explicitly requested npm channel must match before Git records the release. Once the remote Git tag exists, later channel moves are valid.
+Stable releases and prereleases both require an explicit npm distribution tag for every package. Verify a stable release with `pnpm release 0.7.2 --tag=latest --dry-run`, or a prerelease with `pnpm release 0.7.2-alpha.1 --tag=next --dry-run`; omit `--dry-run` after verification to publish. The CLI tag overrides each package’s `publishConfig.tag`. Without a CLI tag, every package must declare `publishConfig.tag`; the release does not adopt npm's configured default tag. Missing or invalid channels fail before any Git/npm command or manifest write. Channel names start with an ASCII letter or digit and may include letters, digits, dots, underscores and hyphens. SemVer ranges are reserved. Once release inputs are captured, each package's upload, recovery checks and final channel confirmation use that same tag. Resume a partial upload with the same tag. For an unfinished release, the verified archives and every channel's target version must match before Git records the release. Once the remote Git tag exists, later channel moves are valid.
+
+On `SIGINT`, `SIGTERM` or `SIGHUP`, the release uses the same cleanup entrypoint as a failed exit to restore manifests it still owns and remove temporary archives, then terminates with the original signal. Cleanup failures are reported without changing the terminating signal, overwriting another operation's manifests or automatically retrying relinquished restoration obligations. Uploaded immutable npm versions remain available for recovery with the original version and channel. Only a successfully completed dry run retains its archive directory.
 
 After npm accepts an upload, registry visibility queries and native asynchronous Node timer waits share one monotonic deadline. Each wait is bounded by the smaller of the polling interval and the remaining budget; neither a slow query nor a wait resets the deadline. Each query receives only the remaining budget and is forcibly terminated on timeout; slow queries cannot extend the total wait. Only an explicit E404 proves that a version is not yet visible. Authentication, network, format and query-timeout failures end observation rather than imply successful publication.

@@ -19,7 +19,7 @@
 | `remove(...registrations)` | 复用同一 Core Plan 执行移除 |
 | `[Symbol.asyncDispose]()` | 取消待完成激活并移除该 Platform 拥有的执行 |
 
-`PlatformOptions.id` 区分同一 Host 中的交付命名空间。可选 `group` 必须已提交并属于给定 Host。`apiVersion` 由宿主声明，Manifest 的范围检查是交付准入事实。
+`PlatformOptions.id` 区分同一 Host 中的交付命名空间。可选 `group` 必须已提交并属于给定 Host。应用代码通过 `PlatformOptions.apiVersion` 提供应用 API 版本，Platform 捕获该版本并校验 `Manifest.apiVersion` 声明的兼容范围。Host 是 Core 的执行边界。
 
 Artifact 的 `revision` 是调用方给定的内容或发行身份；没有依赖时钟生成的版本。复用要求同一已提交 Installation 上的 revision 和经验证的 Manifest 都与选择一致。依赖键、激活事件和权限的声明顺序不影响匹配。Registration 的 `selectionRevision` 用于拒绝过期激活。`activeOrigin` 由 Installation origin 派生，Core 提交通知中已经能够看到正确来源。
 

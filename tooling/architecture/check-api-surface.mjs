@@ -16,6 +16,7 @@ import { architectureRules, sourceExtensions } from "./rules.mjs";
 import { runtimeBaseline } from "../runtime-baseline.mjs";
 
 const retiredIdentifiers = new Set(retiredVocabulary);
+const publicImports = Object.keys(PACKAGES);
 
 function difference(actual, expected) {
   const expectedSet = new Set(expected);
@@ -101,7 +102,7 @@ for (const file of publishedDirectories.flatMap((directory) =>
     typescript.ScriptKind.TS,
   );
   const visit = (node) => {
-    const abbreviated = abbreviatedDeclaration(node);
+    const abbreviated = abbreviatedDeclaration(node, publicImports);
     if (abbreviated) failures.push(`${file}: ${abbreviated}`);
     if (typescript.isIdentifier(node) && retiredIdentifiers.has(node.text))
       failures.push(

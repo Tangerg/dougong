@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { readFileSync } from "node:fs";
+import { globSync, readFileSync } from "node:fs";
 import { isBuiltin } from "node:module";
 import { relative, sep } from "node:path";
 import typescript from "typescript";
@@ -306,7 +306,7 @@ for (const [file, dependencies] of Object.entries(graph)) {
         source,
       );
     if (owner && !test) {
-      const abbreviated = abbreviatedDeclaration(node);
+      const abbreviated = abbreviatedDeclaration(node, publicImports);
       if (abbreviated) violation(file, "vocabulary.current", abbreviated, node, source);
       if (
         (typescript.isIdentifier(node) || typescript.isStringLiteralLike(node)) &&
@@ -374,6 +374,29 @@ for (const [file, dependencies] of Object.entries(graph)) {
         }
       }
     }
+    typescript.forEachChild(node, visit);
+  };
+  visit(source);
+}
+
+// Node tooling shares naming ownership, but does not belong to the portable runtime graph.
+const toolingExtensions = sourceExtensions.flatMap((extension) => [
+  extension,
+  extension.replace("ts", "js"),
+]);
+for (const path of globSync(`tooling/**/*.{${toolingExtensions.join(",")}}`, {
+  exclude: ["tooling/test/**"],
+})) {
+  const file = path.split(sep).join("/");
+  const source = typescript.createSourceFile(
+    file,
+    readFileSync(file, "utf8"),
+    typescript.ScriptTarget.Latest,
+    true,
+  );
+  const visit = (node) => {
+    const abbreviated = abbreviatedDeclaration(node, publicImports);
+    if (abbreviated) violation(file, "vocabulary.current", abbreviated, node, source);
     typescript.forEachChild(node, visit);
   };
   visit(source);

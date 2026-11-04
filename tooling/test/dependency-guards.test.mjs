@@ -14,7 +14,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { beforeAll, describe, expect, it, vi } from "vitest";
-import { arrangeLayerViolations } from "./fixtures/layer-violations.mjs";
+import {
+  arrangeLayerViolations,
+  arrangeValidToolingVocabulary,
+  toolingSourceExtensions,
+} from "./fixtures/layer-violations.mjs";
 
 const guardTestTimeout = 30000;
 vi.setConfig({ testTimeout: guardTestTimeout });
@@ -80,7 +84,7 @@ it.each(["check-circular.mjs", "check-layers.mjs"])(
 it.each(["check-circular.mjs", "check-layers.mjs"])(
   "%s accepts the complete valid source graph",
   (script) => {
-    const result = runGuard(script);
+    const result = runGuard(script, arrangeValidToolingVocabulary);
     expect(result).toMatchObject({ status: 0, output: expect.stringContaining("OK:") });
   },
 );
@@ -171,5 +175,52 @@ describe("layer violations", () => {
       [6, "fn"],
     ])
       expect(output).toContain(`names.ts:${line}: [vocabulary.current] Declaration '${name}'`);
+  });
+
+  it.each(toolingSourceExtensions)("checks tooling declarations in .%s files", (extension) => {
+    expect(output).toContain(
+      `tooling/commands/arguments.${extension}:1: [vocabulary.current] Declaration 'args'`,
+    );
+  });
+
+  it("keeps aliases owned by the project even when the original API name belongs to a dependency", () => {
+    for (const [line, name] of [
+      [1, "args"],
+      [2, "cfg"],
+      [3, "config"],
+      [5, "opts"],
+      [6, "args"],
+    ])
+      expect(output).toContain(
+        `tooling/commands/aliases.mjs:${line}: [vocabulary.current] Declaration '${name}'`,
+      );
+    expect(output).not.toContain("tooling/commands/aliases.mjs:4:");
+  });
+
+  it("does not exempt relative imports, project package imports or package-local imports", () => {
+    for (const [line, name] of [
+      [1, "args"],
+      [2, "config"],
+      [3, "args"],
+      [4, "deps"],
+    ])
+      expect(output).toContain(
+        `tooling/commands/project-imports.mts:${line}: [vocabulary.current] Declaration '${name}'`,
+      );
+  });
+
+  it("continues rejecting retired domain vocabulary in runtime declarations and re-exports", () => {
+    for (const filename of ["retired.ts", "retired-owner.ts"])
+      expect(output).toContain(
+        `packages/reactive/src/${filename}:1: [vocabulary.current] retired vocabulary 'Runtime'`,
+      );
+  });
+
+  it("preserves foreign API names, tool-defined keys and unrelated tooling concepts", () => {
+    expect(output).not.toContain("tooling/commands/foreign.");
+    expect(output).not.toContain("tooling/test/fixtures/vocabulary.mjs");
+    const violations = output.split("\n").filter((line) => line.includes("tooling/"));
+    expect(violations.length).toBeGreaterThan(0);
+    expect(violations.every((line) => line.includes("[vocabulary.current]"))).toBe(true);
   });
 });

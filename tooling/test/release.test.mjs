@@ -15,7 +15,8 @@ const preload = fileURLToPath(new URL("./fixtures/release-preflight.mjs", import
 async function runRelease(
   response,
   names = ["@dougongjs/reactive", "dougong", "@dougongjs/platform"],
-  releaseArguments = [version, "--dry-run"],
+  releaseArguments = [version, "--tag=latest", "--dry-run"],
+  registries = {},
 ) {
   const workspace = mkdtempSync(join(tmpdir(), "dougong-release-test-"));
   try {
@@ -30,10 +31,15 @@ async function runRelease(
       );
     }
     writeFileSync(join(workspace, "queries.json"), "[]");
+    writeFileSync(join(workspace, "commands.json"), "[]");
     writeFileSync(join(workspace, "response.json"), JSON.stringify(response));
     const result = await executeRelease(["--import", preload, release, ...releaseArguments], {
       cwd: workspace,
-      env: { ...process.env, PATH: executableDirectory },
+      env: {
+        ...process.env,
+        PATH: executableDirectory,
+        DOUGONG_RELEASE_REGISTRIES: JSON.stringify(registries),
+      },
     });
     return {
       ...result,
@@ -41,6 +47,7 @@ async function runRelease(
         ? JSON.parse(readFileSync(join(workspace, "gate-started"), "utf8"))
         : undefined,
       queries: JSON.parse(readFileSync(join(workspace, "queries.json"), "utf8")),
+      commands: JSON.parse(readFileSync(join(workspace, "commands.json"), "utf8")),
     };
   } finally {
     rmSync(workspace, { recursive: true, force: true });
@@ -111,8 +118,24 @@ it.each([
   expect(result.stderr).toContain("version");
 });
 
+it.each([version, "0.7.2-alpha.1"])(
+  "requires an explicit channel for %s before external commands even when npm config has a tag",
+  async (targetVersion) => {
+    const result = await runRelease(
+      { status: 1, stdout: JSON.stringify({ error: { code: "E404" } }) },
+      undefined,
+      [targetVersion, "--dry-run"],
+      { tag: "latest" },
+    );
+    expect(result.status).toBe(1);
+    expect(result.commands).toEqual([]);
+    expect(result.queries).toEqual([]);
+    expect(result.gate).toBeUndefined();
+    expect(result.stderr).toContain("a release needs --tag=<dist-tag> or publishConfig.tag");
+  },
+);
+
 it.each([
-  { commandArguments: ["0.7.2-alpha.1", "--dry-run"], error: "--tag" },
   { commandArguments: [version, "--tag="], error: "dist-tag" },
   { commandArguments: [version, "--tag=1.x"], error: "dist-tag" },
   { commandArguments: [version, "--tag=beta/test"], error: "dist-tag" },
@@ -146,8 +169,8 @@ it.each([
 
 it.each([
   ["0.7.2-alpha.1", "--tag=next", "--dry-run"],
-  ["--otp=123456", "--dry-run", version],
-  [version, "--yes", "--dry-run", "--otp=123456"],
+  ["--otp=123456", "--dry-run", version, "--tag=latest"],
+  [version, "--yes", "--dry-run", "--otp=123456", "--tag=latest"],
 ])("accepts canonical release inputs %s", async (...commandArguments) => {
   const result = await runRelease(
     { status: 1, stdout: JSON.stringify({ error: { code: "E404" } }) },

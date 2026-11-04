@@ -25,10 +25,13 @@ const workspace = process.cwd();
 const visibility = process.env.DOUGONG_RELEASE_VISIBILITY;
 const queryMilliseconds = Number(process.env.DOUGONG_RELEASE_QUERY_MILLISECONDS ?? 0);
 let elapsedMilliseconds = 0;
+let terminationRequested = false;
 Object.defineProperty(performance, "now", { value: () => elapsedMilliseconds });
-process.once("exit", () =>
-  writeFileSync(join(workspace, "release-clock.json"), JSON.stringify({ elapsedMilliseconds })),
-);
+function recordClock() {
+  writeFileSync(join(workspace, "release-clock.json"), JSON.stringify({ elapsedMilliseconds }));
+}
+recordClock();
+process.once("exit", recordClock);
 if (!["immediate", "delayed", "never", "unreadable"].includes(visibility)) {
   throw new TypeError(`Unknown fixture visibility: ${visibility}`);
 }
@@ -52,6 +55,18 @@ timers.setTimeout = async (delayMilliseconds) => {
     }
   } else if (visibility !== "never") {
     throw new Error(`Unexpected registry polling wait: ${visibility}`);
+  }
+  const terminationSignal = process.env.DOUGONG_RELEASE_TERMINATION_SIGNAL;
+  if (terminationSignal) {
+    if (!["SIGINT", "SIGTERM", "SIGHUP"].includes(terminationSignal)) {
+      throw new TypeError(`Unknown release termination signal: ${terminationSignal}`);
+    }
+    recordClock();
+    terminationRequested = true;
+    process.kill(process.pid, terminationSignal);
+    // Keep the real release suspended until the signal reaches its installed handler.
+    const terminationWaitIntervalMilliseconds = 1_000;
+    await new Promise(() => setInterval(() => undefined, terminationWaitIntervalMilliseconds));
   }
 };
 syncBuiltinESMExports();
@@ -189,6 +204,13 @@ installReleaseFixture((name, commandArguments, options, nativeSpawn) => {
     );
   }
   if (name === "git") {
+    if (
+      terminationRequested &&
+      process.env.DOUGONG_RELEASE_FAIL_RESTORATION_SOURCE_QUERY === "true" &&
+      commandArguments[0] === "rev-parse"
+    ) {
+      return { status: 1, stderr: "Fixture restoration source query failed" };
+    }
     if (process.env.DOUGONG_RELEASE_REAL_GIT) {
       const interrupt =
         (recording || (commandArguments[0] === "diff" && commandArguments.includes("--cached"))) &&
@@ -329,7 +351,7 @@ installReleaseFixture((name, commandArguments, options, nativeSpawn) => {
       const directory = packageAt("published", commandArguments[1]);
       if (!directory) return { status: 1 };
       const manifest = JSON.parse(readFileSync(join(directory, "package/package.json"), "utf8"));
-      const tags = registryTags()[manifest.name] ?? { latest: manifest.version };
+      const tags = registryTags()[manifest.name] ?? {};
       return { status: 0, stdout: JSON.stringify(tags) };
     }
     if (
@@ -361,9 +383,10 @@ installReleaseFixture((name, commandArguments, options, nativeSpawn) => {
 
   if (name === "npm" && commandArguments[0] === "publish") {
     const flags = commandArguments.slice(4);
-    const channel = flags[0]?.startsWith("--tag=")
-      ? flags.shift().slice("--tag=".length)
-      : "latest";
+    if (!flags[0]?.startsWith("--tag=")) {
+      throw new Error("Release publication must pin an explicit npm distribution tag");
+    }
+    const channel = flags.shift().slice("--tag=".length);
     if (flags[0]?.startsWith("--otp=")) flags.shift();
     if (commandArguments[2] !== "--access" || commandArguments[3] !== "public" || flags.length)
       process.exit(99);

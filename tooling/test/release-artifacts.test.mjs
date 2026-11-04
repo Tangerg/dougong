@@ -50,7 +50,7 @@ async function runRelease(
   mutate,
   {
     version: targetVersion = version,
-    distributionTag,
+    channelArguments = ["--tag=latest"],
     registries = {},
     packedOverrides = {},
     declaredDependencies = { "@standard-schema/spec": "^1.0.0" },
@@ -65,6 +65,8 @@ async function runRelease(
     visibilityQueryMilliseconds = 0,
     oneTimePassword,
     interruptAt,
+    terminationSignal,
+    failRestorationSourceQuery = false,
     interruptAfter = false,
     resume = false,
     beforeRelease = () => undefined,
@@ -147,6 +149,19 @@ async function runRelease(
         }
       }
     }
+    writeFileSync(
+      join(workspace, "dist-tags.json"),
+      JSON.stringify(
+        Object.fromEntries(
+          publishedPackages.map((directory) => {
+            const manifest = JSON.parse(
+              readFileSync(join(workspace, "published", directory, "package/package.json")),
+            );
+            return [manifest.name, { latest: manifest.version }];
+          }),
+        ),
+      ),
+    );
     mutate(join(workspace, "published/reactive/package"), workspace);
     const originals = new Map(
       packages.map((name) => {
@@ -193,7 +208,7 @@ async function runRelease(
       );
     }
     const pnpm = realPack ? requireExecutable("pnpm") : undefined;
-    const execute = async (stage, interruption, publicationFailure) => {
+    const execute = async (stage, interruption, publicationFailure, expectedSignal) => {
       try {
         return await executeRelease(
           [
@@ -201,7 +216,7 @@ async function runRelease(
             preload,
             release,
             targetVersion,
-            ...(distributionTag === undefined ? [] : [`--tag=${distributionTag}`]),
+            ...channelArguments,
             dryRun ? "--dry-run" : "--yes",
             ...(oneTimePassword ? [`--otp=${oneTimePassword}`] : []),
           ],
@@ -222,9 +237,27 @@ async function runRelease(
               DOUGONG_RELEASE_PUBLISHED_ARCHIVE_PREFIX: publishedArchivePrefix,
               DOUGONG_RELEASE_INTERRUPT: interruption ?? "",
               DOUGONG_RELEASE_INTERRUPT_AFTER: String(interruptAfter),
+              DOUGONG_RELEASE_TERMINATION_SIGNAL: expectedSignal ?? "",
+              DOUGONG_RELEASE_FAIL_RESTORATION_SOURCE_QUERY: String(failRestorationSourceQuery),
             },
           },
         );
+      } catch (error) {
+        if (
+          expectedSignal !== undefined &&
+          error.signal === expectedSignal &&
+          error.status === null &&
+          error.killed === false &&
+          error.cause?.signal === expectedSignal
+        ) {
+          return {
+            status: error.status,
+            signal: error.signal,
+            stdout: error.stdout,
+            stderr: error.stderr,
+          };
+        }
+        throw error;
       } finally {
         const stageRecord = join(workspace, "release-stage");
         if (existsSync(stageRecord)) stages.add(readFileSync(stageRecord, "utf8"));
@@ -238,20 +271,27 @@ async function runRelease(
         }),
       );
     beforeRelease(git, workspace);
-    const interrupted = await execute("initial attempt", interruptAt, publishFailure);
+    const interrupted = await execute(
+      "initial attempt",
+      interruptAt,
+      publishFailure,
+      terminationSignal,
+    );
     const publishedAfterFirstAttempt = publishedManifests();
-    const interruptedState = interruptAt
-      ? {
-          status: git(["status", "--porcelain"]),
-          versions: packages.map(
-            (name) =>
-              JSON.parse(readFileSync(join(workspace, "packages", name, "package.json"), "utf8"))
-                .version,
-          ),
-          ahead: git(["rev-list", "--count", "origin/main..HEAD"]),
-          tag: git(["tag", "--list", `v${targetVersion}`]),
-        }
-      : undefined;
+    const interruptedState =
+      interruptAt || terminationSignal
+        ? {
+            status: git(["status", "--porcelain"]),
+            versions: packages.map(
+              (name) =>
+                JSON.parse(readFileSync(join(workspace, "packages", name, "package.json"), "utf8"))
+                  .version,
+            ),
+            ahead: git(["rev-list", "--count", "origin/main..HEAD"]),
+            tag: git(["tag", "--list", `v${targetVersion}`]),
+            stagesRetained: [...stages].some((stage) => existsSync(stage)),
+          }
+        : undefined;
     if (resume) beforeResume(git, workspace);
     const result = resume ? await execute("resume") : interrupted;
     afterRelease(git, workspace);
@@ -260,7 +300,9 @@ async function runRelease(
       const edited =
         concurrentEdit === "manifest" && path === join(workspace, "packages/dougong/package.json");
       const expected =
-        edited || (realGit && head !== initialHead && concurrentEdit !== "preflight-source")
+        edited ||
+        (terminationSignal && failRestorationSourceQuery) ||
+        (realGit && head !== initialHead && concurrentEdit !== "preflight-source")
           ? JSON.stringify(
               {
                 ...JSON.parse(contents),
@@ -289,6 +331,7 @@ async function runRelease(
         ? readFileSync(join(workspace, "published/dougong/package/dist/index.js"), "utf8")
         : undefined,
       published: publishedManifests(),
+      distributionTags: JSON.parse(readFileSync(join(workspace, "dist-tags.json"), "utf8")),
       elapsedMilliseconds: JSON.parse(readFileSync(join(workspace, "release-clock.json"), "utf8"))
         .elapsedMilliseconds,
       calls,
@@ -558,9 +601,15 @@ it.each([undefined, "123456"])(
       ({ command, commandArguments }) =>
         command === "npm" && ["publish", "view"].includes(commandArguments[0]),
     );
-    expect(publication.map(({ commandArguments }) => commandArguments[0])).toEqual([
-      ...packages.map(() => "view"),
-      ...packages.slice(1).flatMap(() => ["publish", "view"]),
+    expect(
+      publication.map(({ commandArguments }) =>
+        commandArguments[0] === "view" ? commandArguments[2] : commandArguments[0],
+      ),
+    ).toEqual([
+      ...packages.map(() => "version"),
+      "dist-tags",
+      ...packages.slice(1).flatMap(() => ["publish", "version", "dist-tags"]),
+      ...packages.map(() => "dist-tags"),
     ]);
     for (const { commandArguments } of publication.filter(
       ({ commandArguments }) => commandArguments[0] === "publish",
@@ -568,6 +617,7 @@ it.each([undefined, "123456"])(
       expect(commandArguments.slice(2)).toEqual([
         "--access",
         "public",
+        "--tag=latest",
         ...(oneTimePassword ? [`--otp=${oneTimePassword}`] : []),
       ]);
       expect(commandArguments[1]).toMatch(/\.tgz$/);
@@ -816,47 +866,162 @@ it.each([false, true])(
   },
 );
 
-it.each(["command", "manifest"])(
-  "publishes and resumes a prerelease with its %s dist-tag",
-  async (source) => {
-    const version = "0.7.2-alpha.1";
-    const result = await runRelease(
-      (_published, workspace) => {
-        for (const name of packages) {
-          const path = join(workspace, "packages", name, "package.json");
-          const manifest = JSON.parse(readFileSync(path));
-          manifest.publishConfig = { tag: "canary" };
-          writeFileSync(path, JSON.stringify(manifest, null, 2) + "\n");
-        }
-      },
-      {
-        version,
-        distributionTag: source === "command" ? "next" : undefined,
-        dryRun: false,
-        publishedPackages: [],
-        publishFailure: "platform",
-        resume: true,
-      },
-    );
-    expect(result.interrupted.status).toBe(1);
-    const option = source === "command" ? " --tag=next" : "";
-    expect(result.interrupted.stderr).toContain(`pnpm release ${version}${option}\``);
+it("keeps one explicit channel when npm configuration changes before resuming", async () => {
+  const settings = { tag: "preview" };
+  const result = await runRelease(() => undefined, {
+    channelArguments: ["--tag=preview"],
+    registries: settings,
+    publishedPackages: [],
+    dryRun: false,
+    publishFailure: "dougong",
+    resume: true,
+    beforeResume() {
+      settings.tag = "latest";
+    },
+  });
+
+  expect(result.interrupted.status).toBe(1);
+  expect(result.status).toBe(0);
+  expect(result.distributionTags).toEqual({
+    "@dougongjs/reactive": { preview: version },
+    dougong: { preview: version },
+    "@dougongjs/platform": { preview: version },
+  });
+  expect(result.recorded).toEqual(["commit", "tag", "push"]);
+  const uploads = result.calls.filter(
+    ({ command, commandArguments }) => command === "npm" && commandArguments[0] === "publish",
+  );
+  expect(uploads).toHaveLength(4);
+  for (const { commandArguments } of uploads) expect(commandArguments).toContain("--tag=preview");
+});
+
+it("requires a manifest channel for every package when the command omits its tag", async () => {
+  const result = await runRelease(
+    (_published, workspace) => {
+      const path = join(workspace, "packages/reactive/package.json");
+      const manifest = JSON.parse(readFileSync(path));
+      manifest.publishConfig = { tag: "preview" };
+      writeFileSync(path, JSON.stringify(manifest, null, 2) + "\n");
+    },
+    { channelArguments: [], publishedPackages: [], registries: { tag: "preview" } },
+  );
+
+  expect(result.status).toBe(1);
+  expect(result.stderr).toContain("dougong: a release needs --tag=<dist-tag> or publishConfig.tag");
+  expect(result.calls).toEqual([]);
+  expect(result.published).toEqual({});
+});
+
+it.each(["SIGINT", "SIGTERM", "SIGHUP"])(
+  "preserves %s after cleanup and resumes the interrupted publication",
+  async (terminationSignal) => {
+    const result = await runRelease(() => undefined, {
+      publishedPackages: [],
+      dryRun: false,
+      visibility: "delayed",
+      terminationSignal,
+      resume: true,
+    });
+
+    expect(result.interrupted).toMatchObject({ status: null, signal: terminationSignal });
+    expect(result.interruptedState).toEqual({
+      status: "",
+      versions: packages.map(() => "0.7.1"),
+      ahead: "0",
+      tag: "",
+      stagesRetained: false,
+    });
+    expect(Object.keys(result.publishedAfterFirstAttempt)).toEqual(["reactive"]);
     expect(result.status).toBe(0);
+    expect(result.recorded).toEqual(["commit", "tag", "push"]);
     const uploads = result.calls.filter(
       ({ command, commandArguments }) => command === "npm" && commandArguments[0] === "publish",
     );
-    expect(uploads).toHaveLength(4);
-    for (const { commandArguments } of uploads)
-      expect(commandArguments).toContain(source === "command" ? "--tag=next" : "--tag=canary");
-    expect(Object.values(result.published).map((manifest) => manifest.version)).toEqual(
-      packages.map(() => version),
+    expect(uploads.map(({ commandArguments }) => basename(commandArguments[1]))).toEqual(
+      packages.map((name) => `${name}.tgz`),
     );
-    expect(result.remoteTags).toContain(`refs/tags/v${version}`);
   },
 );
 
+it("reports a failed restoration without changing the terminating signal or another owner's manifest", async () => {
+  const result = await runRelease(() => undefined, {
+    publishedPackages: [],
+    dryRun: false,
+    visibility: "delayed",
+    concurrentEdit: "manifest",
+    terminationSignal: "SIGTERM",
+  });
+
+  expect(result).toMatchObject({ status: null, signal: "SIGTERM" });
+  expect(result.stderr).toContain("Release manifest restoration failed");
+  expect(result.stderr).toContain("packages/dougong/package.json changed during release");
+  expect(result.interruptedState.versions).toEqual(["0.7.1", version, "0.7.1"]);
+  expect(result.interruptedState.stagesRetained).toBe(false);
+  expect(result.recorded).toEqual([]);
+});
+
+it("preserves the signal and external edits when the restoration source query fails", async () => {
+  const result = await runRelease(() => undefined, {
+    publishedPackages: [],
+    dryRun: false,
+    visibility: "delayed",
+    concurrentEdit: "manifest",
+    terminationSignal: "SIGHUP",
+    failRestorationSourceQuery: true,
+  });
+
+  expect(result).toMatchObject({ status: null, signal: "SIGHUP" });
+  expect(result.stderr).toContain("Fixture restoration source query failed");
+  expect(result.interruptedState.versions).toEqual(packages.map(() => version));
+  expect(result.interruptedState.stagesRetained).toBe(false);
+  expect(result.recorded).toEqual([]);
+});
+
+it.each([
+  { source: "command", version },
+  { source: "manifest", version },
+  { source: "command", version: "0.7.2-alpha.1" },
+  { source: "manifest", version: "0.7.2-alpha.1" },
+])("publishes and resumes $version with its $source dist-tag", async ({ source, version }) => {
+  const result = await runRelease(
+    (_published, workspace) => {
+      for (const name of packages) {
+        const path = join(workspace, "packages", name, "package.json");
+        const manifest = JSON.parse(readFileSync(path));
+        manifest.publishConfig = { tag: "canary" };
+        writeFileSync(path, JSON.stringify(manifest, null, 2) + "\n");
+      }
+    },
+    {
+      version,
+      channelArguments: source === "command" ? ["--tag=next"] : [],
+      dryRun: false,
+      publishedPackages: [],
+      publishFailure: "platform",
+      resume: true,
+    },
+  );
+  expect(result.interrupted.status).toBe(1);
+  const option = source === "command" ? " --tag=next" : "";
+  expect(result.interrupted.stderr).toContain(`pnpm release ${version}${option}\``);
+  expect(result.status).toBe(0);
+  const uploads = result.calls.filter(
+    ({ command, commandArguments }) => command === "npm" && commandArguments[0] === "publish",
+  );
+  expect(uploads).toHaveLength(4);
+  for (const { commandArguments } of uploads)
+    expect(commandArguments).toContain(source === "command" ? "--tag=next" : "--tag=canary");
+  expect(Object.values(result.published).map((manifest) => manifest.version)).toEqual(
+    packages.map(() => version),
+  );
+  expect(result.remoteTags).toContain(`refs/tags/v${version}`);
+});
+
 it("does not complete a partial release whose existing version is on another explicit channel", async () => {
-  const result = await runRelease(() => undefined, { distributionTag: "next", dryRun: false });
+  const result = await runRelease(() => undefined, {
+    channelArguments: ["--tag=next"],
+    dryRun: false,
+  });
   expect(result.status).toBe(1);
   expect(result.stderr).toContain("@dougongjs/reactive@next does not point to " + version);
   expect(Object.keys(result.published)).toEqual(["reactive"]);
@@ -866,7 +1031,7 @@ it("does not complete a partial release whose existing version is on another exp
 it("recognizes a recorded release after its distribution channel moves", async () => {
   const result = await runRelease(() => undefined, {
     publishedPackages: [],
-    distributionTag: "next",
+    channelArguments: ["--tag=next"],
     dryRun: false,
     resume: true,
     beforeResume(_git, workspace) {
@@ -941,7 +1106,7 @@ it.each([
       },
       {
         registries: { registry: registryRoutes.fallback, ...settings },
-        distributionTag: "next",
+        channelArguments: ["--tag=next"],
         dryRun: false,
         publishedPackages: [],
       },
@@ -993,7 +1158,9 @@ it("waits for registry visibility before publishing dependents", async () => {
   const publication = result.calls.filter(
     ({ command, commandArguments, delayMilliseconds }) =>
       delayMilliseconds !== undefined ||
-      (command === "npm" && ["publish", "view"].includes(commandArguments[0])),
+      (command === "npm" &&
+        (commandArguments[0] === "publish" ||
+          (commandArguments[0] === "view" && commandArguments[2] === "version"))),
   );
   expect(
     publication

@@ -4,6 +4,9 @@ import { cleanReleaseGit, installReleaseFixture } from "../release-command-fixtu
 const response = JSON.parse(readFileSync("response.json", "utf8"));
 
 installReleaseFixture((name, commandArguments, options, nativeSpawn) => {
+  const commands = JSON.parse(readFileSync("commands.json", "utf8"));
+  commands.push({ name, commandArguments });
+  writeFileSync("commands.json", JSON.stringify(commands));
   if (name === "git") {
     return cleanReleaseGit(commandArguments, options);
   }

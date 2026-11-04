@@ -1,6 +1,29 @@
 import { appendFileSync, copyFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
+export const toolingSourceExtensions = ["js", "mjs", "cjs", "jsx", "ts", "mts", "cts", "tsx"];
+
+const validTooling = {
+  "tooling/commands/foreign.mjs": [
+    'import { parseArgs } from "node:util";',
+    'import { defineConfig } from "vite";',
+    'const parsed = parseArgs({ args: [], options: { config: { type: "string" } } });',
+    "export const configuration = defineConfig({ build: { outDir: parsed.values.config } });",
+    'export { parseArgs } from "node:util";',
+    'export { loadConfigFromFile } from "vite";',
+    'export const commandArguments = ["Runtime", "Extension", "args"];',
+    'const extension = ".mjs";',
+    'export const filename = "command" + extension;',
+  ],
+  "tooling/commands/foreign.mts": [
+    'import type { UserConfig } from "vite";',
+    'import { parseArgs as parseArguments } from "node:util";',
+    'export const configuration: UserConfig = { build: { outDir: "dist" } };',
+    "export const parsed = parseArguments({ args: [] });",
+  ],
+  "tooling/test/fixtures/vocabulary.mjs": ["export const args = [];", "export class Runtime {}"],
+};
+
 // Distinct files let one compiler graph exercise independent violations and their legal lookalikes.
 const files = {
   "packages/dougong/src/contracts/direction-probe.ts": [
@@ -52,14 +75,44 @@ const files = {
     '  return [ctx.deps, dependencies, "deps", fn(), import.meta.url, ctx.config, ctx.publishConfig, shutdownTimeoutMs];',
     "}",
   ],
+  "packages/reactive/src/retired.ts": ['export { Runtime } from "./retired-owner.js";'],
+  "packages/reactive/src/retired-owner.ts": ["export class Runtime {}"],
+  "tooling/commands/aliases.mjs": [
+    'import { parseArgs as args } from "node:util";',
+    'import * as cfg from "node:util";',
+    'import config from "node:fs";',
+    'import { args as commandArguments } from "./arguments.mjs";',
+    'export { parseArgs as opts } from "node:util";',
+    'export { args } from "./arguments.mjs";',
+  ],
+  "tooling/commands/project-imports.mts": [
+    'import { args } from "./arguments.mjs";',
+    'import { config } from "dougong";',
+    'export { args } from "dougong/advanced";',
+    'import { deps } from "#project";',
+  ],
 };
 
-export function arrangeLayerViolations(workspace) {
-  for (const [relativePath, lines] of Object.entries(files)) {
+function writeSources(workspace, sources) {
+  for (const [relativePath, lines] of Object.entries(sources)) {
     const file = join(workspace, relativePath);
     mkdirSync(dirname(file), { recursive: true });
     writeFileSync(file, lines.join("\n") + "\n");
   }
+}
+
+export function arrangeValidToolingVocabulary(workspace) {
+  writeSources(workspace, validTooling);
+}
+
+export function arrangeLayerViolations(workspace) {
+  writeSources(workspace, files);
+  arrangeValidToolingVocabulary(workspace);
+  for (const extension of toolingSourceExtensions)
+    writeFileSync(
+      join(workspace, `tooling/commands/arguments.${extension}`),
+      "export const args = [];\n",
+    );
   const reactive = join(workspace, "packages/reactive");
   appendFileSync(
     join(reactive, "src/index.ts"),

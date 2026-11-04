@@ -32,10 +32,13 @@ async function runRelease(failure) {
       originals[name] = contents;
     }
 
-    const result = await executeRelease(["--import", preload, release, version, "--dry-run"], {
-      cwd: workspace,
-      env: { ...process.env, PATH: executableDirectory, DOUGONG_RELEASE_FAILURE: failure },
-    });
+    const result = await executeRelease(
+      ["--import", preload, release, version, "--tag=latest", "--dry-run"],
+      {
+        cwd: workspace,
+        env: { ...process.env, PATH: executableDirectory, DOUGONG_RELEASE_FAILURE: failure },
+      },
+    );
     return {
       ...result,
       originals,
