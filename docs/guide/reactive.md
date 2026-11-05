@@ -1,6 +1,6 @@
 # 响应式与观察
 
-`@dougongjs/reactive` 零外部依赖，不依赖 Host。`signal` 创建可写 `Signal`，`computed` 产生惰性 `ReadonlySignal`，`batch` 合并通知。调用 `get()` 读取，`subscribe(listener)` 仅通知变化，不立即重放；释放订阅使用标准 `Disposable`。
+`@dougongjs/reactive` 零外部依赖，不依赖 Host。`signal` 创建可写 `Signal`，`computed` 产生惰性 `ReadonlySignal`，`batch` 合并通知。调用 `get()` 读取，`subscribe(listener)` 不立即重放。`Signal` 仅在值变化时通知；computed 在失效时通知，此时尚未重新计算，值可能没有改变，订阅者需要确认时自行读取并比较。释放订阅使用标准 `Disposable`。
 
 显式释放订阅或观察时，从 `@dougongjs/reactive` 导入 `disposeSymbol` 或 `asyncDisposeSymbol`。这些键在缺少原生释放符号的运行环境中也可用。
 

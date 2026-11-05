@@ -1,6 +1,6 @@
 # Reactive state and observation
 
-`@dougongjs/reactive` has no external dependencies and does not depend on Host. `signal` creates a writable `Signal`, `computed` produces a lazy `ReadonlySignal`, and `batch` coalesces notifications. Read with `get()`; `subscribe(listener)` notifies changes without immediate replay. Subscriptions implement standard `Disposable`.
+`@dougongjs/reactive` has no external dependencies and does not depend on Host. `signal` creates a writable `Signal`, `computed` produces a lazy `ReadonlySignal`, and `batch` coalesces notifications. Read with `get()`; `subscribe(listener)` notifies without immediate replay. A `Signal` notifies when its value changes. A computed signal notifies when it is invalidated, before it evaluates, so its value may be unchanged; a listener that needs to know reads and compares it. Subscriptions implement standard `Disposable`.
 
 For explicit disposal, import `disposeSymbol` or `asyncDisposeSymbol` from `@dougongjs/reactive`. These keys also work on supported runtimes without native disposal symbols.
 
