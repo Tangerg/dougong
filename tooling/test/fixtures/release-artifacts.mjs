@@ -296,7 +296,7 @@ installReleaseFixture((name, commandArguments, options, nativeSpawn, execute) =>
         if (
           !basename(workspace).startsWith("dougong-release-artifacts-test-") ||
           dirname(realpathSync(workspace)) !== realpathSync(tmpdir()) ||
-          git(["remote", "get-url", "origin"]) !== remote ||
+          realpathSync(git(["remote", "get-url", "origin"])) !== realpathSync(remote) ||
           git(["rev-parse", "--is-bare-repository"], remote) !== "true"
         )
           throw new Error("Concurrent source fixture requires its isolated local Git repository");
