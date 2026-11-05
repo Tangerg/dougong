@@ -31,7 +31,7 @@ Service 的字符串 ID 是共享身份；其 TypeScript 类型描述值协议�
 
 运行与源码开发支持 <!-- runtime-baseline:start -->Node.js `^24.22.0 || >=26.10.0`, Chrome ≥ 119, Edge ≥ 119, Firefox ≥ 124, Safari ≥ 17.4<!-- runtime-baseline:end -->。发行物是 ESM，释放协议使用标准 `Symbol.dispose` 与 `Symbol.asyncDispose`。使用仓库固定的 pnpm 版本。
 
-取消监听通过公开的 `AbortSignal.any` 创建私有依赖信号，既不受原信号上的合成事件影响，也不受其他监听器阻断。Node.js 的最低版本同时保证原生状态读取与未使用依赖图的回收；旧版本不再提供兼容分支。对应上游实现可核对 [Node.js 24.22.0](https://github.com/nodejs/node/blob/v24.22.0/lib/internal/abort_controller.js) 与 [26.10.0](https://github.com/nodejs/node/blob/v26.10.0/lib/internal/abort_controller.js)。
+取消监听通过公开的 `AbortSignal.any` 创建私有依赖信号，既不受原信号上的合成事件影响，也不受其他监听器阻断。Node.js 的最低版本同时保证原生状态读取与未使用依赖图的回收；旧版本不再提供兼容分支。加载 Dougong 时会检查 `AbortSignal.any` 是否读取原生信号状态，不满足的运行环境会以 `Unsupported JavaScript runtime` 错误拒绝加载，而不是让伪造的 `aborted` 属性吞掉取消。对应上游实现可核对 [Node.js 24.22.0](https://github.com/nodejs/node/blob/v24.22.0/lib/internal/abort_controller.js) 与 [26.10.0](https://github.com/nodejs/node/blob/v26.10.0/lib/internal/abort_controller.js)。
 
 需要外部插件交付时添加 `@dougongjs/platform`；需要信号、观察与跨副本桥接时添加 `@dougongjs/reactive`。两个能力按需导入。
 

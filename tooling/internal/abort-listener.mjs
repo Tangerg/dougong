@@ -1,3 +1,21 @@
+// The private dependent must take its state from the source's controller. A runtime whose
+// AbortSignal.any reads the public, shadowable properties instead would create a dependent
+// already aborted with a forged reason, which never reports the real cancellation.
+export function assertAbortRuntime(any) {
+  if (typeof any !== "function") {
+    throw new Error("Unsupported JavaScript runtime: AbortSignal.any is required");
+  }
+  const source = new AbortController().signal;
+  Object.defineProperty(source, "aborted", { value: true });
+  if (Reflect.get(AbortSignal.prototype, "aborted", any.call(AbortSignal, [source]))) {
+    throw new Error(
+      "Unsupported JavaScript runtime: AbortSignal.any must read native signal state",
+    );
+  }
+}
+
+assertAbortRuntime(AbortSignal.any);
+
 // A separate closure prevents the dependent from retaining the source through its registration.
 function weakAbortListener(reference) {
   return () => reference.deref()?.();
