@@ -297,12 +297,14 @@ export function observe<T, Child extends AsyncDisposable, Result = void>(
     spawn: (task) => Reflect.apply(spawn, owner, [task]),
   };
   const observation = new Observation(binding, readable, observer);
-  const close = captureRelease(
-    binding.defer(() => observation.dispose()),
-    "ObservationOwner.defer() must return an AsyncDisposable",
-  );
-  observation.attachOwnerCleanup(close);
+  // A retained cleanup must not capture the factory's owner and protocol methods.
+  let close: Release = observation.dispose.bind(observation);
   try {
+    close = captureRelease(
+      binding.defer(close),
+      "ObservationOwner.defer() must return an AsyncDisposable",
+    );
+    observation.attachOwnerCleanup(close);
     observation.start();
     return observation.handle;
   } catch (error) {

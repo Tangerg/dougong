@@ -1,7 +1,54 @@
 import { expect, it, vi } from "vitest";
+import { createHost, definePlugin, type LifetimeContext, type Resource } from "../src";
 import { Lifetime } from "../src/lifetime/lifetime";
 
 const lifetime = () => new Lifetime({ label: "resource-owner", report: () => undefined });
+
+it.each(["use", "acquire"] as const)(
+  "rejects primitive resource identities at the %s boundary without recording an obligation",
+  async (operation) => {
+    let context!: LifetimeContext;
+    const release = vi.fn<() => void>();
+    const host = createHost({
+      installations: [
+        {
+          id: "owner",
+          plugin: definePlugin({
+            name: "owner",
+            setup({ lifetime }) {
+              context = lifetime;
+            },
+          }),
+        },
+      ],
+    });
+    await host.start();
+    try {
+      const before = host.diagnostics.get().installations[0]!.lifetime;
+      for (const input of [
+        undefined,
+        null,
+        false,
+        0,
+        1n,
+        "resource",
+        Symbol("resource"),
+        Symbol.for("resource"),
+      ]) {
+        const resource = input as unknown as Resource;
+        await expect(async () => {
+          if (operation === "use") context.use(resource);
+          else await context.acquire(() => resource);
+        }).rejects.toThrow("Resource must implement Symbol.dispose or Symbol.asyncDispose");
+        expect(host.diagnostics.get().installations[0]!.lifetime).toEqual(before);
+      }
+      context.use({ [Symbol.dispose]: release });
+    } finally {
+      await host.stop();
+    }
+    expect(release).toHaveBeenCalledOnce();
+  },
+);
 
 it("gives a resource identity one release obligation across Lifetimes and acquisition", async () => {
   const first = lifetime();

@@ -31,6 +31,13 @@ interface ResourceIdentity {
 // Control provenance survives release; external claims end only through their own reservation.
 const resourceIdentities = new WeakMap<Resource, ResourceIdentity>();
 const controlHandleIdentity: ResourceIdentity = Object.freeze({ kind: "control" });
+const invalidResourceMessage = "Resource must implement Symbol.dispose or Symbol.asyncDispose";
+
+function assertResourceIdentity(resource: unknown) {
+  if ((typeof resource !== "object" && typeof resource !== "function") || resource === null) {
+    throw new TypeError(invalidResourceMessage);
+  }
+}
 
 export function markOwnedControlHandle<T extends Resource>(handle: T): T {
   resourceIdentities.set(handle, controlHandleIdentity);
@@ -38,6 +45,7 @@ export function markOwnedControlHandle<T extends Resource>(handle: T): T {
 }
 
 export function claimResource(resource: Resource): () => void {
+  assertResourceIdentity(resource);
   const identity = resourceIdentities.get(resource);
   if (identity) {
     throw new TypeError(
@@ -54,9 +62,7 @@ export function claimResource(resource: Resource): () => void {
 }
 
 export function captureDisposer(resource: Resource): () => Awaitable<void> {
-  if ((typeof resource !== "object" && typeof resource !== "function") || resource === null) {
-    throw new TypeError("Resource must implement Symbol.dispose or Symbol.asyncDispose");
-  }
+  assertResourceIdentity(resource);
   const asynchronous = (resource as Partial<AsyncDisposable>)[asyncDisposeSymbol];
   if (asynchronous !== undefined && asynchronous !== null) {
     if (typeof asynchronous !== "function")
@@ -65,7 +71,7 @@ export function captureDisposer(resource: Resource): () => Awaitable<void> {
   }
   const synchronous = (resource as Partial<Disposable>)[disposeSymbol];
   if (typeof synchronous !== "function") {
-    throw new TypeError("Resource must implement Symbol.dispose or Symbol.asyncDispose");
+    throw new TypeError(invalidResourceMessage);
   }
   return () =>
     assertSynchronous(

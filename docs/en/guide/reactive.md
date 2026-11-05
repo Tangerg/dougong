@@ -39,6 +39,8 @@ Observers register resources synchronously. Use `generation.spawn` for asynchron
 
 The adapters capture the accepted source methods and subscription disposer. Observation also captures each child, task and cleanup handle’s disposer when it takes ownership. If a custom owner returns a cancellable task whose `result` is missing or throws, construction fails and rollback invokes that task’s captured disposer. A failed unsubscribe remains a release obligation of the owner: early termination, drain failure and later shutdown cannot turn it into success by running it again.
 
+After an observation finishes closing, retaining its handle or the cleanup callback registered with its owner no longer keeps the source, observer or owner alive through the observation. A custom owner's `defer` can retain that callback before throwing or returning an invalid handle; failed construction also releases the local observation binding. The observation can request withdrawal of the external registration only after accepting a valid release handle.
+
 ## Asynchronous result protocol
 
 Synchronous boundary checks and asynchronous release share one result protocol. A prototype chain containing this module's realm's `Promise.prototype` selects the native protocol. Intrinsic `then` validates the brand and observes actual settlement; an own `then` cannot replace it, and an already fulfilled payload is not assimilated again. A `constructor` or `Symbol.species` failure propagates without retrying the public `then`. Child, drain-task and owner-registration disposal all join that outcome before replacement or observation completion.
