@@ -2,7 +2,7 @@
 
 External artifact selection, admission and lazy activation compiled into Dougong plans.
 
-Upgrading from 0.8.3? Read the [migration guide](https://tangerg.github.io/dougong/en/guide/migrating-to-0.9) and [0.9.0 release notes](https://tangerg.github.io/dougong/en/reference/release-0.9.0).
+Upgrading from 0.9? Read the [migration guide](https://tangerg.github.io/dougong/en/guide/migrating-to-0.10) and [0.10.0 release notes](https://tangerg.github.io/dougong/en/reference/release-0.10.0). From 0.8.3, complete [Migrating to 0.9.0](https://tangerg.github.io/dougong/en/guide/migrating-to-0.9) first.
 
 Platform owns available artifacts and the user's selected targets. Dougong owns committed
 installations, their source information, running generations and resources. Platform uses

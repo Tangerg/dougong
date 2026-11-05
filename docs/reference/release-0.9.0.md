@@ -20,14 +20,13 @@ Platform 和 Reactive 按需添加。旧 `@dougongjs/core` 已合入 `dougong`�
 
 - 安装变更统一为 `ChangeSet → host.plan() → host.apply()`。Installation 和 Group 是稳定只读身份；旧的直接安装、句柄更新、删除、ready 和 commit 路径被移除。
 - 应用通过 `host.use` 借用服务。贡献视图返回有序 ID 数组，通过 `ContributionView.use` 读取和执行；使用中的代次受到变更保护。
-- `Task.result`、`host.use`、`ContributionView.use` 和 `SerialQueue.run` 返回 `Promise<ResolvedValue<T>>`，成功结果通过冻结的 `{ value }` 回执交付。跨 realm Promise 使用公开结构协议，不再通过展示标签推断原生身份。
 - PluginContext 明确分为 `dependencies`、`lifetime`、`events`、`contributions`、`metadata` 和 `logger`。配置字段统一为 `configuration`，相关类型与错误名也使用完整拼写。
 - 配置输入与验证输出只接受不可变数据；资源对象、Promise、函数、访问器、循环和稀疏数组被拒绝。规划捕获配置，回滚复用已验证值。
 - 根 `LifetimeContext` 只登记资源和工作；可提前释放的子树使用 `ChildLifetime`。句柄统一使用标准释放符号。异步获取返回 `{ resource }` 回执。
 - 无法安全清理或恢复时，整个 Host 进入终止性的 `quarantined` 状态。失败分支保留实际依赖的提供者，独立安全分支继续释放；迟到完成不恢复可用性。
 - Platform 通过 Catalog 保存不可变 Artifact，通过 Registration 保存选择意图，实际来源从 Core Installation 投影。显式 revision、稳定 Platform ID 和预览/激活取代旧注册与 placeholder 流程。
 - 权限错误的诊断字段位于 `ErrorSnapshot.fields`；Core 不再内置交付领域字段。直接捕获的权限异常保留类型化属性。
-- Firefox 支持下限提升至 124；Node.js 运行要求为 `^24.22.0 || >=26.10.0`，取消适配仅使用公开原语。发行类型支持 Bundler 与 NodeNext 解析。
+- Firefox 支持下限提升至 124；Node.js 运行要求仍为 22+。发行类型支持 Bundler 与 NodeNext 解析。
 
 ## 新增能力
 
@@ -51,6 +50,6 @@ Platform 和 Reactive 按需添加。旧 `@dougongjs/core` 已合入 `dougong`�
 
 发布使用经隔离消费者验证的同一组 tarball，核对哈希、完整入口、声明、依赖和 runtime 文件；上传后从 npm 读回并逐文件比对，再记录 Git 标签。发布与恢复显式传递 npm dist-tag，预发布版本必须指定通道。
 
-完整门禁覆盖 936 个测试、按包覆盖率阈值、类型、lint、格式、未使用代码、循环依赖、架构边界、包构建、公开 API、打包消费者和中英双语文档。CI 从运行基线派生版本矩阵，在每个受支持分支的最低版本及当前版本上执行完整验证。
+完整门禁覆盖 936 个测试、按包覆盖率阈值、类型、lint、格式、未使用代码、循环依赖、架构边界、包构建、公开 API、打包消费者和中英双语文档。CI 在 Node.js 22、24、26 上执行完整验证。
 
 完整变更：[v0.8.3…v0.9.0](https://github.com/Tangerg/dougong/compare/v0.8.3...v0.9.0)。[English release notes](../en/reference/release-0.9.0.md)。

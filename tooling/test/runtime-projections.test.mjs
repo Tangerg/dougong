@@ -68,7 +68,7 @@ it("regenerates every runtime projection from one policy change and refuses miss
     for (const path of projections) expect(stale.stderr).toContain(path);
     expect(generate().status).toBe(0);
     expect(generate("--check").status).toBe(0);
-    expect(projections).toHaveLength(13);
+    expect(projections).toHaveLength(15);
     for (const [path, source] of before) {
       const generated = readFileSync(join(root, path), "utf8");
       expect(generated).not.toBe(source);

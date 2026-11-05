@@ -4,7 +4,7 @@
 
 TypeScript 插件装配内核：不可变计划、原子发布、结构化资源生命周期和可解释诊断。
 
-从 0.8.3 升级请先阅读[迁移指南](./docs/guide/migrating-to-0.9.md)和 [0.9.0 Release Notes](./docs/reference/release-0.9.0.md)。
+从 0.9 升级请阅读[迁移指南](./docs/guide/migrating-to-0.10.md)和 [0.10.0 Release Notes](./docs/reference/release-0.10.0.md)；从 0.8.3 升级请先完成[迁移到 0.9.0](./docs/guide/migrating-to-0.9.md)。
 
 ```ts
 import { asyncDisposeSymbol, createHost, definePlugin, service } from "dougong";

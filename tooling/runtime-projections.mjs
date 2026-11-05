@@ -10,6 +10,8 @@ const runtimeDocumentPaths = [
   "docs/en/guide/getting-started.md",
   "docs/guide/migrating-to-0.9.md",
   "docs/en/guide/migrating-to-0.9.md",
+  "docs/guide/migrating-to-0.10.md",
+  "docs/en/guide/migrating-to-0.10.md",
   "packages/dougong/README.md",
   "packages/reactive/README.md",
 ];

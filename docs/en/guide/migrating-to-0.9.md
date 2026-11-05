@@ -1,6 +1,6 @@
 # Migrating from 0.8.3 to 0.9.0
 
-0.9.0 changes package boundaries, installation transitions, plugin contexts and shutdown contracts. Upgrading requires application changes; removed APIs have no aliases or compatibility adapters. The [release notes](../reference/release-0.9.0.md) describe the full release scope.
+0.9.0 changes package boundaries, installation transitions, plugin contexts and shutdown contracts. Upgrading requires application changes; removed APIs have no aliases or compatibility adapters. The [release notes](../reference/release-0.9.0.md) describe the full release scope. Examples use the current API; after completing this guide, continue with [Migrating to 0.10.0](./migrating-to-0.10.md).
 
 ## 1. Update dependencies and imports
 
@@ -149,23 +149,3 @@ Custom Loaders implement `load(reference, signal)`. Authorizers receive `{ artif
 Failed or timed-out shutdown retains real resource obligations and quarantines the entire Host. `quarantined` is terminal: replaying start, stop or apply, or constructing a replacement Host, does not prove that old resources were released. Late completion only updates diagnostics. Follow the [quarantine procedure](./transactions.md#quarantine) to stop dispatch, retain diagnostics and handle the old execution boundary.
 
 After upgrading, exercise installation, updates, removal, busy rejection during borrowing, failed-transition restoration and shutdown. Rollback creates new Instances from previous declarations; it does not resurrect old objects or reverse external file and network effects. See the [Core API](../reference/core-api.md) and [Platform specification](../reference/platform.md) for the complete protocols.
-
-## Successful result receipts
-
-`Task.result`, `host.use`, `ContributionView.use` and `SerialQueue.run` now fulfill with a frozen `{ value }` receipt (`ResolvedValue<T>`). Replace `const result = await operation` with `const { value: result } = await operation`; calls that only wait for completion need no destructuring. `acquire` continues to return `{ resource }`. Errors still propagate as Promise rejections. Cross-realm Promises must retain a working public `then`; see [Lifetime and resources](./lifetime.md) for the protocol boundary.
-
-## Synchronous notifications and binding reports
-
-Snapshot and reactive `subscribe`, `batchSnapshotNotifications`, `batch`, `computed` and `observe` now reject statically recognizable asynchronous results, including calls explicitly specifying `void`. Subscription and observation callbacks should finish registration synchronously and register asynchronous work through `lifetime.spawn`. Do not cast away an asynchronous callback; results already erased to `unknown`, `any` or `() => void` still require runtime checks.
-
-The third parameter of `Observer<T, Child, Result>` describes its synchronous result and defaults to `void`. Ordinary `observe(...)` calls infer it. When explicitly supplying the first two type arguments and returning data, supply the third argument as well, or make a notification-only callback return nothing.
-
-A `SnapshotPublisher` error reporter performs synchronous side effects and returns no business value. Replace `error => errors.push(error)` with `error => { errors.push(error); }`; do not pass an asynchronous reporter. Existing synchronous functions typed to return `void` remain accepted.
-
-`BindingReport` uses `optional` to distinguish bindings: `optional: false` requires a string `provider`; only optional bindings may lack a provider. Hand-written reports and test fixtures must preserve this relationship. Inside `!binding.optional`, the provider is a string without a non-null assertion.
-
-## Logging backend result contracts
-
-`Logger` now defaults to four methods that finish synchronously without business results. Host backends and plugin-scoped logging use this contract. Direct asynchronous methods are rejected at the type boundary; move asynchronous Host error reporting to `onError`. Change logging shorthand that returns a count or other incidental value into a block without a return. Platform's terminal logger uses `Logger<unknown>` and continues to accept and observe asynchronous results.
-
-`captureLogger` no longer erases known method result types. Both `captureLogger(unknown)` and `isLogger` establish only `Logger<unknown>`. Method presence does not prove a synchronous backend; establish its actual contract at the integration boundary. Results already erased to `void` upstream cannot be recovered, so scoped logging retains its runtime synchronous check.

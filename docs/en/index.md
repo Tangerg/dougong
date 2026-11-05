@@ -3,6 +3,7 @@
 Explicit capability composition, immutable plans and structured resource ownership for TypeScript. Every public operation shares the same facts and owners.
 
 - [Getting started](./guide/getting-started.md)
+- [Migrating to 0.10.0](./guide/migrating-to-0.10.md)
 - [Migrating to 0.9.0](./guide/migrating-to-0.9.md)
 - [Core concepts](./guide/concepts.md)
 - [Writing plugins](./guide/writing-plugins.md)
@@ -16,5 +17,6 @@ Explicit capability composition, immutable plans and structured resource ownersh
 - [Platform API](./reference/platform.md)
 - [Error codes](./reference/errors.md)
 - [Mechanical guards](./reference/guards.md)
+- [0.10.0 release notes](./reference/release-0.10.0.md)
 - [0.9.0 release notes](./reference/release-0.9.0.md)
 - [Runnable examples](./examples.md)
