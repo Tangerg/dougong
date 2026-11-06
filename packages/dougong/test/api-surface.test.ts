@@ -329,6 +329,32 @@ describe("public API surface", () => {
     expect(new core.RecordedFailure(empty).snapshot).not.toHaveProperty("stack");
   });
 
+  it.each(["configuration", "external"])(
+    "preserves %s validation property keys in JSON diagnostics",
+    (source) => {
+      const keys = [NaN, Infinity, -Infinity, 0, -2, 1.5, "field", Symbol("field")];
+      const issues = [
+        { message: "direct path", path: [...keys] },
+        { message: "wrapped path", path: keys.map((key) => ({ key })) },
+      ];
+      const failure =
+        source === "configuration"
+          ? new core.ConfigurationValidationError(issues)
+          : Object.assign(new Error("external validation"), { issues });
+      const snapshot = new core.RecordedFailure(failure).snapshot;
+      const expectedPath = ["NaN", "Infinity", "-Infinity", 0, -2, 1.5, "field", "Symbol(field)"];
+      const expectedIssues = issues.map(({ message }) => ({ message, path: expectedPath }));
+
+      expect(JSON.parse(JSON.stringify(snapshot)).issues).toEqual(expectedIssues);
+      expect(snapshot.issues).toEqual(expectedIssues);
+      expect(snapshot.truncated).toBeUndefined();
+      expect(failure.issues[0]?.path).toEqual(keys);
+      expect(failure.issues[1]?.path).toEqual(keys.map((key) => ({ key })));
+      expect(Object.isFrozen(snapshot.issues)).toBe(true);
+      for (const issue of snapshot.issues!) expect(Object.isFrozen(issue.path)).toBe(true);
+    },
+  );
+
   it("captures only selected domain fields and preserves their bounded projection when nested", () => {
     const tags = ["x".repeat(300), "blue"];
     const error = Object.assign(new Error("invalid delivery"), {

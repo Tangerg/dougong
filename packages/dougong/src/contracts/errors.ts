@@ -293,11 +293,10 @@ function captureError(
         const path = list(readErrorProperty(issue, "path"), maximumValidationPathSegments)?.map(
           (part) => {
             const key = part && typeof part === "object" ? readErrorProperty(part, "key") : part;
-            return typeof key === "number"
-              ? key
-              : typeof key === "string" || typeof key === "symbol"
-                ? clip(String(key), maximumValidationPathSegmentLength)
-                : "[omitted]";
+            if (typeof key === "number" && Number.isFinite(key)) return key;
+            return isPropertyKey(key)
+              ? clip(String(key), maximumValidationPathSegmentLength)
+              : "[omitted]";
           },
         );
         return Object.freeze({

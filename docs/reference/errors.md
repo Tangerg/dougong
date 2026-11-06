@@ -8,6 +8,8 @@
 
 `details.outcome` 区分 rejected、restored、quarantined。Promise 正常完成即成功，`ApplyResult` 只返回状态修订与影响安装；无须用固定字段再次判断成功。`RecordedFailure` 与 `ErrorSnapshot` 是有界诊断投影，直接调用者仍获得原始失败。参数与协议误用可能抛 TypeError；取消服从所属 AbortSignal，并不等于成功提交。
 
+诊断投影统一编码直接属性键和 `{ key }` 路径段：有限数字保留为数字，非有限数字和 symbol 转为有界字符串。`NaN`、`Infinity` 和 `-Infinity` 分别记录为同名文本，避免 JSON 序列化将它们变成 `null`。原始 `ConfigurationValidationError.issues` 仍保留捕获后的 Standard Schema 属性键。
+
 来自其他 Realm 的原生 Error 可以保留消息和原因链。当资源清理和执行体都抛错时，记录器从错误自身的数据字段 `error` 和 `suppressed` 读取两条失败原因，应用可以自定义错误名称。两条分支共用同一份诊断深度和大小预算。
 
 贡献视图的 ID 来自已提交集合的快照，不保证借用瞬间仍可用。已有贡献更新后等待批次发布时，`view.get()` 仍可能包含其 ID，而 `view.use()` 会以 `CONTRIBUTION_UNAVAILABLE` 拒绝。等待 `view.subscribe()` 的发布通知后重新读取并借用；不要把暂未发布等同于永久删除，也不要忙重试。若所有者已经封闭，借用还可能以 `LIFETIME_DISPOSED` 拒绝，此时应按所属 Lifetime 或 Host 的退出状态处理。
