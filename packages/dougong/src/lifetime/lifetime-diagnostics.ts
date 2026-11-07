@@ -3,11 +3,12 @@ import type { ErrorSnapshot } from "../contracts/errors.js";
 export type LifetimePhase = "active" | "sealed" | "disposing" | "disposed" | "quarantined";
 export type ObligationKind = "cleanup" | "interrupt" | "publication" | "shutdown";
 
-export interface UnresolvedObligation {
-  readonly id: number;
-  readonly kind: ObligationKind;
+export type UnresolvedObligation = {
   readonly error: ErrorSnapshot;
-}
+} & (
+  | { readonly kind: Exclude<ObligationKind, "shutdown">; readonly id: number }
+  | { readonly kind: "shutdown"; readonly id?: never }
+);
 
 export interface LifetimeSnapshot {
   readonly label: string;

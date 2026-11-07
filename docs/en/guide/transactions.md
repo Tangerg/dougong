@@ -56,7 +56,8 @@ An existing Installation handle retains only its final status and origin. Open C
 
 | Operation after quarantine | Behavior and purpose |
 | --- | --- |
-| `host.diagnostics.get()` and `subscribe()` | Read and observe errors, retained instances and resource obligations |
+| `host.diagnostics.get()` | Read errors, retained instances and resource obligations; the final snapshot remains readable after release completes |
+| `host.diagnostics.subscribe()` | Observe actual late progress; subscriptions end after every obligation and transition completes and final notifications are delivered, and later subscriptions are rejected |
 | `installation(id)`, `group(id)` and `explain(id)` | Inspect retained declaration identities and bindings; data is not execution authority |
 | `change()`, `plan()`, `apply()`, `start()` and `stop()` | Reject with [`HOST_QUARANTINED`](../reference/errors.md); no alternate shutdown retry or recovery path |
 | `host[Symbol.asyncDispose]()` | Uses stop and also rejects; standard disposal syntax does not erase an existing failure |
@@ -66,6 +67,8 @@ An existing Installation handle retains only its final status and origin. Open C
 `snapshot.unresolved` identifies retained Instances by installation and generation. Their Lifetime snapshots describe tasks, acquisitions, borrows, children and failed obligations. A provider can remain retained because its consumer has not exited, even if that provider has no cleanup error itself. Failed restoration setup can also quarantine a Host after all resources have been released, so **an empty unresolved list does not establish health**; read `snapshot.status`.
 
 Shutdown already in progress may continue after a timeout and update diagnostics. This does not start another cleanup attempt or automatically leave quarantine. Diagnostic progress does not advance `stateRevision`.
+
+Engine seals observation after terminal execution and actual release finish. Diagnostics and Host contribution views retain their final read-only snapshots while detaching the execution graph and callbacks; they neither retry cleanup nor decide execution state. Pending obligations keep observation active. Ordinary stop/start preserves usable views.
 
 Application code at the Host management boundary should:
 

@@ -130,6 +130,16 @@ describe("public API surface", () => {
     expect(new core.RecordedFailure(ordinary).snapshot).not.toHaveProperty("suppressed");
   });
 
+  it.each(["error", "suppressed"] as const)(
+    "omits an unpaired %s field from suppression diagnostics",
+    (field) => {
+      const failure = Object.assign(new Error("ordinary"), { [field]: new Error("unpaired") });
+      const snapshot = new core.RecordedFailure(failure).snapshot;
+      expect(snapshot).not.toHaveProperty("error");
+      expect(snapshot).not.toHaveProperty("suppressed");
+    },
+  );
+
   it("records terminal diagnostics without claiming the original error class", () => {
     const retained = { payload: "application state" };
     const original = new core.DougongError("TEST_FAILURE", "failed", { cause: retained });

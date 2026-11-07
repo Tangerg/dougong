@@ -12,13 +12,15 @@
 
 来自其他 Realm 的原生 Error 可以保留消息和原因链。当资源清理和执行体都抛错时，记录器从错误自身的数据字段 `error` 和 `suppressed` 读取两条失败原因，应用可以自定义错误名称。两条分支共用同一份诊断深度和大小预算。
 
+`ErrorSnapshot` 中的 `error` 与 `suppressed` 总是同时存在或同时缺省。检查 `snapshot.error !== undefined` 后，两条分支均可作为 `ErrorSnapshot` 读取；原错误只提供其中一个字段时，诊断不将它解释为抑制关系。
+
 贡献视图的 ID 来自已提交集合的快照，不保证借用瞬间仍可用。已有贡献更新后等待批次发布时，`view.get()` 仍可能包含其 ID，而 `view.use()` 会以 `CONTRIBUTION_UNAVAILABLE` 拒绝。等待 `view.subscribe()` 的发布通知后重新读取并借用；不要把暂未发布等同于永久删除，也不要忙重试。若所有者已经封闭，借用还可能以 `LIFETIME_DISPOSED` 拒绝，此时应按所属 Lifetime 或 Host 的退出状态处理。
 
 | 错误码 | 含义与处理 |
 | --- | --- |
 | `ACTIVATION_FAILED` | 激活执行失败；检查 cause 与 Core 的结构化执行结果。 |
 | `ACTIVATION_STALE` | 激活准备期间 Core 状态改变；重新预览与激活。 |
-| `API_INCOMPATIBLE` | Artifact 要求的宿主 API 范围不匹配。 |
+| `API_INCOMPATIBLE` | Artifact 要求的应用 API 范围不匹配。 |
 | `ARTIFACT_DUPLICATE` | 相同名称与 revision 已存在；使用真正的新发行身份。 |
 | `ARTIFACT_IDENTITY` | 加载的 Plugin 身份与 Manifest 不一致，或 Platform 在间接重启前无法识别已提交的 Artifact。 |
 | `ARTIFACT_UNAVAILABLE` | Artifact 不属于可用 Catalog 或已被移除。 |

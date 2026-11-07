@@ -1,20 +1,28 @@
 import type { ErrorSnapshot } from "../contracts/errors.js";
 import type { InstallationOrigin } from "../composition/declarations.js";
-import type { InstallationState, HostStatus } from "../contracts/status.js";
+import type { HostStatus } from "../contracts/status.js";
 import type { LifetimeSnapshot } from "../lifetime/lifetime-diagnostics.js";
 import type { BindingReport } from "../composition/plan.js";
 
-export interface InstallationSnapshot {
+export type InstallationSnapshot = {
   readonly id: string;
   readonly groupId: string | undefined;
   readonly pluginName: string;
-  readonly status: InstallationState;
   readonly origin: InstallationOrigin | undefined;
-  readonly generation: number | undefined;
   readonly requires: ReadonlyArray<string>;
   readonly provides: ReadonlyArray<string>;
-  readonly lifetime: LifetimeSnapshot | undefined;
-}
+} & (
+  | {
+      readonly status: "running" | "changing";
+      readonly generation: number;
+      readonly lifetime: LifetimeSnapshot;
+    }
+  | {
+      readonly status: "stopped" | "changing" | "quarantined";
+      readonly generation: undefined;
+      readonly lifetime: undefined;
+    }
+);
 
 export interface GroupSnapshot {
   readonly id: string;

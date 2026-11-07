@@ -1,6 +1,13 @@
 import { z } from "zod";
 import { expectTypeOf } from "vitest";
-import { createHost, definePlugin, type InitialInstallation, type Logger } from "dougong";
+import {
+  createHost,
+  definePlugin,
+  type InitialInstallation,
+  type InstallationSnapshot,
+  type Logger,
+  type RecordedFailure,
+} from "dougong";
 import {
   createPlatform,
   defineManifest,
@@ -12,6 +19,7 @@ import {
   type Platform,
   type PlatformOptions,
   type Registration,
+  type RegistrationSnapshot,
 } from "@dougongjs/platform";
 
 const invalidPolicy: Authorizer = {
@@ -200,3 +208,44 @@ change.install(optional, { id: "optional" });
 change.install(transformed, { id: "transformed", configuration: "42" });
 // @ts-expect-error Both installation paths use the same input constraint.
 change.install(defaulted, { id: "wrong-default", configuration: "42" });
+
+function inspectRegistrationSnapshot(
+  snapshot: RegistrationSnapshot,
+  failure: RecordedFailure,
+  registration: Registration<string>,
+) {
+  expectTypeOf(snapshot.execution).toEqualTypeOf<InstallationSnapshot["status"] | undefined>();
+  if (snapshot.status === "failed") {
+    expectTypeOf(snapshot.error).toEqualTypeOf<RecordedFailure>();
+  } else if (snapshot.status === "selected" || snapshot.status === "installed") {
+    expectTypeOf(snapshot.error).toEqualTypeOf<undefined>();
+  } else {
+    expectTypeOf(snapshot.error).toEqualTypeOf<RecordedFailure | undefined>();
+  }
+  if (registration.status === "failed") {
+    expectTypeOf(registration.error).toEqualTypeOf<RecordedFailure | undefined>();
+  }
+  for (const status of ["activating", "removing", "quarantined"] as const) {
+    const retained: RegistrationSnapshot = { ...snapshot, status, error: failure };
+    const clear: RegistrationSnapshot = { ...snapshot, status, error: undefined };
+    void [retained, clear];
+  }
+  const failed: RegistrationSnapshot = { ...snapshot, status: "failed", error: failure };
+  const healthy: RegistrationSnapshot = { ...snapshot, status: "installed", error: undefined };
+  void [failed, healthy];
+
+  // @ts-expect-error Failed snapshots always carry the recorded failure.
+  const missingError: RegistrationSnapshot = { ...snapshot, status: "failed", error: undefined };
+  // @ts-expect-error Healthy selections cannot retain an activation failure.
+  const selectedError: RegistrationSnapshot = { ...snapshot, status: "selected", error: failure };
+  // @ts-expect-error An installed selection has no unresolved activation failure.
+  const installedError: RegistrationSnapshot = { ...snapshot, status: "installed", error: failure };
+  // @ts-expect-error Removed identities are absent from the current registration snapshot.
+  const removed: RegistrationSnapshot = { ...snapshot, status: "removed" };
+  // @ts-expect-error A pending identity is not committed execution.
+  const pendingExecution: RegistrationSnapshot = { ...snapshot, execution: "pending" };
+  // @ts-expect-error A removed identity is not committed execution.
+  const removedExecution: RegistrationSnapshot = { ...snapshot, execution: "removed" };
+  void [missingError, selectedError, installedError, removed, pendingExecution, removedExecution];
+}
+void inspectRegistrationSnapshot;

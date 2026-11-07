@@ -12,13 +12,15 @@ Diagnostic projections encode direct property keys and `{ key }` path segments t
 
 A native Error from another realm retains its message and causes. When cleanup throws during unwinding, the recorder reads the own data fields `error` and `suppressed` even if the application has renamed the error. Both branches share the diagnostic depth and size budget.
 
+The `error` and `suppressed` fields of `ErrorSnapshot` are either both present or both absent. After checking `snapshot.error !== undefined`, both branches can be read as `ErrorSnapshot` values. If the original error provides only one field, diagnostics do not interpret it as a suppression relationship.
+
 Contribution IDs describe the committed collection snapshot, not guaranteed availability at the moment of borrowing. While an existing contribution update awaits batch publication, `view.get()` can still contain its ID and `view.use()` rejects with `CONTRIBUTION_UNAVAILABLE`. Reread and borrow after a publication notification from `view.subscribe()`; pending publication does not mean permanent removal and does not justify a busy retry loop. A closed owner can also reject borrowing with `LIFETIME_DISPOSED`; handle that according to the owning Lifetime or Host's shutdown state.
 
 | Code | Meaning and response |
 | --- | --- |
 | `ACTIVATION_FAILED` | Activation execution failed; inspect cause and the structured Core outcome. |
 | `ACTIVATION_STALE` | Core state changed during activation preparation; preview and activate again. |
-| `API_INCOMPATIBLE` | The Artifact requires an incompatible host API range. |
+| `API_INCOMPATIBLE` | The Artifact requires an incompatible application API range. |
 | `ARTIFACT_DUPLICATE` | The name and revision already exist; use a genuinely new delivery identity. |
 | `ARTIFACT_IDENTITY` | The loaded Plugin identity differs from the Manifest, or Platform cannot identify the committed Artifact for an indirect restart. |
 | `ARTIFACT_UNAVAILABLE` | The Artifact is unavailable in this Catalog. |

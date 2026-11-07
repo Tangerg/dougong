@@ -33,7 +33,7 @@ it("derives immutable contract descriptions without running setup", () => {
       { alias: "items", id: items.id, kind: "extensionPoint", optional: false },
     ],
     provides: [{ alias: "result", id: result.id }],
-    configuration: { status: "none" },
+    configuration: { status: "schema_absent" },
   });
   expect(setup).not.toHaveBeenCalled();
   expect(JSON.parse(JSON.stringify(descriptor))).toEqual(descriptor);
@@ -45,7 +45,7 @@ it("derives immutable contract descriptions without running setup", () => {
   expect(Object.isFrozen(descriptor.configuration)).toBe(true);
 });
 
-it("distinguishes a validator without an exporter from a Plugin without configuration", () => {
+it("distinguishes a validator without an exporter from an absent schema", () => {
   const validate = vi.fn<StandardSchemaV1<string, number>["~standard"]["validate"]>(() => ({
     value: 1,
   }));
@@ -59,6 +59,28 @@ it("distinguishes a validator without an exporter from a Plugin without configur
     vendor: "validation-only",
   });
   expect(validate).not.toHaveBeenCalled();
+});
+
+it("describes schema absence without claiming a required typed configuration is absent", async () => {
+  const received = vi.fn<(configuration: { readonly port: number }) => void>();
+  const plugin = definePlugin<{ port: number }>({
+    name: "description.schema-free",
+    setup(_context, configuration) {
+      received(configuration);
+    },
+  });
+  expect(describePlugin(plugin).configuration).toEqual({ status: "schema_absent" });
+  expect(received).not.toHaveBeenCalled();
+  const host = createHost({
+    installations: [{ id: "configured", plugin, configuration: { port: 8080 } }],
+  });
+  try {
+    await host.start();
+    expect(received).toHaveBeenCalledExactlyOnceWith({ port: 8080 });
+    expect(Object.isFrozen(received.mock.calls[0]![0])).toBe(true);
+  } finally {
+    await host.stop();
+  }
 });
 
 it("captures standard JSON Schema methods and receivers and only exports on explicit description", () => {

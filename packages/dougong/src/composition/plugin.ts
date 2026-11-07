@@ -18,6 +18,7 @@ import type { Logger } from "../contracts/logging.js";
 import type { EventOperations } from "../events/event-hub.js";
 import type { Awaitable } from "../contracts/resource.js";
 import { normalizePlainRecord, recordFields } from "../internal/record.js";
+import type { ReadonlyConfiguration } from "./configuration.js";
 
 export type { Awaitable } from "../contracts/resource.js";
 
@@ -87,7 +88,7 @@ export interface Plugin<
   readonly provides?: Provides;
   readonly setup: (
     context: PluginContext<Requires>,
-    configuration: Configuration,
+    configuration: ReadonlyConfiguration<Configuration>,
   ) => Awaitable<SetupOutput<NoInfer<Provides>>>;
 }
 

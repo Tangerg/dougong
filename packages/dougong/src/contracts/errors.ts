@@ -147,14 +147,12 @@ export function quarantinedHost(revision: number) {
   });
 }
 
-export interface ErrorSnapshot {
+export type ErrorSnapshot = {
   readonly name: string;
   readonly message: string;
   readonly code?: string;
   readonly stack?: string;
   readonly cause?: ErrorSnapshot;
-  readonly error?: ErrorSnapshot;
-  readonly suppressed?: ErrorSnapshot;
   readonly errors?: ReadonlyArray<ErrorSnapshot>;
   readonly details?: ErrorDetails;
   readonly fields?: Readonly<Record<string, string | ReadonlyArray<string>>>;
@@ -163,7 +161,10 @@ export interface ErrorSnapshot {
     readonly path?: ReadonlyArray<string | number>;
   }>;
   readonly truncated?: true;
-}
+} & (
+  | { readonly error: ErrorSnapshot; readonly suppressed: ErrorSnapshot }
+  | { readonly error?: never; readonly suppressed?: never }
+);
 
 // Terminal diagnostics must not retain application resources through Error causes or custom fields.
 export class RecordedFailure extends Error {
@@ -314,21 +315,23 @@ function captureError(
     // Native and downlevel suppression store both failures as own data, even when a subclass renames the Error.
     const primary = ownDataField(value, "error");
     const suppressed = primary && ownDataField(value, "suppressed");
-    return Object.freeze({
+    const snapshot = {
       name,
       message,
       ...(code === undefined ? {} : { code }),
       ...(stack === undefined ? {} : { stack }),
       ...(cause === undefined ? {} : { cause: child(cause) }),
       ...(errors === undefined ? {} : { errors: Object.freeze(errors.map(child)) }),
-      ...(primary && suppressed
-        ? { error: child(primary.value), suppressed: child(suppressed.value) }
-        : {}),
       ...(fields === undefined ? {} : { fields }),
       ...(issues === undefined ? {} : { issues: Object.freeze(issues) }),
       ...(details === undefined ? {} : { details }),
       ...(truncated ? { truncated: true as const } : {}),
-    });
+    };
+    return Object.freeze(
+      primary && suppressed
+        ? { ...snapshot, error: child(primary.value), suppressed: child(suppressed.value) }
+        : snapshot,
+    );
   };
   return visit(error, 0);
 }

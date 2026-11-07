@@ -9,7 +9,7 @@ export interface PluginDescriptionOptions {
 }
 
 export type PluginConfigurationDescriptor =
-  | { readonly status: "none" }
+  | { readonly status: "schema_absent" }
   | { readonly status: "unavailable"; readonly vendor: string }
   | {
       readonly status: "available";
@@ -21,12 +21,12 @@ export type PluginConfigurationDescriptor =
 
 export interface PluginDescriptor {
   readonly name: string;
-  readonly requires: ReadonlyArray<{
-    readonly alias: string;
-    readonly id: string;
-    readonly kind: "service" | "extensionPoint";
-    readonly optional: boolean;
-  }>;
+  readonly requires: ReadonlyArray<
+    { readonly alias: string; readonly id: string } & (
+      | { readonly kind: "service"; readonly optional: boolean }
+      | { readonly kind: "extensionPoint"; readonly optional: false }
+    )
+  >;
   readonly provides: ReadonlyArray<{ readonly alias: string; readonly id: string }>;
   readonly configuration: PluginConfigurationDescriptor;
 }
@@ -47,7 +47,7 @@ export function describePlugin(
   const declaration = normalizePlugin(plugin);
   const schema = declaration.configuration?.["~standard"];
   let configuration: PluginConfigurationDescriptor;
-  if (!schema) configuration = Object.freeze({ status: "none" });
+  if (!schema) configuration = Object.freeze({ status: "schema_absent" });
   else if (!schema.jsonSchema)
     configuration = Object.freeze({ status: "unavailable", vendor: schema.vendor });
   else {
@@ -68,8 +68,9 @@ export function describePlugin(
         return Object.freeze({
           alias,
           id: token.id,
-          kind: token.kind,
-          optional: requirement.kind === "optional",
+          ...(token.kind === "extensionPoint"
+            ? { kind: token.kind, optional: false as const }
+            : { kind: token.kind, optional: requirement.kind === "optional" }),
         });
       }),
     ),

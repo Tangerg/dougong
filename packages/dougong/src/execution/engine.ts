@@ -57,7 +57,7 @@ import type {
 } from "../composition/declarations.js";
 import type { HostStatus, InstallationState } from "../contracts/status.js";
 import type { HostSnapshot, InstallationSnapshot } from "../inspection/diagnostics.js";
-import type { Awaitable } from "../contracts/resource.js";
+import { disposeSymbol, type Awaitable } from "../contracts/resource.js";
 
 interface CommittedState extends CompositionState {
   readonly phase: "stopped" | "running" | "quarantined";
@@ -139,6 +139,7 @@ export class Engine {
   #state: CommittedState;
   #transition: Transition | undefined;
   #quarantineWork: Promise<DougongError> | undefined;
+  #observationPhase: "active" | "closing" | "closed" = "active";
   #generation = 0;
 
   constructor(options: HostOptions = {}) {
@@ -737,6 +738,7 @@ export class Engine {
     this.#quarantineWork = work;
     const forget = () => {
       this.#quarantineWork = undefined;
+      this.#sealObservationsWhenComplete();
     };
     void work.then(forget, forget);
     for (const instance of remaining) instance.lifetime.block();
@@ -880,22 +882,30 @@ export class Engine {
 
   #installationStatus(record: InstallationRecord): InstallationState {
     if (!this.#state.graph.declarations.has(record)) return "pending";
-    if (this.#isQuarantined()) return "quarantined";
-    if (this.#transition?.affected.has(record)) return "changing";
-    return this.#state.instances.has(record) ? "running" : "stopped";
+    return this.#installationExecution(record).status;
+  }
+
+  #installationExecution(record: InstallationRecord) {
+    const instance = this.#state.instances.get(record);
+    const changing = this.#transition?.affected.has(record);
+    if (instance) {
+      return { status: changing ? "changing" : "running", instance } as const;
+    }
+    return {
+      status: this.#isQuarantined() ? "quarantined" : changing ? "changing" : "stopped",
+      instance: undefined,
+    } as const;
   }
 
   #snapshot(): HostSnapshot {
     const installations: InstallationSnapshot[] = [...this.#state.graph.declarations].map(
       ([record, declaration]) => {
-        const instance = this.#state.instances.get(record);
-        return Object.freeze({
+        const execution = this.#installationExecution(record);
+        const description = {
           id: record.id,
           groupId: record.groupId,
           pluginName: declaration.plugin.name,
-          status: this.#installationStatus(record),
           origin: declaration.origin,
-          generation: instance?.generation,
           requires: Object.freeze(
             Object.values(declaration.plugin.requires).map((token) =>
               token.kind === "optional" ? token.service.id : token.id,
@@ -904,7 +914,20 @@ export class Engine {
           provides: Object.freeze(
             Object.values(declaration.plugin.provides).map((token) => token.id),
           ),
-          lifetime: instance?.lifetime.snapshot(),
+        };
+        if (!execution.instance) {
+          return Object.freeze({
+            ...description,
+            status: execution.status,
+            generation: undefined,
+            lifetime: undefined,
+          });
+        }
+        return Object.freeze({
+          ...description,
+          status: execution.status,
+          generation: execution.instance.generation,
+          lifetime: execution.instance.lifetime.snapshot(),
         });
       },
     );
@@ -948,11 +971,43 @@ export class Engine {
         ),
       });
     }
+    if (this.#observationPhase === "closed") return;
     try {
       this.#publisher.invalidate();
     } catch (error) {
       this.#report(error);
     }
+    this.#sealObservationsWhenComplete();
+  }
+
+  #sealObservationsWhenComplete() {
+    if (
+      this.#observationPhase !== "active" ||
+      !this.#isQuarantined() ||
+      this.#transition ||
+      this.#quarantineWork ||
+      this.#state.unresolved.length
+    )
+      return;
+    this.#observationPhase = "closing";
+    // The enclosing notification batch must deliver its final snapshot before subscriptions detach.
+    queueMicrotask(() => {
+      this.#observationPhase = "closed";
+      const errors: unknown[] = [];
+      try {
+        this.#contributions.sealHostViews();
+      } catch (error) {
+        errors.push(error);
+      }
+      try {
+        this.#publisher[disposeSymbol]();
+      } catch (error) {
+        errors.push(error);
+      }
+      if (errors.length === 1) this.#report(errors[0]);
+      if (errors.length > 1)
+        this.#report(new AggregateError(errors, "Host observation sealing failed"));
+    });
   }
 
   #report(error: unknown) {

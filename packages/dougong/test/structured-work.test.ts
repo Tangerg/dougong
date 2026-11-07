@@ -491,6 +491,7 @@ describe("structured work boundaries", () => {
       tasks: 1,
       unresolved: [{ kind: "shutdown" }],
     });
+    expect(owner.snapshot().unresolved[0]).not.toHaveProperty("id");
     pending.resolve();
     await task.result;
     await new Promise((resolve) => setTimeout(resolve, 0));

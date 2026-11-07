@@ -1,4 +1,4 @@
-import type { RecordedFailure, Installation } from "dougong";
+import type { RecordedFailure, Installation, InstallationSnapshot } from "dougong";
 import {
   describeArtifact,
   matchesArtifact,
@@ -9,8 +9,15 @@ import {
 } from "../artifacts/artifact.js";
 import { PlatformError, registrationUnavailableCode, selectionSupersededCode } from "../errors.js";
 
-export type RegistrationStatus =
-  "selected" | "activating" | "removing" | "installed" | "failed" | "quarantined" | "removed";
+type RegistrationStatusSnapshot =
+  | { readonly status: "selected" | "installed"; readonly error: undefined }
+  | { readonly status: "failed"; readonly error: RecordedFailure }
+  | {
+      readonly status: "activating" | "removing" | "quarantined";
+      readonly error: RecordedFailure | undefined;
+    };
+
+export type RegistrationStatus = RegistrationStatusSnapshot["status"] | "removed";
 
 declare const registrationBrand: unique symbol;
 
@@ -26,16 +33,14 @@ export interface Registration<Reference> {
   readonly error: RecordedFailure | undefined;
 }
 
-export interface RegistrationSnapshot {
+export type RegistrationSnapshot = {
   readonly id: string;
   readonly name: string;
   readonly selectedArtifact: ArtifactDescriptor;
   readonly selectionRevision: number;
   readonly activeOrigin: ArtifactOrigin | undefined;
-  readonly status: RegistrationStatus;
-  readonly execution: Installation["status"] | undefined;
-  readonly error: RecordedFailure | undefined;
-}
+  readonly execution: InstallationSnapshot["status"] | undefined;
+} & RegistrationStatusSnapshot;
 
 export interface RegistrationPort<Reference> {
   readonly installation: (id: string) => Installation | undefined;
@@ -163,13 +168,9 @@ export class RegistrationRecord<Reference> {
   }
 
   get status(): RegistrationStatus {
-    const state = this.#state;
-    if (state.phase === "removed") return "removed";
-    if (this.installation?.status === "quarantined") return "quarantined";
-    const operation = state.port.operation(this, state.revision);
-    if (operation) return operation;
-    if (state.error) return "failed";
-    return this.actionFor(state.artifact) === "reuse" ? "installed" : "selected";
+    return this.#state.phase === "removed"
+      ? "removed"
+      : this.#projectStatus(this.installation?.status).status;
   }
 
   select(artifact: Artifact<Reference>) {
@@ -227,20 +228,22 @@ export class RegistrationRecord<Reference> {
     };
   }
 
-  snapshot(previous?: RegistrationSnapshot): RegistrationSnapshot {
+  snapshot(
+    execution: InstallationSnapshot["status"] | undefined,
+    previous?: RegistrationSnapshot,
+  ): RegistrationSnapshot {
     const state = this.#requireSelected();
     const selectedArtifact = describeArtifact(state.artifact);
     const activeOrigin = this.activeOrigin;
-    const status = this.status;
-    const execution = this.installation?.status;
+    const statusSnapshot = this.#projectStatus(execution);
     if (
       previous &&
       previous.selectedArtifact === selectedArtifact &&
       previous.selectionRevision === state.revision &&
       previous.activeOrigin === activeOrigin &&
-      previous.status === status &&
+      previous.status === statusSnapshot.status &&
       previous.execution === execution &&
-      previous.error === state.error
+      previous.error === statusSnapshot.error
     )
       return previous;
     return Object.freeze({
@@ -249,10 +252,21 @@ export class RegistrationRecord<Reference> {
       selectedArtifact,
       selectionRevision: state.revision,
       activeOrigin,
-      status,
       execution,
-      error: state.error,
+      ...statusSnapshot,
     });
+  }
+
+  #projectStatus(execution: Installation["status"] | undefined): RegistrationStatusSnapshot {
+    const state = this.#requireSelected();
+    if (execution === "quarantined") return { status: "quarantined", error: state.error };
+    const operation = state.port.operation(this, state.revision);
+    if (operation) return { status: operation, error: state.error };
+    if (state.error) return { status: "failed", error: state.error };
+    return {
+      status: this.actionFor(state.artifact) === "reuse" ? "installed" : "selected",
+      error: undefined,
+    };
   }
 
   #requireSelected() {

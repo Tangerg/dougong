@@ -131,6 +131,24 @@ describe("lifetime retention", () => {
     expect(reference.deref()).toBeUndefined();
   });
 
+  it.each([
+    { kind: "diagnostics", afterQuarantine: false },
+    { kind: "diagnostics", afterQuarantine: true },
+    { kind: "contributions", afterQuarantine: false },
+    { kind: "contributions", afterQuarantine: true },
+  ] as const)(
+    "releases execution through a terminal $kind view (created after quarantine: $afterQuarantine)",
+    async ({ kind, afterQuarantine }) => {
+      const fixture = await terminalView(kind, afterQuarantine);
+      await collect([...fixture.references.values()]);
+      for (const [name, reference] of fixture.references) {
+        expect.soft(reference.deref(), `Terminal view retained ${name}`).toBeUndefined();
+      }
+      expect(fixture.view.get()).toBeDefined();
+      fixture.subscription?.[Symbol.dispose]();
+    },
+  );
+
   it("releases registry authority from a discarded Contract writer", async () => {
     const fixture = discardedWriter();
     await collect([fixture.reference]);
@@ -353,6 +371,63 @@ async function abandonedHost() {
   const host = createHost({ installations: [{ id: "abandoned", plugin: empty }] });
   await host.start();
   return new WeakRef(host);
+}
+
+async function terminalView(kind: "diagnostics" | "contributions", afterQuarantine: boolean) {
+  const reporter = () => undefined;
+  const payload = { starts: 0 };
+  const observerPayload = { notifications: 0 };
+  const point = extensionPoint<number>("retention/terminal-view");
+  const host = createHost({
+    onError: reporter,
+    installations: [
+      {
+        id: "original",
+        plugin: definePlugin({
+          name: "original",
+          setup() {
+            if (++payload.starts > 1) throw new Error("Restoration failed");
+          },
+        }),
+      },
+    ],
+  });
+  let view = afterQuarantine
+    ? undefined
+    : kind === "diagnostics"
+      ? host.diagnostics
+      : host.contributions(point);
+  const subscription = view?.subscribe(() => {
+    observerPayload.notifications++;
+  });
+  await host.start();
+  const change = host.change();
+  change.update(host.installation("original")!, {
+    plugin: definePlugin({
+      name: "replacement",
+      setup() {
+        throw new Error("Replacement failed");
+      },
+    }),
+  });
+  const failure = await host.apply(await host.plan(change)).then(
+    () => false,
+    () => true,
+  );
+  if (!failure || host.status !== "quarantined" || host.diagnostics.get().unresolved.length) {
+    throw new Error("Expected terminal quarantine with completed release obligations");
+  }
+  view ??= kind === "diagnostics" ? host.diagnostics : host.contributions(point);
+  return {
+    view,
+    subscription,
+    references: new Map<string, WeakRef<object>>([
+      ["Host facade", new WeakRef(host)],
+      ["Engine reporter", new WeakRef(reporter)],
+      ["plugin payload", new WeakRef(payload)],
+      ["subscriber payload", new WeakRef(observerPayload)],
+    ]),
+  };
 }
 
 function discardedWriter() {

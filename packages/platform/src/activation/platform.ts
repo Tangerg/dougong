@@ -8,6 +8,7 @@ import {
   type Disposable,
   type Group,
   type Host,
+  type HostSnapshot,
   type Logger,
   type Plan,
   type SnapshotView,
@@ -159,7 +160,7 @@ class DeliveryPlatform<Reference> implements Platform<Reference> {
     },
   };
   readonly #viewBinding: { synchronize: (() => void) | undefined };
-  #hostSnapshot: unknown;
+  #hostSnapshot: HostSnapshot | undefined;
   #projection: PlatformSnapshot;
   #executing: ActivationOperation<Reference> | "disposal" | undefined;
   #subscription: Disposable | undefined;
@@ -202,12 +203,12 @@ class DeliveryPlatform<Reference> implements Platform<Reference> {
       authorizer: admission,
       assertPlacement: () => this.#assertPlacement(),
     });
+    this.#hostSnapshot = host.diagnostics.get();
     this.#projection = this.#snapshot();
     this.#publisher = new SnapshotPublisher(
       () => (this.#projection = this.#snapshot(this.#projection)),
       reporter(capturedLogger),
     );
-    this.#hostSnapshot = host.diagnostics.get();
     const binding = { synchronize: (() => this.#synchronize()) as (() => void) | undefined };
     this.#viewBinding = binding;
     this.diagnostics = diagnosticView(this.#publisher.view, binding);
@@ -687,11 +688,17 @@ class DeliveryPlatform<Reference> implements Platform<Reference> {
   }
 
   #snapshot(previous?: PlatformSnapshot): PlatformSnapshot {
+    const installations = new Map(
+      this.#hostSnapshot?.installations.map((installation) => [installation.id, installation]),
+    );
     let changed =
       previous?.status !== this.status || previous.registrations.size !== this.#registrations.size;
     const entries = [...this.#registrations].map(([name, registration]) => {
       const before = previous?.registrations.get(name);
-      const next = registration.snapshot(before);
+      const execution = registration.installation
+        ? installations.get(registration.id)?.status
+        : undefined;
+      const next = registration.snapshot(execution, before);
       if (before !== next) changed = true;
       return [name, next] as const;
     });

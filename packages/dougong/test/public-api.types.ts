@@ -5,6 +5,7 @@ import {
   batchSnapshotNotifications,
   captureLogger,
   normalizePlainRecord,
+  onAbort,
   recordFields,
   resolveValue,
   SerialQueue,
@@ -540,6 +541,214 @@ change.install(defaulting, { id: "explicit-defaulting", configuration: "42" });
 // @ts-expect-error Schema defaults do not authorize setup output as installation input.
 change.install(defaulting, { id: "wrong-defaulting", configuration: 42 });
 
+declare const configurationBrand: unique symbol;
+type BrandedNumber = number & { readonly [configurationBrand]: "port" };
+type BrandedString = string & { readonly [configurationBrand]: "label" };
+type BrandedBoolean = boolean & { readonly [configurationBrand]: "enabled" };
+
+function verifyReadonlyConfigurationTypes(
+  brandedSchema: StandardSchemaV1<
+    string,
+    { port: BrandedNumber; label: BrandedString; enabled: BrandedBoolean }
+  >,
+) {
+  interface ConfigurationInput {
+    source: string;
+    labels: string[];
+  }
+
+  interface ConfigurationOutput {
+    nested: { limit: number };
+    values: number[];
+    pair: [name: string, options: { enabled: boolean }];
+    optional?: { names: string[] };
+    choice:
+      { mode: "automatic"; retry: { attempts: number } } | { mode: "manual"; schedule: string[] };
+  }
+
+  type ReadonlyOutput = {
+    readonly nested: { readonly limit: number };
+    readonly values: readonly number[];
+    readonly pair: readonly [name: string, options: { readonly enabled: boolean }];
+    readonly optional?: { readonly names: readonly string[] };
+    readonly choice:
+      | { readonly mode: "automatic"; readonly retry: { readonly attempts: number } }
+      | { readonly mode: "manual"; readonly schedule: readonly string[] };
+  };
+
+  const output: ConfigurationOutput = {
+    nested: { limit: 1 },
+    values: [1],
+    pair: ["primary", { enabled: true }],
+    choice: { mode: "automatic", retry: { attempts: 2 } },
+  };
+  const schema: StandardSchemaV1<ConfigurationInput, ConfigurationOutput> = {
+    "~standard": { version: 1, vendor: "configuration-types", validate: () => ({ value: output }) },
+  };
+  const configured = core.definePlugin({
+    name: "configuration.readonly-output",
+    configuration: schema,
+    setup(_context, configuration) {
+      expectTypeOf(configuration).toEqualTypeOf<ReadonlyOutput>();
+      expectTypeOf(configuration.values.map((value) => value + 1)).toEqualTypeOf<number[]>();
+      // @ts-expect-error Setup cannot replace captured record fields.
+      configuration.nested = { limit: 2 };
+      // @ts-expect-error Nested captured data does not grant mutation authority.
+      configuration.nested.limit++;
+      // @ts-expect-error Captured arrays expose no mutating methods.
+      configuration.values.push(2);
+      // @ts-expect-error Tuple positions are captured data too.
+      configuration.pair[0] = "replacement";
+      // @ts-expect-error Tuple members retain the same deep readonly boundary.
+      configuration.pair[1].enabled = false;
+      if (configuration.optional) {
+        expectTypeOf(configuration.optional.names).toEqualTypeOf<readonly string[]>();
+        // @ts-expect-error Optional fields do not bypass nested readonly capture.
+        configuration.optional.names.push("replacement");
+      }
+      if (configuration.choice.mode === "automatic") {
+        expectTypeOf(configuration.choice.retry.attempts).toEqualTypeOf<number>();
+        // @ts-expect-error Union narrowing preserves the readonly output view.
+        configuration.choice.retry.attempts = 3;
+      } else {
+        expectTypeOf(configuration.choice.schedule).toEqualTypeOf<readonly string[]>();
+        // @ts-expect-error Every configuration union branch is deeply readonly.
+        configuration.choice.schedule.push("later");
+      }
+    },
+  });
+
+  expectTypeOf<
+    StandardSchemaV1.InferInput<NonNullable<typeof configured.configuration>>
+  >().toEqualTypeOf<ConfigurationInput>();
+  expectTypeOf<
+    StandardSchemaV1.InferOutput<NonNullable<typeof configured.configuration>>
+  >().toEqualTypeOf<ConfigurationOutput>();
+  expectTypeOf<
+    core.InstallationOptions<typeof configured>["configuration"]
+  >().toEqualTypeOf<ConfigurationInput>();
+  expectTypeOf<Parameters<typeof configured.setup>[1]>().toEqualTypeOf<ReadonlyOutput>();
+
+  const input: ConfigurationInput = { source: "primary", labels: ["one"] };
+  input.labels.push("two");
+  output.values.push(2);
+  const host = core.createHost({
+    installations: [{ id: "configured", plugin: configured, configuration: input }],
+  });
+  const change = host.change();
+  const installation = change.install(configured, { id: "replacement", configuration: input });
+  change.update(installation, { configuration: input });
+  change.update(installation, { plugin: configured, configuration: input });
+  // @ts-expect-error Readonly setup output cannot replace the schema's distinct input.
+  change.install(configured, { id: "wrong-input", configuration: output });
+  // @ts-expect-error Required schema input remains required.
+  change.install(configured, { id: "missing-input" });
+  // @ts-expect-error Configuration-only updates still require schema input.
+  change.update(installation, { configuration: output });
+
+  interface PlainConfiguration {
+    port: number;
+    endpoints: { path: string }[];
+  }
+
+  const schemaFree = core.definePlugin<PlainConfiguration>({
+    name: "configuration.schema-free",
+    setup(_context, configuration) {
+      expectTypeOf(configuration).toEqualTypeOf<{
+        readonly port: number;
+        readonly endpoints: ReadonlyArray<{ readonly path: string }>;
+      }>();
+      // @ts-expect-error A schema-free declaration has the same captured output boundary.
+      configuration.port++;
+      // @ts-expect-error Plain interfaces do not need an index signature to become deeply readonly.
+      configuration.endpoints[0]!.path = "replacement";
+    },
+  });
+  expectTypeOf<
+    core.InstallationOptions<typeof schemaFree>["configuration"]
+  >().toEqualTypeOf<PlainConfiguration>();
+  change.install(schemaFree, { id: "schema-free", configuration: { port: 8080, endpoints: [] } });
+  // @ts-expect-error Schema absence does not make a typed configuration input optional.
+  change.install(schemaFree, { id: "missing-schema-free-input" });
+
+  const annotated: core.Plugin<ConfigurationOutput, {}, {}, ConfigurationInput> = {
+    name: "configuration.annotated",
+    configuration: schema,
+    setup(_context, configuration) {
+      expectTypeOf(configuration).toEqualTypeOf<ReadonlyOutput>();
+      // @ts-expect-error Direct Plugin annotations expose the same readonly output as core.definePlugin.
+      configuration.values.splice(0, 1);
+    },
+  };
+  change.install(annotated, { id: "annotated", configuration: input });
+
+  const inferred = core.definePlugin({
+    name: "configuration.inferred",
+    setup(_context, configuration: { readonly port: number }) {
+      expectTypeOf(configuration.port).toEqualTypeOf<number>();
+    },
+  });
+  change.install(inferred, { id: "inferred", configuration: { port: 8080 } });
+  // @ts-expect-error Inference from a setup annotation still preserves the configuration shape.
+  change.install(inferred, { id: "wrong-inferred", configuration: "8080" });
+
+  const defaultingSchema: StandardSchemaV1<ConfigurationInput | undefined, ConfigurationOutput> = {
+    "~standard": { version: 1, vendor: "configuration-types", validate: () => ({ value: output }) },
+  };
+  const defaulting = core.definePlugin({
+    name: "configuration.defaulting",
+    configuration: defaultingSchema,
+    setup(_context, configuration) {
+      expectTypeOf(configuration).toEqualTypeOf<ReadonlyOutput>();
+    },
+  });
+  change.install(defaulting, { id: "defaulting" });
+  change.install(defaulting, { id: "defaulting-input", configuration: input });
+  // @ts-expect-error Optional schema input does not accept the output type.
+  change.install(defaulting, { id: "wrong-defaulting", configuration: output });
+
+  const choice = core.definePlugin<ConfigurationOutput["choice"]>({
+    name: "configuration.union",
+    setup(_context, configuration) {
+      expectTypeOf(configuration).toEqualTypeOf<ReadonlyOutput["choice"]>();
+    },
+  });
+  change.install(choice, {
+    id: "automatic",
+    configuration: { mode: "automatic", retry: { attempts: 2 } },
+  });
+  change.install(choice, { id: "manual", configuration: { mode: "manual", schedule: [] } });
+
+  const branded = core.definePlugin({
+    name: "configuration.branded-primitives",
+    configuration: brandedSchema,
+    setup(_context, configuration) {
+      expectTypeOf(configuration.port).toEqualTypeOf<BrandedNumber>();
+      expectTypeOf(configuration.label).toEqualTypeOf<BrandedString>();
+      expectTypeOf(configuration.enabled).toEqualTypeOf<BrandedBoolean>();
+      expectTypeOf(configuration.port + 1).toEqualTypeOf<number>();
+      expectTypeOf(configuration.label.toLowerCase()).toEqualTypeOf<string>();
+    },
+  });
+  change.install(branded, { id: "branded", configuration: "input" });
+
+  const unknown = core.definePlugin<unknown>({
+    name: "configuration.unknown",
+    setup(_context, configuration) {
+      expectTypeOf(configuration).toEqualTypeOf<unknown>();
+    },
+  });
+  const empty = core.definePlugin({
+    name: "configuration.empty",
+    setup(_context, configuration) {
+      expectTypeOf(configuration).toEqualTypeOf<void>();
+    },
+  });
+  change.install(unknown, { id: "unknown", configuration: input });
+  change.install(empty, { id: "empty" });
+}
+void verifyReadonlyConfigurationTypes;
+
 expectTypeOf<core.Installation["status"]>().toEqualTypeOf<core.InstallationState>();
 expectTypeOf<core.HostSnapshot["error"]>().toEqualTypeOf<core.ErrorSnapshot | undefined>();
 expectTypeOf<ReturnType<core.ChangeSet["update"]>>().toEqualTypeOf<void>();
@@ -676,6 +885,48 @@ if (description.configuration.status === "available") {
     Readonly<Record<string, core.ConfigurationValue>>
   >();
 }
+
+function verifyPluginDescriptorTypes() {
+  type DescribedRequirement = core.PluginDescriptor["requires"][number];
+
+  const requirements: ReadonlyArray<DescribedRequirement> = [
+    { alias: "required", id: "description/required", kind: "service", optional: false },
+    { alias: "optional", id: "description/optional", kind: "service", optional: true },
+    {
+      alias: "contributions",
+      id: "description/contributions",
+      kind: "extensionPoint",
+      optional: false,
+    },
+  ];
+
+  // @ts-expect-error Only Services can be optional requirements.
+  const optionalExtensionPoint: DescribedRequirement = {
+    alias: "invalid",
+    id: "description/invalid",
+    kind: "extensionPoint",
+    optional: true,
+  };
+
+  function readRequirement(requirement: DescribedRequirement) {
+    if (requirement.kind === "extensionPoint") {
+      expectTypeOf(requirement.optional).toEqualTypeOf<false>();
+    } else {
+      expectTypeOf(requirement.optional).toEqualTypeOf<boolean>();
+    }
+  }
+
+  const absent: core.PluginConfigurationDescriptor = { status: "schema_absent" };
+  // @ts-expect-error Schema absence no longer claims that no configuration exists.
+  const obsolete: core.PluginConfigurationDescriptor = { status: "none" };
+
+  void requirements;
+  void optionalExtensionPoint;
+  void readRequirement;
+  void absent;
+  void obsolete;
+}
+void verifyPluginDescriptorTypes;
 
 const plannedDeclaration: core.DeclarationSnapshot = { pluginName: "planned", origin: undefined };
 // @ts-expect-error Required Service bindings always identify their provider in an executable graph.
@@ -879,3 +1130,244 @@ function verifySnapshotThenableCallbacks(
   batchSnapshotNotifications(() => (uncertain ? undefined : completing));
 }
 void verifySnapshotThenableCallbacks;
+
+function verifySynchronousAbortCallbacks(
+  signal: AbortSignal,
+  synchronous: () => void,
+  pending: PromiseLike<void>,
+  completing: { readonly then: (fulfill: (value: number) => void) => void },
+  uncertain: boolean,
+) {
+  onAbort(signal, (reason) => {
+    expectTypeOf(reason).toEqualTypeOf<unknown>();
+  });
+  onAbort(signal, synchronous);
+  onAbort<void>(signal, synchronous);
+  onAbort(signal, () => 1);
+  onAbort(signal, () => (uncertain ? 1 : "cancelled"));
+  onAbort(signal, () => ({ pending }));
+
+  // @ts-expect-error Cancellation observation cannot own an asynchronous callback continuation.
+  onAbort(signal, async () => undefined);
+  // @ts-expect-error Explicit void cannot discard a visible Promise result.
+  onAbort<void>(signal, async () => undefined);
+  // @ts-expect-error A PromiseLike callback has the same asynchronous ownership requirement.
+  onAbort(signal, () => pending);
+  // @ts-expect-error Runtime thenables need no PromiseLike chained return to start asynchronous work.
+  onAbort(signal, () => completing);
+  // @ts-expect-error Every callback branch must finish before cancellation notification returns.
+  onAbort(signal, () => (uncertain ? undefined : pending));
+}
+void verifySynchronousAbortCallbacks;
+
+function verifyAcquiredResourceTypes(
+  lifetime: core.LifetimeContext,
+  structural: PromiseLike<core.Resource>,
+  uncertain: boolean,
+) {
+  const synchronous = { value: 1, [Symbol.dispose]() {} };
+  const asynchronous = { value: "value", async [Symbol.asyncDispose]() {} };
+  const thenable = {
+    // oxlint-disable-next-line unicorn/no-thenable -- Acquisition accepts the structural fulfillment protocol.
+    then(fulfill: (resource: typeof synchronous) => void) {
+      fulfill(synchronous);
+    },
+  };
+  expectTypeOf(lifetime.acquire(() => synchronous)).toEqualTypeOf<
+    Promise<{ readonly resource: typeof synchronous }>
+  >();
+  expectTypeOf(lifetime.acquire(async () => asynchronous)).toEqualTypeOf<
+    Promise<{ readonly resource: typeof asynchronous }>
+  >();
+  expectTypeOf(lifetime.acquire(() => structural)).toEqualTypeOf<
+    Promise<{ readonly resource: core.Resource }>
+  >();
+  expectTypeOf(lifetime.acquire(() => thenable)).toEqualTypeOf<
+    Promise<{ readonly resource: typeof synchronous }>
+  >();
+  expectTypeOf(lifetime.acquire(() => (uncertain ? synchronous : asynchronous))).toEqualTypeOf<
+    Promise<{ readonly resource: typeof synchronous | typeof asynchronous }>
+  >();
+  expectTypeOf(
+    lifetime.acquire(() => (uncertain ? Promise.resolve(synchronous) : asynchronous)),
+  ).toEqualTypeOf<Promise<{ readonly resource: typeof synchronous | typeof asynchronous }>>();
+  expectTypeOf(
+    lifetime.acquire<Promise<typeof synchronous>>(() => Promise.resolve(synchronous)),
+  ).toEqualTypeOf<Promise<{ readonly resource: typeof synchronous }>>();
+
+  const disposablePromise = Object.assign(Promise.resolve(1), { [Symbol.dispose]() {} });
+  // @ts-expect-error Acquisition owns the fulfilled value, not a disposable Promise that delivers a number.
+  lifetime.acquire(() => disposablePromise);
+  // @ts-expect-error Explicit factory result types must also fulfill with a Resource.
+  lifetime.acquire<typeof disposablePromise>(() => disposablePromise);
+  // @ts-expect-error A valid synchronous alternative cannot hide a non-Resource fulfillment branch.
+  lifetime.acquire(() => (uncertain ? synchronous : disposablePromise));
+  // @ts-expect-error A primitive factory result has no resource protocol.
+  lifetime.acquire(() => 1);
+  // @ts-expect-error A primitive Promise result has no resource protocol.
+  lifetime.acquire(() => Promise.resolve(1));
+}
+void verifyAcquiredResourceTypes;
+
+function verifyGenericAcquisition<Value>(lifetime: core.LifetimeContext, value: Value) {
+  const resource = { value, [Symbol.dispose]() {} };
+  const acquired: Promise<{ readonly resource: typeof resource }> = lifetime.acquire(
+    async () => resource,
+  );
+  return acquired;
+}
+void verifyGenericAcquisition;
+
+function rejectUnprovenAcquisition<ResourceType extends core.Resource>(
+  lifetime: core.LifetimeContext,
+  resource: ResourceType,
+) {
+  // @ts-expect-error A Resource subtype may itself be a Promise that fulfills with a non-Resource value.
+  lifetime.acquire(() => resource);
+}
+void rejectUnprovenAcquisition;
+
+const projectedError: core.ErrorSnapshot = { name: "Error", message: "release failed" };
+const registeredObligation: core.UnresolvedObligation = {
+  kind: "cleanup",
+  id: 1,
+  error: projectedError,
+};
+const shutdownObligation: core.UnresolvedObligation = {
+  kind: "shutdown",
+  error: projectedError,
+};
+// @ts-expect-error A shutdown deadline has no ordinary registration identity.
+const inventedShutdownIdentity: core.UnresolvedObligation = {
+  kind: "shutdown",
+  id: 0,
+  error: projectedError,
+};
+// @ts-expect-error A registered release obligation must retain its own identity.
+const missingRegistrationIdentity: core.UnresolvedObligation = {
+  kind: "cleanup",
+  error: projectedError,
+};
+void [
+  registeredObligation,
+  shutdownObligation,
+  inventedShutdownIdentity,
+  missingRegistrationIdentity,
+];
+
+function verifyObligationIdentity(obligation: core.UnresolvedObligation) {
+  if (obligation.kind === "shutdown") {
+    expectTypeOf(obligation.id).toEqualTypeOf<undefined>();
+  } else {
+    expectTypeOf(obligation.id).toEqualTypeOf<number>();
+  }
+}
+void verifyObligationIdentity;
+
+const suppressionPair: core.ErrorSnapshot = {
+  name: "SuppressedError",
+  message: "release failed while another error was pending",
+  error: projectedError,
+  suppressed: projectedError,
+};
+// @ts-expect-error Suppression diagnostics always retain both failures.
+const missingSuppressed: core.ErrorSnapshot = { name: "Error", message: "", error: projectedError };
+// @ts-expect-error The suppressed failure cannot exist without its paired primary failure.
+const missingPrimary: core.ErrorSnapshot = {
+  name: "Error",
+  message: "",
+  suppressed: projectedError,
+};
+void [suppressionPair, missingSuppressed, missingPrimary];
+
+function verifySuppressionPair(snapshot: core.ErrorSnapshot) {
+  if (snapshot.error !== undefined) {
+    expectTypeOf(snapshot.suppressed).toEqualTypeOf<core.ErrorSnapshot>();
+  } else {
+    expectTypeOf(snapshot.suppressed).toEqualTypeOf<undefined>();
+  }
+}
+void verifySuppressionPair;
+
+const installationSnapshotFields = {
+  id: "owner",
+  groupId: undefined,
+  pluginName: "owner",
+  origin: undefined,
+  requires: [],
+  provides: [],
+};
+const lifetimeSnapshot: core.LifetimeSnapshot = {
+  label: "owner",
+  phase: "active",
+  cleanups: 0,
+  interrupts: 0,
+  tasks: 0,
+  acquisitions: 0,
+  publications: 0,
+  foreground: 0,
+  unresolved: [],
+  children: [],
+};
+const installationSnapshots: ReadonlyArray<core.InstallationSnapshot> = [
+  { ...installationSnapshotFields, status: "running", generation: 1, lifetime: lifetimeSnapshot },
+  { ...installationSnapshotFields, status: "changing", generation: 1, lifetime: lifetimeSnapshot },
+  { ...installationSnapshotFields, status: "changing", generation: undefined, lifetime: undefined },
+  { ...installationSnapshotFields, status: "stopped", generation: undefined, lifetime: undefined },
+  {
+    ...installationSnapshotFields,
+    status: "quarantined",
+    generation: undefined,
+    lifetime: undefined,
+  },
+];
+// @ts-expect-error Running diagnostics always project an existing Instance.
+const missingRunningInstance: core.InstallationSnapshot = {
+  ...installationSnapshotFields,
+  status: "running",
+  generation: undefined,
+  lifetime: undefined,
+};
+// @ts-expect-error Generation and Lifetime must come from the same existing Instance.
+const partialChangingInstance: core.InstallationSnapshot = {
+  ...installationSnapshotFields,
+  status: "changing",
+  generation: 1,
+  lifetime: undefined,
+};
+const pendingSnapshot: core.InstallationSnapshot = {
+  ...installationSnapshotFields,
+  // @ts-expect-error Pending identities are not members of the committed diagnostic collection.
+  status: "pending",
+  generation: undefined,
+  lifetime: undefined,
+};
+const removedSnapshot: core.InstallationSnapshot = {
+  ...installationSnapshotFields,
+  // @ts-expect-error Removed identities are not members of the committed diagnostic collection.
+  status: "removed",
+  generation: undefined,
+  lifetime: undefined,
+};
+void [
+  installationSnapshots,
+  missingRunningInstance,
+  partialChangingInstance,
+  pendingSnapshot,
+  removedSnapshot,
+];
+
+function verifyInstallationSnapshot(snapshot: core.InstallationSnapshot) {
+  if (snapshot.status === "running") {
+    expectTypeOf(snapshot.generation).toEqualTypeOf<number>();
+    expectTypeOf(snapshot.lifetime).toEqualTypeOf<core.LifetimeSnapshot>();
+  }
+  if (snapshot.status === "stopped" || snapshot.status === "quarantined") {
+    expectTypeOf(snapshot.generation).toEqualTypeOf<undefined>();
+    expectTypeOf(snapshot.lifetime).toEqualTypeOf<undefined>();
+  }
+  if (snapshot.generation !== undefined) {
+    expectTypeOf(snapshot.lifetime).toEqualTypeOf<core.LifetimeSnapshot>();
+  }
+}
+void verifyInstallationSnapshot;

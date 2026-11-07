@@ -152,7 +152,7 @@ describe("Catalog and selection ownership", () => {
     expect(snapshot.get("sample")?.get("1.0.0")).toBe(artifact);
   });
 
-  it("keeps manifests compatible with concrete host and prerelease versions", () => {
+  it("keeps manifests compatible with concrete application API and prerelease versions", () => {
     const platform = createPlatform({
       id: "prerelease",
       host: createHost(),

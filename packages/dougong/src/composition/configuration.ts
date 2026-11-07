@@ -13,6 +13,13 @@ export type ConfigurationValue =
   | ReadonlyArray<ConfigurationValue>
   | { readonly [key: string]: ConfigurationValue };
 
+export type ReadonlyConfiguration<Value> =
+  Value extends Exclude<ConfigurationValue, object>
+    ? Value
+    : Value extends object
+      ? { readonly [Key in keyof Value]: ReadonlyConfiguration<Value[Key]> }
+      : Value;
+
 const maximumConfigurationDepth = 64;
 
 interface CapturedValue {

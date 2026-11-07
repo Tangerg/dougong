@@ -413,6 +413,174 @@ it.each([0, 2])(
   },
 );
 
+it.each([
+  { reentrant: false, enclosingBatch: false },
+  { reentrant: true, enclosingBatch: false },
+  { reentrant: true, enclosingBatch: true },
+])(
+  "propagates subscriber failures with reentrancy $reentrant and enclosing batch $enclosingBatch",
+  async ({ reentrant, enclosingBatch }) => {
+    const owner = new Owner();
+    let value = 0;
+    let notify!: () => void;
+    let nested = false;
+    const local = bridge(owner, {
+      get() {
+        const captured = value;
+        if (nested) {
+          nested = false;
+          value = 2;
+          notify();
+        }
+        return captured;
+      },
+      subscribe(listener) {
+        notify = listener;
+        return { [Symbol.dispose]() {} };
+      },
+    });
+    const failures = [new Error("first subscriber"), new Error("second subscriber")];
+    const observed: number[] = [];
+    const subscriptions = failures.map((failure) =>
+      local.subscribe(() => {
+        observed.push(local.get());
+        throw failure;
+      }),
+    );
+    value = 1;
+    nested = reentrant;
+    const publish = () => {
+      if (!enclosingBatch) return notify();
+      batch(() => {
+        notify();
+        expect(observed).toEqual([]);
+      });
+    };
+    expect(publish).toThrow(expect.objectContaining({ errors: failures }));
+    expect(local.get()).toBe(reentrant ? 2 : 1);
+    expect(observed).toEqual(reentrant ? [2, 2] : [1, 1]);
+    for (const subscription of subscriptions) subscription[Symbol.dispose]();
+    await owner[Symbol.asyncDispose]();
+  },
+);
+
+it("does not replace a newer value with an obsolete getter failure", async () => {
+  const owner = new Owner();
+  let value = 0;
+  let notify!: () => void;
+  let nested = false;
+  const obsoleteFailure = new Error("obsolete source read");
+  const subscriberFailure = new Error("subscriber");
+  const local = bridge(owner, {
+    get() {
+      if (nested) {
+        nested = false;
+        value = 2;
+        notify();
+        throw obsoleteFailure;
+      }
+      return value;
+    },
+    subscribe(listener) {
+      notify = listener;
+      return { [Symbol.dispose]() {} };
+    },
+  });
+  const subscription = local.subscribe(() => {
+    expect(local.get()).toBe(2);
+    throw subscriberFailure;
+  });
+  nested = true;
+  expect(notify).toThrow(subscriberFailure);
+  expect(local.get()).toBe(2);
+  subscription[Symbol.dispose]();
+  await owner[Symbol.asyncDispose]();
+});
+
+it.each(["native", "structural"] as const)(
+  "rejects a %s asynchronous subscriber result after a reentrant foreign read",
+  async (protocol) => {
+    const owner = new Owner();
+    let notify!: () => void;
+    let nested = false;
+    let value = 0;
+    const local = bridge(owner, {
+      get() {
+        const captured = value;
+        if (nested) {
+          nested = false;
+          value = 2;
+          notify();
+        }
+        return captured;
+      },
+      subscribe(listener) {
+        notify = listener;
+        return { [Symbol.dispose]() {} };
+      },
+    });
+    const failure = new Error("asynchronous subscriber");
+    const then = vi.fn<(_resolve: (value: void) => void, reject: (error: unknown) => void) => void>(
+      (_resolve, reject) => reject(failure),
+    );
+    // oxlint-disable-next-line unicorn/no-thenable -- The regression must cross the structural asynchronous result boundary.
+    const structural = { then };
+    const subscriber: () => void = () =>
+      protocol === "native" ? Promise.reject(failure) : structural;
+    const subscription = local.subscribe(subscriber);
+    nested = true;
+    expect(notify).toThrow("Signal subscribers must be synchronous");
+    expect(local.get()).toBe(2);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(then).toHaveBeenCalledTimes(protocol === "structural" ? 1 : 0);
+    subscription[Symbol.dispose]();
+    await owner[Symbol.asyncDispose]();
+  },
+);
+
+it("delivers terminal subscriber failures after a foreign getter revokes its owner", () => {
+  let close!: () => unknown;
+  let notify!: () => void;
+  let closing = false;
+  const release = vi.fn<() => void>();
+  const local = bridge(
+    {
+      defer(dispose) {
+        close = dispose;
+        return {
+          async [Symbol.asyncDispose]() {
+            await dispose();
+          },
+        };
+      },
+    },
+    {
+      get() {
+        if (closing) close();
+        return 1;
+      },
+      subscribe(listener) {
+        notify = listener;
+        return { [Symbol.dispose]: release };
+      },
+    },
+  );
+  const failure = new Error("terminal subscriber");
+  const subscriber = vi.fn<() => never>(() => {
+    expect(() => local.get()).toThrow("disposed");
+    throw failure;
+  });
+  local.subscribe(subscriber);
+  closing = true;
+  expect(notify).toThrow(failure);
+  expect(release).toHaveBeenCalledOnce();
+  expect(subscriber).toHaveBeenCalledOnce();
+  notify();
+  close();
+  expect(subscriber).toHaveBeenCalledOnce();
+  expect(release).toHaveBeenCalledOnce();
+});
+
 it("projects a source read failure and notifies recovery even when the recovered value is unchanged", async () => {
   const revision = signal(0);
   const failure = new Error("unavailable");

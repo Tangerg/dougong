@@ -43,14 +43,16 @@ export interface Task<T = void> extends AsyncDisposable {
 export type Cleanup = () => Awaitable<unknown>;
 export type BackgroundTask<T> = (signal: AbortSignal) => Awaitable<T>;
 
+type AcquisitionResult<T> = T & NoInfer<Awaited<T> extends Resource ? unknown : never>;
+
 export interface LifetimeContext {
   readonly signal: AbortSignal;
   readonly use: <T extends Resource>(resource: T) => T;
   readonly defer: (cleanup: Cleanup) => AsyncDisposable;
   readonly child: (label: string) => ChildLifetime;
   readonly spawn: <T>(task: BackgroundTask<T>) => Task<Awaited<T>>;
-  readonly acquire: <T extends Resource>(
-    factory: (signal: AbortSignal) => Awaitable<T>,
+  readonly acquire: <T>(
+    factory: (signal: AbortSignal) => AcquisitionResult<T>,
   ) => Promise<{ readonly resource: Awaited<T> }>;
   readonly interrupt: (callback: Cleanup) => Disposable;
 }
@@ -320,8 +322,7 @@ export class Lifetime {
       defer: (cleanup: Cleanup) => this.defer(cleanup),
       child: (label: string) => this.child(label),
       spawn: <T>(task: BackgroundTask<T>) => this.spawn(task),
-      acquire: <T extends Resource>(factory: (signal: AbortSignal) => Awaitable<T>) =>
-        this.acquire(factory),
+      acquire: <T>(factory: (signal: AbortSignal) => AcquisitionResult<T>) => this.acquire(factory),
       interrupt: (callback: Cleanup) => this.interrupt(callback),
     });
     lifetimeAuthorities.set(handle, this);
@@ -385,14 +386,20 @@ export class Lifetime {
 
   #snapshot(children: LifetimeSnapshot[]): LifetimeSnapshot {
     const unresolved: UnresolvedObligation[] = [];
-    const add = (id: number, kind: ObligationKind, error: RecordedFailure | undefined) => {
+    const add = (
+      id: number,
+      kind: Exclude<ObligationKind, "shutdown">,
+      error: RecordedFailure | undefined,
+    ) => {
       if (error) unresolved.push(Object.freeze({ id, kind, error: error.snapshot }));
     };
     for (const record of this.#cleanups) add(record.id, record.kind, record.failure);
     for (const record of this.#interrupts) add(record.id, record.kind, record.failure);
     for (const record of this.#publications)
       add(record.id, "publication", record.failure?.recorded);
-    add(0, "shutdown", this.#timeoutFailure);
+    if (this.#timeoutFailure) {
+      unresolved.push(Object.freeze({ kind: "shutdown", error: this.#timeoutFailure.snapshot }));
+    }
     return Object.freeze({
       label: this.#label,
       phase: this.#phase,
@@ -492,15 +499,15 @@ export class Lifetime {
     return record.handle;
   }
 
-  acquire<T extends Resource>(
-    factory: (signal: AbortSignal) => Awaitable<T>,
+  acquire<T>(
+    factory: (signal: AbortSignal) => AcquisitionResult<T>,
   ): Promise<{ readonly resource: Awaited<T> }> {
     this.#requireActive();
     if (typeof factory !== "function") throw new TypeError("Acquisition must be a function");
     const completion = Promise.resolve()
       .then(() => resolveValue(factory(this.signal)))
       .then(async ({ value: resource }) => {
-        const record = this.#adopt(resource, true);
+        const record = this.#adopt(resource as Resource, true);
         // Sealing closes ingress while consumers can still depend on already admitted acquisitions.
         if (isAborted(this.signal)) {
           const reason = abortReason(this.signal);

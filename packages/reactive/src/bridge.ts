@@ -8,7 +8,7 @@ import {
   type Disposable,
   type Readable,
 } from "./protocol.js";
-import { signal, type ReadonlySignal, type Signal } from "./signals.js";
+import { batch, signal, type ReadonlySignal, type Signal } from "./signals.js";
 import { resolveValue } from "./async-result.js";
 
 export interface BridgeOwner {
@@ -87,28 +87,39 @@ class ReadableBridge<T> implements Disposable {
   }
 
   #refresh() {
-    const before = this.#value?.get();
-    if (!before) return;
-    // A foreign getter may deliver another notification before returning an obsolete value.
-    const read = Symbol();
-    this.#reading = read;
-    try {
-      const { source } = before;
-      let next: BridgeValue<T>;
+    // Deliver subscribers outside foreign getters so a superseded read cannot swallow their errors.
+    batch(() => {
+      const before = this.#value?.get();
+      if (!before) return;
+      // A foreign getter may deliver another notification before returning an obsolete value.
+      const read = Symbol();
+      this.#reading = read;
       try {
-        next = { phase: "value", source, value: source.get() };
-      } catch (error) {
-        next = { phase: "error", source, error };
+        const { source } = before;
+        let next: BridgeValue<T>;
+        try {
+          next = { phase: "value", source, value: source.get() };
+        } catch (error) {
+          next = { phase: "error", source, error };
+        }
+        if (this.#reading !== read || this.#value?.get() !== before) return;
+        if (
+          before.phase === "value" &&
+          next.phase === "value" &&
+          Object.is(before.value, next.value)
+        )
+          return;
+        if (
+          before.phase === "error" &&
+          next.phase === "error" &&
+          Object.is(before.error, next.error)
+        )
+          return;
+        this.#value?.set(next);
+      } finally {
+        this.#reading = undefined;
       }
-      if (this.#reading !== read || this.#value?.get() !== before) return;
-      if (before.phase === "value" && next.phase === "value" && Object.is(before.value, next.value))
-        return;
-      if (before.phase === "error" && next.phase === "error" && Object.is(before.error, next.error))
-        return;
-      this.#value?.set(next);
-    } finally {
-      this.#reading = undefined;
-    }
+    });
   }
 
   #subscribe(listener: () => void): Disposable {

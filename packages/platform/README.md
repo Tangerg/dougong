@@ -74,7 +74,7 @@ expected by its helpers. Exporting a disposal key does not install global `Symbo
 | --- | --- | --- |
 | Available artifact revisions | Catalog | `catalog.get(name, revision)` and `catalog.list()` |
 | Selected target | Registration | `selectedArtifact`, `selectionRevision` |
-| Committed implementation source | Core Installation | `activeOrigin` |
+| Committed implementation source | Core Engine | `activeOrigin` |
 | Execution generation | Core Engine | `installation.status` and Host inspection |
 | Last activation failure | Registration | `error`, captured without resource references |
 
@@ -198,8 +198,10 @@ artifacts and integrity guarantees remain the corresponding Loader's responsibil
 
 `PlatformOptions.group` can place installations in a committed Group owned by `host`.
 Group remains an installation-ownership boundary. Platform checks the Host and Group before
-and after load admission. A quarantined Host or a removed Group cannot start module evaluation;
-removing the now-unavailable Registrations or disposing Platform remains possible.
+and after load admission. A quarantined Host or a removed Group cannot start module evaluation.
+A Registration without a committed Installation can still be removed as metadata. Removal or
+Platform disposal that must release committed Installations requires a Core Plan, which a
+quarantined Host rejects; Platform retains those ownership obligations.
 
 `platform.diagnostics` follows the Core snapshot protocol. Its reads synchronize against the
 current Host snapshot, so an earlier Host observer also sees the current committed source.

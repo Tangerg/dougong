@@ -46,7 +46,7 @@ const greeting = definePlugin({
 });
 const description = describePlugin(greeting);
 assert(
-  description.name === greeting.name && description.configuration.status === "none",
+  description.name === greeting.name && description.configuration.status === "schema_absent",
   "Packed declaration description differs",
 );
 assert(

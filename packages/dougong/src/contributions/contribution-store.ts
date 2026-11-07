@@ -49,13 +49,17 @@ export interface ContributionOperations {
 type ExtensionPointIdentity = Extract<Requirement, { readonly kind: "extensionPoint" }>;
 
 interface ContributionViewBinding<T> {
+  readonly phase: "active";
   readonly store: ContributionStore<T>;
   readonly own?: (resource: Disposable) => () => void;
   readonly owner?: Lifetime;
 }
 
 interface ContributionViewState<T> {
-  binding: ContributionViewBinding<T> | undefined;
+  binding:
+    | ContributionViewBinding<T>
+    | { readonly phase: "sealed"; readonly snapshot: ReadonlyArray<string> }
+    | undefined;
 }
 
 class ContributionViewHandle<T> implements ContributionView<T> {
@@ -83,6 +87,8 @@ class ContributionViewHandle<T> implements ContributionView<T> {
 
   // Revocable bindings prevent a retained view from keeping its disposed store alive.
   #read() {
+    const current = this.#state.binding;
+    if (current?.phase === "sealed") return current.snapshot;
     const binding = this.#requireBinding();
     return binding.store.snapshot();
   }
@@ -101,6 +107,8 @@ class ContributionViewHandle<T> implements ContributionView<T> {
     const binding = this.#state.binding;
     if (!binding)
       throw new DougongError(lifetimeDisposedCode, "Contribution view has been disposed");
+    if (binding.phase === "sealed")
+      throw new DougongError(lifetimeDisposedCode, "Contribution view has been sealed");
     if (binding.owner && !binding.owner.acceptsWork) {
       throw new DougongError(lifetimeDisposedCode, "Contribution view owner is closed");
     }
@@ -201,7 +209,8 @@ export class ContributionStore<T> {
   #snapshot: ReadonlyArray<string> = Object.freeze([]);
   #views = 0;
   #subscriptions = 0;
-  #hostView: ContributionView<T> | undefined;
+  #hostView:
+    { readonly view: ContributionView<T>; readonly state: ContributionViewState<T> } | undefined;
   #released = false;
 
   constructor(
@@ -243,7 +252,7 @@ export class ContributionStore<T> {
   view(own: (resource: Disposable) => () => void, owner?: Lifetime): ContributionView<T> {
     this.#views++;
     const state: ContributionViewState<T> = {
-      binding: { store: this, own, ...(owner && { owner }) },
+      binding: { phase: "active", store: this, own, ...(owner && { owner }) },
     };
     let releaseView: (() => void) | undefined;
     const lease = new ContributionViewLease(state, () => {
@@ -269,7 +278,19 @@ export class ContributionStore<T> {
 
   // Host-owned views pin the store because application code has no Lifetime from which to lease one.
   hostView(): ContributionView<T> {
-    return (this.#hostView ??= new ContributionViewHandle<T>({ binding: { store: this } }));
+    if (!this.#hostView) {
+      const state: ContributionViewState<T> = { binding: { phase: "active", store: this } };
+      this.#hostView = { state, view: new ContributionViewHandle(state) };
+    }
+    return this.#hostView.view;
+  }
+
+  sealHostView() {
+    const current = this.#hostView;
+    if (!current) return;
+    this.#hostView = undefined;
+    current.state.binding = { phase: "sealed", snapshot: this.#snapshot };
+    this.#notifyIfUnused();
   }
 
   use<Result>(
@@ -440,6 +461,7 @@ export class ContributionRegistry {
   readonly #invalidated = new Set<ContributionStore<unknown>>();
   readonly #report: (error: unknown) => void;
   #batchDepth = 0;
+  #hostViewsSealed = false;
 
   constructor(report: (error: unknown) => void) {
     this.#report = report;
@@ -463,8 +485,28 @@ export class ContributionRegistry {
   }
 
   view<T = unknown>(token: ExtensionPointIdentity, owner?: Lifetime): ContributionView<T> {
+    if (!owner && this.#hostViewsSealed) {
+      return new ContributionViewHandle<T>({
+        binding: { phase: "sealed", snapshot: Object.freeze([]) },
+      });
+    }
     const store = this.get<T>(token);
     return owner ? store.view((resource) => owner.own(resource), owner) : store.hostView();
+  }
+
+  sealHostViews() {
+    if (this.#hostViewsSealed) return;
+    this.#hostViewsSealed = true;
+    const errors: unknown[] = [];
+    for (const store of this.#stores.values()) {
+      try {
+        store.sealHostView();
+      } catch (error) {
+        errors.push(error);
+      }
+    }
+    if (errors.length === 1) throw errors[0];
+    if (errors.length > 1) throw new AggregateError(errors, "Contribution view sealing failed");
   }
 
   scope(

@@ -33,6 +33,8 @@ Artifact 和 Registration 是由 Catalog、Platform 分别签发的名义句柄�
 
 Platform 状态为 `active/disposing/disposed`。Registration 状态为 `selected/activating/removing/installed/failed/quarantined/removed`，反映选择、正在执行的操作及 Core 执行事实。调用方取消不会覆盖上次实际失败；当前选择激活成功后清除该错误。选择、激活目标及移除列表只捕获数组自己的索引数据。稀疏数组和访问器会被拒绝，不会调用 getter。
 
+`RegistrationSnapshot` 的 `status` 与 `error` 保持关联：`failed` 必有错误，`selected/installed` 没有错误，`activating/removing/quarantined` 可以保留上次失败。当前快照不包含已移除的 Registration；`execution` 复用 Core `InstallationSnapshot` 的已提交状态范围，或在没有本 Registration 拥有的已提交 Installation 时为 `undefined`。活句柄的独立 getter 不保证跨读取的类型收窄；需要关联判断时，读取并使用同一份快照。
+
 诊断快照在读取或被订阅观察时物化；没有观察者的连续选择不会反复遍历全部 Registration。未变化的快照保持同一对象身份，无关 Core 活动不会通知 Platform 观察者。订阅从当前状态建立比较基线，释放后保留最终快照并断开运行资源。
 
 `ActivationPreview.deferred` 明确包含 admission、module_validation、configuration_validation、core_binding、setup。预览不是运行验证通过的凭证。activate 捕获选择版本与 Artifact 身份，准备完成后再次核对，过期结果不能覆盖新选择。

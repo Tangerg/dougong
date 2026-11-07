@@ -115,6 +115,45 @@ describe("Plugin configuration validation", () => {
     expect(captureConfiguration(false)).toBe(false);
   });
 
+  it("captures mutable schema output before setup receives its deeply readonly view", async () => {
+    interface Output {
+      nested: { count: number };
+      values: number[];
+    }
+    const output: Output = { nested: { count: 1 }, values: [1, 2] };
+    const validate = vi.fn<StandardSchemaV1<string, Output>["~standard"]["validate"]>(() => ({
+      value: output,
+    }));
+    const schema: StandardSchemaV1<string, Output> = {
+      "~standard": { version: 1, vendor: "test", validate },
+    };
+    const received = vi.fn<(configuration: unknown) => void>();
+    const plugin = definePlugin({
+      name: "configuration.readonly-output",
+      configuration: schema,
+      setup(_context, configuration) {
+        expect(Object.isFrozen(configuration)).toBe(true);
+        expect(Object.isFrozen(configuration.nested)).toBe(true);
+        expect(Object.isFrozen(configuration.values)).toBe(true);
+        received(configuration);
+      },
+    });
+    const host = createHost();
+    const change = host.change();
+    change.install(plugin, { id: "configured", configuration: "input" });
+    const plan = await host.plan(change);
+    output.nested.count = 9;
+    output.values.push(3);
+    try {
+      await host.apply(plan);
+      await host.start();
+      expect(validate).toHaveBeenCalledExactlyOnceWith("input");
+      expect(received).toHaveBeenCalledExactlyOnceWith({ nested: { count: 1 }, values: [1, 2] });
+    } finally {
+      await host.stop();
+    }
+  });
+
   it("rejects accessors without executing them", () => {
     const getter = vi.fn<() => number>(() => 1);
     const input = Object.defineProperty({}, "port", { enumerable: true, get: getter });

@@ -25,6 +25,8 @@ A computed collector tracks nodes from its own module copy. For another bundle, 
 
 Bridge rereads after subscribing to close the attachment window. On owner shutdown it unsubscribes, invalidates local dependants and clears the retained value. Existing subscribers receive one terminal invalidation, including inside a batch, unless they unsubscribe before delivery. Terminal get and subscribe calls reject; do not retain a bridge beyond its owner's lifetime.
 
+If a foreign getter notifies again before returning, bridge retains the newest read and coalesces local notification until the outermost read ends. Subscriber failures propagate through the same batch error channel instead of being discarded as obsolete getter failures. An enclosing batch still defers delivery until that batch ends.
+
 Once attached, a failed source read invalidates the bridge: local reads throw the source error, and a later successful read recovers even if the value equals its last success.
 
 `observe(owner, source, observer)` creates a child owner for each source value. Replacement fully disposes the previous child before creating another; changes arriving during a transition coalesce to the latest value. The returned `AsyncDisposable` joins one registration release across concurrent and repeated calls, including a failed release. If the initial observer closes its owner synchronously, construction fails before the background task starts.

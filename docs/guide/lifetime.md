@@ -33,6 +33,8 @@ lifetime.spawn((signal) => connection.readUntilClosed(signal));
 
 工厂结果只在上述协议边界解析一次。接管完成后，`receipt.resource` 就是 Lifetime 捕获释放方法时的那个对象。用回执交付，避免 Promise 再次把资源当作 thenable 解析成别的值。原先直接接收资源的调用方按上例解构 `resource`。
 
+`acquire<Result>` 的类型参数表示工厂返回类型，`Awaited<Result>` 必须满足 `Resource`。通常让 TypeScript 推断即可；显式标注异步工厂时，类型参数应包含 `Promise`，例如 `acquire<Promise<Connection>>`。泛型转发也必须能证明最终结果是资源：仅声明 `Result extends Resource` 不足以排除自身可释放、却结算为数字的 `Promise<number>`。
+
 `Task<T>.result` 返回 `Promise<ResolvedValue<T>>`，其中 `T` 表示最终数据类型；`host.use` 和 `ContributionView.use` 对于回调结果类型 `Result` 返回 `Promise<ResolvedValue<Awaited<Result>>>`，嵌套的 Promise 类型会先解析再交付。`ResolvedValue<T>` 只有只读的 `value`，成功回执被冻结。调用方通过 `const { value } = await task.result` 或 `const { value } = await host.use(token, callback)` 取得结果。失败仍以原原因拒绝 Promise。回执保存已完成结果的身份，不再次解析它的 `then`，也不新增资源所有者或延长借用。任务与获取仍在登记义务之后异步启动；前台借用的回调仍同步进入。
 
 清理失败不能宣称已经干净退出。Lifetime 保留失败释放和未完成工作；Host 的 `unresolved` 投影仍被保留的运行代次。子树没有成功退出时，不能释放它仍可使用的父资源；同理，未退出消费者的传递提供者必须保留，独立分支则继续安全清理。正在使用的前台借用也不能被强制销毁。
@@ -43,13 +45,19 @@ lifetime.spawn((signal) => connection.readUntilClosed(signal));
 
 子 Lifetime 的关闭截止时间独立生效。即使根已经进入关闭流程，子截止时间到期仍立即使整个 Host 隔离；子清理赶在根截止时间之前完成，也不能让停止或更新成功。Lifetime 保留对真实子清理工作的等待，Engine 依据失败来源保持唯一的终态隔离，父资源和服务提供者不会因子等待回执超时而被提前释放。
 
+Lifetime 的 `unresolved` 按 `kind` 区分释放登记与关闭等待：`cleanup`、`interrupt`、`publication` 携带原登记的数值 `id`；`shutdown` 表示 Lifetime 自身等待超时，不带登记 `id`。读取身份前先按 `kind` 缩窄。
+
 取消以原生 AbortSignal 的状态为准。手动派发名为 `abort` 的事件不会取消子树或任务，也不会使它们错过随后真正的取消。Lifetime 通过自己拥有的任务和子树传播取消；公开信号的监听器阻止事件派发，也不能阻止这些结构化的取消。
+
+`dougong/advanced` 的 `onAbort(signal, callback)` 只接受同步回调。若回调返回受支持的 Promise 或 thenable，它会先观察该异步结果，再以 TypeError 拒绝协议误用。信号已经取消时，回调错误直接从 `onAbort` 抛出；随后才取消时，错误沿原生 AbortSignal 的事件错误通道报告。需要等待的中断或清理应交给 `lifetime.interrupt` 或 `lifetime.defer` 登记。
 
 成功退出后，每个 Lifetime 都暴露自己已经中止的信号。保留子树句柄不会再保留原控制器及其监听器；其他已退出子树也不能通知这个信号的监听器。
 
 每次独立退出创建独立的取消原因，同一次树形取消向后代传播同一原因。操作应保存开始时取得的 signal，并用它判断该操作的取消；`spawn` 和 `acquire` 已把对应信号传给回调。成功退出后的句柄暴露脱离原资源图的已取消信号，不再用于重建此前操作的原因身份。
 
 Task 自己拥有后台异常报告。前台 `host.use` 和贡献 `use` 的失败传播给调用者；不要把同一个错误再次作为后台失败抛出。任务完成和借用释放都以交给调用者的同一个 Promise 为准。Lifetime 快照中的任务数、中断数、借用数和未完成义务是资源事实的只读投影。事件监听器、快照订阅者和错误回调的 JavaScript `this` 不携带内部所有者；请使用插件显式获得的能力。Lifetime 在公开任务或获取结果前就登记自己的等待，给返回的 Promise 装饰方法不会提前解除所有权。
+
+`host.diagnostics.get().installations` 只投影已提交的 Installation。`running` 行同时包含同一 Instance 的 `generation` 与 `lifetime`；`stopped`、`quarantined` 行的两者均为 `undefined`；`changing` 行可以保留两者，也可以两者都不存在。`pending` 与 `removed` 属于 Installation 句柄状态，不会出现在这份已提交集合中。
 
 `isCancellationReason(signal, error)` 只在原生信号已经取消且错误携带同一个取消原因时成立：错误本身就是 `signal.reason`，或者错误是名为 `AbortError` 的 Error，且自有数据属性 `cause` 就是这个原因。后一种形式覆盖 Node 异步计时器等保留取消原因的接口。仅有 `AbortError` 名称不足以证明因果；独立错误不会因为稍后发生取消而被省略。自定义适配器应保留真正的取消原因，不能用错误名称推断来源，也无需包裹独立失败来避免误判。
 

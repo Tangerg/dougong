@@ -26,6 +26,8 @@
 
 `createHost` 按初始列表中的每个 Plugin 推断其配置输入；异构列表也保留各自的配对。`InitialInstallation<typeof plugin>` 和 `InstallationOptions<typeof plugin>` 从同一 Plugin 类型派生配置要求。输入允许 `undefined` 时可以省略配置，包括 `void`、可选输入与 schema 默认值；否则必须提供配置。schema 转换后的输出只供 setup 使用，安装声明仍须提供转换前的输入。配置不能反向扩宽 Plugin 类型来通过检查。
 
+`setup` 接收配置输出的深只读视图：记录字段、嵌套对象、数组与元组都不能修改。调用方仍可提供普通可变输入；Core 捕获输入和验证后的输出，Plugin 不获得这些数据的写权限。schema 的输入与原始输出类型保持各自含义，无 schema 的显式配置类型也遵守同一只读规则。类型保留普通 interface、联合与可选字段；有限数值、稠密数组和普通数据对象等要求仍由运行时捕获边界校验。
+
 `ChangeSet.install` 保留同样的 Plugin 与输入关联。`InstallationArguments<First | Second>` 分发完整的 `[plugin, options]` 元组，`InitialInstallation` 从这条规则投影初始声明。联合 Plugin 与独立选择的配置会被拒绝，`void` 分支也不能掩盖另一个分支必填的输入。在多个 Plugin 中选择时，应保留完整配对：
 
 ```ts
@@ -117,7 +119,9 @@ Node 与浏览器使用同一份公开 API 组合：源信号的原生监听器�
 
 ## 声明描述与可执行计划
 
-`describePlugin(plugin, { jsonSchemaTarget })` 从 Plugin 的同一声明投影 `PluginDescriptor`，供文档、UI 与代理读取。描述不执行 setup 或 validate，不推测擦除后的 TypeScript 接口。`PluginConfigurationDescriptor.status` 区分 `none`（无配置）、`unavailable`（有验证器但无 JSON Schema 出口）、`available`（提供标准 JSON Schema 出口）；默认 target 为 `draft-2020-12`。使用 Standard Schema 1.1 的 Standard JSON Schema 协议导出输入与输出描述，无法导出的 schema 如实标记 unavailable。
+`describePlugin(plugin, { jsonSchemaTarget })` 从 Plugin 的同一声明投影 `PluginDescriptor`，供文档、UI 与代理读取。描述不执行 setup 或 validate，不推测擦除后的 TypeScript 接口。`PluginConfigurationDescriptor.status` 区分 `schema_absent`（未声明运行时配置 schema）、`unavailable`（有验证器但无 JSON Schema 出口）、`available`（提供标准 JSON Schema 出口）；默认 target 为 `draft-2020-12`。`schema_absent` 不能说明是否需要配置，其结构与必填性未知；例如 `definePlugin<{ port: number }>(...)` 可以没有 schema，但安装仍必须提供配置。需要机器可发现的输入与输出描述时，由同一配置声明通过 Standard Schema 1.1 的 Standard JSON Schema 协议导出，不另加一份必填性标记。
+
+`PluginDescriptor.requires` 保留依赖种类与可选性的关联：Service 的 `optional` 可以为 true 或 false，ExtensionPoint 的 `optional` 始终为 false。按 `kind` 分支读取时，公开类型保留这条保证。
 
 `PlanReport.bindings.before/after` 展示绑定前后差异，`prepareOrder`、`stopOrder`、`publishOrder` 分别说明准备、停止与发布顺序。安装类 `PlanOperation` 携带 before/after `DeclarationSnapshot`，其中只含 pluginName 与公开 origin，不含配置载荷；分组操作只描述 id 与 parentId。`ImpactReason.previousProvider` 与 provider 保留提供者变化原因，包括可选依赖的提供者移除。
 

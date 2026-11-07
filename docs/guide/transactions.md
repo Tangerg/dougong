@@ -56,7 +56,8 @@ Core 只签发可执行的 Plan：声明不成立时，`host.plan()` 直接拒�
 
 | 隔离后操作 | 行为与用途 |
 | --- | --- |
-| `host.diagnostics.get()`、`subscribe()` | 读取和观察错误、保留实例及其资源义务 |
+| `host.diagnostics.get()` | 读取错误、保留实例及其资源义务；退出完成后仍可读取最终快照 |
+| `host.diagnostics.subscribe()` | 观察真实迟到进度；全部义务和转换完成、最终通知交付后自动结束，之后的新订阅被拒绝 |
 | `installation(id)`、`group(id)`、`explain(id)` | 检查保留的声明身份与绑定；这些数据不代表可执行权限 |
 | `change()`、`plan()`、`apply()`、`start()`、`stop()` | 拒绝并报告 [`HOST_QUARANTINED`](../reference/errors.md)，不会开启一条重试退出或恢复路径 |
 | `host[Symbol.asyncDispose]()` | 复用 stop，也会拒绝；标准释放语法不会消除已有故障 |
@@ -66,6 +67,8 @@ Core 只签发可执行的 Plan：声明不成立时，`host.plan()` 直接拒�
 `snapshot.unresolved` 按 installation 和 generation 列出仍被保留的 Instance；Lifetime 快照进一步显示任务、获取、借用、子树及失败义务。一个提供者可能因消费者仍未退出而被保留，即使它自身没有清理错误。恢复 setup 失败也可能使 Host 隔离，而资源已经全部释放，因此 **空的 unresolved 不是健康判据**，必须读取 `snapshot.status`。
 
 超时后，已启动的退出工作仍可能继续，并使诊断更新；它不会启动新的清理重试，也不使 Host 自动离开隔离。诊断进度不推进 `stateRevision`。
+
+Engine 在终态执行和真实退出都结束后统一封存观察。诊断与 Host 贡献视图保留最终只读快照，并断开执行图和回调；它们不负责重试清理或决定执行状态。存在未完成义务时不会提前封存，普通 stop/start 仍保留可用视图。
 
 应用应在管理该 Host 的边界执行以下步骤：
 

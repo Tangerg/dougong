@@ -65,11 +65,17 @@ describe("Lifetime diagnostic projections", () => {
     expect(after.phase).toBe("quarantined");
     expect(after.children[0]?.children[0]).toMatchObject({
       phase: "quarantined",
-      unresolved: [{ kind: "cleanup", error: { message: "connection not released" } }],
+      unresolved: [
+        {
+          kind: "cleanup",
+          id: expect.any(Number),
+          error: { message: "connection not released" },
+        },
+      ],
     });
   });
 
-  it("publishes Host diagnostics from the authoritative runtime without invalidating saved values", async () => {
+  it("publishes Host diagnostics from the authoritative Engine without invalidating saved values", async () => {
     const failure = new Error("observer failed");
     const report = vi.fn<(error: unknown) => void>();
     const host = createHost({
@@ -92,9 +98,19 @@ describe("Lifetime diagnostic projections", () => {
       if (host.status === "stopped") throw failure;
     });
     await host.stop();
-    expect(host.diagnostics.get().status).toBe("stopped");
+    const stopped = host.diagnostics.get();
+    expect(stopped.status).toBe("stopped");
+    expect(stopped.installations[0]).toMatchObject({
+      status: "stopped",
+      generation: undefined,
+      lifetime: undefined,
+    });
     expect(active.status).toBe("running");
-    expect(active.installations[0]?.lifetime?.phase).toBe("active");
+    expect(active.installations[0]).toMatchObject({
+      status: "running",
+      generation: expect.any(Number),
+      lifetime: { phase: "active" },
+    });
     expect(report).toHaveBeenCalledWith(failure);
     subscription[Symbol.dispose]();
   });

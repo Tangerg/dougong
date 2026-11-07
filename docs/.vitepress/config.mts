@@ -60,7 +60,7 @@ function chineseSidebar(): DefaultTheme.SidebarItem[] {
         { text: "可执行示例", link: "/examples" },
         { text: "第一段 · 原子", link: "/examples#stage-1" },
         { text: "第二段 · 组合", link: "/examples#stage-2" },
-        { text: "第三段 · 真实宿主", link: "/examples#stage-3" },
+        { text: "第三段 · 完整应用", link: "/examples#stage-3" },
       ],
     },
   ];
@@ -104,7 +104,7 @@ function englishSidebar(): DefaultTheme.SidebarItem[] {
         { text: "Runnable examples", link: "/en/examples" },
         { text: "Stage 1 · Atoms", link: "/en/examples#stage-1" },
         { text: "Stage 2 · Composition", link: "/en/examples#stage-2" },
-        { text: "Stage 3 · Real hosts", link: "/en/examples#stage-3" },
+        { text: "Stage 3 · Applications", link: "/en/examples#stage-3" },
       ],
     },
   ];
