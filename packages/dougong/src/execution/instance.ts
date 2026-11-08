@@ -24,6 +24,7 @@ export interface InstanceEnvironment {
 
 export class Instance {
   readonly lifetime: Lifetime;
+  readonly settled: Promise<void>;
   readonly #services = new Map<string, unknown>();
 
   constructor(
@@ -42,6 +43,8 @@ export class Instance {
         ? {}
         : { shutdownTimeoutMilliseconds: environment.shutdownTimeoutMilliseconds }),
     });
+    this.settled = Object.freeze(this.lifetime.settled.then(() => this.#services.clear()));
+    void this.settled.catch(() => undefined);
   }
 
   async prepare(dependencies: Readonly<Record<string, unknown>>, configuration: unknown) {
@@ -108,13 +111,5 @@ export class Instance {
   publish() {
     this.lifetime.detachStartupSignal();
     this.lifetime.publish();
-  }
-
-  async dispose() {
-    try {
-      await this.lifetime.dispose();
-    } finally {
-      if (this.lifetime.phase === "disposed") this.#services.clear();
-    }
   }
 }

@@ -1,3 +1,4 @@
+import { setImmediate } from "node:timers/promises";
 import { expect, it, vi } from "vitest";
 import {
   createHost,
@@ -424,7 +425,7 @@ it("uses restored declarations when restoration cleanup retains a dependency", a
   ]);
 });
 
-it("retains a busy unrelated borrower and its providers without deadlocking quarantine", async () => {
+it("drains a borrower after its callback receives quarantine without releasing its providers early", async () => {
   const provider = service<number>("release/busy-provider");
   const consumer = service<number>("release/busy-consumer");
   const releaseProvider = vi.fn<() => void>();
@@ -483,17 +484,23 @@ it("retains a busy unrelated borrower and its providers without deadlocking quar
   const plan = await host.plan(change);
   const { value: error } = await host.use(consumer, async (value) => {
     expect(value).toBe(1);
-    return host.apply(plan).catch((error: unknown) => error);
+    const failure = await host.apply(plan).catch((error: unknown) => error);
+    expect(releaseIndependent).toHaveBeenCalledOnce();
+    expect(releaseProvider).not.toHaveBeenCalled();
+    expect(releaseConsumer).not.toHaveBeenCalled();
+    expect(new Set(host.diagnostics.get().unresolved.map((entry) => entry.installation))).toEqual(
+      new Set(["provider", "consumer", "failure"]),
+    );
+    return failure;
   });
   expect(error).toMatchObject({ details: { outcome: "quarantined", phase: "stop" } });
-  expect(releaseIndependent).toHaveBeenCalledOnce();
-  expect(releaseProvider).not.toHaveBeenCalled();
-  expect(releaseConsumer).not.toHaveBeenCalled();
-  expect(new Set(host.diagnostics.get().unresolved.map((entry) => entry.installation))).toEqual(
-    new Set(["provider", "consumer", "failure"]),
-  );
+  await setImmediate();
+  expect(releaseConsumer).toHaveBeenCalledOnce();
+  expect(releaseProvider).toHaveBeenCalledOnce();
+  expect(host.diagnostics.get().unresolved.map((entry) => entry.installation)).toEqual(["failure"]);
   await expect(host.stop()).rejects.toMatchObject({ code: "HOST_QUARANTINED" });
-  expect(releaseConsumer).not.toHaveBeenCalled();
+  expect(releaseConsumer).toHaveBeenCalledOnce();
+  expect(releaseProvider).toHaveBeenCalledOnce();
 });
 
 it("retains a timed out consumer while releasing independent work", async () => {
@@ -629,7 +636,7 @@ it("joins an already running shutdown without retrying it or quarantining succes
   const settled = vi.fn<() => void>();
   const stopping = host.stop().then(settled, settled);
   try {
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await setImmediate();
     expect(settled).not.toHaveBeenCalled();
     expect(host.status).toBe("stopping");
   } finally {

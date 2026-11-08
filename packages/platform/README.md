@@ -112,6 +112,11 @@ externally changed Manifest with the same revision still needs an update. A matc
 make it adopt another installation. Platforms that collide on an installation ID receive
 Core's normal conflict error; removing either Registration cannot remove the other's identity.
 
+Artifact configuration supplies installation or update input. A configuration-only change through
+Core leaves the origin intact, so reactivating the same Artifact reuses the Installation without
+resetting its current configuration. Add and select a new Artifact revision to deliver a new
+configuration; Platform does not own a second runtime configuration to reconcile against Core.
+
 ## Atomic deployment changes
 
 ```ts

@@ -274,17 +274,17 @@ export class Lifetime {
   readonly #publications = new Set<PublicationRecord>();
   readonly #tasks = new Set<TaskRecord<unknown>>();
   readonly #acquisitions = new Set<Promise<void>>();
+  readonly #foreground = new Set<Promise<void>>();
+  readonly #settlement = Promise.withResolvers<void>();
   readonly #shutdownTimeoutMilliseconds: number | undefined;
   #report: ((error: unknown) => void) | undefined;
   #releaseFailed: ((failure: ReleaseFailure) => void) | undefined;
   #changed: (() => void) | undefined;
   #phase: LifetimePhase = "active";
-  #foreground = 0;
   #sequence = 0;
   #detachParentAbort: (() => void) | undefined;
   #detachFromParent: ((child: Lifetime) => void) | undefined;
   #completion: Promise<void> | undefined;
-  #shutdownWork: Promise<void> | undefined;
   #timeoutFailure: RecordedFailure | undefined;
   #handle: LifetimeContext | undefined;
 
@@ -299,6 +299,9 @@ export class Lifetime {
     this.#shutdownTimeoutMilliseconds = shutdownTimeout(options.shutdownTimeoutMilliseconds);
     this.#visibility = ownership?.visibility ?? new Visibility();
     this.#detachFromParent = ownership?.detach;
+    Object.freeze(this.#settlement.promise);
+    // A deadline may end the caller's wait before the real shutdown rejects.
+    void this.#settlement.promise.catch(() => undefined);
     if (options.parentSignal) {
       this.#detachParentAbort = onAbort(options.parentSignal, (reason) => {
         this.block();
@@ -363,6 +366,9 @@ export class Lifetime {
   get phase() {
     return this.#phase;
   }
+  get settled() {
+    return this.#settlement.promise;
+  }
   get acceptsWork() {
     return this.#phase === "active" && !isAborted(this.signal);
   }
@@ -370,7 +376,7 @@ export class Lifetime {
     return this.#visibility.published;
   }
   get busy(): boolean {
-    for (const scope of this.#tree()) if (scope.#foreground > 0) return true;
+    for (const scope of this.#tree()) if (scope.#foreground.size > 0) return true;
     return false;
   }
 
@@ -408,7 +414,7 @@ export class Lifetime {
       tasks: this.#tasks.size,
       acquisitions: this.#acquisitions.size,
       publications: this.#publications.size,
-      foreground: this.#foreground,
+      foreground: this.#foreground.size,
       unresolved: Object.freeze(unresolved),
       children: Object.freeze(children),
     });
@@ -474,7 +480,7 @@ export class Lifetime {
     );
     this.#children.add(child);
     this.#changed?.();
-    const handle = child.#context({ [asyncDisposeSymbol]: child.dispose.bind(child) });
+    const handle = child.#context({ [asyncDisposeSymbol]: () => child.dispose() });
     child.#handle = handle;
     return handle;
   }
@@ -549,13 +555,15 @@ export class Lifetime {
   borrow<T>(callback: () => Awaitable<T>): Promise<ResolvedValue<Awaited<T>>> {
     this.#requireActive();
     if (typeof callback !== "function") throw new TypeError("Borrow callback must be a function");
-    this.#foreground++;
-    this.#changed?.();
+    const obligation = Promise.withResolvers<void>();
+    this.#foreground.add(obligation.promise);
     const release = () => {
-      this.#foreground--;
+      this.#foreground.delete(obligation.promise);
+      obligation.resolve();
       this.#changed?.();
     };
     try {
+      this.#changed?.();
       const result = resolveValue(callback());
       // The receipt carries data; this reaction alone releases the foreground obligation.
       void result.then(release, release);
@@ -599,11 +607,12 @@ export class Lifetime {
     this.#detachParentAbort = undefined;
   }
 
-  dispose(): Promise<void> {
+  dispose(options?: { readonly cancelForeground?: boolean }): Promise<void> {
     if (this.#completion) return this.#completion;
     if (this.#phase === "disposed") return Promise.resolve();
     try {
-      this.seal();
+      if (options?.cancelForeground) this.block();
+      else this.seal();
     } catch (error) {
       return Promise.reject(error);
     }
@@ -629,10 +638,11 @@ export class Lifetime {
   #beginShutdown(errors: unknown[]) {
     this.#phase = "disposing";
     this.detachStartupSignal();
-    const work = Promise.resolve().then(() => this.#finishShutdown(errors));
-    this.#shutdownWork = work;
+    void Promise.resolve()
+      .then(() => this.#finishShutdown(errors))
+      .then(this.#settlement.resolve, this.#settlement.reject);
     if (this.#shutdownTimeoutMilliseconds === undefined) {
-      this.#completion = Object.freeze(work);
+      this.#completion = this.settled;
       return;
     }
     const completion = Promise.withResolvers<void>();
@@ -650,7 +660,7 @@ export class Lifetime {
       this.#changed?.();
       completion.reject(failure);
     }, this.#shutdownTimeoutMilliseconds);
-    void work.then(
+    void this.settled.then(
       () => {
         clearTimeout(timeout);
         completion.resolve();
@@ -667,7 +677,7 @@ export class Lifetime {
       if (record.failure) errors.push(record.failure.reason);
     }
     // A child's deadline ends its caller's wait, not its use of parent-owned resources.
-    const children = Promise.allSettled([...this.#children].map((child) => child.#shutdownWork!));
+    const children = Promise.allSettled([...this.#children].map((child) => child.settled));
     // An interruption may await work unblocked by another one in the same scope.
     const interruptions = [...this.#interrupts].reverse().map((record) => record.dispose());
     for (const result of await Promise.allSettled(interruptions)) {
@@ -676,6 +686,7 @@ export class Lifetime {
     const tasks = [...this.#tasks].map((task) => task.settled);
     await Promise.all(tasks);
     await Promise.allSettled([...this.#acquisitions]);
+    await Promise.all(this.#foreground);
     const childResults = await children;
     for (const result of childResults) if (result.status === "rejected") errors.push(result.reason);
     if (childResults.every((result) => result.status === "fulfilled")) {

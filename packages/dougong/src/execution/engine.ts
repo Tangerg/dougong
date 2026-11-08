@@ -5,7 +5,6 @@ import {
   isCancellationReason,
   quarantinedHost,
   RecordedFailure,
-  type ErrorSnapshot,
   groupConflictCode,
   groupForeignCode,
   groupMissingCode,
@@ -63,7 +62,7 @@ interface CommittedState extends CompositionState {
   readonly phase: "stopped" | "running" | "quarantined";
   readonly instances: ReadonlyMap<InstallationRecord, Instance>;
   readonly unresolved: ReadonlyArray<Instance>;
-  readonly error: ErrorSnapshot | undefined;
+  readonly error: RecordedFailure | undefined;
 }
 
 interface Transition {
@@ -77,7 +76,14 @@ interface ExecutionScope {
   readonly instances: ReadonlyMap<InstallationRecord, Instance>;
 }
 
+interface Retirement {
+  readonly receipt: Promise<void>;
+  readonly settled: Promise<void>;
+}
+
 type FailurePhase = "stop" | "prepare" | "restore" | "publish" | "release";
+
+const quarantineFailureMessage = "Execution could not establish a healthy state";
 
 const hostOptionFields = recordFields<HostOptions>()(
   "name",
@@ -136,6 +142,7 @@ export class Engine {
   readonly #installations = new WeakMap<object, InstallationRecord>();
   readonly #groups = new WeakMap<object, GroupNode>();
   readonly #publisher: SnapshotPublisher<HostSnapshot>;
+  readonly #retirements = new WeakMap<Instance, Retirement>();
   #state: CommittedState;
   #transition: Transition | undefined;
   #quarantineWork: Promise<DougongError> | undefined;
@@ -464,7 +471,7 @@ export class Engine {
         if (previous.phase === "stopped") {
           this.#advance({
             ...previous,
-            error: new RecordedFailure(failure).snapshot,
+            error: new RecordedFailure(failure),
           });
           throw this.#transitionError(
             "Startup failed",
@@ -600,7 +607,7 @@ export class Engine {
       this.#advance({
         ...previous,
         instances,
-        error: new RecordedFailure(error).snapshot,
+        error: new RecordedFailure(error),
       });
       for (const [record, instance] of instances) {
         if (failed.affected.has(record)) instance.publish();
@@ -681,10 +688,7 @@ export class Engine {
       !this.#transition?.scopes.some((scope) => scope.instances.get(record) === instance)
     )
       return;
-    void this.#quarantine(this.#state, [failure.error], undefined, "release").then(
-      (failure) => this.#report(failure),
-      (failure) => this.#report(failure),
-    );
+    this.#reportReleaseFailure(instance, failure.error);
   }
 
   #quarantine(
@@ -713,17 +717,20 @@ export class Engine {
     const affectedInstallations = prepared?.report.affectedInstallations ?? [
       ...new Set(remaining.map((instance) => instance.installation.id)),
     ];
-    const failureMessage = "Execution could not establish a healthy state";
     const work = Promise.resolve().then(async () => {
       const cleanupErrors = await this.#dispose(execution, new Set(remaining));
-      const cause = new AggregateError([...errors, ...cleanupErrors], failureMessage);
+      const cause = new AggregateError([...errors, ...cleanupErrors], quarantineFailureMessage);
       // Cleanup completion refines diagnostics; it cannot grant another committed revision.
       this.#state = Object.freeze({
         ...this.#state,
         unresolved: Object.freeze(
           remaining.filter((instance) => instance.lifetime.phase !== "disposed"),
         ),
-        error: new RecordedFailure(cause).snapshot,
+        error: cleanupErrors.length
+          ? new RecordedFailure(
+              new AggregateError([this.#state.error, ...cleanupErrors], quarantineFailureMessage),
+            )
+          : this.#state.error,
       });
       this.#notify();
       return this.#transitionError(
@@ -753,7 +760,7 @@ export class Engine {
     // Reading an external Error can execute accessors; availability is already terminal.
     this.#state = Object.freeze({
       ...this.#state,
-      error: new RecordedFailure(new AggregateError(errors, failureMessage)).snapshot,
+      error: new RecordedFailure(new AggregateError(errors, quarantineFailureMessage)),
     });
     this.#notify();
     return work;
@@ -774,28 +781,98 @@ export class Engine {
       }
     }
 
-    const pending = new Map<Instance, Promise<void>>();
+    const pending: Promise<void>[] = [];
     for (const instance of [...targets].reverse()) {
-      // Register every branch before looking up joins, including bindings across generations.
-      pending.set(
-        instance,
-        Promise.resolve().then(async () => {
-          const consumers = [...(dependents.get(instance) ?? [])];
-          await Promise.allSettled(consumers.map((consumer) => pending.get(consumer)));
-          if (
-            consumers.some((consumer) => consumer.lifetime.phase !== "disposed") ||
-            instance.lifetime.busy ||
-            instance.lifetime.phase === "disposed" ||
-            instance.lifetime.phase === "quarantined"
-          )
-            return;
-          await instance.dispose();
-        }),
-      );
+      const current = this.#retirements.get(instance);
+      if (current) {
+        // The first disposal call owns its failure receipt; quarantine joins without duplicating it.
+        pending.push(current.receipt.catch(() => undefined));
+        continue;
+      }
+      if (instance.lifetime.phase === "disposed") continue;
+      const retirement = this.#retire(instance, [...(dependents.get(instance) ?? [])]);
+      this.#retirements.set(instance, retirement);
+      pending.push(retirement.receipt);
     }
-    const outcomes = await Promise.allSettled(pending.values());
+    const outcomes = await Promise.allSettled(pending);
     return outcomes.flatMap((result) =>
       result.status === "rejected" ? [result.reason as unknown] : [],
+    );
+  }
+
+  #retire(instance: Instance, consumers: ReadonlyArray<Instance>): Retirement {
+    const completion = Promise.withResolvers<void>();
+    let deferred = false;
+    const deferReceipt = () => {
+      deferred = true;
+      completion.resolve();
+    };
+    // Register every branch before looking up joins, including bindings across generations.
+    const settled = Promise.resolve().then(async () => {
+      const dependents = consumers.map((consumer) => this.#retirements.get(consumer));
+      void Promise.allSettled(dependents.map((dependent) => dependent?.receipt)).then(() => {
+        // A failed receipt cannot hold the quarantine report open until actual work settles.
+        if (consumers.some((consumer) => consumer.lifetime.phase !== "disposed")) deferReceipt();
+      });
+      await Promise.allSettled(
+        consumers.map((consumer, index) => dependents[index]?.settled ?? consumer.settled),
+      );
+      if (consumers.some((consumer) => consumer.lifetime.phase !== "disposed")) return;
+
+      const busy = instance.lifetime.busy;
+      const release = instance.lifetime.dispose({ cancelForeground: true });
+      if (busy) deferReceipt();
+      const releaseOutcome = release.then(
+        () => {
+          completion.resolve();
+          return { status: "fulfilled" } as const;
+        },
+        (error: unknown) => {
+          if (deferred) this.#reportReleaseFailure(instance, error);
+          else completion.reject(error);
+          return { status: "rejected", reason: error } as const;
+        },
+      );
+      try {
+        await instance.settled;
+      } catch (error) {
+        const outcome = await releaseOutcome;
+        if (outcome.status === "fulfilled" || outcome.reason !== error)
+          this.#reportReleaseFailure(instance, error);
+        throw error;
+      }
+      await releaseOutcome;
+    });
+    void settled.then(completion.resolve, completion.reject);
+    return Object.freeze({
+      receipt: Object.freeze(completion.promise),
+      settled: Object.freeze(settled),
+    });
+  }
+
+  #reportReleaseFailure(instance: Instance, error: unknown) {
+    if (!this.#isQuarantined()) {
+      void this.#quarantine(this.#state, [error], undefined, "release").then(
+        (failure) => this.#report(failure),
+        (failure) => this.#report(failure),
+      );
+      return;
+    }
+    this.#state = Object.freeze({
+      ...this.#state,
+      error: new RecordedFailure(
+        new AggregateError([this.#state.error, error], quarantineFailureMessage),
+      ),
+    });
+    this.#notify();
+    this.#report(
+      this.#transitionError(
+        "Instance release failed after Host quarantine",
+        error,
+        "quarantined",
+        [instance.installation.id],
+        "release",
+      ),
     );
   }
 
@@ -958,7 +1035,7 @@ export class Engine {
           }),
         ),
       ),
-      error: this.#state.error,
+      error: this.#state.error?.snapshot,
     });
   }
 

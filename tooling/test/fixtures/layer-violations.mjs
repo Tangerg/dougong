@@ -41,12 +41,41 @@ const files = {
     'export function unrelated(declare: (id: string) => string) { return declare("probe/shadow"); }',
     'export const actual = declare("probe/shadow");',
   ],
+  "packages/dougong/src/composition/first-contract.ts": [
+    'import { service } from "../contracts/contracts.js";',
+    'export const first = service("probe/across-files");',
+  ],
+  "packages/dougong/src/composition/second-contract.ts": [
+    'import { event } from "../contracts/contracts.js";',
+    'export const second = event("probe/across-files");',
+  ],
+  "packages/dougong/src/composition/policy-probe.ts": [
+    'import "../contracts/contracts";',
+    "export type UnknownInput = any;",
+    "interface PolicyPort { notify(): void; readonly receive: () => void }",
+    'console.info("unscoped");',
+    "Date.now();",
+    "performance.now();",
+    "Math.random();",
+  ],
   "packages/platform/src/activation/access-probe.ts": [
     'export type Hidden = import("../../../dougong/src/execution/engine.js").Engine;',
     'export { Engine } from "../../../dougong/src/execution/engine.js";',
     'export const load = () => import("fs");',
   ],
   "packages/dougong/test/helper.ts": ["export type Helper = string;"],
+  "packages/dougong/test/type-placement-probe.ts": [
+    'import { expectTypeOf } from "vitest";',
+    "expectTypeOf(1).toBeNumber();",
+  ],
+  "packages/dougong/test/public-api.types.ts": [
+    'import { expectTypeOf } from "vitest";',
+    "expectTypeOf(1).toBeNumber();",
+  ],
+  "examples/src/ambient-policy.ts": [
+    'export { readFile } from "node:fs";',
+    "console.info(Date.now(), performance.now(), Math.random());",
+  ],
   "packages/dougong/src/composition/owner-probe.ts": [
     'import { Lifetime as Scope } from "../lifetime/lifetime.js";',
     "const Alias = Scope;",

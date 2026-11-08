@@ -46,6 +46,27 @@ function requireExecutable(name) {
   throw new Error(`Release fixture requires ${name}`);
 }
 
+function preparePackLauncher(directory) {
+  const launcher = requireExecutable("pnpm");
+  const header = readFileSync(launcher, "utf8").split(/\r?\n/, 1)[0];
+  const invocation = /^#![ \t]*(\/\S+)(?:[ \t]+(\S+))?[ \t]*$/.exec(header);
+  const executable = invocation && basename(invocation[1]);
+  const interpreter =
+    executable === "env" ? invocation[2] : invocation?.[2] === undefined ? executable : undefined;
+  const runtimes = ["node", "sh", "bash"];
+  if (!runtimes.includes(interpreter))
+    throw new Error(
+      `Release pack fixture supports Node, POSIX sh and Bash launchers without interpreter options: ${launcher}`,
+    );
+  // Shell shims may delegate to another supported launcher; the fixed runtime keeps real npm off PATH.
+  for (const name of [...runtimes, "dirname", "readlink", "sed", "uname"])
+    symlinkSync(
+      name === "node" ? process.execPath : requireExecutable(name),
+      join(directory, name),
+    );
+  return launcher;
+}
+
 async function runRelease(
   mutate,
   {
@@ -85,13 +106,7 @@ async function runRelease(
     for (const name of ["tar", "gzip"]) {
       symlinkSync(requireExecutable(name), join(executableDirectory, name));
     }
-    if (realPack) {
-      // Package-manager launchers need their own runtime without gaining the caller's whole PATH.
-      symlinkSync(process.execPath, join(executableDirectory, "node"));
-      for (const name of ["dirname", "readlink", "sed", "uname"]) {
-        symlinkSync(requireExecutable(name), join(executableDirectory, name));
-      }
-    }
+    const pnpm = realPack ? preparePackLauncher(executableDirectory) : undefined;
 
     writeFileSync(
       join(workspace, "package.json"),
@@ -210,7 +225,6 @@ async function runRelease(
         ].join("\n"),
       );
     }
-    const pnpm = realPack ? requireExecutable("pnpm") : undefined;
     const execute = async (stage, interruption, publicationFailure, expectedSignal) => {
       try {
         return await executeRelease(
@@ -718,29 +732,53 @@ it.each(["complete", "excluded dist", "directory README.md"])(
   },
 );
 
-it("packs through a shell executable without restoring the caller's command path", async () => {
-  const pnpm = requireExecutable("pnpm");
-  const directory = mkdtempSync(join(tmpdir(), "dougong pnpm launcher-"));
-  try {
-    writeFileSync(
-      join(directory, "pnpm"),
-      `#!/bin/sh
-if command -v npm >/dev/null 2>&1; then
+it.each(["#!/usr/bin/env node", "#!/bin/sh", "#!/usr/bin/env sh", "#!/usr/bin/env bash"])(
+  "packs through %s without restoring the caller's command path",
+  async (shebang) => {
+    const pnpm = requireExecutable("pnpm");
+    const directory = mkdtempSync(join(tmpdir(), "dougong pnpm launcher-"));
+    try {
+      const body = shebang.endsWith("node")
+        ? `const { spawnSync } = require("node:child_process");
+if (spawnSync("npm", ["--version"]).error?.code !== "ENOENT") {
+  throw new Error("The real npm command escaped fixture isolation");
+}
+const result = spawnSync(${JSON.stringify(pnpm)}, process.argv.slice(2), { stdio: "inherit" });
+if (result.error) throw result.error;
+process.exit(result.status ?? 1);
+`
+        : `if command -v npm >/dev/null 2>&1; then
   echo "The real npm command escaped fixture isolation" >&2
   exit 1
 fi
 exec '${pnpm.replaceAll("'", "'\"'\"'")}' "$@"
-`,
-      { mode: constants.S_IRUSR | constants.S_IWUSR | constants.S_IXUSR },
+`;
+      writeFileSync(join(directory, "pnpm"), `${shebang}\n${body}`, {
+        mode: constants.S_IRUSR | constants.S_IWUSR | constants.S_IXUSR,
+      });
+      const shadow = join(directory, "shadow");
+      mkdirSync(shadow);
+      writeFileSync(join(shadow, "pnpm"), "not executable", { mode: 0o644 });
+      mkdirSync(join(shadow, "tar"));
+      vi.stubEnv("PATH", [shadow, directory, process.env.PATH].join(delimiter));
+      const result = await runRelease(() => undefined, { realPack: true });
+      expect({ status: result.status, stderr: result.stderr }).toEqual({ status: 0, stderr: "" });
+      expect(result.stdout).toContain("Dry run complete");
+    } finally {
+      vi.unstubAllEnvs();
+      rmSync(directory, { recursive: true, force: true });
+    }
+  },
+);
+
+it("rejects an unsupported pack launcher before starting the release fixture", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "dougong-unsupported-launcher-"));
+  try {
+    writeFileSync(join(directory, "pnpm"), "#!/usr/bin/env python3\n", { mode: 0o700 });
+    vi.stubEnv("PATH", [directory, process.env.PATH].join(delimiter));
+    await expect(runRelease(() => undefined, { realPack: true })).rejects.toThrow(
+      "Release pack fixture supports Node, POSIX sh and Bash launchers without interpreter options",
     );
-    const shadow = join(directory, "shadow");
-    mkdirSync(shadow);
-    writeFileSync(join(shadow, "pnpm"), "not executable", { mode: 0o644 });
-    mkdirSync(join(shadow, "tar"));
-    vi.stubEnv("PATH", [shadow, directory, process.env.PATH].join(delimiter));
-    const result = await runRelease(() => undefined, { realPack: true });
-    expect({ status: result.status, stderr: result.stderr }).toEqual({ status: 0, stderr: "" });
-    expect(result.stdout).toContain("Dry run complete");
   } finally {
     vi.unstubAllEnvs();
     rmSync(directory, { recursive: true, force: true });

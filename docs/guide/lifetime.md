@@ -25,6 +25,8 @@ Lifetime 以组合构成资源树。根由 Instance 创建，插件通过 `child
 
 封闭新入口与取消已有工作是两个不同阶段。Engine 先封闭受影响代次，再按依赖顺序等待消费者退出，因此提供者可能已 sealed，但 signal 尚未取消。此时新的 `acquire` 仍会被拒绝；此前已登记的获取可以完成并交付资源，让消费者完成最后的 flush。只有原 signal 真正取消后，迟到资源才会被回收，并以该 signal 的原始原因拒绝。工厂的独立失败仍按实际错误传播。
 
+正常的破坏性变更与显式子树释放，在受影响的前台借用仍活动时拒绝。隔离已经撤销可用性：实际消费者退出后，Engine 会让该代次进入退出并取消已接纳的前台工作。中断可以帮助这些工作解除阻塞，但最终资源释放仍等待它们真实结束。因此，等待借用排空的代次处于 `disposing`；仍等待消费者的提供者保持 `sealed`，其原 signal 尚未取消。
+
 ```ts
 const { resource: connection } = await lifetime.acquire(async (signal) => openConnection(signal));
 lifetime.interrupt(() => connection.interruptRead());
@@ -41,7 +43,9 @@ lifetime.spawn((signal) => connection.readUntilClosed(signal));
 
 通过 child 或 defer 句柄提前释放时，清理失败同样使整个 Host 进入隔离。Lifetime 上报释放失败，Engine 先撤销可用性，再捕获错误诊断并清理独立安全分支；直接调用者仍收到原释放失败，Host 的错误报告端口接收隔离结果。错误对象的 getter 不能趁诊断捕获重新借用 Service。准备中或恢复中的候选也归这次退出处理，不能在故障之后提交。
 
-`shutdownTimeoutMilliseconds` 为正数且最多为 2,147,483,647 毫秒（原生计时器上限）；不设置即不限制等待时间。超时只结束等待，不证明底层工作已停止；已经启动的退出可能随后完成，但清理失败不会自动重试。隔离是整个 Host 的终止状态，迟到完成只更新诊断，不恢复服务。AbortSignal 无法强杀任意 JavaScript；硬终止需要实际执行隔离。应用的处置和替换前提见[隔离后的应用处理](./transactions.md#quarantine)。
+`shutdownTimeoutMilliseconds` 为正数且最多为 2,147,483,647 毫秒（原生计时器上限）；不设置即不限制等待时间。超时只结束等待，不证明底层工作已停止。借用排空或消费者真正成功退出后，Engine 继续推进同一次退出，包括超时前尚不能启动的首次释放；失败清理绝不自动重试。隔离是整个 Host 的终止状态，迟到完成只更新诊断，不恢复服务，也不推进 `stateRevision`。AbortSignal 无法强杀任意 JavaScript；硬终止需要实际执行隔离。应用的处置和替换前提见[隔离后的应用处理](./transactions.md#quarantine)。
+
+暂缓的前台排空，以及已经到期但真实工作仍未结束的消费者回执，不会阻止初次隔离失败返回。未完成所有权仍在诊断中可见。如果持续退出随后出现新的失败，有界诊断会更新，Host 错误报告端口也会收到该失败，但不会再次改变健康状态。已经通过其所属退出回执返回的同一失败不会重复报告。
 
 子 Lifetime 的关闭截止时间独立生效。即使根已经进入关闭流程，子截止时间到期仍立即使整个 Host 隔离；子清理赶在根截止时间之前完成，也不能让停止或更新成功。Lifetime 保留对真实子清理工作的等待，Engine 依据失败来源保持唯一的终态隔离，父资源和服务提供者不会因子等待回执超时而被提前释放。
 

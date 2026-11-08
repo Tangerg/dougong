@@ -23,6 +23,8 @@
 
 Artifact 的 `revision` 是调用方给定的内容或发行身份；没有依赖时钟生成的版本。复用要求同一已提交 Installation 上的 revision 和经验证的 Manifest 都与选择一致。依赖键、激活事件和权限的声明顺序不影响匹配。Registration 的 `selectionRevision` 用于拒绝过期激活。`activeOrigin` 由 Installation origin 派生，Core 提交通知中已经能够看到正确来源。
 
+Artifact 的配置是安装或更新该发行物时使用的输入，不是持续覆盖 Core 的期望状态。应用通过 Core 单独更新配置后，如果 origin 仍匹配，后续激活会复用该 Installation，保留当前配置。需要交付新的配置时，添加并选择新的 Artifact 修订；Platform 不维护另一份可独立推进的运行配置。
+
 发现与预览是同步操作；选择、激活、触发与移除始终返回 Promise，输入不合法也通过拒绝报告。事件匹配和计划捕获使用同一批已接纳的选择；即使调用方尚未 await，排在触发命令之前的选择也已生效。
 
 `select` 在提交时捕获数组自己的索引数据，并在排队命令执行时重新检查整个集合的 Catalog 身份、可用性和名称唯一性。任一成员不合法，整组都不改变选择；空数组不改变任何选择。所有目标都完成选择后才通知诊断订阅者或取消过期操作。其他 Registration 保持原选择，移除须显式提交。接纳后的 Catalog 撤回不会撤销已经选择的意图。

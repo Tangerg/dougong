@@ -137,6 +137,32 @@ describe("layer violations", () => {
     expect(output).not.toContain("fixed Contract ID 'probe/shadow'");
   });
 
+  it("keeps fixed Contract ownership across source files and factory kinds", () => {
+    expect(
+      output.match(/\[contracts\.owner\] fixed Contract ID 'probe\/across-files'/g),
+    ).toHaveLength(1);
+  });
+
+  it("applies independent source policies without giving examples the library's ambient restrictions", () => {
+    for (const [line, rule] of [
+      [1, "modules.esm"],
+      [2, "types.precise"],
+      [3, "callbacks.readonly"],
+      [4, "logging.port"],
+      [5, "policy.explicit"],
+      [6, "policy.explicit"],
+      [7, "policy.explicit"],
+    ])
+      expect(output).toContain(`policy-probe.ts:${line}: [${rule}]`);
+    expect(output.match(/policy-probe\.ts:3: \[callbacks\.readonly\]/g)).toHaveLength(1);
+    expect(output).not.toContain("examples/src/ambient-policy.ts:");
+  });
+
+  it("keeps compile-only assertions in their dedicated source boundary", () => {
+    expect(output).toContain("type-placement-probe.ts:2: [tests.types]");
+    expect(output).not.toContain("public-api.types.ts:");
+  });
+
   it("checks import types, re-exports and dynamic imports against the same package boundaries", () => {
     expect(output).toContain("access-probe.ts:1: [exports.public]");
     expect(output).toContain("access-probe.ts:2: [exports.public]");

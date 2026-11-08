@@ -99,13 +99,11 @@ it.each([
       expect(host.stateRevision).toBe(revision + 1);
       expect(releaseChild).toHaveBeenCalledOnce();
       expect(releaseParent).toHaveBeenCalledOnce();
-      expect(releaseProvider).toHaveBeenCalledTimes(finishBeforeRootDeadline ? 1 : 0);
+      expect(releaseProvider).toHaveBeenCalledOnce();
       expect(replacementSetup).not.toHaveBeenCalled();
       expect(report).toHaveBeenCalledOnce();
       expect(report.mock.calls[0]![0]).toMatchObject({ code: "HOST_QUARANTINED" });
-      expect(host.diagnostics.get().unresolved.map(({ installation }) => installation)).toEqual(
-        finishBeforeRootDeadline ? [] : ["provider"],
-      );
+      expect(host.diagnostics.get().unresolved).toEqual([]);
       await expect(host.start()).rejects.toMatchObject({ code: "HOST_QUARANTINED" });
       await expect(host.apply(replacement)).rejects.toMatchObject({ code: "HOST_QUARANTINED" });
       expect(host.stateRevision).toBe(revision + 1);

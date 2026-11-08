@@ -29,6 +29,8 @@ Invalidation ends the waiting `plan()` immediately, even if its validator never 
 
 Execution first checks foreground borrows on affected generations. A live borrow rejects with [`HOST_BUSY`](../reference/errors.md) before execution effects and without consuming the Plan. Once execution is admitted, it seals affected old generations, joins their background work and releases resources, then prepares candidates in dependency order. After every candidate is ready, listeners, contributions, services and origin publish together.
 
+`start()` has no cancellation input. While its configuration validation or setup is pending, `stop()` and `host[Symbol.asyncDispose]()` reject with `HOST_BUSY`; they do not cancel startup. `shutdownTimeoutMilliseconds` applies only once a Lifetime starts shutting down and does not bound startup.
+
 Candidate failure cleans candidates and attempts to reconstruct the previous declarations using their validated configuration. Reconstruction creates new Instances; it does not revive disposed objects. Incomplete cleanup or restoration quarantines the Host. Failed consumers retain the providers they transitively use; other independently safe branches continue cleaning up and independent errors are aggregated.
 
 Within a dependency layer, preparation starts in committed declaration order. Asynchronous setup may finish in any order. Publication follows the same declaration order. Updates preserve an Installation’s position. A new Installation takes its position when its draft commits. A single change can remove overlapping Group subtrees. Its impact report lists the Installations removed implicitly by those Groups once in committed declaration order.
@@ -66,7 +68,7 @@ An existing Installation handle retains only its final status and origin. Open C
 
 `snapshot.unresolved` identifies retained Instances by installation and generation. Their Lifetime snapshots describe tasks, acquisitions, borrows, children and failed obligations. A provider can remain retained because its consumer has not exited, even if that provider has no cleanup error itself. Failed restoration setup can also quarantine a Host after all resources have been released, so **an empty unresolved list does not establish health**; read `snapshot.status`.
 
-Shutdown already in progress may continue after a timeout and update diagnostics. This does not start another cleanup attempt or automatically leave quarantine. Diagnostic progress does not advance `stateRevision`.
+Engine continues the same retirement after a timeout. It cancels cooperative foreground work when that generation can safely enter shutdown and joins the borrow before releasing its resources. A provider's cancellation and first release wait for its actual consumers to exit successfully; an expired consumer receipt cannot authorize them. Late success therefore also unblocks first releases that were previously deferred. Failure receipts can return while this work remains unresolved, and later release failures update diagnostics and reach the Host error reporter. Failed callbacks are never retried, quarantine remains terminal, and progress does not advance `stateRevision`.
 
 Engine seals observation after terminal execution and actual release finish. Diagnostics and Host contribution views retain their final read-only snapshots while detaching the execution graph and callbacks; they neither retry cleanup nor decide execution state. Pending obligations keep observation active. Ordinary stop/start preserves usable views.
 

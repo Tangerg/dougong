@@ -247,3 +247,49 @@ it("keeps waiting after a synthetic abort and rejects with the controller's real
   await expect(result).rejects.toBe(reason);
   expect(rejected).toHaveBeenCalledExactlyOnceWith(reason);
 });
+
+it("detaches a cancelled waiter while its external operation remains pending", async () => {
+  const collectGarbage = globalThis.gc;
+  if (!collectGarbage) throw new TypeError("Retention tests require Node.js --expose-gc");
+  const operation = Promise.withResolvers<never>();
+  const references = await abandonPendingWait(operation.promise);
+
+  try {
+    for (
+      let pass = 0;
+      pass < 12 && Object.values(references).some((reference) => reference.deref());
+      pass++
+    ) {
+      await setImmediate();
+      collectGarbage();
+      collectGarbage();
+    }
+    expect(
+      Object.fromEntries(
+        Object.entries(references).map(([name, reference]) => [
+          name,
+          reference.deref() === undefined,
+        ]),
+      ),
+    ).toEqual({ signal: true, reason: true, result: true, start: true });
+  } finally {
+    operation.reject(new Error("late failure remains observed"));
+    await setImmediate();
+  }
+});
+
+async function abandonPendingWait(operation: Promise<never>) {
+  const controller = new AbortController();
+  const reason = { request: "retired" };
+  const start = () => operation;
+  const result = abandonOnAbort(controller.signal, start);
+  await setImmediate();
+  controller.abort(reason);
+  await result.catch(() => undefined);
+  return {
+    signal: new WeakRef(controller.signal),
+    reason: new WeakRef(reason),
+    result: new WeakRef(result),
+    start: new WeakRef(start),
+  };
+}

@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { event, extensionPoint } from "../src/contracts/contracts";
+import { event, extensionPoint, service } from "../src/contracts/contracts";
 import type { Resource } from "../src/contracts/resource";
 import { ContractRegistry } from "../src/contracts/contract-registry";
-import { Lifetime, type ChildLifetime } from "../src/lifetime/lifetime";
+import { Lifetime, type ChildLifetime, type LifetimeContext } from "../src/lifetime/lifetime";
 import { EventHub } from "../src/events/event-hub";
 import { ContributionRegistry } from "../src/contributions/contribution-store";
 import { createHost } from "../src/execution/host";
@@ -109,6 +109,16 @@ describe("lifetime retention", () => {
       message: "Resource disposed",
     });
     expect(Object.isFrozen(fixture.child.signal.reason)).toBe(true);
+  });
+
+  it("detaches terminal views and root handles after deferred provider retirement", async () => {
+    const fixture = await completedLateRetirement();
+    await collect([...fixture.references.values()]);
+    for (const [name, reference] of fixture.references)
+      expect.soft(reference.deref(), `Late retirement retained ${name}`).toBeUndefined();
+    expect(fixture.view.get()).toMatchObject({ status: "quarantined", unresolved: [] });
+    expect(fixture.owner.signal.aborted).toBe(true);
+    expect(fixture.subscription).toBeDefined();
   });
 
   it("keeps historical lifetime values without retaining their Host", async () => {
@@ -426,6 +436,72 @@ async function terminalView(kind: "diagnostics" | "contributions", afterQuaranti
       ["Engine reporter", new WeakRef(reporter)],
       ["plugin payload", new WeakRef(payload)],
       ["subscriber payload", new WeakRef(observerPayload)],
+    ]),
+  };
+}
+
+async function completedLateRetirement() {
+  const reporter = () => undefined;
+  const payload = { value: 1 };
+  const observerPayload = { notifications: 0 };
+  const value = service<object>("retention/late-provider");
+  const resume = Promise.withResolvers<void>();
+  const finished = Promise.withResolvers<void>();
+  let owner!: LifetimeContext;
+  let provided!: WeakRef<object>;
+  const host = createHost({
+    shutdownTimeoutMilliseconds: 1,
+    onError: reporter,
+    installations: [
+      {
+        id: "provider",
+        plugin: definePlugin({
+          name: "provider",
+          provides: { value },
+          setup({ lifetime }) {
+            owner = lifetime;
+            const serviceValue = { payload };
+            provided = new WeakRef(serviceValue);
+            return { value: serviceValue };
+          },
+        }),
+      },
+      {
+        id: "consumer",
+        plugin: definePlugin({
+          name: "consumer",
+          requires: { value },
+          setup({ lifetime }) {
+            lifetime.defer(() => resume.promise);
+          },
+        }),
+      },
+    ],
+  });
+  const view = host.diagnostics;
+  const subscription = view.subscribe(() => {
+    observerPayload.notifications++;
+    if (view.get().status === "quarantined" && view.get().unresolved.length === 0)
+      finished.resolve();
+  });
+  await host.start();
+  const failed = await host.stop().then(
+    () => false,
+    () => true,
+  );
+  if (!failed || host.status !== "quarantined") throw new Error("Expected shutdown quarantine");
+  resume.resolve();
+  await finished.promise;
+  return {
+    view,
+    subscription,
+    owner,
+    references: new Map<string, WeakRef<object>>([
+      ["Host facade", new WeakRef(host)],
+      ["Engine reporter", new WeakRef(reporter)],
+      ["plugin payload", new WeakRef(payload)],
+      ["subscriber payload", new WeakRef(observerPayload)],
+      ["provided Service", provided],
     ]),
   };
 }
