@@ -9,15 +9,36 @@ import {
 } from "../artifacts/artifact.js";
 import { PlatformError, registrationUnavailableCode, selectionSupersededCode } from "../errors.js";
 
-type RegistrationStatusSnapshot =
-  | { readonly status: "selected" | "installed"; readonly error: undefined }
-  | { readonly status: "failed"; readonly error: RecordedFailure }
+type RegistrationStateSnapshot =
   | {
-      readonly status: "activating" | "removing" | "quarantined";
+      readonly status: "installed";
+      readonly activeOrigin: ArtifactOrigin;
+      readonly execution: Exclude<InstallationSnapshot["status"], "quarantined">;
+      readonly error: undefined;
+    }
+  | {
+      readonly status: "quarantined";
+      readonly activeOrigin: ArtifactOrigin | undefined;
+      readonly execution: "quarantined";
       readonly error: RecordedFailure | undefined;
-    };
+    }
+  | ((
+      | { readonly activeOrigin: undefined; readonly execution: undefined }
+      | {
+          readonly activeOrigin: ArtifactOrigin | undefined;
+          readonly execution: Exclude<InstallationSnapshot["status"], "quarantined">;
+        }
+    ) &
+      (
+        | { readonly status: "selected"; readonly error: undefined }
+        | { readonly status: "failed"; readonly error: RecordedFailure }
+        | {
+            readonly status: "activating" | "removing";
+            readonly error: RecordedFailure | undefined;
+          }
+      ));
 
-export type RegistrationStatus = RegistrationStatusSnapshot["status"] | "removed";
+export type RegistrationStatus = RegistrationStateSnapshot["status"] | "removed";
 
 declare const registrationBrand: unique symbol;
 
@@ -38,9 +59,7 @@ export type RegistrationSnapshot = {
   readonly name: string;
   readonly selectedArtifact: ArtifactDescriptor;
   readonly selectionRevision: number;
-  readonly activeOrigin: ArtifactOrigin | undefined;
-  readonly execution: InstallationSnapshot["status"] | undefined;
-} & RegistrationStatusSnapshot;
+} & RegistrationStateSnapshot;
 
 export interface RegistrationPort<Reference> {
   readonly installation: (id: string) => Installation | undefined;
@@ -168,9 +187,10 @@ export class RegistrationRecord<Reference> {
   }
 
   get status(): RegistrationStatus {
-    return this.#state.phase === "removed"
+    const state = this.#state;
+    return state.phase === "removed"
       ? "removed"
-      : this.#projectStatus(this.installation?.status).status;
+      : this.#projectState(state, this.installation).status;
   }
 
   select(artifact: Artifact<Reference>) {
@@ -229,21 +249,20 @@ export class RegistrationRecord<Reference> {
   }
 
   snapshot(
-    execution: InstallationSnapshot["status"] | undefined,
+    installation: InstallationSnapshot | undefined,
     previous?: RegistrationSnapshot,
   ): RegistrationSnapshot {
     const state = this.#requireSelected();
     const selectedArtifact = describeArtifact(state.artifact);
-    const activeOrigin = this.activeOrigin;
-    const statusSnapshot = this.#projectStatus(execution);
+    const projection = this.#projectState(state, installation);
     if (
       previous &&
       previous.selectedArtifact === selectedArtifact &&
       previous.selectionRevision === state.revision &&
-      previous.activeOrigin === activeOrigin &&
-      previous.status === statusSnapshot.status &&
-      previous.execution === execution &&
-      previous.error === statusSnapshot.error
+      previous.activeOrigin === projection.activeOrigin &&
+      previous.status === projection.status &&
+      previous.execution === projection.execution &&
+      previous.error === projection.error
     )
       return previous;
     return Object.freeze({
@@ -251,22 +270,30 @@ export class RegistrationRecord<Reference> {
       name: this.name,
       selectedArtifact,
       selectionRevision: state.revision,
-      activeOrigin,
-      execution,
-      ...statusSnapshot,
+      ...projection,
     });
   }
 
-  #projectStatus(execution: Installation["status"] | undefined): RegistrationStatusSnapshot {
-    const state = this.#requireSelected();
-    if (execution === "quarantined") return { status: "quarantined", error: state.error };
+  #projectState(
+    state: Extract<RegistrationState<Reference>, { readonly phase: "selected" }>,
+    installation: Pick<Installation, "origin" | "status"> | undefined,
+  ): RegistrationStateSnapshot {
+    const execution = installation?.status;
+    if (execution === "pending" || execution === "removed")
+      throw new TypeError("Registration execution must come from a committed Installation");
+    const activeOrigin = readArtifactOrigin(installation?.origin, this.#platformId, this.name);
+    if (execution === "quarantined")
+      return { activeOrigin, execution, status: "quarantined", error: state.error };
+    const projection =
+      execution === undefined
+        ? { activeOrigin: undefined, execution }
+        : { activeOrigin, execution };
     const operation = state.port.operation(this, state.revision);
-    if (operation) return { status: operation, error: state.error };
-    if (state.error) return { status: "failed", error: state.error };
-    return {
-      status: this.actionFor(state.artifact) === "reuse" ? "installed" : "selected",
-      error: undefined,
-    };
+    if (operation) return { ...projection, status: operation, error: state.error };
+    if (state.error) return { ...projection, status: "failed", error: state.error };
+    if (activeOrigin && execution !== undefined && matchesArtifact(activeOrigin, state.artifact))
+      return { activeOrigin, execution, status: "installed", error: undefined };
+    return { ...projection, status: "selected", error: undefined };
   }
 
   #requireSelected() {

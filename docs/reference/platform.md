@@ -37,9 +37,15 @@ Platform 状态为 `active/disposing/disposed`。Registration 状态为 `selecte
 
 `RegistrationSnapshot` 的 `status` 与 `error` 保持关联：`failed` 必有错误，`selected/installed` 没有错误，`activating/removing/quarantined` 可以保留上次失败。当前快照不包含已移除的 Registration；`execution` 复用 Core `InstallationSnapshot` 的已提交状态范围，或在没有本 Registration 拥有的已提交 Installation 时为 `undefined`。活句柄的独立 getter 不保证跨读取的类型收窄；需要关联判断时，读取并使用同一份快照。
 
+当 `status === "installed"` 时，同一快照的 `activeOrigin` 必为 `ArtifactOrigin`，`execution` 必为 `stopped`、`running` 或 `changing`；类型判别后可以直接读取来源。installed 表示已提交来源与选择一致，不能据此断言执行正在运行。来源与执行状态取自同一 Core 安装快照；其他 Registration 状态仍可能保留先前的已提交来源。
+
+`status === "quarantined"` 与 `execution === "quarantined"` 在同一快照中双向成立；此时 `activeOrigin` 仍可能为 `undefined`。`execution === undefined` 时，`activeOrigin` 也必为 `undefined`；执行存在则不保证存在 Artifact 来源。
+
 诊断快照在读取或被订阅观察时物化；没有观察者的连续选择不会反复遍历全部 Registration。未变化的快照保持同一对象身份，无关 Core 活动不会通知 Platform 观察者。订阅从当前状态建立比较基线，释放后保留最终快照并断开运行资源。
 
 `ActivationPreview.deferred` 明确包含 admission、module_validation、configuration_validation、core_binding、setup。预览不是运行验证通过的凭证。activate 捕获选择版本与 Artifact 身份，准备完成后再次核对，过期结果不能覆盖新选择。
+
+`ActivationBlocker["code"]` 仅包含发行依赖规划能产生的四种错误：`REGISTRATION_DEPENDENCY_MISSING`、`REGISTRATION_DEPENDENCY_INCOMPATIBLE`、`REGISTRATION_DEPENDENCY_INACTIVE`、`REGISTRATION_CYCLE`。加载、权限和 Core 执行错误不能作为预览 blocker；它们在各自的执行边界报告。
 
 Manifest dependencies 负责发行依赖；Plugin requires 负责真实能力绑定。动态导入图属于 打包器的模块热替换适配器，不能从这两个图猜测。示例 12 展示将 bundler 影响集合提交为一笔激活计划。
 

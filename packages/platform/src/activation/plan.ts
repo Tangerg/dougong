@@ -3,15 +3,20 @@ import { describeArtifact, type ArtifactDescriptor } from "../artifacts/artifact
 import type { Registration, RegistrationRecord, Selection } from "../catalog/registration.js";
 import {
   PlatformError,
-  type PlatformErrorCode,
   registrationDependencyMissingCode,
   registrationDependencyIncompatibleCode,
   registrationDependencyInactiveCode,
   registrationCycleCode,
 } from "../errors.js";
 
+type ActivationBlockerCode =
+  | typeof registrationDependencyMissingCode
+  | typeof registrationDependencyIncompatibleCode
+  | typeof registrationDependencyInactiveCode
+  | typeof registrationCycleCode;
+
 export interface ActivationBlocker {
-  readonly code: PlatformErrorCode;
+  readonly code: ActivationBlockerCode;
   readonly message: string;
   readonly dependencyPath: ReadonlyArray<string>;
 }

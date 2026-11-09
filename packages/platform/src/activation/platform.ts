@@ -695,10 +695,10 @@ class DeliveryPlatform<Reference> implements Platform<Reference> {
       previous?.status !== this.status || previous.registrations.size !== this.#registrations.size;
     const entries = [...this.#registrations].map(([name, registration]) => {
       const before = previous?.registrations.get(name);
-      const execution = registration.installation
-        ? installations.get(registration.id)?.status
+      const installation = registration.installation
+        ? installations.get(registration.id)
         : undefined;
-      const next = registration.snapshot(execution, before);
+      const next = registration.snapshot(installation, before);
       if (before !== next) changed = true;
       return [name, next] as const;
     });

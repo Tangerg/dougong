@@ -5,6 +5,7 @@ import {
   createHost,
   definePlugin,
   type HostOptions,
+  type Cleanup,
   type ChildLifetime,
   type LifetimeContext,
   type Logger,
@@ -34,6 +35,19 @@ async function createFixture(options: HostOptions = {}) {
     generation: owner.child("generation"),
     operations: owner.child("external-operations"),
     report,
+  };
+}
+
+function destinationRejectingAfterRegistration(
+  generation: LifetimeContext,
+  registrationFailure: Error,
+): Pick<LifetimeContext, "signal" | "defer"> {
+  return {
+    signal: generation.signal,
+    defer(cleanup) {
+      generation.defer(cleanup);
+      throw registrationFailure;
+    },
   };
 }
 
@@ -739,6 +753,204 @@ describe("acquisition failure ownership", () => {
       });
     }
   });
+});
+
+describe("partial acquisition registration", () => {
+  it("releases once after the target registers then rejects and both owners retire", async () => {
+    const { host, generation, operations, report } = await createFixture();
+    const registrationFailure = new Error("destination rejected after registration");
+    const destination = destinationRejectingAfterRegistration(generation, registrationFailure);
+    const resource = { id: "partially-registered" };
+    const release = vi.fn<(value: object) => void>();
+    try {
+      const result = await acquireForLifetime(
+        destination,
+        operations,
+        () => Promise.resolve(resource),
+        release,
+      );
+      expect(result).toEqual({ status: "failed", error: registrationFailure });
+      expect(release).toHaveBeenCalledExactlyOnceWith(resource);
+      await operations[Symbol.asyncDispose]();
+      await generation[Symbol.asyncDispose]();
+      expect(release).toHaveBeenCalledExactlyOnceWith(resource);
+      expect(report).toHaveBeenCalledExactlyOnceWith(registrationFailure);
+    } finally {
+      await host.stop();
+    }
+  });
+
+  it("reserves one release completion before a disposer reenters its retained target callback", async () => {
+    const { host, generation, operations } = await createFixture();
+    const registrationFailure = new Error("destination rejected after registration");
+    const resource = { id: "reentrant-release" };
+    let retainedCleanup!: Cleanup;
+    let initialCompletion: unknown;
+    let reentrantCompletion: unknown;
+    let requestedReentry = false;
+    const destination: Pick<LifetimeContext, "signal" | "defer"> = {
+      signal: generation.signal,
+      defer(cleanup) {
+        retainedCleanup = cleanup;
+        generation.defer(cleanup);
+        initialCompletion = cleanup();
+        throw registrationFailure;
+      },
+    };
+    const release = vi.fn<(this: unknown, value: object) => void>(function (
+      this: unknown,
+      _value: object,
+    ) {
+      if (requestedReentry) return;
+      requestedReentry = true;
+      reentrantCompletion = retainedCleanup();
+    });
+    try {
+      const result = await acquireForLifetime(
+        destination,
+        operations,
+        () => Promise.resolve(resource),
+        release,
+      );
+      expect(result).toEqual({ status: "failed", error: registrationFailure });
+      expect(initialCompletion).toBeInstanceOf(Promise);
+      expect(reentrantCompletion).toBe(initialCompletion);
+      expect(release).toHaveBeenCalledExactlyOnceWith(resource);
+      expect(release.mock.contexts).toEqual([undefined]);
+      await Promise.all([generation[Symbol.asyncDispose](), operations[Symbol.asyncDispose]()]);
+      expect(retainedCleanup()).toBe(initialCompletion);
+      expect(release).toHaveBeenCalledExactlyOnceWith(resource);
+    } finally {
+      await host.stop();
+    }
+  });
+
+  it("joins one pending release while both partially registered owners retire", async () => {
+    const { host, generation, operations } = await createFixture();
+    const registrationFailure = new Error("destination rejected after registration");
+    const destination = destinationRejectingAfterRegistration(generation, registrationFailure);
+    const resource = { id: "pending-release" };
+    const releaseEntered = Promise.withResolvers<void>();
+    const allowReleaseCompletion = Promise.withResolvers<void>();
+    let activeReleases = 0;
+    let peakActiveReleases = 0;
+    const release = vi.fn<(value: object) => Promise<void>>(async () => {
+      activeReleases++;
+      peakActiveReleases = Math.max(peakActiveReleases, activeReleases);
+      releaseEntered.resolve();
+      await allowReleaseCompletion.promise;
+      activeReleases--;
+    });
+    const acquisition = acquireForLifetime(
+      destination,
+      operations,
+      () => Promise.resolve(resource),
+      release,
+    );
+    const acquisitionOutcome = acquisition.catch((error: unknown) => error);
+    try {
+      await releaseEntered.promise;
+      const generationRetirement = generation[Symbol.asyncDispose]();
+      const operationsRetirement = operations[Symbol.asyncDispose]();
+      await setImmediate();
+      expect(release).toHaveBeenCalledExactlyOnceWith(resource);
+      expect(peakActiveReleases).toBe(1);
+      allowReleaseCompletion.resolve();
+      await Promise.all([generationRetirement, operationsRetirement]);
+      await acquisitionOutcome;
+      expect(release).toHaveBeenCalledExactlyOnceWith(resource);
+    } finally {
+      allowReleaseCompletion.resolve();
+      await acquisitionOutcome;
+      await host.stop();
+    }
+  });
+
+  it("preserves one failed release through both owners and repeated shutdown", async () => {
+    const { host, generation, operations } = await createFixture();
+    const generationSignal = generation.signal;
+    const registrationFailure = new Error("destination rejected after registration");
+    const releaseFailure = new Error("asynchronous reclamation failed");
+    const destination = destinationRejectingAfterRegistration(generation, registrationFailure);
+    const resource = { id: "failed-release" };
+    const release = vi.fn<(value: object) => Promise<never>>(async () => {
+      await Promise.resolve();
+      throw releaseFailure;
+    });
+    try {
+      const acquisitionFailure: unknown = await acquireForLifetime(
+        destination,
+        operations,
+        () => Promise.resolve(resource),
+        release,
+      ).catch((error: unknown) => error);
+      expect(acquisitionFailure).toBe(generationSignal.reason);
+      const generationRetirement = generation[Symbol.asyncDispose]();
+      const operationsRetirement = operations[Symbol.asyncDispose]();
+      for (const retirement of [generationRetirement, operationsRetirement]) {
+        const failure: unknown = await retirement.catch((error: unknown) => error);
+        if (!(failure instanceof AggregateError)) {
+          throw new Error("Expected retained cleanup obligations", { cause: failure });
+        }
+        expect(failure.errors).toHaveLength(1);
+        expect(failure.errors[0]).toBe(releaseFailure);
+      }
+      expect(generation[Symbol.asyncDispose]()).toBe(generationRetirement);
+      expect(operations[Symbol.asyncDispose]()).toBe(operationsRetirement);
+      expect(release).toHaveBeenCalledExactlyOnceWith(resource);
+      expect(host.status).toBe("quarantined");
+    } finally {
+      await expect(host.stop()).rejects.toMatchObject({ code: "HOST_QUARANTINED" });
+    }
+  });
+
+  it.each([
+    { name: "accepted", rejectAfterRegistration: false },
+    { name: "partially rejected", rejectAfterRegistration: true },
+  ])(
+    "detaches the released value and disposer from a retained $name destination callback",
+    async ({ rejectAfterRegistration }) => {
+      const { host, generation, operations } = await createFixture();
+      const registrationFailure = new Error("destination rejected after registration");
+      async function captureReleasedReferences() {
+        const resource = { id: "released" };
+        const release = (_value: object) => undefined;
+        let retainedCleanup!: Cleanup;
+        const destination: Pick<LifetimeContext, "signal" | "defer"> = {
+          signal: generation.signal,
+          defer(cleanup) {
+            retainedCleanup = cleanup;
+            const registration = generation.defer(cleanup);
+            if (rejectAfterRegistration) throw registrationFailure;
+            return registration;
+          },
+        };
+        await acquireForLifetime(destination, operations, () => Promise.resolve(resource), release);
+        await operations[Symbol.asyncDispose]();
+        if (!rejectAfterRegistration) await generation[Symbol.asyncDispose]();
+        return {
+          retainedCleanup,
+          references: [new WeakRef(resource), new WeakRef(release)],
+        };
+      }
+      try {
+        const { retainedCleanup, references } = await captureReleasedReferences();
+        const maximumCollectionPasses = 8;
+        for (
+          let pass = 0;
+          pass < maximumCollectionPasses && references.some((reference) => reference.deref());
+          pass++
+        ) {
+          await setImmediate();
+          globalThis.gc!();
+        }
+        expect(references.map((reference) => reference.deref())).toEqual([undefined, undefined]);
+        await retainedCleanup();
+      } finally {
+        await host.stop();
+      }
+    },
+  );
 });
 
 describe("application-selected identity queues", () => {

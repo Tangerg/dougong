@@ -10,6 +10,52 @@ export type AcquisitionResult<T> =
   | { readonly status: "failed"; readonly error: unknown }
   | { readonly status: "retired" };
 
+interface ReleasePayload<T> {
+  readonly value: T;
+  readonly dispose: (value: T) => unknown;
+}
+
+// A failed attempt keeps its payload and completion; only successful release ends ownership.
+type ReleaseState<T> =
+  | { readonly phase: "ready"; readonly payload: ReleasePayload<T> }
+  | {
+      readonly phase: "started";
+      readonly payload: ReleasePayload<T>;
+      readonly completion: Promise<void>;
+    }
+  | { readonly phase: "released"; readonly completion: Promise<void> };
+
+class ResourceRelease<T> {
+  #state: ReleaseState<T>;
+
+  constructor(value: T, dispose: (value: T) => unknown) {
+    this.#state = { phase: "ready", payload: { value, dispose } };
+  }
+
+  readonly release = (): Promise<void> => {
+    const state = this.#state;
+    if (state.phase !== "ready") return state.completion;
+    const completion = Promise.withResolvers<void>();
+    Object.freeze(completion.promise);
+    this.#state = {
+      phase: "started",
+      payload: state.payload,
+      completion: completion.promise,
+    };
+    // A partial target registration may retain this callback while the source also reclaims it.
+    void Promise.resolve()
+      .then(() => {
+        const { value, dispose } = state.payload;
+        return resolveValue(dispose(value));
+      })
+      .then(() => {
+        this.#state = { phase: "released", completion: completion.promise };
+        completion.resolve();
+      }, completion.reject);
+    return completion.promise;
+  };
+}
+
 async function handoff<T>(
   generation: Destination,
   operations: Operations,
@@ -30,7 +76,7 @@ async function handoff<T>(
   try {
     if (!retired()) {
       const { value } = await resolveValue(start());
-      reclaim = () => dispose(value);
+      reclaim = new ResourceRelease(value, dispose).release;
       if (!retired()) {
         generation.defer(reclaim);
         reclaim = undefined;

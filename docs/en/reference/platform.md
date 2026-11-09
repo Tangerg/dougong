@@ -37,9 +37,15 @@ Platform states are `active/disposing/disposed`. Registration states are `select
 
 `RegistrationSnapshot` correlates `status` with `error`: `failed` carries a recorded failure, `selected/installed` have no error, and `activating/removing/quarantined` may retain a previous failure. Current snapshots omit removed Registrations. `execution` uses Core's committed `InstallationSnapshot` status domain, or is `undefined` when this Registration owns no committed Installation. Independent live-handle getters do not support narrowing across reads; use one captured snapshot for correlated decisions.
 
+When `status === "installed"`, the same snapshot has an `ArtifactOrigin` in `activeOrigin` and `stopped`, `running` or `changing` execution. Type narrowing makes the origin directly readable. Installed means the committed origin matches the selection; it does not imply running execution. Origin and execution come from one Core installation snapshot. Other Registration states may still retain the previous committed origin.
+
+`status === "quarantined"` and `execution === "quarantined"` imply each other within the same snapshot; `activeOrigin` may still be `undefined`. When `execution === undefined`, `activeOrigin` is also `undefined`. An existing execution does not guarantee an Artifact origin.
+
 Diagnostics materialize snapshots when read or observed by a subscriber. Consecutive unobserved selections do not repeatedly traverse every Registration. Unchanged snapshots preserve identity, and unrelated Core activity does not notify Platform observers. A subscription establishes its comparison baseline from the current state. Disposal retains a final snapshot and detaches runtime resources.
 
 `ActivationPreview.deferred` explicitly contains admission, module_validation, configuration_validation, core_binding and setup. Preview is not proof that runtime validation passed. Activation captures selection revision and Artifact identity and rechecks after preparation; stale work cannot overwrite a newer selection.
+
+`ActivationBlocker["code"]` contains only the four delivery dependency planning failures: `REGISTRATION_DEPENDENCY_MISSING`, `REGISTRATION_DEPENDENCY_INCOMPATIBLE`, `REGISTRATION_DEPENDENCY_INACTIVE` and `REGISTRATION_CYCLE`. Loading, permission and Core execution failures cannot be preview blockers; their own execution boundaries report them.
 
 Manifest dependencies describe delivery relationships; Plugin requires describe actual capability binding. A bundler’s hot module replacement adapter owns the import graph, which cannot be guessed from either of those graphs. Example 12 submits the bundler's affected set as one activation plan.
 

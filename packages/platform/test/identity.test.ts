@@ -85,7 +85,11 @@ describe("Registration installation authority", () => {
     expect(previous.status).toBe("removed");
     expect(registration.installation).toBeUndefined();
     expect(registration.activeOrigin).toBeUndefined();
-    expect(platform.diagnostics.get().registrations.get("sample")?.execution).toBeUndefined();
+    expect(platform.diagnostics.get().registrations.get("sample")).toMatchObject({
+      status: "selected",
+      activeOrigin: undefined,
+      execution: undefined,
+    });
     await expect(platform.activate([registration])).rejects.toMatchObject({
       code: "INSTALLATION_CONFLICT",
     });

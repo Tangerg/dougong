@@ -13,7 +13,9 @@ import {
   defineManifest,
   ImportLoader,
   MemoryLoader,
+  type ActivationBlocker,
   type Artifact,
+  type ArtifactOrigin,
   type Authorizer,
   type ManifestInput,
   type Platform,
@@ -27,6 +29,22 @@ const invalidPolicy: Authorizer = {
   authorize: () => false,
 };
 void invalidPolicy;
+
+expectTypeOf<ActivationBlocker["code"]>().toEqualTypeOf<
+  | "REGISTRATION_DEPENDENCY_MISSING"
+  | "REGISTRATION_DEPENDENCY_INCOMPATIBLE"
+  | "REGISTRATION_DEPENDENCY_INACTIVE"
+  | "REGISTRATION_CYCLE"
+>();
+// @ts-expect-error Module loading is deferred beyond the metadata preview.
+const loadingBlocker: ActivationBlocker["code"] = "MODULE_LOAD_FAILED";
+// @ts-expect-error Module validation is deferred beyond the metadata preview.
+const validationBlocker: ActivationBlocker["code"] = "MODULE_INVALID";
+// @ts-expect-error Permission admission is deferred beyond the metadata preview.
+const permissionBlocker: ActivationBlocker["code"] = "PERMISSION_DENIED";
+// @ts-expect-error Command admission failures are not delivery dependency blockers.
+const busyBlocker: ActivationBlocker["code"] = "PLATFORM_BUSY";
+void [loadingBlocker, validationBlocker, permissionBlocker, busyBlocker];
 
 const plugin = definePlugin({ name: "types", setup() {} });
 const platform = createPlatform({
@@ -215,37 +233,165 @@ function inspectRegistrationSnapshot(
   registration: Registration<string>,
 ) {
   expectTypeOf(snapshot.execution).toEqualTypeOf<InstallationSnapshot["status"] | undefined>();
-  if (snapshot.status === "failed") {
-    expectTypeOf(snapshot.error).toEqualTypeOf<RecordedFailure>();
-  } else if (snapshot.status === "selected" || snapshot.status === "installed") {
+  if (snapshot.status === "installed") {
     expectTypeOf(snapshot.error).toEqualTypeOf<undefined>();
+    expectTypeOf(snapshot.activeOrigin).toEqualTypeOf<ArtifactOrigin>();
+    expectTypeOf(snapshot.execution).toEqualTypeOf<
+      Exclude<InstallationSnapshot["status"], "quarantined">
+    >();
+  } else if (snapshot.status === "failed") {
+    expectTypeOf(snapshot.error).toEqualTypeOf<RecordedFailure>();
+  } else if (snapshot.status === "selected") {
+    expectTypeOf(snapshot.error).toEqualTypeOf<undefined>();
+  } else if (snapshot.status === "quarantined") {
+    expectTypeOf(snapshot.execution).toEqualTypeOf<"quarantined">();
+    expectTypeOf(snapshot.activeOrigin).toEqualTypeOf<ArtifactOrigin | undefined>();
+    expectTypeOf(snapshot.error).toEqualTypeOf<RecordedFailure | undefined>();
   } else {
     expectTypeOf(snapshot.error).toEqualTypeOf<RecordedFailure | undefined>();
+  }
+  if (snapshot.execution === "quarantined") {
+    expectTypeOf(snapshot.status).toEqualTypeOf<"quarantined">();
+  }
+  if (snapshot.execution === undefined) {
+    expectTypeOf(snapshot.activeOrigin).toEqualTypeOf<undefined>();
   }
   if (registration.status === "failed") {
     expectTypeOf(registration.error).toEqualTypeOf<RecordedFailure | undefined>();
   }
-  for (const status of ["activating", "removing", "quarantined"] as const) {
-    const retained: RegistrationSnapshot = { ...snapshot, status, error: failure };
-    const clear: RegistrationSnapshot = { ...snapshot, status, error: undefined };
+  for (const status of ["activating", "removing"] as const) {
+    const retained: RegistrationSnapshot = {
+      ...snapshot,
+      status,
+      execution: "running",
+      error: failure,
+    };
+    const clear: RegistrationSnapshot = {
+      ...snapshot,
+      status,
+      execution: "running",
+      error: undefined,
+    };
     void [retained, clear];
   }
-  const failed: RegistrationSnapshot = { ...snapshot, status: "failed", error: failure };
-  const healthy: RegistrationSnapshot = { ...snapshot, status: "installed", error: undefined };
-  void [failed, healthy];
+  const activeOrigin: ArtifactOrigin = {
+    kind: "artifact",
+    platformId: "types",
+    revision: artifact.revision,
+    manifest: artifact.manifest,
+  };
+  const installed = {
+    ...snapshot,
+    activeOrigin,
+    status: "installed",
+    error: undefined,
+  } as const;
+  for (const execution of ["stopped", "running", "changing"] as const) {
+    const healthy: RegistrationSnapshot = { ...installed, execution };
+    void healthy;
+  }
+  const failed: RegistrationSnapshot = {
+    ...snapshot,
+    activeOrigin,
+    status: "failed",
+    execution: "running",
+    error: failure,
+  };
+  const selected: RegistrationSnapshot = {
+    ...snapshot,
+    activeOrigin,
+    status: "selected",
+    execution: "running",
+    error: undefined,
+  };
+  const quarantined: RegistrationSnapshot = {
+    ...snapshot,
+    activeOrigin,
+    status: "quarantined",
+    execution: "quarantined",
+    error: failure,
+  };
+  const quarantineWithoutOrigin: RegistrationSnapshot = {
+    ...quarantined,
+    activeOrigin: undefined,
+    error: undefined,
+  };
+  const executionWithoutOrigin: RegistrationSnapshot = { ...selected, activeOrigin: undefined };
+  const uncommitted: RegistrationSnapshot = {
+    ...selected,
+    activeOrigin: undefined,
+    execution: undefined,
+  };
+  void [
+    failed,
+    selected,
+    quarantined,
+    quarantineWithoutOrigin,
+    executionWithoutOrigin,
+    uncommitted,
+  ];
 
   // @ts-expect-error Failed snapshots always carry the recorded failure.
-  const missingError: RegistrationSnapshot = { ...snapshot, status: "failed", error: undefined };
+  const missingError: RegistrationSnapshot = { ...failed, error: undefined };
   // @ts-expect-error Healthy selections cannot retain an activation failure.
-  const selectedError: RegistrationSnapshot = { ...snapshot, status: "selected", error: failure };
+  const selectedError: RegistrationSnapshot = { ...selected, error: failure };
   // @ts-expect-error An installed selection has no unresolved activation failure.
-  const installedError: RegistrationSnapshot = { ...snapshot, status: "installed", error: failure };
+  const installedError: RegistrationSnapshot = {
+    ...installed,
+    execution: "running",
+    error: failure,
+  };
+  // @ts-expect-error A matching installed selection always has committed origin data.
+  const missingOrigin: RegistrationSnapshot = {
+    ...installed,
+    execution: "running",
+    activeOrigin: undefined,
+  };
+  // @ts-expect-error A matching installed selection always has committed execution state.
+  const missingExecution: RegistrationSnapshot = { ...installed, execution: undefined };
+  // @ts-expect-error Quarantined execution has its own Registration status.
+  const quarantinedInstallation: RegistrationSnapshot = { ...installed, execution: "quarantined" };
+  // @ts-expect-error Quarantined execution cannot retain selected status.
+  const quarantinedSelection: RegistrationSnapshot = { ...selected, execution: "quarantined" };
+  // @ts-expect-error Quarantined execution takes precedence over a recorded activation failure.
+  const quarantinedFailure: RegistrationSnapshot = { ...failed, execution: "quarantined" };
+  // @ts-expect-error Quarantined execution takes precedence over an activation operation.
+  const quarantinedActivation: RegistrationSnapshot = { ...quarantined, status: "activating" };
+  // @ts-expect-error Quarantined execution takes precedence over a removal operation.
+  const quarantinedRemoval: RegistrationSnapshot = { ...quarantined, status: "removing" };
+  // @ts-expect-error Quarantined status requires a quarantined Core execution.
+  const runningQuarantine: RegistrationSnapshot = { ...quarantined, execution: "running" };
+  // @ts-expect-error An absent Core execution cannot be quarantined.
+  const uncommittedQuarantine: RegistrationSnapshot = {
+    ...quarantined,
+    activeOrigin: undefined,
+    execution: undefined,
+  };
+  // @ts-expect-error An absent Core installation cannot supply a committed Artifact origin.
+  const originWithoutExecution: RegistrationSnapshot = { ...selected, execution: undefined };
   // @ts-expect-error Removed identities are absent from the current registration snapshot.
   const removed: RegistrationSnapshot = { ...snapshot, status: "removed" };
   // @ts-expect-error A pending identity is not committed execution.
   const pendingExecution: RegistrationSnapshot = { ...snapshot, execution: "pending" };
   // @ts-expect-error A removed identity is not committed execution.
   const removedExecution: RegistrationSnapshot = { ...snapshot, execution: "removed" };
-  void [missingError, selectedError, installedError, removed, pendingExecution, removedExecution];
+  void [
+    missingError,
+    selectedError,
+    installedError,
+    missingOrigin,
+    missingExecution,
+    quarantinedInstallation,
+    quarantinedSelection,
+    quarantinedFailure,
+    quarantinedActivation,
+    quarantinedRemoval,
+    runningQuarantine,
+    uncommittedQuarantine,
+    originWithoutExecution,
+    removed,
+    pendingExecution,
+    removedExecution,
+  ];
 }
 void inspectRegistrationSnapshot;
