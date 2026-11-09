@@ -1051,7 +1051,10 @@ export class Engine {
     }
     if (this.#observationPhase === "closed") return;
     try {
-      this.#publisher.invalidate();
+      batchSnapshotNotifications(
+        () => this.#publisher.invalidate(),
+        (error) => this.#report(error),
+      );
     } catch (error) {
       this.#report(error);
     }

@@ -11,6 +11,8 @@ export interface SnapshotView<T> {
 
 type SnapshotErrorReporter = (error: unknown) => SynchronousResult<void>;
 
+const snapshotReportingFailureMessage = "Snapshot error reporting failed";
+
 interface SnapshotSubscriptionBinding {
   readonly listener: () => void;
   readonly report: SnapshotErrorReporter;
@@ -23,49 +25,91 @@ const snapshotSubscriptionBindings = new WeakMap<
   SnapshotSubscriptionBinding
 >();
 
-// Commit related snapshots before callbacks so reentrant reads cannot observe a torn update.
-const pendingSubscriptions = new Set<SnapshotSubscription>();
-let batchDepth = 0;
-let flushing = false;
+class SnapshotNotificationQueue {
+  readonly #pending = new Map<SnapshotSubscription, SnapshotErrorReporter | undefined>();
+  #batchDepth = 0;
+  #flushing = false;
+  #boundary: SnapshotErrorReporter | undefined;
 
-export function batchSnapshotNotifications<Result>(operation: () => SynchronousResult<Result>) {
-  batchDepth++;
-  const errors: unknown[] = [];
-  try {
-    assertSynchronous(operation(), "Snapshot notification batches must be synchronous");
-  } catch (error) {
-    errors.push(error);
-  } finally {
-    batchDepth--;
-    if (!batchDepth) {
+  batch<Result>(
+    operation: () => SynchronousResult<Result>,
+    reportNotificationFailure?: SnapshotErrorReporter,
+  ) {
+    if (
+      reportNotificationFailure !== undefined &&
+      typeof reportNotificationFailure !== "function"
+    ) {
+      throw new TypeError("Snapshot notification error reporter must be a function");
+    }
+    const previousBoundary = this.#boundary;
+    this.#boundary = reportNotificationFailure ?? previousBoundary;
+    this.#batchDepth++;
+    const errors: unknown[] = [];
+    try {
+      assertSynchronous(operation(), "Snapshot notification batches must be synchronous");
+    } catch (error) {
+      errors.push(error);
+    } finally {
+      this.#batchDepth--;
       try {
-        flushNotifications();
+        if (!this.#batchDepth) this.#flush();
       } catch (error) {
         errors.push(error);
+      } finally {
+        this.#boundary = previousBoundary;
       }
     }
+    if (errors.length === 1) throw errors[0];
+    if (errors.length > 1) throw new AggregateError(errors, "Snapshot batch failed");
   }
-  if (errors.length === 1) throw errors[0];
-  if (errors.length > 1) throw new AggregateError(errors, "Snapshot batch failed");
+
+  enqueue(subscriptions: ReadonlySet<SnapshotSubscription>) {
+    for (const subscription of subscriptions) {
+      // Coalescing adds no new notification; its first enqueue keeps responsibility until delivery.
+      if (!this.#pending.has(subscription)) this.#pending.set(subscription, this.#boundary);
+    }
+    if (!this.#batchDepth) this.#flush();
+  }
+
+  cancel(subscription: SnapshotSubscription) {
+    this.#pending.delete(subscription);
+  }
+
+  #flush() {
+    if (this.#flushing) return;
+    this.#flushing = true;
+    const failures: unknown[] = [];
+    try {
+      while (this.#pending.size) {
+        const [subscription, boundary] = this.#pending.entries().next().value!;
+        this.#pending.delete(subscription);
+        const previousBoundary = this.#boundary;
+        // The creating batch can already have returned; reentrant notifications retain its error boundary.
+        this.#boundary = boundary;
+        try {
+          notifySnapshotSubscription(subscription, boundary, failures);
+        } finally {
+          this.#boundary = previousBoundary;
+        }
+      }
+    } finally {
+      this.#flushing = false;
+      this.#pending.clear();
+    }
+    if (failures.length) {
+      throw new AggregateError(failures, snapshotReportingFailureMessage);
+    }
+  }
 }
 
-function flushNotifications() {
-  if (flushing) return;
-  flushing = true;
-  const failures: unknown[] = [];
-  try {
-    while (pendingSubscriptions.size) {
-      const subscription = pendingSubscriptions.values().next().value!;
-      pendingSubscriptions.delete(subscription);
-      notifySnapshotSubscription(subscription, failures);
-    }
-  } finally {
-    flushing = false;
-    pendingSubscriptions.clear();
-  }
-  if (failures.length) {
-    throw new AggregateError(failures, "Snapshot error reporting failed");
-  }
+// One queue keeps related snapshots atomic without making its drain caller own every notification failure.
+const snapshotNotifications = new SnapshotNotificationQueue();
+
+export function batchSnapshotNotifications<Result>(
+  operation: () => SynchronousResult<Result>,
+  reportNotificationFailure?: SnapshotErrorReporter,
+) {
+  snapshotNotifications.batch<Result>(operation, reportNotificationFailure);
 }
 
 type SnapshotPublisherState<T> =
@@ -105,8 +149,7 @@ export class SnapshotPublisher<T> implements Disposable {
   invalidate() {
     this.#requireActive();
     this.#dirty = true;
-    for (const subscription of this.#subscriptions) pendingSubscriptions.add(subscription);
-    if (!batchDepth) flushNotifications();
+    snapshotNotifications.enqueue(this.#subscriptions);
   }
 
   [disposeSymbol]() {
@@ -193,7 +236,11 @@ class SnapshotSubscription implements Disposable {
   }
 }
 
-function notifySnapshotSubscription(subscription: SnapshotSubscription, failures: unknown[]) {
+function notifySnapshotSubscription(
+  subscription: SnapshotSubscription,
+  reportNotificationFailure: SnapshotErrorReporter | undefined,
+  failures: unknown[],
+) {
   const binding = snapshotSubscriptionBindings.get(subscription);
   if (!binding) return;
   try {
@@ -204,12 +251,34 @@ function notifySnapshotSubscription(subscription: SnapshotSubscription, failures
       const { report } = binding;
       assertSynchronous(report(subscriberError), "Snapshot error reporters must be synchronous");
     } catch (reporterError) {
-      failures.push(subscriberError, reporterError);
+      if (!reportNotificationFailure) {
+        failures.push(subscriberError, reporterError);
+        return;
+      }
+      const notificationFailure = new AggregateError(
+        [subscriberError, reporterError],
+        snapshotReportingFailureMessage,
+      );
+      try {
+        assertSynchronous(
+          reportNotificationFailure(notificationFailure),
+          "Snapshot notification error reporters must be synchronous",
+        );
+      } catch (boundaryError) {
+        const terminalFailure = new AggregateError(
+          [notificationFailure, boundaryError],
+          "Snapshot notification error boundary failed",
+        );
+        // A terminal reporter has no lower boundary; its failure cannot rewrite the operation's result.
+        queueMicrotask(() => {
+          throw terminalFailure;
+        });
+      }
     }
   }
 }
 
 function closeSnapshotSubscription(subscription: SnapshotSubscription) {
-  pendingSubscriptions.delete(subscription);
+  snapshotNotifications.cancel(subscription);
   snapshotSubscriptionBindings.delete(subscription);
 }

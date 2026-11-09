@@ -200,6 +200,7 @@ class ContributionRecord<T> implements Publication {
 
 export class ContributionStore<T> {
   readonly #invalidate: (store: ContributionStore<unknown>) => void;
+  #report: ((error: unknown) => void) | undefined;
   readonly #releaseIfUnused: (store: ContributionStore<unknown>) => void;
   readonly #claims = new Map<
     string,
@@ -219,6 +220,7 @@ export class ContributionStore<T> {
     releaseIfUnused: (store: ContributionStore<unknown>) => void,
   ) {
     this.#invalidate = invalidate;
+    this.#report = report;
     this.#releaseIfUnused = releaseIfUnused;
     this.#publisher = new SnapshotPublisher(() => this.#snapshot, report);
   }
@@ -378,7 +380,7 @@ export class ContributionStore<T> {
     if (!changed && ids.length === this.#snapshot.length) return;
     // A snapshot may outlive the generation. Only the store lends its executable values.
     this.#snapshot = Object.freeze(ids);
-    this.#publisher.invalidate();
+    batchSnapshotNotifications(() => this.#publisher.invalidate(), this.#report);
   }
 
   #requireClaim(id: string, contribution: ContributionRecord<T>) {
@@ -404,6 +406,7 @@ export class ContributionStore<T> {
     try {
       this.#publisher[disposeSymbol]();
     } finally {
+      this.#report = undefined;
       this.#releaseIfUnused(this as ContributionStore<unknown>);
     }
   }

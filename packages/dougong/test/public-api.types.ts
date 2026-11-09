@@ -1063,6 +1063,16 @@ function verifySynchronousSnapshotCallbacks(
   batchSnapshotNotifications(() => ({ pending: asynchronous }));
   batchSnapshotNotifications(synchronous);
   batchSnapshotNotifications<void>(synchronous);
+  batchSnapshotNotifications(synchronous, synchronous);
+  batchSnapshotNotifications(synchronous, (error) => {
+    expectTypeOf(error).toEqualTypeOf<unknown>();
+  });
+  // @ts-expect-error A notification boundary must report synchronously.
+  batchSnapshotNotifications(synchronous, async () => undefined);
+  // @ts-expect-error Structural PromiseLike reporters cannot extend the boundary.
+  batchSnapshotNotifications(synchronous, () => asynchronous);
+  // @ts-expect-error A notification boundary reports failures without returning a business result.
+  batchSnapshotNotifications(synchronous, () => 1);
 
   // @ts-expect-error Snapshot notifications cannot own an asynchronous subscriber continuation.
   view.subscribe(async () => undefined);

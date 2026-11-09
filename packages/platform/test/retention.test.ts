@@ -152,10 +152,11 @@ async function abandonPreparation(
   };
 }
 
-it("releases admission and loader capabilities while application code retains the disposed Platform", async () => {
+it("releases admission, loader and logger capabilities while application code retains the disposed Platform", async () => {
   async function dispose() {
     const loader = { load: () => ({ default: definePlugin({ name: "sample", setup() {} }) }) };
     const authorizer = { authorize() {} };
+    const logger = { debug() {}, info() {}, warn() {}, error() {} };
     const host = createHost();
     const platform = createPlatform({
       id: "retained",
@@ -163,12 +164,18 @@ it("releases admission and loader capabilities while application code retains th
       apiVersion: "1.0.0",
       loader,
       authorizer,
+      logger,
     });
     await platform.activate([await select(platform, "sample", "one")]);
     await platform[Symbol.asyncDispose]();
     return {
       platform,
-      references: [new WeakRef(host), new WeakRef(loader), new WeakRef(authorizer)],
+      references: [
+        new WeakRef(host),
+        new WeakRef(loader),
+        new WeakRef(authorizer),
+        new WeakRef(logger),
+      ],
     };
   }
   const { platform, references } = await dispose();
@@ -180,6 +187,7 @@ it("releases admission and loader capabilities while application code retains th
   }
   expect(platform.status).toBe("disposed");
   expect(references.map((reference) => reference.deref())).toEqual([
+    undefined,
     undefined,
     undefined,
     undefined,

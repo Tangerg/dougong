@@ -109,6 +109,7 @@ interface PlatformPorts {
   readonly host: Host;
   readonly authorizer: Authorizer;
   readonly group: Group | undefined;
+  readonly reportNotificationFailure: (error: unknown) => void;
 }
 
 type PlatformState =
@@ -194,7 +195,12 @@ class DeliveryPlatform<Reference> implements Platform<Reference> {
 
     this.id = id;
     this.apiVersion = apiVersion;
-    const ports: PlatformPorts = Object.freeze({ host, group, authorizer: admission });
+    const ports: PlatformPorts = Object.freeze({
+      host,
+      group,
+      authorizer: admission,
+      reportNotificationFailure: reporter(capturedLogger),
+    });
     this.#state = { phase: "active", ports };
     this.#catalog = new ArtifactCatalog(apiVersion);
     this.catalog = this.#catalog.facade;
@@ -207,7 +213,7 @@ class DeliveryPlatform<Reference> implements Platform<Reference> {
     this.#projection = this.#snapshot();
     this.#publisher = new SnapshotPublisher(
       () => (this.#projection = this.#snapshot(this.#projection)),
-      reporter(capturedLogger),
+      ports.reportNotificationFailure,
     );
     const binding = { synchronize: (() => this.#synchronize()) as (() => void) | undefined };
     this.#viewBinding = binding;
@@ -291,17 +297,21 @@ class DeliveryPlatform<Reference> implements Platform<Reference> {
     const signal = declaration.signal;
     const removing = this.#resolveRemoval(declaration.remove);
     if (signal !== undefined) AbortSignal.prototype.throwIfAborted.call(signal);
-    const { roots, operation } = await this.#admit(() => {
-      // Resolve an event against the same admitted selections whose revisions the Plan captures.
-      const roots =
-        typeof target === "string"
-          ? [...this.#registrations.values()].filter((registration) =>
-              registration.selectedArtifact.manifest.activation.includes(target),
-            )
-          : target;
-      return { roots, operation: this.#beginActivation(roots, removing, signal) };
-    }, signal);
+    let admittedOperation: ActivationOperation<Reference> | undefined;
     try {
+      const { roots, operation } = await this.#admit(() => {
+        // Resolve an event against the same admitted selections whose revisions the Plan captures.
+        const roots =
+          typeof target === "string"
+            ? [...this.#registrations.values()].filter((registration) =>
+                registration.selectedArtifact.manifest.activation.includes(target),
+              )
+            : target;
+        // Notification can reenter disposal or fail before the queued receipt reaches this scope.
+        admittedOperation = this.#beginActivation(roots, removing, signal);
+        this.#publish();
+        return { roots, operation: admittedOperation };
+      }, signal);
       const loaded = new Map<Artifact<Reference>, AnyPlugin>();
       for (const selection of operation.plan.selections) {
         operation.checkpoint();
@@ -319,12 +329,15 @@ class DeliveryPlatform<Reference> implements Platform<Reference> {
         this.#commitActivation(operation, roots, removing, loaded),
       );
     } catch (error) {
-      operation.checkpoint();
-      throw recordActivationFailure(operation.plan, error);
+      if (!admittedOperation) throw error;
+      admittedOperation.checkpoint();
+      throw recordActivationFailure(admittedOperation.plan, error);
     } finally {
-      this.#operations.delete(operation);
-      operation.finish();
-      this.#publish();
+      if (admittedOperation) {
+        this.#operations.delete(admittedOperation);
+        admittedOperation.finish();
+        this.#publish();
+      }
     }
   }
 
@@ -371,7 +384,6 @@ class DeliveryPlatform<Reference> implements Platform<Reference> {
     }
     const operation = new ActivationOperation(plan, signal);
     this.#operations.add(operation);
-    this.#publish();
     return operation;
   }
 
@@ -537,7 +549,10 @@ class DeliveryPlatform<Reference> implements Platform<Reference> {
       subscription?.[disposeSymbol]();
     } finally {
       try {
-        this.#publisher.invalidate();
+        batchSnapshotNotifications(
+          () => this.#publisher.invalidate(),
+          ports.reportNotificationFailure,
+        );
       } finally {
         this.#publisher[disposeSymbol]();
       }
@@ -571,7 +586,7 @@ class DeliveryPlatform<Reference> implements Platform<Reference> {
     batchSnapshotNotifications(() => {
       this.#publish();
       cancel();
-    });
+    }, this.#ports().reportNotificationFailure);
   }
 
   #resolveRemoval(registrations: ReadonlyArray<Registration<Reference>> | undefined) {
@@ -675,8 +690,9 @@ class DeliveryPlatform<Reference> implements Platform<Reference> {
 
   #publish() {
     if (this.#state.phase === "disposed") return;
-    this.#hostSnapshot = this.#ports().host.diagnostics.get();
-    this.#publisher.invalidate();
+    const ports = this.#ports();
+    this.#hostSnapshot = ports.host.diagnostics.get();
+    batchSnapshotNotifications(() => this.#publisher.invalidate(), ports.reportNotificationFailure);
   }
 
   #synchronize() {

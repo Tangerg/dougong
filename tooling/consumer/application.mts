@@ -14,6 +14,7 @@ import { captureDataArray, ReadonlyMapSnapshot, resolveValue, SerialQueue } from
 import { bridge, computed } from "@dougongjs/reactive";
 import type * as Reactive from "@dougongjs/reactive";
 import { createPlatform, MemoryLoader } from "@dougongjs/platform";
+import { verifyObservationBoundary } from "./observation-boundary.mjs";
 
 function assert(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Error(message);
@@ -231,6 +232,7 @@ assert(
   !("install" in host) && !("get" in host) && !("dispose" in host) && !("inspect" in host),
   "Retired Host mutation or disposal aliases escaped",
 );
+await verifyObservationBoundary();
 console.log(
   "Packed consumer OK: ESM, declarations, plans, resources, Platform and separate reactive copies",
 );

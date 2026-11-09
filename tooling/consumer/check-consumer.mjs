@@ -36,6 +36,7 @@ try {
   for (const fixture of [
     "application.mts",
     "browser.mts",
+    "observation-boundary.mts",
     "fallback-disposal.mjs",
     "mask-native-disposal.mjs",
   ])

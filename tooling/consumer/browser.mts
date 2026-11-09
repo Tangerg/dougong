@@ -2,6 +2,7 @@ import { asyncDisposeSymbol, createHost, definePlugin, service } from "dougong";
 import { onAbort } from "dougong/advanced";
 import { computed, disposeSymbol, observe, signal, type Readable } from "@dougongjs/reactive";
 import { createPlatform, MemoryLoader } from "@dougongjs/platform";
+import { verifyObservationBoundary } from "./observation-boundary.mjs";
 
 function assert(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Error(message);
@@ -282,4 +283,5 @@ export async function verifyBrowserConsumer() {
   verifySubscriptions();
   await verifySynchronousResults();
   await verifyResources();
+  await verifyObservationBoundary();
 }

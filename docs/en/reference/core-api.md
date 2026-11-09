@@ -79,6 +79,10 @@ Callbacks passed to `SnapshotView.subscribe` and `batchSnapshotNotifications` mu
 
 The `SnapshotPublisher` error reporter must also finish synchronously and perform reporting side effects without returning a business result. If a shorthand callback returns the count from `Array.push`, use a block without a return, such as `error => { errors.push(error); }`. A synchronous reporter failure is preserved together with the original subscriber failure; dynamic inputs still pass through the runtime synchronous check.
 
+`batchSnapshotNotifications(operation, reportNotificationFailure?)` can explicitly bind a terminal notification error boundary. When a subscriber and its error reporter both fail, this boundary receives an `AggregateError` containing both original errors without changing the operation's outcome; errors from the operation itself still reach its caller. Omitting the second argument inherits the current boundary. With no boundary, notification failures still throw synchronously to the direct caller. A coalesced notification keeps the boundary captured by its first enqueue: returning from a nested batch or invalidating again cannot transfer that responsibility. Notifications raised by subscribers or reporters inherit the boundary of the notification being delivered.
+
+The terminal reporter must also finish synchronously without a business result. If it fails, both stages of failure are reported as an uncaught error in a separate microtask, without replacing the established operation outcome. Notification delivery remains synchronous and related snapshots remain atomically visible. Core and Platform bind their existing `onError` or logger channels at their publication and cancellation boundaries; real publication, resource cleanup and execution failures retain their rejection and quarantine semantics.
+
 `ErrorDetails` carries outcome, phase, stateRevision and optional installation, contract, dependency path and impact. `RecordedFailure` is a bounded diagnostic projection detached from resource graphs; direct callers still receive the cause of the original rejection.
 
 `isCancellationReason` uses the native signal's reason identity. An arbitrary error with the same name is not cancellation; an `AbortError.cause` data property holding that reason also establishes the relation. See [Lifetime and resources](../guide/lifetime.md) for the full contract.
@@ -100,7 +104,7 @@ Use `dougong/advanced` for adapters and domain extensions. These primitives expo
 | Primitive | Responsibility |
 | --- | --- |
 | `SnapshotPublisher`, `ReadonlyMapSnapshot` | Publish snapshots and expose read-only collections. |
-| `batchSnapshotNotifications` | Group publications in one synchronous callback. A returned Promise cannot extend the boundary. |
+| `batchSnapshotNotifications` | Group publications in one synchronous callback and optionally bind their terminal notification error boundary. A returned Promise cannot extend the boundary. |
 | `SerialQueue` | Runs operations in order. `run(operation, signal)` returns `Promise<ResolvedValue<Awaited<T>>>`; `settled` only joins completion. The optional signal withdraws a waiting operation immediately. Once invoked, the operation owns its settlement. |
 | `normalizePlainRecord` | Capture the data fields of a plain record. Use `captureConfiguration` when the input is plugin configuration. |
 | `recordFields<T>()(...keys)` | Build an exhaustive accepted-field set from a declaration type for `normalizePlainRecord`. |

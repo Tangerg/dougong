@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { extensionPoint } from "../src/contracts/contracts";
 import { ContributionRegistry, ContributionStore } from "../src/contributions/contribution-store";
 import { Lifetime } from "../src/lifetime/lifetime";
@@ -12,6 +12,15 @@ function createStore<T>() {
     () => undefined,
     () => undefined,
   );
+}
+
+function captureFailure(callback: () => void): unknown {
+  try {
+    callback();
+  } catch (error) {
+    return error;
+  }
+  return undefined;
 }
 
 describe("ContributionStore invariants", () => {
@@ -101,45 +110,73 @@ describe("ContributionStore invariants", () => {
     await lifetime.dispose();
   });
 
-  it("keeps publication committed when error reporting fails", async () => {
+  it("keeps publication committed and escalates a failed notification boundary once", async () => {
+    const terminalReports: Array<() => void> = [];
+    vi.spyOn(globalThis, "queueMicrotask").mockImplementation((callback) => {
+      terminalReports.push(callback);
+    });
+    const subscriberFailure = new Error("subscriber failed");
+    const reporterFailure = new Error("reporter failed");
+    const report = vi.fn<(error: unknown) => never>(() => {
+      throw reporterFailure;
+    });
     const store = new ContributionStore<number>(
       (current) => current.publishSnapshot(),
-      () => {
-        throw new Error("reporter failed");
-      },
+      report,
       () => undefined,
     );
     const lifetime = owner();
     const contribution = store.stage("owner", "item", 1, lifetime);
     const subscription = store.subscribe(
       () => {
-        throw new Error("subscriber failed");
+        throw subscriberFailure;
       },
       () => () => undefined,
     );
-    expect(() => lifetime.publish()).toThrow(AggregateError);
+    lifetime.publish();
+    expect(report).toHaveBeenCalledTimes(2);
+    expect(report).toHaveBeenNthCalledWith(1, subscriberFailure);
+    expect(report).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ errors: [subscriberFailure, reporterFailure] }),
+    );
+    expect(terminalReports).toHaveLength(1);
+    expect(captureFailure(terminalReports[0]!)).toMatchObject({
+      errors: [
+        expect.objectContaining({ errors: [subscriberFailure, reporterFailure] }),
+        reporterFailure,
+      ],
+    });
     subscription[Symbol.dispose]();
     contribution.update(2);
     expect((await store.use("owner/item", (value) => value)).value).toBe(2);
     await lifetime.dispose();
   });
 
-  it("publishes every invalidated Store before surfacing batch reporting failures", async () => {
-    const registry = new ContributionRegistry(() => {
-      throw new Error("reporter failed");
+  it("publishes every invalidated Store before escalating its notification failures", async () => {
+    const terminalReports: Array<() => void> = [];
+    vi.spyOn(globalThis, "queueMicrotask").mockImplementation((callback) => {
+      terminalReports.push(callback);
     });
+    const firstFailure = new Error("first subscriber failed");
+    const secondFailure = new Error("second subscriber failed");
+    const reporterFailure = new Error("reporter failed");
+    const report = vi.fn<(error: unknown) => never>(() => {
+      throw reporterFailure;
+    });
+    const registry = new ContributionRegistry(report);
     const firstStore = registry.get<number>(extensionPoint("contribution/batch-first"));
     const secondStore = registry.get<number>(extensionPoint("contribution/batch-second"));
     const lifetime = owner();
     const firstSubscription = firstStore.subscribe(
       () => {
-        throw new Error("first subscriber failed");
+        throw firstFailure;
       },
       () => () => undefined,
     );
     const secondSubscription = secondStore.subscribe(
       () => {
-        throw new Error("second subscriber failed");
+        throw secondFailure;
       },
       () => () => undefined,
     );
@@ -147,9 +184,25 @@ describe("ContributionStore invariants", () => {
     secondStore.stage("owner", "item", 2, lifetime);
     registry.beginBatch();
     lifetime.publish();
-    expect(() => registry.endBatch()).toThrow(AggregateError);
+    registry.endBatch();
     expect((await firstStore.use("owner/item", (value) => value)).value).toBe(1);
     expect((await secondStore.use("owner/item", (value) => value)).value).toBe(2);
+    expect(report).toHaveBeenCalledTimes(4);
+    expect(terminalReports).toHaveLength(2);
+    expect(terminalReports.map(captureFailure)).toMatchObject([
+      {
+        errors: [
+          expect.objectContaining({ errors: [firstFailure, reporterFailure] }),
+          reporterFailure,
+        ],
+      },
+      {
+        errors: [
+          expect.objectContaining({ errors: [secondFailure, reporterFailure] }),
+          reporterFailure,
+        ],
+      },
+    ]);
     firstSubscription[Symbol.dispose]();
     secondSubscription[Symbol.dispose]();
     await lifetime.dispose();
@@ -194,5 +247,29 @@ describe("ContributionStore invariants", () => {
     claim[Symbol.dispose]();
     expect(registry.get(claimed)).not.toBe(held);
     await lifetime.dispose();
+  });
+
+  it("releases its notification reporter when its last view is sealed", async () => {
+    function createRetainedStore() {
+      const reporter = { report() {} };
+      const store = new ContributionStore<number>(
+        (current) => current.publishSnapshot(),
+        reporter.report.bind(reporter),
+        () => undefined,
+      );
+      const view = store.hostView();
+      store.sealHostView();
+      return { store, view, reporter: new WeakRef(reporter) };
+    }
+
+    const retained = createRetainedStore();
+    const collectionPasses = 8;
+    for (let pass = 0; pass < collectionPasses && retained.reporter.deref(); pass++) {
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      globalThis.gc!();
+    }
+    expect(retained.reporter.deref()).toBeUndefined();
+    expect(retained.store.snapshot()).toEqual([]);
+    expect(retained.view.get()).toEqual([]);
   });
 });

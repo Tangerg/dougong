@@ -536,6 +536,7 @@ export class Lifetime {
 
   stage<T extends Publication>(create: (detach: () => void) => T): T {
     this.#requireActive();
+    const report = this.#report;
     let record: PublicationRecord | undefined;
     const publication = create(() => {
       if (record && !record.failure) this.#publications.delete(record);
@@ -548,7 +549,7 @@ export class Lifetime {
     batchSnapshotNotifications(() => {
       this.#changed?.();
       if (this.published) publication.publish();
-    });
+    }, report);
     return publication;
   }
 
@@ -610,6 +611,7 @@ export class Lifetime {
   dispose(options?: { readonly cancelForeground?: boolean }): Promise<void> {
     if (this.#completion) return this.#completion;
     if (this.#phase === "disposed") return Promise.resolve();
+    const report = this.#report;
     try {
       if (options?.cancelForeground) this.block();
       else this.seal();
@@ -627,11 +629,11 @@ export class Lifetime {
       batchSnapshotNotifications(() => {
         for (const scope of entering) scope.#withdraw();
         this.#changed?.();
-      });
+      }, report);
     } catch (error) {
       errors.push(error);
     }
-    this.#cancelTree(createDisposalReason());
+    batchSnapshotNotifications(() => this.#cancelTree(createDisposalReason()), report);
     return this.#completion!;
   }
 

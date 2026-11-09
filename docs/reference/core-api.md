@@ -79,6 +79,10 @@ Host 状态为 `stopped`、`starting`、`running`、`changing`、`stopping`、`q
 
 `SnapshotPublisher` 的错误报告函数也必须同步完成，并且只执行报告副作用，不返回业务结果。若简写回调意外返回 `Array.push` 的计数，改用不返回值的代码块，例如 `error => { errors.push(error); }`。同步抛出的报告错误会与原订阅错误一起保留；动态输入仍经过运行时同步校验。
 
+`batchSnapshotNotifications(operation, reportNotificationFailure?)` 可显式指定通知的终端错误边界。订阅者及其错误报告函数都失败时，该边界接收包含两个原始错误的 `AggregateError`，不改变 `operation` 的结果；操作体自己的异常仍由调用者接收。省略第二参数会继承当前边界，完全没有边界时仍向直接调用者同步抛出通知错误。合并通知保留首次入队时的边界；嵌套批次返回或后续重复失效不能转移这项责任。订阅者和报告函数触发的新通知继承正在投递的通知边界。
+
+终端报告函数也必须同步完成且不返回业务结果。它自身失败时，两个阶段的错误通过独立微任务作为未捕获错误报告，不覆盖已经确定的业务结果。通知仍然同步投递，相关快照仍然原子可见。Core 和 Platform 在自己的发布与取消边界绑定既有 `onError` 或 logger 通道；真正的发布、资源清理和执行失败仍遵守原来的拒绝与隔离规则。
+
 `ErrorDetails` 给出 outcome、phase、stateRevision 和可选的安装、契约、依赖路径与影响范围。`RecordedFailure` 是有界脱离资源图的诊断投影；原始拒绝的 cause 仍由直接调用者接收。
 
 `isCancellationReason` 按原生信号的取消原因身份分类，不把任意同名错误视为取消；带有同一原因的 `AbortError.cause` 数据属性也可建立因果。完整契约见[生命周期与资源](../guide/lifetime.md)。
@@ -100,7 +104,7 @@ Host 只在选项缺省时使用默认值；显式传入 null 的名字、安装
 | 原语 | 职责 |
 | --- | --- |
 | `SnapshotPublisher`、`ReadonlyMapSnapshot` | 发布快照、提供只读集合。 |
-| `batchSnapshotNotifications` | 在一个同步回调中批量发布。返回 Promise 不能延长此次发布边界。 |
+| `batchSnapshotNotifications` | 在一个同步回调中批量发布，并可绑定通知的终端错误边界。返回 Promise 不能延长此次发布边界。 |
 | `SerialQueue` | 顺序执行提交的操作。`run(operation, signal)` 返回 `Promise<ResolvedValue<Awaited<T>>>`，`settled` 只等待完成；信号可立即撤回仍在排队的操作。操作开始后，由它自己决定结算。 |
 | `normalizePlainRecord` | 捕获普通记录的数据字段。插件配置请用 `captureConfiguration`。 |
 | `recordFields<T>()(...keys)` | 从声明类型建立穷尽的允许字段集合，供 `normalizePlainRecord` 使用。 |
