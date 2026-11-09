@@ -8,6 +8,7 @@ import { PassThrough } from "node:stream";
 export function cleanReleaseGit(commandArguments, { gitConfigurationArguments = [] } = {}) {
   const [command] = commandArguments;
   const head = "a".repeat(40);
+  if (command === "--version") return { status: 0, stdout: "git version 2.48.0" };
   if (command === "rev-parse")
     return { status: 0, stdout: commandArguments.includes("--abbrev-ref") ? "main" : head };
   if (command === "rev-list") return { status: 0, stdout: "0" };

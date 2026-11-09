@@ -11,12 +11,15 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { delimiter, dirname, join, resolve } from "node:path";
 import { clearTimeout, setTimeout } from "node:timers";
 import { setImmediate as nextTurn } from "node:timers/promises";
 
 const terminationSignals = ["SIGINT", "SIGTERM", "SIGHUP"];
 const maximumCapturedBytes = 1024 * 1024;
+const interruptCommand = "interrupt";
+const settleCommand = "settle";
+const ignoreCancellation = "ignore";
 
 class ReleaseCancellation extends Error {
   constructor(signal) {
@@ -63,10 +66,10 @@ export class ReleaseSession {
     return result.stdout.trim();
   }
 
-  async #execute(command, commandArguments, options, cancellable = true) {
+  async #execute(command, commandArguments, options, cancellation = interruptCommand) {
     // A signal received during synchronous archive inspection must be delivered before another command starts.
     await nextTurn();
-    if (cancellable) this.signal.throwIfAborted();
+    if (cancellation !== ignoreCancellation) this.signal.throwIfAborted();
     if (this.#command) throw new Error("A release command is already running");
 
     const {
@@ -145,7 +148,8 @@ export class ReleaseSession {
         });
       });
       this.#command = { completion, terminate };
-      if (cancellable) this.signal.addEventListener("abort", cancel, { once: true });
+      if (cancellation === interruptCommand)
+        this.signal.addEventListener("abort", cancel, { once: true });
       result = await completion;
     } finally {
       clearTimeout(deadlineTimer);
@@ -153,7 +157,7 @@ export class ReleaseSession {
       this.#command = undefined;
     }
     await nextTurn();
-    if (cancellable) {
+    if (cancellation === interruptCommand) {
       if (this.signal.aborted && result.error) {
         throw new AggregateError([this.signal.reason, result.error], "Release command interrupted");
       }
@@ -163,16 +167,16 @@ export class ReleaseSession {
   }
 
   async atSource(source) {
-    return this.#atSource(source, true);
+    return this.#atSource(source, interruptCommand);
   }
 
-  async #atSource({ branch, head }, cancellable) {
+  async #atSource({ branch, head }, cancellation) {
     const query = async (commandArguments) => {
       const result = await this.#execute(
         "git",
         commandArguments,
         { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
-        cancellable,
+        cancellation,
       );
       assertCommandSucceeded("git", commandArguments, result);
       return result.stdout.trim();
@@ -199,7 +203,7 @@ export class ReleaseSession {
     this.#replacedManifests.clear();
     if (!owned.length) return true;
     // Cancellation stops publication, not the read-only Git check needed to respect another checkout owner.
-    if (!(await this.#atSource(this.#source, false))) return false;
+    if (!(await this.#atSource(this.#source, ignoreCancellation))) return false;
     const errors = [];
     for (const { directory, original, versioned } of owned) {
       try {
@@ -214,8 +218,76 @@ export class ReleaseSession {
     return true;
   }
 
-  recordManifests() {
+  relinquishManifestRestoration() {
     this.#replacedManifests.clear();
+  }
+
+  async recordCommit({ source, reference, commit, directory, message }, indexProjection) {
+    const commandArguments = [
+      "-c",
+      `core.hooksPath=${directory}`,
+      "update-ref",
+      "-m",
+      message,
+      "HEAD",
+      commit,
+      source.head,
+    ];
+    // The private prepared hook authorizes the locked ref; cancellation must join its index projection.
+    const result = await this.#execute(
+      "git",
+      commandArguments,
+      {
+        stdio: "pipe",
+        env: { ...process.env, PATH: `${directory}${delimiter}${process.env.PATH ?? ""}` },
+      },
+      settleCommand,
+    );
+    const failures = [];
+    try {
+      assertCommandSucceeded("git", commandArguments, result);
+    } catch (error) {
+      failures.push(error);
+    }
+    const query = async (arguments_) => {
+      try {
+        const observed = await this.#execute(
+          "git",
+          arguments_,
+          { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
+          ignoreCancellation,
+        );
+        assertCommandSucceeded("git", arguments_, observed);
+        return observed.stdout.trim();
+      } catch (error) {
+        failures.push(error);
+        return undefined;
+      }
+    };
+    const observedReference = await query(["rev-parse", "--verify", reference]);
+    const checkoutReference =
+      observedReference === commit ? await query(["symbolic-ref", "--quiet", "HEAD"]) : undefined;
+    const recoveryMessage =
+      `Release reference ${reference} requires inspection (source ${source.head}, release ${commit}, ` +
+      `observed ${observedReference ?? "unavailable"}); prepared index retained at ${indexProjection.path}. ` +
+      "Inspect the checkout and reconcile the retained index before resuming.";
+    if (observedReference === commit && checkoutReference === reference) {
+      this.relinquishManifestRestoration();
+      try {
+        indexProjection.publish();
+      } catch (cause) {
+        indexProjection.retain();
+        failures.push(new Error(recoveryMessage, { cause }));
+      }
+    } else if (!(failures.length && observedReference === source.head)) {
+      // An uncertain or superseded ref update cannot authorize restoring the old worktree or projecting this index.
+      this.relinquishManifestRestoration();
+      indexProjection.retain();
+      failures.push(new Error(recoveryMessage));
+    }
+    if (failures.length === 1) throw failures[0];
+    if (failures.length > 1) throw new AggregateError(failures, "Release recording failed");
+    this.signal.throwIfAborted();
   }
 
   createStage() {

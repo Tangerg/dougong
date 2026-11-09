@@ -1,8 +1,40 @@
+import {
+  closeSync,
+  copyFileSync,
+  mkdtempSync,
+  openSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
+import { basename, dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { versionedManifest } from "./release-request.mjs";
+import { releaseRecordProofFilename } from "./release-reference-transaction.mjs";
 
 const releaseBranch = "main";
 const sourceRemote = "origin";
 const mainReference = `refs/heads/${releaseBranch}`;
+const minimumGitVersion = [2, 48];
+const referenceTransactionModule = new URL("./release-reference-transaction.mjs", import.meta.url);
+const referenceTransactionSource = readFileSync(referenceTransactionModule);
+
+async function assertGitVersion(session) {
+  const version = await session.capture("git", ["--version"]);
+  const match = /^git version (\d+)\.(\d+)(?:\.|\s|$)/u.exec(version);
+  const [major, minor] = match?.slice(1).map(Number) ?? [];
+  if (
+    !match ||
+    major < minimumGitVersion[0] ||
+    (major === minimumGitVersion[0] && minor < minimumGitVersion[1])
+  ) {
+    throw new Error(
+      `Release recording requires Git ${minimumGitVersion.join(".")} or newer with resolved reference-transaction updates`,
+    );
+  }
+}
 
 // Git owns recovery: only this exact manifest-only commit proves a pending release record.
 async function isReleaseCommit(session, request, commit, parent) {
@@ -144,6 +176,7 @@ async function readReferences(session, destination, tagReference) {
 }
 
 export async function inspectReleaseRepository(session, request) {
+  await assertGitVersion(session);
   const { source, remoteMain, pendingReleaseCommit } = await inspectSource(session, request);
   const tag = `v${request.version}`;
   const tagReference = `refs/tags/${tag}`;
@@ -248,7 +281,6 @@ class ReleaseRepository {
   async record() {
     await this.assertPublicationInputs("record");
     const commit = await this.#recordManifestCommit();
-    this.#session.recordManifests();
     const tagObject = await this.#recordTag(commit);
     await this.#pushRecord(commit, tagObject);
   }
@@ -256,36 +288,106 @@ class ReleaseRepository {
   async #recordManifestCommit() {
     const { head } = this.source;
     const { manifestFiles, version } = this.#request;
-    const staged = await this.#session.execute(
-      "git",
-      ["diff", "--cached", "--quiet", head, "--", ...manifestFiles],
-      { stdio: "inherit" },
-    );
-    if (staged.error || staged.status !== 0)
-      throw new Error(
-        "release manifests have staged changes or the index is unreadable; refusing to replace them",
+    const index = resolve(await this.#session.capture("git", ["rev-parse", "--git-path", "index"]));
+    const indexLock = `${index}.lock`;
+    const lockDescriptor = openSync(indexLock, "wx");
+    let discardIndex = true;
+    let directory;
+    let commit = head;
+    const failures = [];
+    try {
+      closeSync(lockDescriptor);
+      copyFileSync(index, indexLock);
+      directory = mkdtempSync(join(dirname(index), "release-record-"));
+      const hookFilename = basename(fileURLToPath(referenceTransactionModule));
+      writeFileSync(join(directory, hookFilename), referenceTransactionSource, { mode: 0o755 });
+      symlinkSync(hookFilename, join(directory, "reference-transaction"));
+      symlinkSync(process.execPath, join(directory, "node"));
+      const configuration = ["-c", `core.hooksPath=${directory}`];
+      const pendingIndex = { env: { ...process.env, GIT_INDEX_FILE: indexLock } };
+      const staged = await this.#session.execute(
+        "git",
+        [...configuration, "diff", "--cached", "--quiet", head, "--", ...manifestFiles],
+        { ...pendingIndex, stdio: "inherit" },
       );
-    // Git's clean filters decide whether worktree bytes represent a different tree.
-    const changed = await this.#session.execute(
-      "git",
-      ["diff", "--quiet", head, "--", ...manifestFiles],
-      { stdio: "inherit" },
-    );
-    if (changed.error || (changed.status !== 0 && changed.status !== 1))
-      throw new Error("Cannot determine whether release manifests change the Git tree");
-    if (changed.status === 0) return head;
-    // A path-scoped commit leaves other owners' staged files outside the release.
-    await this.#session.run("git", [
-      "commit",
-      "--only",
-      "-m",
-      `chore: release ${version}`,
-      "--",
-      ...manifestFiles,
-    ]);
-    const commit = await this.#session.capture("git", ["rev-parse", "HEAD"]);
-    if (!(await isReleaseCommit(this.#session, this.#request, commit, head)))
-      throw new Error("Git commit differs from the verified release; refusing to tag or push");
+      if (staged.error || staged.status !== 0)
+        throw new Error(
+          "release manifests have staged changes or the index is unreadable; refusing to replace them",
+        );
+      const candidateIndex = {
+        env: { ...process.env, GIT_INDEX_FILE: join(directory, "index") },
+      };
+      await this.#session.run("git", [...configuration, "read-tree", head], candidateIndex);
+      // Git's clean filters decide whether worktree bytes represent a different tree.
+      await this.#session.run(
+        "git",
+        [...configuration, "add", "--", ...manifestFiles],
+        candidateIndex,
+      );
+      const tree = await this.#session.capture(
+        "git",
+        [...configuration, "write-tree"],
+        candidateIndex,
+      );
+      if (tree === (await this.#session.capture("git", ["rev-parse", `${head}^{tree}`]))) {
+        this.#session.relinquishManifestRestoration();
+      } else {
+        const message = `chore: release ${version}`;
+        commit = await this.#session.capture("git", [
+          "commit-tree",
+          tree,
+          "-p",
+          head,
+          "-m",
+          message,
+        ]);
+        if (!(await isReleaseCommit(this.#session, this.#request, commit, head)))
+          throw new Error("Git commit differs from the verified release; refusing to tag or push");
+        await this.#session.run(
+          "git",
+          [...configuration, "restore", `--source=${commit}`, "--staged", "--", ...manifestFiles],
+          pendingIndex,
+        );
+        writeFileSync(
+          join(directory, releaseRecordProofFilename),
+          JSON.stringify({ reference: mainReference, head, commit }),
+          { flag: "wx", mode: 0o400 },
+        );
+        await this.#session.recordCommit(
+          { source: this.source, reference: mainReference, commit, directory, message },
+          {
+            path: indexLock,
+            retain() {
+              discardIndex = false;
+            },
+            publish() {
+              // After ref publication, a failed rename must retain the prepared index for recovery.
+              discardIndex = false;
+              renameSync(indexLock, index);
+            },
+          },
+        );
+      }
+    } catch (error) {
+      failures.push(error);
+    } finally {
+      for (const cleanup of [
+        () => {
+          if (discardIndex) rmSync(indexLock, { force: true });
+        },
+        () => {
+          if (directory !== undefined) rmSync(directory, { recursive: true, force: true });
+        },
+      ]) {
+        try {
+          cleanup();
+        } catch (error) {
+          failures.push(error);
+        }
+      }
+    }
+    if (failures.length === 1) throw failures[0];
+    if (failures.length > 1) throw new AggregateError(failures, "Release recording failed");
     return commit;
   }
 

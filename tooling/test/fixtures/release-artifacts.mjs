@@ -228,7 +228,7 @@ installReleaseFixture((name, commandArguments, options, nativeSpawn, execute) =>
   }
   const recording =
     name === "git" &&
-    (["add", "commit", "push"].includes(commandArguments[0]) ||
+    (["update-ref", "push"].includes(commandArguments[0]) ||
       (commandArguments[0] === "tag" && commandArguments.includes("-a")));
   if (recording || name === "npm") {
     appendFileSync(
@@ -271,7 +271,7 @@ installReleaseFixture((name, commandArguments, options, nativeSpawn, execute) =>
         [...options.gitConfigurationArguments, ...commandArguments],
         { ...options, stdio: "pipe" },
       );
-      if (result.status === 0 && commandArguments[0] === "commit") {
+      if (result.status === 0 && commandArguments[0] === "update-ref") {
         const interrupted = signalProbe(execute, options, "after-commit");
         if (interrupted) return interrupted;
       }

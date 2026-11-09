@@ -42,6 +42,7 @@ The kernel has one mutation path: `host.change()` → `host.plan(change)` → `h
 
 ```sh
 pnpm install
+pnpm exec playwright install
 pnpm check
 pnpm examples
 pnpm docs:dev

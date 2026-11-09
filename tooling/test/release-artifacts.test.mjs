@@ -585,7 +585,7 @@ it.each([
     });
     expect(result.status).toBe(rejected ? 1 : 0);
     expect(Object.keys(result.published)).toEqual(rejected ? [] : packages);
-    expect(result.recorded).toEqual(rejected ? [] : ["commit", "tag", "push"]);
+    expect(result.recorded).toEqual(rejected ? [] : ["update-ref", "tag", "push"]);
     expect(result.stderr.includes("release destination would be rewritten")).toBe(rejected);
     expect(references.destination).toBe(rejected ? result.initialHead : result.head);
     expect(references.destinationTag).toBe(rejected ? "" : `v${version}`);
@@ -661,7 +661,7 @@ it.each([undefined, "123456"])(
       expect(commandArguments[1]).toMatch(/\.tgz$/);
     }
     expect(result.calls.slice(-3).map(({ command }) => command)).toEqual(["git", "git", "git"]);
-    expect(result.recorded).toEqual(["commit", "tag", "push"]);
+    expect(result.recorded).toEqual(["update-ref", "tag", "push"]);
     expect(result.remoteReferences.split("\n")).toEqual([
       `${result.head}\trefs/heads/main`,
       `${result.head}\trefs/tags/v${version}^{}`,
@@ -686,7 +686,7 @@ it.each(["immediate", "delayed"])(
     expect(uploads.map(({ commandArguments }) => commandArguments[1].split("/").at(-1))).toEqual(
       packages.map((name) => `${name}.tgz`),
     );
-    expect(result.recorded).toEqual(["commit", "tag", "push"]);
+    expect(result.recorded).toEqual(["update-ref", "tag", "push"]);
     expect(result.remoteReferences.split("\n")).toEqual([
       `${result.head}\trefs/heads/main`,
       `${result.head}\trefs/tags/v${version}^{}`,
@@ -923,7 +923,7 @@ it.each([false, true])(
       resume ? ["dougong.tgz", "platform.tgz", "platform.tgz"] : ["dougong.tgz", "platform.tgz"],
     );
     expect(result.status).toBe(resume ? 0 : 1);
-    expect(result.recorded).toEqual(resume ? ["commit", "tag", "push"] : []);
+    expect(result.recorded).toEqual(resume ? ["update-ref", "tag", "push"] : []);
     expect(Object.keys(result.published)).toEqual(resume ? packages : ["reactive", "dougong"]);
   },
 );
@@ -949,7 +949,7 @@ it("keeps one explicit channel when npm configuration changes before resuming", 
     dougong: { preview: version },
     "@dougongjs/platform": { preview: version },
   });
-  expect(result.recorded).toEqual(["commit", "tag", "push"]);
+  expect(result.recorded).toEqual(["update-ref", "tag", "push"]);
   const uploads = result.calls.filter(
     ({ command, commandArguments }) => command === "npm" && commandArguments[0] === "publish",
   );
@@ -1067,7 +1067,7 @@ it.each([
       ),
     ).toHaveLength(attempts);
     expect(result.status).toBe(0);
-    expect(result.recorded).toEqual(["commit", "tag", "push"]);
+    expect(result.recorded).toEqual(["update-ref", "tag", "push"]);
     expect(Object.keys(result.published)).toEqual(packages);
     const uploads = result.calls.filter(
       ({ command, commandArguments }) => command === "npm" && commandArguments[0] === "publish",
@@ -1097,7 +1097,7 @@ it.each(["SIGINT", "SIGTERM", "SIGHUP"])(
     });
     expect(Object.keys(result.publishedAfterFirstAttempt)).toEqual(["reactive"]);
     expect(result.status).toBe(0);
-    expect(result.recorded).toEqual(["commit", "tag", "push"]);
+    expect(result.recorded).toEqual(["update-ref", "tag", "push"]);
     const uploads = result.calls.filter(
       ({ command, commandArguments }) => command === "npm" && commandArguments[0] === "publish",
     );
@@ -1124,15 +1124,15 @@ it("preserves a completed Git commit when cancellation arrives before recording 
     tag: "",
     stagesRetained: false,
   });
-  expect(result.interrupted.stderr).toContain("Checkout moved; leaving manifests untouched");
+  expect(result.interrupted.stderr).not.toContain("Checkout moved; leaving manifests untouched");
   expect(Object.keys(result.publishedAfterFirstAttempt)).toEqual(packages);
   expect(
     result.callsAfterFirstAttempt
       .filter(({ command }) => command === "git")
       .map(({ commandArguments }) => commandArguments[0]),
-  ).toEqual(["commit"]);
+  ).toEqual(["update-ref"]);
   expect(result.status).toBe(0);
-  expect(result.recorded).toEqual(["commit", "tag", "push"]);
+  expect(result.recorded).toEqual(["update-ref", "tag", "push"]);
   expect(
     result.calls.filter(
       ({ command, commandArguments }) => command === "npm" && commandArguments[0] === "publish",
@@ -1366,7 +1366,7 @@ it("waits for registry visibility before publishing dependents", async () => {
         delayMilliseconds === undefined ? commandArguments[0] : "wait",
       ),
   ).toEqual(packages.slice(1).flatMap(() => ["publish", "view", "wait", "view"]));
-  expect(result.recorded).toEqual(["commit", "tag", "push"]);
+  expect(result.recorded).toEqual(["update-ref", "tag", "push"]);
 });
 
 it.each(["never", "unreadable"])(
@@ -1435,15 +1435,15 @@ it("terminates a visibility query at the remaining deadline instead of granting 
 it("finishes release recording after every upload already completed", async () => {
   const result = await runRelease(() => undefined, { publishedPackages: packages, dryRun: false });
   expect(result.status).toBe(0);
-  expect(result.recorded).toEqual(["commit", "tag", "push"]);
+  expect(result.recorded).toEqual(["update-ref", "tag", "push"]);
   expect(result.stdout.match(/already published, contents match/g)).toHaveLength(packages.length);
   expect(result.stdout).toContain("released");
 });
 
 it.each([
   { command: "diff", after: false, committed: false },
-  { command: "commit", after: false, committed: false },
-  { command: "commit", after: true, committed: true },
+  { command: "update-ref", after: false, committed: false },
+  { command: "update-ref", after: true, committed: true },
   { command: "tag", after: false, committed: true },
   { command: "tag", after: true, committed: true },
   { command: "push", after: false, committed: true },
@@ -1653,7 +1653,7 @@ it("lets Git recognize an unchanged resumed release after worktree line-ending c
     },
   });
   expect(result.status).toBe(0);
-  expect(result.recorded.filter((action) => action === "commit")).toHaveLength(1);
+  expect(result.recorded.filter((action) => action === "update-ref")).toHaveLength(1);
 });
 
 it("refuses an ambiguous pack output even when the command prints one valid path", async () => {

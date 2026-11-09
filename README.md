@@ -42,6 +42,7 @@ await host[asyncDisposeSymbol]();
 
 ```sh
 pnpm install
+pnpm exec playwright install
 pnpm check
 pnpm examples
 pnpm docs:dev

@@ -513,10 +513,11 @@ export class Engine {
     writer: ReturnType<ContractRegistry["writer"]>,
     failures: PreparationFailures,
   ) {
-    const startup = new AbortController();
     const generation = ++this.#generation;
     for (const layer of prepared.graph.layers) {
       this.#assertHealthy();
+      // Prepared providers must stay available until their consumers finish cleanup.
+      const layerCancellation = new AbortController();
       const instances = layer
         .filter((record) => prepared.affected.has(record))
         .map((record) => {
@@ -535,7 +536,7 @@ export class Engine {
             events: this.#events,
             contributions: this.#contributions,
             contracts: writer,
-            startupSignal: startup.signal,
+            startupSignal: layerCancellation.signal,
             shutdownTimeoutMilliseconds: this.#shutdownTimeoutMilliseconds,
           });
           execution.set(record, instance);
@@ -564,7 +565,7 @@ export class Engine {
               );
             } catch (error) {
               if (!isCancellationReason(signal, error)) failures.add(error);
-              startup.abort(error);
+              layerCancellation.abort(error);
               throw error;
             }
           }),
@@ -573,7 +574,7 @@ export class Engine {
         for (const instance of instances)
           AbortSignal.prototype.throwIfAborted.call(instance.lifetime.signal);
       } catch (error) {
-        startup.abort(error);
+        layerCancellation.abort(error);
         throw error;
       }
     }
