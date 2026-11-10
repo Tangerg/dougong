@@ -135,7 +135,9 @@ class ReleaseRegistry {
     ];
     if (this.#request.oneTimePassword !== undefined)
       commandArguments.push(`--otp=${this.#request.oneTimePassword}`);
-    await this.#session.run("npm", this.#arguments(entry.name, commandArguments));
+    await this.#session.run("npm", this.#arguments(entry.name, commandArguments), {
+      interactive: true,
+    });
   }
 
   async assertDistributionTag({ name, distributionTag }) {

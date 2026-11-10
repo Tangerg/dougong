@@ -25,10 +25,11 @@ pnpm add dougong@0.11.0
 - Quarantine continues shutdown according to each generation's actual dependencies. Waiting for borrows or consumers does not block the initial quarantine report. Late failures refine diagnostics without restoring availability, retrying failed cleanup or advancing the revision.
 - Snapshot listener and error-reporter failures follow their notification boundary without replacing committed outcomes. Terminal views detach from runtime resources; prepared dependencies and resource transfers retain their original ownership.
 - Reactive bridge preserves the newest reentrant read and subscriber errors. Validation diagnostics encode non-finite numeric property keys as text so JSON cannot replace them with null.
+- Publication preserves real terminal descriptors so npm can start browser-based two-factor authentication; registry queries retain their process-group deadlines.
 - Identity, option capture, contribution storage and borrowing, shutdown obligations, failure recording and snapshot projection have separate responsibilities while preserving package dependency directions and public entrypoints.
 
 ## Release verification
 
-The full `pnpm check` gate passed on Node.js 24.22.2 with 1338 tests in 98 files, generated files, types, lint, formatting, per-package coverage, unused-code analysis, dependency and architecture boundaries, builds, public APIs, packed consumers in six browser environments and bilingual documentation. The release script reruns the full gate at the target version and verifies the archives used for publication.
+The release script runs the full `pnpm check` gate at the target version: generated files, types, lint, formatting, tests and per-package coverage, unused-code analysis, dependency and architecture boundaries, builds, public APIs, packed consumers in six browser environments and bilingual documentation. It then verifies the archives used for publication. A real-terminal regression test covers publication authentication.
 
 Full changes: [v0.10.0…v0.11.0](https://github.com/Tangerg/dougong/compare/v0.10.0...v0.11.0).

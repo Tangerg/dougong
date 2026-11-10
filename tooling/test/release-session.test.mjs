@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import { expect, it } from "vitest";
 import { executeRelease, releaseTestTimeout } from "./release-fixture.mjs";
 
@@ -5,6 +6,49 @@ const sessionModule = new URL("../release/release-session.mjs", import.meta.url)
 const commandTimeoutMilliseconds = 2_000;
 const descendantReady = "descendant ready\n";
 const descendantLateOutput = "descendant completed beyond the deadline\n";
+
+it("preserves terminal descriptors for interactive publication authentication", () => {
+  const ready = "interactive release command ready";
+  const command = `
+    const assert = require("node:assert/strict");
+    assert.equal(process.stdin.isTTY, true);
+    assert.equal(process.stdout.isTTY, true);
+    assert.equal(process.stderr.isTTY, true);
+    console.log(${JSON.stringify(ready)});
+  `;
+  const source = `
+    import assert from "node:assert/strict";
+    import { ReleaseSession } from ${JSON.stringify(sessionModule)};
+    const session = new ReleaseSession();
+    try {
+      const result = await session.execute(process.execPath, ["--eval", ${JSON.stringify(command)}], {
+        stdio: "inherit",
+        interactive: true,
+      });
+      assert.equal(result.status, 0);
+    } finally {
+      await session.close();
+    }
+  `;
+  const nodeArguments = [process.execPath, "--input-type=module", "--eval", source];
+  const commandLine = nodeArguments
+    .map((argument) => "'" + argument.replaceAll("'", "'\\''") + "'")
+    .join(" ");
+  const result = spawnSync(
+    "script",
+    process.platform === "darwin"
+      ? ["-q", "/dev/null", ...nodeArguments]
+      : ["-q", "-e", "-c", commandLine, "/dev/null"],
+    { encoding: "utf8", timeout: 10_000, stdio: ["ignore", "pipe", "pipe"] },
+  );
+  expect(result.error).toBeUndefined();
+  expect(result).toMatchObject({
+    status: 0,
+    signal: null,
+    stdout: expect.stringContaining(ready),
+    stderr: "",
+  });
+});
 
 it.each(["running", "exited"])(
   "terminates the command group at its deadline with a %s leader",

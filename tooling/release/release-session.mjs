@@ -77,8 +77,11 @@ export class ReleaseSession {
       stdio = "pipe",
       timeout = 0,
       killSignal = "SIGTERM",
+      interactive = false,
       ...spawnOptions
     } = options;
+    if (interactive && timeout > 0)
+      throw new TypeError("Interactive release commands cannot enforce an output deadline");
     const descriptors = Array.isArray(stdio) ? stdio : [stdio, stdio, stdio];
     const failures = [];
     let child;
@@ -108,10 +111,14 @@ export class ReleaseSession {
       child = spawn(command, commandArguments, {
         ...spawnOptions,
         detached: true,
-        // Shared pipes keep close pending while ordinary command descendants still own their output.
-        stdio: [descriptors[0] === "inherit" ? "inherit" : "ignore", "pipe", "pipe"],
+        // Publication needs real terminal descriptors for npm's browser authentication.
+        // Queries retain pipes so their deadlines include descendants that still own output.
+        stdio: interactive
+          ? descriptors
+          : [descriptors[0] === "inherit" ? "inherit" : "ignore", "pipe", "pipe"],
       });
       const output = ["stdout", "stderr"].map((channel, index) => {
+        if (child[channel] === null) return () => null;
         const chunks = [];
         let length = 0;
         const disposition = descriptors[index + 1];
