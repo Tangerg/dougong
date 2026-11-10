@@ -1,3 +1,4 @@
+import { createResourceAuthority } from "dougong";
 import { describe, expect, it, vi } from "vitest";
 import { extensionPoint } from "../src/contracts/contracts";
 import { ContributionRegistry } from "../src/contributions/contribution-registry";
@@ -5,7 +6,9 @@ import { ContributionStore } from "../src/contributions/contribution-store";
 import { Lifetime } from "../src/lifetime/lifetime";
 import type { Disposable } from "../src/contracts/resource";
 
-const owner = () => new Lifetime({ label: "owner", report: () => undefined });
+const resourceAuthority = createResourceAuthority();
+
+const owner = () => new Lifetime({ resourceAuthority, label: "owner", report: () => undefined });
 
 function createStore<T>() {
   return new ContributionStore<T>(
@@ -69,9 +72,8 @@ describe("ContributionStore invariants", () => {
     const listener = () => {
       notifications++;
     };
-    const own = () => () => undefined;
-    const first = store.subscribe(listener, own);
-    const second = store.subscribe(listener, own);
+    const first = store.subscribe(listener, lifetime);
+    const second = store.subscribe(listener, lifetime);
     lifetime.publish();
     expect(notifications).toBe(2);
     first[Symbol.dispose]();
@@ -97,13 +99,10 @@ describe("ContributionStore invariants", () => {
     const lifetime = owner();
     const contribution = store.stage("owner/item", 1, lifetime, () => undefined);
     let subscription!: Disposable;
-    subscription = store.subscribe(
-      () => {
-        contribution[Symbol.dispose]();
-        subscription[Symbol.dispose]();
-      },
-      () => () => undefined,
-    );
+    subscription = store.subscribe(() => {
+      contribution[Symbol.dispose]();
+      subscription[Symbol.dispose]();
+    }, lifetime);
     lifetime.publish();
     expect(store.snapshot().length).toBe(0);
     expect(releases).toBe(1);
@@ -128,12 +127,9 @@ describe("ContributionStore invariants", () => {
     );
     const lifetime = owner();
     const contribution = store.stage("owner/item", 1, lifetime, () => undefined);
-    const subscription = store.subscribe(
-      () => {
-        throw subscriberFailure;
-      },
-      () => () => undefined,
-    );
+    const subscription = store.subscribe(() => {
+      throw subscriberFailure;
+    }, lifetime);
     lifetime.publish();
     expect(report).toHaveBeenCalledTimes(2);
     expect(report).toHaveBeenNthCalledWith(1, subscriberFailure);
@@ -169,18 +165,12 @@ describe("ContributionStore invariants", () => {
     const firstStore = registry.store<number>(extensionPoint("contribution/batch-first"));
     const secondStore = registry.store<number>(extensionPoint("contribution/batch-second"));
     const lifetime = owner();
-    const firstSubscription = firstStore.subscribe(
-      () => {
-        throw firstFailure;
-      },
-      () => () => undefined,
-    );
-    const secondSubscription = secondStore.subscribe(
-      () => {
-        throw secondFailure;
-      },
-      () => () => undefined,
-    );
+    const firstSubscription = firstStore.subscribe(() => {
+      throw firstFailure;
+    }, lifetime);
+    const secondSubscription = secondStore.subscribe(() => {
+      throw secondFailure;
+    }, lifetime);
     firstStore.stage("owner/item", 1, lifetime, () => undefined);
     secondStore.stage("owner/item", 2, lifetime, () => undefined);
     registry.beginBatch();

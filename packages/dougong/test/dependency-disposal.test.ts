@@ -1,6 +1,7 @@
 import { setImmediate } from "node:timers/promises";
 import { expect, it, vi } from "vitest";
 import {
+  createResourceAuthority,
   createHost,
   definePlugin,
   event,
@@ -10,6 +11,8 @@ import {
   type ChildLifetime,
   type Task,
 } from "../src/index";
+
+const resourceAuthority = createResourceAuthority();
 
 function failures(error: unknown): unknown[] {
   return [
@@ -25,6 +28,7 @@ it("releases independent branches while retaining a failed consumer's transitive
   const independent = service<number>("release/independent");
   const released: string[] = [];
   const host = createHost({
+    resourceAuthority,
     installations: [
       {
         id: "root",
@@ -114,6 +118,7 @@ it("aggregates independent cleanup failures once while continuing safe teardown"
     throw second;
   });
   const host = createHost({
+    resourceAuthority,
     installations: [
       {
         id: "clean",
@@ -162,6 +167,7 @@ it("retains the previous optional binding after removal fails and drains unaffec
   const releaseProvider = vi.fn<() => void>();
   const releaseUnrelated = vi.fn<() => void>();
   const host = createHost({
+    resourceAuthority,
     installations: [
       {
         id: "provider",
@@ -224,6 +230,7 @@ it("retains a failed candidate's actual provider generation instead of its previ
     throw new Error("new cleanup failed");
   });
   const host = createHost({
+    resourceAuthority,
     installations: [
       {
         id: "original-provider",
@@ -294,6 +301,7 @@ it("drains independent startup candidates after a failed candidate cannot releas
   const providerRelease = vi.fn<() => void>();
   const independentRelease = vi.fn<() => void>();
   const host = createHost({
+    resourceAuthority,
     installations: [
       {
         id: "provider",
@@ -350,6 +358,7 @@ it("uses restored declarations when restoration cleanup retains a dependency", a
   const restorationFailure = new Error("restored cleanup failed");
   let attempts = 0;
   const host = createHost({
+    resourceAuthority,
     installations: [
       {
         id: "original-provider",
@@ -432,6 +441,7 @@ it("drains a borrower after its callback receives quarantine without releasing i
   const releaseConsumer = vi.fn<() => void>();
   const releaseIndependent = vi.fn<() => void>();
   const host = createHost({
+    resourceAuthority,
     installations: [
       {
         id: "provider",
@@ -511,6 +521,7 @@ it("retains a timed out consumer while releasing independent work", async () => 
   const resume = Promise.withResolvers<void>();
   let task!: Task;
   const host = createHost({
+    resourceAuthority,
     shutdownTimeoutMilliseconds: 5,
     installations: [
       {
@@ -574,7 +585,7 @@ it.each([false, true])(
     });
     const notification = event<void>("release/publication-conflict");
     const collision = extensionPoint<number>(notification.id);
-    const host = createHost();
+    const host = createHost({ resourceAuthority });
     await host.start();
     const change = host.change();
     change.install(
@@ -617,6 +628,7 @@ it("joins an already running shutdown without retrying it or quarantining succes
   });
   let child!: ChildLifetime;
   const host = createHost({
+    resourceAuthority,
     installations: [
       {
         id: "plugin",
@@ -655,6 +667,7 @@ it("starts independent shutdown branches while protecting a provider until its l
   const release = Promise.withResolvers<void>();
   const order: string[] = [];
   const host = createHost({
+    resourceAuthority,
     installations: [
       {
         id: "provider",

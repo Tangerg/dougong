@@ -1,35 +1,40 @@
 import { expect, it, vi } from "vitest";
 import {
+  createResourceAuthority,
   createHost,
   definePlugin,
   event,
   extensionPoint,
   service,
   type Plan,
+  type Plugin,
   type ChildLifetime,
 } from "../src";
 import { EventHub } from "../src/events/event-hub";
 import { Lifetime } from "../src/lifetime/lifetime";
 import { ContributionRegistry } from "../src/contributions/contribution-registry";
 
+const resourceAuthority = createResourceAuthority();
+
 it.each(["install", "update"])(
   "refuses %s staging when input normalization has already consumed the draft",
   async (operation) => {
     const original = definePlugin({ name: "staging.declaration", setup() {} });
-    const host = createHost({ installations: [{ id: "owner", plugin: original }] });
+    const host = createHost({
+      resourceAuthority,
+      installations: [{ id: "owner", plugin: original }],
+    });
     const installation = host.installation("owner")!;
     await host.start();
     const change = host.change();
     let planning: Promise<Plan> | undefined;
-    const declaration = new Proxy(
-      { name: original.name, setup() {} },
-      {
-        getPrototypeOf(target) {
-          planning ??= host.plan(change);
-          return Reflect.getPrototypeOf(target);
-        },
+    const definition: Plugin = { name: original.name, setup() {} };
+    const declaration = new Proxy(definition, {
+      getPrototypeOf(target) {
+        planning ??= host.plan(change);
+        return Reflect.getPrototypeOf(target);
       },
-    );
+    });
     expect(() => {
       if (operation === "install")
         change.install(declaration, { id: "late", configuration: undefined });
@@ -51,8 +56,8 @@ it.each(["listener", "contribution", "emission"])(
     const notice = event<void>("staging/notice");
     const items = extensionPoint<number>("staging/items");
     const notified = vi.fn<() => void>();
-    const owner = new Lifetime({ label: "owner", report() {} });
-    const observer = new Lifetime({ label: "observer", report() {} });
+    const owner = new Lifetime({ resourceAuthority, label: "owner", report() {} });
+    const observer = new Lifetime({ resourceAuthority, label: "observer", report() {} });
     const hub = new EventHub();
     const registry = new ContributionRegistry(() => undefined);
     const events = hub.scope(owner, () => undefined);
@@ -94,6 +99,7 @@ it("keeps Instance lifetime termination in the Engine while a plugin can retire 
   const release = vi.fn<() => void>();
   let child!: ChildLifetime;
   const host = createHost({
+    resourceAuthority,
     installations: [
       {
         id: "provider",

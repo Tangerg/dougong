@@ -2,10 +2,10 @@
 
 The TypeScript plugin composition kernel. This package owns contracts, declarations, immutable plans, execution, resource lifetimes and diagnostic projections.
 
-Upgrading from 0.9? Read the [migration guide](https://tangerg.github.io/dougong/en/guide/migrating-to-0.10) and [0.10.0 release notes](https://tangerg.github.io/dougong/en/reference/release-0.10.0). From 0.8.3, complete [Migrating to 0.9.0](https://tangerg.github.io/dougong/en/guide/migrating-to-0.9) first.
+Read the [upgrade guide](https://tangerg.github.io/dougong/en/guide/upgrading) for migration steps and release notes for your target version.
 
 ```ts
-import { asyncDisposeSymbol, createHost, definePlugin, service } from "dougong";
+import { asyncDisposeSymbol, createHost, createResourceAuthority, definePlugin, service } from "dougong";
 
 const GREETER = service<{ greet(name: string): string }>("application/greeter");
 const greeter = definePlugin({
@@ -16,7 +16,9 @@ const greeter = definePlugin({
   },
 });
 
+const resourceAuthority = createResourceAuthority();
 const host = createHost({
+  resourceAuthority,
   name: "application",
   installations: [{ id: "greeter", plugin: greeter }],
 });

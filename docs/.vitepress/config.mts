@@ -29,6 +29,7 @@ function chineseSidebar(): DefaultTheme.SidebarItem[] {
       collapsed: false,
       items: [
         { text: "快速开始", link: "/guide/getting-started" },
+        { text: "升级指南", link: "/guide/upgrading" },
         { text: "迁移到 0.11.0", link: "/guide/migrating-to-0.11" },
         { text: "迁移到 0.10.0", link: "/guide/migrating-to-0.10" },
         { text: "迁移到 0.9.0", link: "/guide/migrating-to-0.9" },
@@ -75,6 +76,7 @@ function englishSidebar(): DefaultTheme.SidebarItem[] {
       collapsed: false,
       items: [
         { text: "Getting started", link: "/en/guide/getting-started" },
+        { text: "Upgrading", link: "/en/guide/upgrading" },
         { text: "Migrating to 0.11.0", link: "/en/guide/migrating-to-0.11" },
         { text: "Migrating to 0.10.0", link: "/en/guide/migrating-to-0.10" },
         { text: "Migrating to 0.9.0", link: "/en/guide/migrating-to-0.9" },

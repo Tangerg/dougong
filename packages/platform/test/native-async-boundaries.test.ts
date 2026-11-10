@@ -1,8 +1,10 @@
 import { expect, it, vi } from "vitest";
-import { createHost, definePlugin } from "dougong";
+import { createResourceAuthority, createHost, definePlugin } from "dougong";
 import { createPlatform } from "../src";
 import { Preparation } from "../src/activation/preparation";
 import { deferred, emptyPlugin, nextTurn, select } from "./fixtures";
+
+const resourceAuthority = createResourceAuthority();
 
 class LocalPromise<T> extends Promise<T> {}
 
@@ -77,7 +79,7 @@ it.each([
     const setup = vi.fn<() => void>();
     const loaded = vi.fn<() => void>();
     const module = { default: definePlugin({ name: "sample", setup }) };
-    const host = createHost();
+    const host = createHost({ resourceAuthority });
     const platform = createPlatform({
       id: "admission",
       host,
@@ -148,7 +150,7 @@ it.each(promiseKinds)(
       default: definePlugin({ name: "sample", setup: shadowSetup }),
     });
     const entered = deferred();
-    const host = createHost();
+    const host = createHost({ resourceAuthority });
     const platform = createPlatform({
       id: "loader",
       host,
@@ -216,7 +218,7 @@ it.each(promiseKinds)(
     const pending = nativeResult<typeof module>(kind);
     pending.resolve(module);
     expect(reads).toBe(1);
-    const host = createHost();
+    const host = createHost({ resourceAuthority });
     const platform = createPlatform({
       id: "fulfilled-module",
       host,

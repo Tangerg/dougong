@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  createResourceAuthority,
   asyncDisposeSymbol,
   createHost,
   definePlugin,
@@ -9,12 +10,14 @@ import {
 import type { Artifact, Loader } from "@dougongjs/platform";
 import { DeploymentController } from "../src/deployment-controller";
 
+const resourceAuthority = createResourceAuthority();
+
 interface ModuleReference {
   readonly default: AnyPlugin;
 }
 
 async function createFixture(load: Loader<ModuleReference>["load"] = (reference) => reference) {
-  const host = createHost({ name: "deployment-controller-test" });
+  const host = createHost({ resourceAuthority, name: "deployment-controller-test" });
   await host.start();
   const deployment = new DeploymentController({
     id: "deployment",

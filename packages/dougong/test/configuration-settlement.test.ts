@@ -1,6 +1,8 @@
 import type { StandardSchemaV1 } from "@standard-schema/spec";
 import { expect, it, vi } from "vitest";
-import { createHost, definePlugin } from "../src/index";
+import { createResourceAuthority, createHost, definePlugin } from "../src/index";
+
+const resourceAuthority = createResourceAuthority();
 
 class NativeValidation extends Promise<StandardSchemaV1.Result<number>> {}
 
@@ -27,6 +29,7 @@ it.each(["fulfilled", "rejected"] as const)(
     };
     const received: number[] = [];
     const host = createHost({
+      resourceAuthority,
       installations: [
         {
           id: "configured",

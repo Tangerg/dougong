@@ -1,7 +1,9 @@
 import { expect, it, vi } from "vitest";
-import { createHost } from "dougong";
+import { createResourceAuthority, createHost } from "dougong";
 import { createPlatform, MemoryLoader } from "../src";
 import { emptyPlugin, nextTurn, select } from "./fixtures";
+
+const resourceAuthority = createResourceAuthority();
 
 const promiseDecorations = ["ordinary", "undefined", "throwing", "fake"] as const;
 type PromiseDecoration = (typeof promiseDecorations)[number];
@@ -14,7 +16,7 @@ it.each(promiseDecorations)(
     const observerFailure = new Error("Platform observer failed");
     const sinkFailure = new Error("Platform logger failed");
     const logError = vi.fn<(error: unknown) => void>();
-    const host = createHost();
+    const host = createHost({ resourceAuthority });
     const platform = createPlatform({
       id: "reporter",
       host,
@@ -75,6 +77,7 @@ it.each(promiseDecorations)(
     const reportError = vi.fn<(error: unknown) => void>();
     const logError = vi.fn<(error: unknown) => void>();
     const host = createHost({
+      resourceAuthority,
       onError(error) {
         reportError(error);
         return reporting.promise;

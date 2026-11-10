@@ -29,6 +29,7 @@
       "asyncDisposeSymbol",
       "captureConfiguration",
       "createHost",
+      "createResourceAuthority",
       "definePlugin",
       "describePlugin",
       "disposeSymbol",
@@ -97,6 +98,7 @@
       "Task",
       "UnresolvedObligation",
       "Resource",
+      "ResourceAuthority",
       "Contribution",
       "ContributionView",
       "ContributionOperations",
@@ -119,6 +121,7 @@
       "resolveValue",
       "captureDataArray",
       "captureLogger",
+      "capturePluginDeclaration",
       "onAbort",
       "batchSnapshotNotifications"
     ],

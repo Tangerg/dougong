@@ -3,6 +3,7 @@
 TypeScript 的显式能力组合、不可变计划与结构化资源所有权。每个公开操作复用同一套事实及其所有者。
 
 - [快速开始](./guide/getting-started.md)
+- [升级指南](./guide/upgrading.md)
 - [迁移到 0.11.0](./guide/migrating-to-0.11.md)
 - [迁移到 0.10.0](./guide/migrating-to-0.10.md)
 - [迁移到 0.9.0](./guide/migrating-to-0.9.md)

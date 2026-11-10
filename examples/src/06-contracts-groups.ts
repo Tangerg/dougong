@@ -1,5 +1,14 @@
-import { createHost, definePlugin, optional, service, type Service } from "dougong";
+import {
+  createResourceAuthority,
+  createHost,
+  definePlugin,
+  optional,
+  service,
+  type Service,
+} from "dougong";
 import { exampleResult, type ExampleResult } from "./example.js";
+
+const resourceAuthority = createResourceAuthority();
 
 interface WorkspaceStore {
   readonly workspace: string;
@@ -33,7 +42,7 @@ function readerPlugin(name: string, token: Service<WorkspaceStore>, trace: strin
 
 export async function contractsAndGroups(): Promise<ExampleResult> {
   const trace: string[] = [];
-  const host = createHost({ name: "contracts-groups" });
+  const host = createHost({ resourceAuthority, name: "contracts-groups" });
   const initial = host.change();
   const alpha = initial.group(alphaWorkspaceId);
   const beta = initial.group(betaWorkspaceId);

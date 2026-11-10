@@ -1,6 +1,8 @@
 import { expect, it, vi } from "vitest";
-import { createHost, definePlugin } from "../src/index";
+import { createResourceAuthority, createHost, definePlugin } from "../src/index";
 import { SnapshotPublisher } from "../src/advanced";
+
+const resourceAuthority = createResourceAuthority();
 
 it.each(["start", "apply", "stop"] as const)(
   "reports foreign observation failures without rejecting a committed Host %s",
@@ -17,7 +19,7 @@ it.each(["start", "apply", "stop"] as const)(
       throw observerFailure;
     });
     const report = vi.fn<(error: unknown) => void>();
-    const host = createHost({ onError: report });
+    const host = createHost({ resourceAuthority, onError: report });
     if (operation !== "start") await host.start();
     const previousRevision = host.stateRevision;
     let change: Promise<unknown>;
@@ -67,7 +69,11 @@ it("preserves the failed-and-restored outcome while separately reporting observa
     throw observerFailure;
   });
   const original = definePlugin({ name: "original", setup() {} });
-  const host = createHost({ onError: report, installations: [{ id: "target", plugin: original }] });
+  const host = createHost({
+    resourceAuthority,
+    onError: report,
+    installations: [{ id: "target", plugin: original }],
+  });
   await host.start();
   const before = host.stateRevision;
   let observed = false;

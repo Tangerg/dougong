@@ -13,10 +13,12 @@ import {
 import { tmpdir } from "node:os";
 import { delimiter, dirname, join, resolve } from "node:path";
 import { clearTimeout, setTimeout } from "node:timers";
-import { setImmediate as nextTurn } from "node:timers/promises";
+import { setImmediate as nextTurn, setTimeout as delay } from "node:timers/promises";
 
 const terminationSignals = ["SIGINT", "SIGTERM", "SIGHUP"];
 const maximumCapturedBytes = 1024 * 1024;
+const commandTerminationGraceMilliseconds = 2_000;
+const commandTerminationConfirmationMilliseconds = 250;
 const interruptCommand = "interrupt";
 const settleCommand = "settle";
 const ignoreCancellation = "ignore";
@@ -45,6 +47,7 @@ export class ReleaseSession {
 
   #cancel = (signal) => {
     if (!this.signal.aborted) this.#cancellation.abort(new ReleaseCancellation(signal));
+    else this.#command?.forceStop?.();
   };
 
   async execute(command, commandArguments, options = {}) {
@@ -85,6 +88,8 @@ export class ReleaseSession {
     const descriptors = Array.isArray(stdio) ? stdio : [stdio, stdio, stdio];
     const failures = [];
     let child;
+    let termination = { phase: "running" };
+    const { promise: forceRequested, resolve: resolveForceRequested } = Promise.withResolvers();
     const terminate = (signal) => {
       if (child?.pid === undefined) return;
       try {
@@ -93,7 +98,35 @@ export class ReleaseSession {
         if (error.code !== "ESRCH") failures.push(error);
       }
     };
-    const cancel = () => terminate(this.signal.reason.signal);
+    const groupExists = () => {
+      if (child?.pid === undefined) return false;
+      try {
+        process.kill(-child.pid, 0);
+        return true;
+      } catch (error) {
+        if (error.code === "ESRCH") return false;
+        if (error.code === "EPERM") return true;
+        failures.push(error);
+        return true;
+      }
+    };
+    const forceStop = () => {
+      if (termination.phase !== "running" && termination.phase !== "interrupting") return;
+      clearTimeout(termination.timer);
+      termination = { phase: "killing" };
+      terminate("SIGKILL");
+      resolveForceRequested();
+    };
+    const interrupt = (signal) => {
+      if (signal === "SIGKILL") return forceStop();
+      if (termination.phase !== "running") return;
+      termination = {
+        phase: "interrupting",
+        timer: setTimeout(forceStop, commandTerminationGraceMilliseconds),
+      };
+      terminate(signal);
+    };
+    const cancel = () => interrupt(this.signal.reason.signal);
     // The command group can still own output after its leader exits; its deadline belongs to this same join.
     const deadlineTimer =
       timeout > 0
@@ -103,7 +136,7 @@ export class ReleaseSession {
                 code: "ETIMEDOUT",
               }),
             );
-            terminate(killSignal);
+            interrupt(killSignal);
           }, timeout)
         : undefined;
     let result;
@@ -131,7 +164,7 @@ export class ReleaseSession {
               failures.push(
                 new Error(`${command} ${channel} exceeded ${maximumCapturedBytes} bytes`),
               );
-              terminate("SIGKILL");
+              forceStop();
             }
           });
         } else child[channel].resume();
@@ -144,24 +177,50 @@ export class ReleaseSession {
       const completion = new Promise((resolveCompletion) => {
         child.on("error", (error) => failures.push(error));
         child.once("close", (status, signal) => {
-          resolveCompletion({
-            status,
-            signal,
-            stdout: output[0](),
-            stderr: output[1](),
-            error:
-              failures.length > 1 ? new AggregateError(failures, `${command} failed`) : failures[0],
-          });
+          resolveCompletion({ status, signal });
         });
+      }).then(async (outcome) => {
+        await nextTurn();
+        // Inherited terminal descriptors let the leader close while descendants still own the release files.
+        if (termination.phase !== "running" && groupExists()) {
+          await forceRequested;
+          await delay(commandTerminationConfirmationMilliseconds);
+          if (groupExists()) {
+            const error = new Error(
+              `Release command group ${child.pid} could not be confirmed stopped after SIGKILL`,
+            );
+            failures.push(error);
+            termination = { phase: "retained", error };
+          }
+        }
+        if (termination.phase !== "retained") {
+          clearTimeout(termination.timer);
+          termination = { phase: "closed" };
+        }
+        return {
+          ...outcome,
+          stdout: output[0](),
+          stderr: output[1](),
+          error:
+            failures.length > 1 ? new AggregateError(failures, `${command} failed`) : failures[0],
+        };
       });
-      this.#command = { completion, terminate };
+      // A ref transaction owns its settlement; ambient cancellation cannot authorize interrupting it.
+      this.#command = {
+        completion,
+        get retainedFailure() {
+          return termination.phase === "retained" ? termination.error : undefined;
+        },
+        ...(cancellation === interruptCommand ? { interrupt, forceStop } : {}),
+      };
       if (cancellation === interruptCommand)
         this.signal.addEventListener("abort", cancel, { once: true });
       result = await completion;
     } finally {
       clearTimeout(deadlineTimer);
+      clearTimeout(termination.timer);
       this.signal.removeEventListener("abort", cancel);
-      this.#command = undefined;
+      if (termination.phase !== "retained") this.#command = undefined;
     }
     await nextTurn();
     if (cancellation === interruptCommand) {
@@ -206,6 +265,8 @@ export class ReleaseSession {
   }
 
   async restoreManifests() {
+    if (this.#command)
+      throw new Error("Cannot restore manifests before the release command is confirmed stopped");
     const owned = [...this.#replacedManifests];
     this.#replacedManifests.clear();
     if (!owned.length) return true;
@@ -313,9 +374,30 @@ export class ReleaseSession {
     await nextTurn();
     const command = this.#command;
     if (command) {
-      command.terminate(this.signal.reason?.signal ?? "SIGTERM");
+      command.interrupt?.(this.signal.reason?.signal ?? "SIGTERM");
       await command.completion;
     }
+    if (command?.retainedFailure) {
+      const manifests = [...this.#replacedManifests].map(
+        ({ directory }) => `${directory}/package.json`,
+      );
+      console.error(
+        new Error(
+          `Release cleanup withheld: ${command.retainedFailure.message}. ` +
+            `Retained stage: ${this.#stage ?? "none"}; manifests: ${manifests.join(", ") || "none"}. ` +
+            "Confirm the process group has exited before restoring manifests or removing the stage.",
+        ),
+      );
+      process.exitCode = 1;
+    } else {
+      await this.#cleanFiles();
+    }
+    await nextTurn();
+    for (const signal of terminationSignals) process.removeListener(signal, this.#cancel);
+    if (this.signal.aborted) process.kill(process.pid, this.signal.reason.signal);
+  }
+
+  async #cleanFiles() {
     try {
       if (!(await this.restoreManifests())) {
         throw new Error(
@@ -335,9 +417,6 @@ export class ReleaseSession {
         process.exitCode = 1;
       }
     }
-    await nextTurn();
-    for (const signal of terminationSignals) process.removeListener(signal, this.#cancel);
-    if (this.signal.aborted) process.kill(process.pid, this.signal.reason.signal);
   }
 }
 

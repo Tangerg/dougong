@@ -1,8 +1,16 @@
 import { expect, it } from "vitest";
-import { createHost, definePlugin, type HostSnapshot, type LifetimeContext } from "../src/index";
+import {
+  createResourceAuthority,
+  createHost,
+  definePlugin,
+  type HostSnapshot,
+  type LifetimeContext,
+} from "../src/index";
+
+const resourceAuthority = createResourceAuthority();
 
 it("publishes one starting snapshot before an empty Host commits", async () => {
-  const host = createHost();
+  const host = createHost({ resourceAuthority });
   const snapshots: HostSnapshot[] = [];
   using subscription = host.diagnostics.subscribe(() => {
     snapshots.push(host.diagnostics.get());
@@ -37,7 +45,7 @@ it("retains the startup snapshot from validation through unpublished preparation
       preparing = host.diagnostics.get();
     },
   });
-  host = createHost({ installations: [{ id: "startup", plugin }] });
+  host = createHost({ resourceAuthority, installations: [{ id: "startup", plugin }] });
   const snapshots: HostSnapshot[] = [];
   using subscription = host.diagnostics.subscribe(() => {
     snapshots.push(host.diagnostics.get());
@@ -56,6 +64,7 @@ it("retains the startup snapshot from validation through unpublished preparation
 it("caches immutable projections while resource changes do not advance stateRevision", async () => {
   let scope!: LifetimeContext;
   const host = createHost({
+    resourceAuthority,
     installations: [
       {
         id: "a",

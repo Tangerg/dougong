@@ -1,5 +1,7 @@
 import { expect, it, vi } from "vitest";
-import { createHost, definePlugin, service } from "../src/index";
+import { createResourceAuthority, createHost, definePlugin, service } from "../src/index";
+
+const resourceAuthority = createResourceAuthority();
 
 it("keeps quarantine terminal after its last pending release finishes", async () => {
   vi.useFakeTimers();
@@ -9,6 +11,7 @@ it("keeps quarantine terminal after its last pending release finishes", async ()
   const value = service<number>("terminal/value");
   const setup = vi.fn<() => void>();
   const host = createHost({
+    resourceAuthority,
     shutdownTimeoutMilliseconds: 10,
     installations: [
       {
@@ -91,6 +94,7 @@ it("distinguishes terminal restoration failure from unresolved resource ownershi
     },
   });
   const host = createHost({
+    resourceAuthority,
     installations: [
       { id: "target", plugin: previous },
       {

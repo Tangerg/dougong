@@ -1,4 +1,5 @@
 import {
+  createResourceAuthority,
   asyncDisposeSymbol,
   createHost,
   definePlugin,
@@ -7,6 +8,8 @@ import {
 } from "dougong";
 import { createPlatform, MemoryLoader, type Artifact, type Platform } from "@dougongjs/platform";
 import { exampleResult, type ExampleResult } from "./example.js";
+
+const resourceAuthority = createResourceAuthority();
 
 interface View {
   readonly id: string;
@@ -143,6 +146,7 @@ export async function hotModuleReplacement(): Promise<ExampleResult> {
     ["theme-v2", { default: viewPlugin(THEME, "theme", "Theme v2") }],
   ]);
   const host = createHost({
+    resourceAuthority,
     name: "hot-module-replacement-example",
     installations: [{ id: "observer", plugin: observer }],
   });

@@ -1,4 +1,4 @@
-import type { AnyPlugin, Plugin } from "./plugin.js";
+import type { AnyPlugin, PluginAuthoringConstraint, PluginConfigurationInput } from "./plugin.js";
 import type { ConfigurationValue } from "./configuration.js";
 
 export type InstallationOrigin = Readonly<Record<string, ConfigurationValue>>;
@@ -22,27 +22,25 @@ export interface Group {
   readonly parentId: string | undefined;
 }
 
-type ConfigurationInputOf<Declaration extends AnyPlugin> =
-  Declaration extends Plugin<infer _Configuration, infer _Requires, infer _Provides, infer Input>
-    ? Input
-    : unknown;
-
 export type InstallationOptions<Declaration extends AnyPlugin = AnyPlugin> = {
   readonly id: string;
   readonly group?: Group;
   readonly origin?: InstallationOrigin;
-} & (undefined extends ConfigurationInputOf<Declaration>
-  ? { readonly configuration?: NoInfer<ConfigurationInputOf<Declaration>> }
-  : { readonly configuration: NoInfer<ConfigurationInputOf<Declaration>> });
+} & (undefined extends PluginConfigurationInput<Declaration>
+  ? { readonly configuration?: NoInfer<PluginConfigurationInput<Declaration>> }
+  : { readonly configuration: NoInfer<PluginConfigurationInput<Declaration>> });
 
 export type InstallationArguments<Declaration extends AnyPlugin = AnyPlugin> =
   Declaration extends unknown
-    ? [plugin: Declaration, options: InstallationOptions<Declaration>]
+    ? [
+        plugin: Declaration & PluginAuthoringConstraint<Declaration>,
+        options: InstallationOptions<Declaration>,
+      ]
     : never;
 
 // Configuration-only updates must be valid for every possible installed declaration.
 type SharedConfigurationInput<Declaration extends AnyPlugin> = (
-  Declaration extends unknown ? (input: ConfigurationInputOf<Declaration>) => void : never
+  Declaration extends unknown ? (input: PluginConfigurationInput<Declaration>) => void : never
 ) extends (input: infer Input) => void
   ? Input
   : never;
@@ -53,29 +51,37 @@ type InstallationReplacement<
   PreviousInput,
 > = Declaration extends unknown
   ? {
-      readonly plugin: Declaration;
+      readonly plugin: Declaration & PluginAuthoringConstraint<Declaration>;
       readonly origin?: InstallationOrigin;
-    } & ([PreviousInput] extends [ConfigurationInputOf<Declaration>]
-      ? { readonly configuration?: ConfigurationInputOf<Declaration> }
-      : { readonly configuration: ConfigurationInputOf<Declaration> })
+    } & ([PreviousInput] extends [PluginConfigurationInput<Declaration>]
+      ? { readonly configuration?: PluginConfigurationInput<Declaration> }
+      : { readonly configuration: PluginConfigurationInput<Declaration> })
   : never;
 
 export type InstallationUpdate<Declaration extends AnyPlugin = AnyPlugin> =
-  | InstallationReplacement<Declaration, ConfigurationInputOf<Declaration>>
+  | InstallationReplacement<Declaration, PluginConfigurationInput<Declaration>>
   | {
       readonly plugin?: never;
       readonly configuration: SharedConfigurationInput<Declaration>;
       readonly origin?: never;
     };
 
+export type InstallationUpdateAuthoring<Update> = Update extends {
+  readonly plugin: infer Declaration extends AnyPlugin;
+}
+  ? { readonly plugin: PluginAuthoringConstraint<Declaration> }
+  : { readonly plugin?: never };
+
 export interface ChangeSet {
   // Inferring the complete tuple preserves correlations that separate parameters would lose.
   install<Arguments extends readonly [plugin: AnyPlugin, options: unknown]>(
     ...declaration: Arguments & NoInfer<InstallationArguments<Arguments[0]>>
   ): Installation<Arguments[0]>;
-  update<Declaration extends AnyPlugin>(
+  update<Declaration extends AnyPlugin, const Update extends object>(
     installation: Installation<Declaration>,
-    update: NoInfer<InstallationUpdate<Declaration>>,
+    update: Update &
+      NoInfer<InstallationUpdate<Declaration>> &
+      NoInfer<InstallationUpdateAuthoring<Update>>,
   ): void;
   remove<Declaration extends AnyPlugin>(installation: Installation<Declaration>): void;
   group(id: string, parent?: Group): Group;

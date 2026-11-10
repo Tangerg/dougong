@@ -1,5 +1,5 @@
 import { expect, it, vi } from "vitest";
-import { createHost, definePlugin } from "dougong";
+import { createResourceAuthority, createHost, definePlugin, type AnyPlugin } from "dougong";
 import {
   createPlatform,
   defineManifest,
@@ -20,10 +20,12 @@ import {
   valuePlugin,
 } from "./fixtures";
 
+const resourceAuthority = createResourceAuthority();
+
 it.each(["load", "activate"] as const)(
   "fails closed when a JavaScript policy returns a decision value during %s admission",
   async (phase) => {
-    const host = createHost();
+    const host = createHost({ resourceAuthority });
     const setup = vi.fn<() => void>();
     const plugin = definePlugin({ name: "sample", setup });
     const load = vi.fn<() => { default: typeof plugin }>(() => ({ default: plugin }));
@@ -57,7 +59,7 @@ it.each(["load", "activate"] as const)(
 it.each(["preview roots", "preview removals", "activation removals"] as const)(
   "does not expose a mutable RegistrationRecord through caller-owned %s",
   async (path) => {
-    const { platform } = fixture();
+    const { platform } = fixture(resourceAuthority);
     const registration = await select(platform, "sample", "one");
     let exposed: unknown;
     const handles = [registration];
@@ -77,7 +79,7 @@ it.each(["preview roots", "preview removals", "activation removals"] as const)(
 );
 
 it("reads only own registration slots, never getters or a supplier's iterator", async () => {
-  const { platform } = fixture(new Map([["one", emptyPlugin("sample")]]));
+  const { platform } = fixture(resourceAuthority, new Map([["one", emptyPlugin("sample")]]));
   const registration = await select(platform, "sample", "one");
   const getter = vi.fn<() => Registration<string>>(() => registration);
   const bad = Object.defineProperty([], "0", { enumerable: true, get: getter });
@@ -94,7 +96,7 @@ it("reads only own registration slots, never getters or a supplier's iterator", 
 });
 
 it("binds the selectable command to the Platform that issued it", async () => {
-  const { platform } = fixture();
+  const { platform } = fixture(resourceAuthority);
   const choose = platform.select;
   const artifact = add(platform, "sample", "module");
   expect((await choose([artifact]))[0].selectedArtifact).toBe(artifact);
@@ -103,7 +105,8 @@ it("binds the selectable command to the Platform that issued it", async () => {
 
 it("reconciles contradictory committed metadata instead of validating dependencies against a fictional reuse", async () => {
   const { host, platform } = fixture(
-    new Map([
+    resourceAuthority,
+    new Map<string, AnyPlugin>([
       ["dependency-module", valuePlugin("dependency", 2)],
       ["root", emptyPlugin("root")],
     ]),
@@ -131,6 +134,7 @@ it("reconciles contradictory committed metadata instead of validating dependenci
 
 it("treats different dependency and trigger orders as the same committed descriptor", async () => {
   const { host, platform } = fixture(
+    resourceAuthority,
     new Map(["a", "b", "sample"].map((name) => [name, emptyPlugin(name)])),
   );
   for (const name of ["a", "b"]) await select(platform, name, name);
@@ -155,6 +159,7 @@ it("treats different dependency and trigger orders as the same committed descrip
 
 it("rejects a quarantined destination before requesting admission or evaluating a module", async () => {
   const host = createHost({
+    resourceAuthority,
     installations: [
       {
         id: "x",
@@ -192,7 +197,7 @@ it("rejects a quarantined destination before requesting admission or evaluating 
 });
 
 it("rechecks the destination Group after asynchronous admission and before executing the loader", async () => {
-  const host = createHost({ groups: [{ id: "delivery" }] });
+  const host = createHost({ resourceAuthority, groups: [{ id: "delivery" }] });
   const group = host.group("delivery")!;
   const entered = deferred();
   const resume = deferred();
@@ -228,7 +233,7 @@ it("does not publish caller cancellation as a selected artifact failure or erase
   let first = true;
   const platform = createPlatform({
     id: "retry",
-    host: createHost(),
+    host: createHost({ resourceAuthority }),
     apiVersion: "1.0.0",
     loader: {
       async load() {
@@ -286,7 +291,7 @@ it("uses the admitted loader and authorizer callbacks without rereading replacea
   };
   const platform = createPlatform({
     id: "callbacks",
-    host: createHost(),
+    host: createHost({ resourceAuthority }),
     apiVersion: "1.0.0",
     loader,
     authorizer: policy,
@@ -366,7 +371,7 @@ it.each(["validation", "admission"] as const)(
       },
       setup() {},
     });
-    const host = createHost();
+    const host = createHost({ resourceAuthority });
     const platform = createPlatform({
       id: "preparation",
       host,
@@ -417,7 +422,7 @@ it("takes cancellation and listener cleanup from the AbortSignal, not synthetic 
   const entered = deferred();
   const platform = createPlatform({
     id: "signals",
-    host: createHost(),
+    host: createHost({ resourceAuthority }),
     apiVersion: "1.0.0",
     loader: {
       async load(reference: string) {
@@ -450,7 +455,7 @@ it("retiring the last waiter blocks late module evaluation even if admission rep
   let first = true;
   const platform = createPlatform({
     id: "retired-load",
-    host: createHost(),
+    host: createHost({ resourceAuthority }),
     apiVersion: "1.0.0",
     loader: { load },
     authorizer: {
@@ -510,7 +515,7 @@ it.each(["load", "activate"] as const)(
     const authorizing = deferred();
     const resume = deferred();
     const load = vi.fn<() => unknown>(() => ({ default: emptyPlugin("sample") }));
-    const host = createHost();
+    const host = createHost({ resourceAuthority });
     const platform = createPlatform({
       id: "cancellation-boundary",
       host,
@@ -556,7 +561,7 @@ it("invokes captured admission and load methods even when their bind properties 
   }
   const platform = createPlatform({
     id: "adapters",
-    host: createHost(),
+    host: createHost({ resourceAuthority }),
     apiVersion: "1.0.0",
     ...platformOptions,
   });
@@ -574,7 +579,7 @@ it("keeps activation admission and its completion paired for a decorated caller 
     aborted: { get: () => ++reads === 1 },
     reason: { value: "forged refusal" },
   });
-  const { platform } = fixture(new Map([["sample", emptyPlugin("sample")]]));
+  const { platform } = fixture(resourceAuthority, new Map([["sample", emptyPlugin("sample")]]));
   const registration = await select(platform, "sample", "sample");
   const result = await platform
     .activate([registration], { signal: controller.signal })
@@ -605,7 +610,7 @@ it("assimilates a loader result only once before validating its module", async (
   );
   const platform = createPlatform({
     id: "module-result",
-    host: createHost(),
+    host: createHost({ resourceAuthority }),
     apiVersion: "1.0.0",
     loader: { load: () => loaded },
   });

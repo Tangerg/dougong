@@ -1,9 +1,12 @@
+import { createResourceAuthority } from "dougong";
 import { expect, it, vi } from "vitest";
 import { extensionPoint } from "../src/contracts/contracts";
 import type { Resource } from "../src/contracts/resource";
 import { ContributionRegistry } from "../src/contributions/contribution-registry";
 import { EventHub } from "../src/events/event-hub";
 import { Lifetime } from "../src/lifetime/lifetime";
+
+const resourceAuthority = createResourceAuthority();
 
 const adoptionMethods = ["use", "own", "acquire"] as const;
 
@@ -21,8 +24,8 @@ async function rejectAdoption(
 it.each(adoptionMethods)(
   "rejects active and terminal control handles through %s without advancing their owners",
   async (method) => {
-    const owner = new Lifetime({ label: "owner", report() {} });
-    const other = new Lifetime({ label: "other", report() {} });
+    const owner = new Lifetime({ resourceAuthority, label: "owner", report() {} });
+    const other = new Lifetime({ resourceAuthority, label: "other", report() {} });
     const entered = Promise.withResolvers<AbortSignal>();
     const finish = Promise.withResolvers<void>();
     const cleanup = vi.fn<() => void>();
@@ -93,8 +96,8 @@ it.each(adoptionMethods)(
 );
 
 it("keeps one failed cleanup obligation after refusing its control handle", async () => {
-  const owner = new Lifetime({ label: "owner", report() {} });
-  const other = new Lifetime({ label: "other", report() {} });
+  const owner = new Lifetime({ resourceAuthority, label: "owner", report() {} });
+  const other = new Lifetime({ resourceAuthority, label: "other", report() {} });
   const failure = new Error("one release failure");
   const release = vi.fn<() => void>(() => {
     throw failure;
@@ -120,8 +123,8 @@ it("keeps one failed cleanup obligation after refusing its control handle", asyn
 });
 
 it("retains the first ownership and terminal detachment of contribution view subscriptions", async () => {
-  const owner = new Lifetime({ label: "owner", report() {} });
-  const other = new Lifetime({ label: "other", report() {} });
+  const owner = new Lifetime({ resourceAuthority, label: "owner", report() {} });
+  const other = new Lifetime({ resourceAuthority, label: "other", report() {} });
   const registry = new ContributionRegistry(() => undefined);
   const point = extensionPoint<number>("owned/subscriptions");
   const contribution = registry.store<number>(point).stage("owner/item", 1, owner, () => undefined);

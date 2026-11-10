@@ -1,6 +1,15 @@
 import { setImmediate } from "node:timers/promises";
 import { afterEach, expect, it, vi } from "vitest";
-import { createHost, definePlugin, service, type AsyncDisposable, type HostSnapshot } from "../src";
+import {
+  createResourceAuthority,
+  createHost,
+  definePlugin,
+  service,
+  type AsyncDisposable,
+  type HostSnapshot,
+} from "../src";
+
+const resourceAuthority = createResourceAuthority();
 
 afterEach(() => vi.useRealTimers());
 
@@ -31,6 +40,7 @@ it("reports quarantine before a foreground borrow drains and then releases its i
   let early!: AsyncDisposable;
   let borrowedSignal!: AbortSignal;
   const host = createHost({
+    resourceAuthority,
     onError: report,
     installations: [
       {
@@ -107,6 +117,7 @@ it("cancels cooperative foreground work and joins its cancellation before destro
   });
   const cancel = vi.fn<() => void>(() => cancelled.reject(signal.reason));
   const host = createHost({
+    resourceAuthority,
     onError: report,
     installations: [
       {
@@ -175,6 +186,7 @@ it("keeps transitive providers usable until a timed-out consumer really exits an
   let rootSignal!: AbortSignal;
   let providerSignal!: AbortSignal;
   const host = createHost({
+    resourceAuthority,
     shutdownTimeoutMilliseconds,
     onError: report,
     installations: [
@@ -286,6 +298,7 @@ it.each(["consumer", "provider"] as const)(
     });
     const report = vi.fn<(error: unknown) => void>();
     const host = createHost({
+      resourceAuthority,
       shutdownTimeoutMilliseconds,
       onError: report,
       installations: [
@@ -381,6 +394,7 @@ it("preserves a deferred branch's failure when the first quarantine report is st
     if (containsCause(error, initialFailure)) initialReported.resolve(error);
   });
   const host = createHost({
+    resourceAuthority,
     onError: report,
     installations: [
       {

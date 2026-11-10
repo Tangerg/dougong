@@ -286,7 +286,8 @@ class DeliveryPlatform<Reference> implements Platform<Reference> {
       );
     } catch (error) {
       if (!admittedOperation) throw error;
-      admittedOperation.checkpoint();
+      // Once Core owns execution, its cleanup and health outcome outrank the cancellation request.
+      if (!admittedOperation.handedOff) admittedOperation.checkpoint();
       throw recordActivationFailure(admittedOperation.plan, error);
     } finally {
       if (admittedOperation) {
@@ -432,7 +433,7 @@ class DeliveryPlatform<Reference> implements Platform<Reference> {
     );
     operation.plan.assertCurrent();
     operation.handoff();
-    const result = await host.apply(plan);
+    const result = await host.apply(plan, operation.signal);
     this.#commitSelections(candidate);
     return result;
   }

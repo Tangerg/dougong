@@ -7,10 +7,11 @@ import { Lifetime, type ReleaseFailure } from "../lifetime/lifetime.js";
 import type { InstallationRecord, InstallationDeclaration } from "../composition/installation.js";
 import type { InstanceContext } from "../composition/plugin.js";
 import { normalizePlainRecord } from "../internal/record.js";
-import type { Awaitable } from "../contracts/resource.js";
+import type { Awaitable, ResourceAuthority } from "../contracts/resource.js";
 import { ScopedLogger } from "./scoped-logger.js";
 
 export interface InstanceEnvironment {
+  readonly resourceAuthority: ResourceAuthority;
   readonly hostName: string;
   readonly logger: Logger<unknown>;
   readonly report: (error: unknown) => void;
@@ -43,6 +44,7 @@ export class Instance {
     this.generation = generation;
     this.#environment = environment;
     this.lifetime = new Lifetime({
+      resourceAuthority: environment.resourceAuthority,
       label: `${installation.id}@${generation}`,
       report: environment.report,
       releaseFailed: environment.releaseFailed,

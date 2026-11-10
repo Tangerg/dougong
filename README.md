@@ -4,10 +4,10 @@
 
 TypeScript 插件装配内核：不可变计划、原子发布、结构化资源生命周期和可解释诊断。
 
-从 0.10 升级请阅读[迁移指南](./docs/guide/migrating-to-0.11.md)和 [0.11.0 Release Notes](./docs/reference/release-0.11.0.md)；更早版本请依次完成[迁移到 0.9.0](./docs/guide/migrating-to-0.9.md)与[迁移到 0.10.0](./docs/guide/migrating-to-0.10.md)。
+升级前请阅读[升级指南](./docs/guide/upgrading.md)，按目标版本查阅迁移步骤和 Release Notes。
 
 ```ts
-import { asyncDisposeSymbol, createHost, definePlugin, service } from "dougong";
+import { asyncDisposeSymbol, createHost, createResourceAuthority, definePlugin, service } from "dougong";
 
 const GREETER = service<{ greet(name: string): string }>("application/greeter");
 const greeter = definePlugin({
@@ -18,7 +18,9 @@ const greeter = definePlugin({
   },
 });
 
+const resourceAuthority = createResourceAuthority();
 const host = createHost({
+  resourceAuthority,
   name: "application",
   installations: [{ id: "greeter", plugin: greeter }],
 });

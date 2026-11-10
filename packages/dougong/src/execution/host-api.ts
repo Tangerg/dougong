@@ -9,7 +9,7 @@ import type { Service, OptionalService, ExtensionPoint } from "../contracts/cont
 import type { ContributionView } from "../contributions/contribution-view.js";
 import type { SnapshotView } from "../observation/snapshot-view.js";
 import type { HostSnapshot, HostStatus } from "../inspection/diagnostics.js";
-import type { Awaitable } from "../contracts/resource.js";
+import type { Awaitable, ResourceAuthority } from "../contracts/resource.js";
 import type { Plan } from "../composition/plan.js";
 import type { BindingReport } from "../composition/installation-graph.js";
 import type { AnyPlugin } from "../composition/plugin.js";
@@ -18,6 +18,7 @@ import type { ResolvedValue } from "../internal/async-result.js";
 export interface HostOptions<
   Declarations extends ReadonlyArray<AnyPlugin> = ReadonlyArray<AnyPlugin>,
 > {
+  readonly resourceAuthority: ResourceAuthority;
   readonly name?: string;
   // Infer Plugins before checking their configuration so union-typed arrays retain each pairing.
   readonly installations?: {
@@ -29,6 +30,7 @@ export interface HostOptions<
   readonly logger?: Logger;
   readonly onError?: (error: unknown) => Awaitable<void>;
   readonly shutdownTimeoutMilliseconds?: number;
+  readonly restorationTimeoutMilliseconds?: number;
 }
 
 export interface ApplyResult {
@@ -43,8 +45,8 @@ export interface Host {
   readonly diagnostics: SnapshotView<HostSnapshot>;
   change(): ChangeSet;
   plan(change: ChangeSet, signal?: AbortSignal): Promise<Plan>;
-  apply(plan: Plan): Promise<ApplyResult>;
-  start(): Promise<ApplyResult>;
+  apply(plan: Plan, signal?: AbortSignal): Promise<ApplyResult>;
+  start(signal?: AbortSignal): Promise<ApplyResult>;
   stop(): Promise<ApplyResult>;
   use<T, Result>(
     service: Service<T>,

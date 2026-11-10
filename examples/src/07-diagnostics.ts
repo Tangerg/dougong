@@ -1,4 +1,5 @@
 import {
+  createResourceAuthority,
   disposeSymbol,
   createHost,
   definePlugin,
@@ -8,6 +9,8 @@ import {
   type Task,
 } from "dougong";
 import { exampleResult, type ExampleResult } from "./example.js";
+
+const resourceAuthority = createResourceAuthority();
 
 interface Panel {
   readonly id: string;
@@ -44,6 +47,7 @@ export async function diagnostics(): Promise<ExampleResult> {
     setup: () => undefined,
   });
   const host = createHost({
+    resourceAuthority,
     name: "diagnostics",
     installations: [
       { id: "workbench", plugin: workbenchPlugin },

@@ -1,5 +1,15 @@
 import { describe, expect, it, vi } from "vitest";
-import { createHost, definePlugin, event, extensionPoint, optional, service } from "../src/index";
+import {
+  createResourceAuthority,
+  createHost,
+  definePlugin,
+  event,
+  extensionPoint,
+  optional,
+  service,
+} from "../src/index";
+
+const resourceAuthority = createResourceAuthority();
 
 const value = service<number>("plugin/value");
 const items = extensionPoint<number>("plugin/items");
@@ -82,6 +92,7 @@ describe("Plugin declaration contracts", () => {
       composed = definePlugin({ ...composed, name: "composed" });
     }
     const host = createHost({
+      resourceAuthority,
       installations: [{ id: "composed", plugin: composed, configuration: 1 }],
     });
     await host.start();
@@ -113,6 +124,7 @@ describe("Plugin declaration contracts", () => {
       throw new Error("replaced");
     }) as typeof validate;
     const host = createHost({
+      resourceAuthority,
       installations: [{ id: "configuration", plugin, configuration: { value: 1 } }],
     });
     await host.start();

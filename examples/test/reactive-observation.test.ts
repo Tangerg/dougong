@@ -1,5 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
-import { createHost, definePlugin, DougongError, type Logger } from "dougong";
+import {
+  createResourceAuthority,
+  createHost,
+  definePlugin,
+  DougongError,
+  type Logger,
+} from "dougong";
 import {
   observe,
   bridge,
@@ -9,6 +15,8 @@ import {
   type AsyncDisposable,
   type Disposable,
 } from "@dougongjs/reactive";
+
+const resourceAuthority = createResourceAuthority();
 
 const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
 
@@ -280,7 +288,7 @@ describe("observe composition", () => {
     const entered = Promise.withResolvers<void>();
     const resume = Promise.withResolvers<void>();
     const report = vi.fn<(error: unknown) => void>();
-    const host = createHost({ onError: report });
+    const host = createHost({ resourceAuthority, onError: report });
     const change = host.change();
     const source = signal(1);
     const seen: number[] = [];
@@ -312,7 +320,7 @@ describe("observe composition", () => {
   });
 
   it("reads the initial value after ownership and subscription have been established", async () => {
-    const host = createHost();
+    const host = createHost({ resourceAuthority });
     const change = host.change();
     const source = signal(0);
     const seen: number[] = [];
@@ -478,7 +486,7 @@ describe("observe composition", () => {
         observe(context.lifetime, source, (() => thenable) as () => void);
       },
     });
-    const host = createHost();
+    const host = createHost({ resourceAuthority });
     const change = host.change();
     change.install(plugin, { id: plugin.name });
 
@@ -505,7 +513,7 @@ describe("observe composition", () => {
         });
       },
     });
-    const host = createHost();
+    const host = createHost({ resourceAuthority });
     const change = host.change();
     change.install(plugin, { id: plugin.name });
 
@@ -525,7 +533,7 @@ describe("observe composition", () => {
         observe(context.lifetime, source, callback);
       },
     });
-    const host = createHost();
+    const host = createHost({ resourceAuthority });
     const change = host.change();
     change.install(plugin, { id: plugin.name });
 
@@ -548,7 +556,7 @@ describe("observe composition", () => {
         });
       },
     });
-    const host = createHost({ logger });
+    const host = createHost({ resourceAuthority, logger });
     const change = host.change();
     change.install(plugin, { id: plugin.name });
     await host.apply(await host.plan(change));
@@ -697,7 +705,7 @@ describe("observe composition", () => {
         });
       },
     });
-    const host = createHost({ logger });
+    const host = createHost({ resourceAuthority, logger });
     const change = host.change();
     change.install(plugin, { id: plugin.name });
     await host.apply(await host.plan(change));
@@ -750,7 +758,7 @@ describe("observe composition", () => {
         });
       },
     });
-    const host = createHost({ logger });
+    const host = createHost({ resourceAuthority, logger });
     const change = host.change();
     change.install(plugin, { id: plugin.name });
     await host.apply(await host.plan(change));
@@ -812,7 +820,7 @@ describe("observe composition", () => {
         });
       },
     });
-    const host = createHost({ logger });
+    const host = createHost({ resourceAuthority, logger });
     const change = host.change();
     change.install(plugin, { id: plugin.name });
     await host.apply(await host.plan(change));
@@ -860,7 +868,7 @@ async function createStoppedObservationRetentionFixture() {
     source: ControlledReadable<object | undefined> | undefined;
     observer: ((value: object | undefined) => void) | undefined;
   } = { source, observer };
-  const host = createHost({ logger: createTestLogger() });
+  const host = createHost({ resourceAuthority, logger: createTestLogger() });
   const change = host.change();
   change.install(
     definePlugin({
@@ -897,7 +905,7 @@ it("observes only the latest value after asynchronous cleanup completes", async 
   const cleaning = Promise.withResolvers<void>();
   const release = Promise.withResolvers<void>();
   const seen: string[] = [];
-  const host = createHost();
+  const host = createHost({ resourceAuthority });
   const change = host.change();
   change.install(
     definePlugin({
@@ -949,6 +957,7 @@ it("keeps failed unsubscription owned after a source read stops the drain", asyn
     },
   };
   const host = createHost({
+    resourceAuthority,
     onError(error) {
       reported.resolve(error);
       if (isQuarantineFailure(error)) quarantined.resolve(error);
@@ -1043,6 +1052,7 @@ it.each(["bridge", "observe"] as const)(
       },
     };
     const host = createHost({
+      resourceAuthority,
       installations: [
         {
           id: "owner",

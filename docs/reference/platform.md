@@ -65,7 +65,7 @@ Authorizer 通过返回或兑现为 `undefined` 批准请求，通过抛错或�
 
 Core 规划、最终准入、应用或释放期间，新的选择和激活命令以 [`PLATFORM_BUSY`](errors.md) 拒绝。释放 Platform 会取消尚在等待的规划和准入，即使验证器或授权回调本身正在等待这次释放。一旦 Platform 将 Plan 交给 Core 应用，或已开始释放 Core 安装，释放命令也以 [`PLATFORM_BUSY`](errors.md) 拒绝，避免 setup 或清理回调等待自己。此前已接纳的激活仍能完成，交接之前的加载保持并发。
 
-在配置验证或最终准入期间取消，Platform 会结束等待并释放命令占用；迟到的结果不能提交。取消不能撤销模块副作用或已经交给 `host.apply` 的 Plan。已没有已提交 Installation 的 Registration 仍可直接移除。
+在配置验证或最终准入期间取消，Platform 会结束等待并释放命令占用；迟到的结果不能提交。交给 `host.apply(plan, signal)` 后，调用方信号继续送达 Core。Engine 独占候选清理、实际结算、恢复和隔离，Platform 返回 Core 的真实结果，不用取消原因覆盖恢复失败或隔离错误。提交已经确定后，迟到取消不能改写成功结果。取消不能撤销模块副作用或外部 I/O。已没有已提交 Installation 的 Registration 仍可直接移除。
 
 同一次激活失败所影响的 Registration 共享一份已脱离运行资源的错误快照。最后一个加载等待者离开时，会断开外部 Promise 到 Platform 后续操作的引用；即使适配器永不结束，成功释放后的 Platform 也不会因此保留 Artifact 或加载能力。
 

@@ -1,7 +1,9 @@
-import { createHost, definePlugin, service } from "../src/index";
+import { createResourceAuthority, createHost, definePlugin, service } from "../src/index";
 import { expect, it, vi } from "vitest";
 import { SnapshotPublisher } from "../src/observation/snapshot-view";
 import { captureDisposer } from "../src/contracts/resource";
+
+const resourceAuthority = createResourceAuthority();
 
 it.each(["object", "function"] as const)(
   "observes the captured %s thenable after rejecting an asynchronous synchronous disposer",
@@ -60,6 +62,7 @@ it.each(["object", "function"] as const)(
 it("settles the public service callback result exactly once, within the borrow", async () => {
   const value = service<number>("borrow/value");
   const host = createHost({
+    resourceAuthority,
     installations: [
       {
         id: "provider",

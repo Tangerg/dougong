@@ -47,7 +47,8 @@ export type ProvidedServices<T extends Provisions> = {
   readonly [Key in keyof T]: ServiceValue<T[Key]>;
 };
 
-type SetupOutput<T extends Provisions> = keyof T extends never ? void : ProvidedServices<T>;
+type EmptyContracts = Readonly<Record<PropertyKey, never>>;
+type SetupOutput<T extends Provisions> = T extends EmptyContracts ? void : ProvidedServices<T>;
 
 interface PluginSchema<Input, Output> extends StandardSchemaV1<Input, Output> {
   readonly "~standard": StandardSchemaV1.Props<Input, Output> & {
@@ -72,43 +73,114 @@ export interface PluginContext<T extends Requirements = Requirements> {
   readonly logger: Logger;
 }
 
-declare const configurationInputBrand: unique symbol;
+declare const pluginContractBrand: unique symbol;
 
-export interface Plugin<
-  Configuration = void,
-  Requires extends Requirements = {},
-  Provides extends Provisions = {},
-  ConfigurationInput = Configuration,
-> {
-  // Schema input must stay invariant even when TypeScript compares declarations structurally.
-  readonly [configurationInputBrand]?: (input: ConfigurationInput) => ConfigurationInput;
+type IsUnion<Value, Whole = Value> = Value extends unknown
+  ? [Whole] extends [Value]
+    ? false
+    : true
+  : never;
+
+type HasOpenKey<Declaration> = true extends {
+  [Key in keyof Declaration]-?: {} extends Record<Key, unknown> ? true : false;
+}[keyof Declaration]
+  ? true
+  : false;
+
+type ContractFields<Name extends string, Declaration> =
+  true extends IsUnion<Declaration>
+    ? never
+    : Declaration extends EmptyContracts
+      ? { readonly [Field in Name]?: EmptyContracts }
+      : true extends HasOpenKey<Declaration>
+        ? never
+        : Exclude<keyof Declaration, string> extends never
+          ? Declaration extends Required<Declaration>
+            ? { readonly [Field in Name]: Declaration }
+            : never
+          : never;
+
+type ProvisionValues<Declaration extends Provisions> = true extends {
+  [Key in keyof Declaration]-?: IsUnion<Declaration[Key]>;
+}[keyof Declaration]
+  ? never
+  : unknown;
+
+// Without a schema, captured input is delivered directly; distinct type parameters cannot invent a transformation.
+type ConfigurationDeclaration<Input, Output> = [Input] extends [Output]
+  ? { readonly configuration?: PluginSchema<Input, Output> }
+  : { readonly configuration: PluginSchema<Input, Output> };
+
+type PluginAuthoring<
+  Configuration,
+  Requires extends Requirements,
+  Provides extends Provisions,
+  ConfigurationInput,
+> = {
   readonly name: string;
   readonly configuration?: PluginSchema<ConfigurationInput, Configuration>;
   readonly requires?: Requires;
   readonly provides?: Provides;
   readonly setup: (
-    context: PluginContext<Requires>,
+    context: PluginContext<NoInfer<Requires>>,
     configuration: ReadonlyConfiguration<Configuration>,
   ) => Awaitable<SetupOutput<NoInfer<Provides>>>;
-}
+} & ConfigurationDeclaration<ConfigurationInput, Configuration> &
+  ContractFields<"requires", Requires> &
+  ContractFields<"provides", Provides> &
+  ProvisionValues<Provides>;
 
-// The uncallable setup signature preserves variance across heterogeneous declarations.
-export interface AnyPlugin extends Omit<
-  Plugin<unknown, Requirements, Provisions>,
-  "configuration" | "setup" | typeof configurationInputBrand
-> {
+export type Plugin<
+  Configuration = void,
+  Requires extends Requirements = {},
+  Provides extends Provisions = {},
+  ConfigurationInput = Configuration,
+> = PluginAuthoring<Configuration, Requires, Provides, ConfigurationInput> & {
+  // Input stays invariant, and spreading a declaration cannot silently replace its checked setup contract.
+  readonly [pluginContractBrand]?: {
+    readonly input: (input: ConfigurationInput) => ConfigurationInput;
+    readonly authoring: PluginAuthoring<Configuration, Requires, Provides, ConfigurationInput>;
+  };
+};
+
+// The runtime boundary has no erased authoring guarantees; setup remains uncallable until Core resolves its environment.
+export interface AnyPlugin {
+  readonly name: string;
   readonly configuration?: unknown;
+  readonly requires?: Requirements;
+  readonly provides?: Provisions;
   readonly setup: (context: never, configuration: never) => unknown;
 }
+
+// Installation cannot erase an unchecked author's callback contract; dynamic ingress is explicitly AnyPlugin.
+export type PluginAuthoringConstraint<Declaration extends AnyPlugin> = Declaration extends {
+  readonly [pluginContractBrand]?: { readonly authoring: infer Authoring };
+}
+  ? Authoring extends Omit<Declaration, typeof pluginContractBrand>
+    ? Authoring
+    : never
+  : AnyPlugin extends Declaration
+    ? Parameters<Declaration["setup"]> extends [never, never]
+      ? unknown
+      : never
+    : never;
+
+export type PluginConfigurationInput<Declaration extends AnyPlugin> =
+  Declaration extends PluginAuthoringConstraint<Declaration>
+    ? Declaration extends {
+        readonly [pluginContractBrand]?: { readonly input: (input: infer Input) => unknown };
+      }
+      ? Input
+      : unknown
+    : never;
 
 export type InstanceContext = Omit<PluginContext<{}>, "dependencies"> & {
   readonly dependencies: Readonly<Record<string, unknown>>;
 };
 
-export interface NormalizedPlugin extends Omit<
-  Plugin<unknown, Requirements, Provisions>,
-  "requires" | "provides" | "setup"
-> {
+export interface NormalizedPlugin {
+  readonly name: string;
+  readonly configuration?: PluginSchema<unknown, unknown>;
   readonly requires: Requirements;
   readonly provides: Provisions;
   readonly setup: (
@@ -138,14 +210,9 @@ export function definePlugin<
   Provides extends Provisions = {},
   ConfigurationInput = Configuration,
 >(
-  plugin: Plugin<Configuration, Requires, Provides, ConfigurationInput>,
-): Plugin<
-  NoInfer<Configuration>,
-  NoInfer<Requires>,
-  NoInfer<Provides>,
-  NoInfer<ConfigurationInput>
-> {
-  return normalizePluginDeclaration(plugin) as Plugin<
+  plugin: PluginAuthoring<Configuration, Requires, Provides, ConfigurationInput>,
+): NoInfer<Plugin<Configuration, Requires, Provides, ConfigurationInput>> {
+  return capturePluginDeclaration(plugin) as Plugin<
     Configuration,
     Requires,
     Provides,
@@ -154,14 +221,16 @@ export function definePlugin<
 }
 
 // Freezing alone does not prove a declaration was validated by this copy of Core.
-const capturedDeclarations = new WeakSet<AnyPlugin>();
+const capturedDeclarations = new WeakMap<object, AnyPlugin>();
 
-function normalizePluginDeclaration(plugin: AnyPlugin): AnyPlugin {
-  if (capturedDeclarations.has(plugin)) return plugin;
+export function capturePluginDeclaration(plugin: unknown): AnyPlugin {
+  const known =
+    plugin !== null && typeof plugin === "object" ? capturedDeclarations.get(plugin) : undefined;
+  if (known) return known;
   const declaration = normalizePlainRecord(plugin, "Plugin declaration", { fields: pluginFields });
   const { name, configuration, setup } = declaration;
   assertTrimmedText(name, "Plugin name");
-  if (typeof setup !== "function") {
+  if (!isPluginSetup(setup)) {
     throw new TypeError(`Plugin '${name}' must define setup()`);
   }
   const capturedSchema =
@@ -185,8 +254,12 @@ function normalizePluginDeclaration(plugin: AnyPlugin): AnyPlugin {
     provides,
     setup,
   });
-  capturedDeclarations.add(captured);
+  capturedDeclarations.set(captured, captured);
   return captured;
+}
+
+function isPluginSetup(value: unknown): value is AnyPlugin["setup"] {
+  return typeof value === "function";
 }
 
 // Composed declarations can reuse our frozen protocol without chaining another validator or exporter.
@@ -244,7 +317,7 @@ class PluginContracts {
     this.#pluginName = pluginName;
   }
 
-  normalizeRequirements(declarations: Requirements): Requirements {
+  normalizeRequirements(declarations: Readonly<Record<string, unknown>>): Requirements {
     const requires: Record<string, Requirement> = Object.create(null);
     for (const [alias, value] of Object.entries(declarations)) {
       this.#assertAlias(alias, "requirement");
@@ -259,7 +332,7 @@ class PluginContracts {
     return Object.freeze(requires);
   }
 
-  normalizeProvisions(declarations: Provisions): Provisions {
+  normalizeProvisions(declarations: Readonly<Record<string, unknown>>): Provisions {
     const provides: Record<string, Provisions[string]> = Object.create(null);
     for (const [alias, value] of Object.entries(declarations)) {
       this.#assertAlias(alias, "provision");
@@ -270,7 +343,7 @@ class PluginContracts {
         value,
         "service",
         `Plugin provision '${alias}' must be a Service`,
-      );
+      ) as ServiceIdentity;
       this.#remember("provision", alias, provision);
       provides[alias] = provision;
     }
@@ -304,7 +377,7 @@ class PluginContracts {
   }
 }
 
-export function normalizePlugin(plugin: AnyPlugin): NormalizedPlugin {
+export function normalizePlugin(plugin: unknown): NormalizedPlugin {
   // Authoring generics are erased only after the declaration has passed validation.
-  return normalizePluginDeclaration(plugin) as unknown as NormalizedPlugin;
+  return capturePluginDeclaration(plugin) as unknown as NormalizedPlugin;
 }

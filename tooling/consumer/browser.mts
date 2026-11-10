@@ -1,8 +1,16 @@
-import { asyncDisposeSymbol, createHost, definePlugin, service } from "dougong";
+import {
+  createResourceAuthority,
+  asyncDisposeSymbol,
+  createHost,
+  definePlugin,
+  service,
+} from "dougong";
 import { onAbort } from "dougong/advanced";
 import { computed, disposeSymbol, observe, signal, type Readable } from "@dougongjs/reactive";
 import { createPlatform, MemoryLoader } from "@dougongjs/platform";
 import { verifyObservationBoundary } from "./observation-boundary.mjs";
+
+const resourceAuthority = createResourceAuthority();
 
 function assert(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Error(message);
@@ -209,6 +217,7 @@ async function verifyResources() {
     },
   });
   const host = createHost({
+    resourceAuthority,
     installations: [{ id: "owner", plugin: owner }],
     onError(error) {
       failures.push(error);

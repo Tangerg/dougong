@@ -1,6 +1,14 @@
 import { setImmediate } from "node:timers/promises";
 import { afterEach, expect, it, vi } from "vitest";
-import { createHost, definePlugin, service, type AsyncDisposable } from "../src";
+import {
+  createResourceAuthority,
+  createHost,
+  definePlugin,
+  service,
+  type AsyncDisposable,
+} from "../src";
+
+const resourceAuthority = createResourceAuthority();
 
 afterEach(() => vi.useRealTimers());
 
@@ -60,6 +68,7 @@ it.each(["start", "change"] as const)(
         },
       });
     const host = createHost({
+      resourceAuthority,
       installations: [
         { id: "storage", plugin: storageProvider },
         { id: "buffer", plugin: buffer },
@@ -123,6 +132,7 @@ it("releases prepared dependencies when restoration setup also fails", async () 
     },
   });
   const host = createHost({
+    resourceAuthority,
     installations: [
       { id: "provider", plugin: provider },
       { id: "consumer", plugin: original },
@@ -174,6 +184,7 @@ it("retains prepared providers after a peer's shutdown deadline until its setup 
   let providerSignal!: AbortSignal;
   const report = vi.fn<(error: unknown) => void>();
   const host = createHost({
+    resourceAuthority,
     shutdownTimeoutMilliseconds,
     onError: report,
     installations: [
@@ -268,6 +279,7 @@ it.each([false, true])(
     const report = vi.fn<(error: unknown) => void>();
     let release!: AsyncDisposable;
     const host = createHost({
+      resourceAuthority,
       onError: report,
       installations: [
         {

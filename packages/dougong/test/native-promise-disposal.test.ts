@@ -1,6 +1,8 @@
 import { expect, it, vi } from "vitest";
-import { createHost, definePlugin, service } from "../src";
+import { createResourceAuthority, createHost, definePlugin, service } from "../src";
 import { Lifetime } from "../src/lifetime/lifetime";
+
+const resourceAuthority = createResourceAuthority();
 
 it("retains a consumer and its provider when a synchronous disposer hides a pending native Promise", async () => {
   const dependency = service<object>("native-disposal/dependency");
@@ -16,6 +18,7 @@ it("retains a consumer and its provider when a synchronous disposer hides a pend
   };
   const releaseProvider = vi.fn<() => void>();
   const host = createHost({
+    resourceAuthority,
     installations: [
       {
         id: "provider",
@@ -40,7 +43,11 @@ it("retains a consumer and its provider when a synchronous disposer hides a pend
       },
     ],
   });
-  const competing = new Lifetime({ label: "competing", report: () => undefined });
+  const competing = new Lifetime({
+    resourceAuthority,
+    label: "competing",
+    report: () => undefined,
+  });
   await host.start();
   try {
     await expect(host.stop()).rejects.toThrow(/quarantin/);

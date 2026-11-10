@@ -1,6 +1,8 @@
 import { setImmediate } from "node:timers/promises";
 import { afterEach, expect, it, vi } from "vitest";
-import { createHost, definePlugin, type AsyncDisposable } from "../src";
+import { createResourceAuthority, createHost, definePlugin, type AsyncDisposable } from "../src";
+
+const resourceAuthority = createResourceAuthority();
 
 afterEach(() => vi.useRealTimers());
 
@@ -39,6 +41,7 @@ it("preserves a preparation failure and joins quarantine that begins during cand
   const previousSetup = vi.fn<() => void>();
   let early!: AsyncDisposable;
   const host = createHost({
+    resourceAuthority,
     onError: report,
     installations: [
       {
@@ -128,6 +131,7 @@ it("reuses the quarantine receipt when an interrupted change has no independent 
   const nextSetup = vi.fn<() => void>();
   let early!: AsyncDisposable;
   const host = createHost({
+    resourceAuthority,
     onError: report,
     installations: [
       {
@@ -190,6 +194,7 @@ it.each(["pending", "completed"] as const)(
     const previousSetup = vi.fn<() => void>();
     let early!: AsyncDisposable;
     const host = createHost({
+      resourceAuthority,
       shutdownTimeoutMilliseconds,
       onError: report,
       installations: [

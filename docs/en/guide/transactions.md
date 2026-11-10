@@ -29,7 +29,20 @@ Invalidation ends the waiting `plan()` immediately, even if its validator never 
 
 Execution first checks foreground borrows on affected generations. A live borrow rejects with [`HOST_BUSY`](../reference/errors.md) before execution effects and without consuming the Plan. Once execution is admitted, it seals affected old generations, joins their background work and releases resources, then prepares candidates in dependency order. After every candidate is ready, listeners, contributions, services and origin publish together.
 
-`start()` has no cancellation input. While its configuration validation or setup is pending, `stop()` and `host[Symbol.asyncDispose]()` reject with `HOST_BUSY`; they do not cancel startup. `shutdownTimeoutMilliseconds` applies only once a Lifetime starts shutting down and does not bound startup.
+`start(signal?)` and `apply(plan, signal?)` accept cancellation of the execution request. Cancellation while queued or validating startup ends the request; a late validator result cannot run setup, and a Plan that has not begun execution remains unconsumed. Once execution begins, Engine delivers cancellation to the current preparation layer's Lifetimes and uses the same recovery path to clean candidates, join actual setup settlement, and reconstruct the previous declarations or quarantine. Prepared providers remain owned until their consumers finish cleanup.
+
+Cancellation during execution reports `TRANSITION_FAILED` with `details.outcome: "restored"` after successful cleanup or reconstruction, or `HOST_QUARANTINED` when cleanup or recovery cannot complete. The original cancellation reason remains in the failure cause. A final check accepts cancellation before commit; once publication begins, late cancellation cannot rewrite the committed outcome. Cancellation cannot undo external I/O.
+
+While startup or change is unsettled, `stop()` and `host[Symbol.asyncDispose]()` still reject with `HOST_BUSY`, so a validator, setup or cleanup callback cannot await itself. Applications cancel their own execution request and then await its outcome.
+
+Each waiting budget belongs to the owner of its actual obligations. Neither falls back to the other or limits normal startup:
+
+| Host option | Scope |
+| --- | --- |
+| `shutdownTimeoutMilliseconds` | Shutdown already initiated by each Lifetime; expiry retains its actual tasks and cleanup obligations |
+| `restorationTimeoutMilliseconds` | Engine preparation of the previous declarations after candidate cleanup; all dependency layers share this one budget, and expiry cancels the current restoration layer before cleanup and quarantine |
+
+Both are optional; omitting one leaves its corresponding wait unbounded. Configured values must be positive finite milliseconds no greater than `2 ** 31 - 1`. A failure receipt for non-cooperative restoration setup requires both restoration and shutdown budgets. Restoration uses an independent signal rather than inheriting the already cancelled replacement request, and commit clears its timer. A deadline retains the actual obligations and quarantines the Host rather than declaring release; forceful termination of arbitrary code requires Worker or process isolation.
 
 Candidate failure cleans candidates and attempts to reconstruct the previous declarations using their validated configuration. Reconstruction creates new Instances; it does not revive disposed objects. Incomplete cleanup or restoration quarantines the Host. Failed consumers retain the providers they transitively use; other independently safe branches continue cleaning up and independent errors are aggregated.
 

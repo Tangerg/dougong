@@ -1,12 +1,15 @@
 import { describe, expect, it, vi } from "vitest";
 import type { StandardSchemaV1 } from "@standard-schema/spec";
 import {
+  createResourceAuthority,
   ConfigurationValidationError,
   captureConfiguration,
   createHost,
   definePlugin,
   type InstallationArguments,
 } from "../src/index";
+
+const resourceAuthority = createResourceAuthority();
 
 function schemaReturning(result: unknown): StandardSchemaV1<unknown, unknown> {
   return {
@@ -24,7 +27,10 @@ async function startWith(schema: StandardSchemaV1<unknown, unknown>, configurati
     configuration: schema,
     setup: () => undefined,
   });
-  const host = createHost({ installations: [{ id: "configuration", plugin, configuration }] });
+  const host = createHost({
+    resourceAuthority,
+    installations: [{ id: "configuration", plugin, configuration }],
+  });
   return host.start().then(
     () => undefined,
     (error: unknown) => error,
@@ -59,7 +65,7 @@ describe("Plugin configuration validation", () => {
       const declaration: InstallationArguments<typeof parsed | typeof unconfigured> = configured
         ? [parsed, { id: "selected", configuration: "42" }]
         : [unconfigured, { id: "selected" }];
-      const host = createHost();
+      const host = createHost({ resourceAuthority });
       const change = host.change();
       const installation = change.install(...declaration);
 
@@ -138,7 +144,7 @@ describe("Plugin configuration validation", () => {
         received(configuration);
       },
     });
-    const host = createHost();
+    const host = createHost({ resourceAuthority });
     const change = host.change();
     change.install(plugin, { id: "configured", configuration: "input" });
     const plan = await host.plan(change);
@@ -185,6 +191,7 @@ describe("Plugin configuration validation", () => {
     const plugin = definePlugin<unknown>({ name: "configuration", setup });
     expect(() =>
       createHost({
+        resourceAuthority,
         installations: [{ id: "configuration", plugin, configuration: Promise.resolve(1) }],
       }),
     ).toThrow("configuration must be a plain record");
@@ -257,6 +264,7 @@ describe("Plugin configuration validation", () => {
       };
       const setup = vi.fn<() => void>();
       const host = createHost({
+        resourceAuthority,
         installations: [
           {
             id: "configuration",
@@ -297,6 +305,7 @@ describe("Plugin configuration validation", () => {
     };
     const received: unknown[] = [];
     const host = createHost({
+      resourceAuthority,
       installations: [
         {
           id: "configuration",
@@ -342,6 +351,7 @@ describe("Plugin configuration validation", () => {
     };
     const received: unknown[] = [];
     const host = createHost({
+      resourceAuthority,
       installations: [
         {
           id: "configuration",
@@ -374,6 +384,7 @@ describe("Plugin configuration validation", () => {
       },
     });
     const host = createHost({
+      resourceAuthority,
       installations: [{ id: "configuration", plugin, configuration: { port: "8080" } }],
     });
     await host.start();

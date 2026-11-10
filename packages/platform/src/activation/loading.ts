@@ -1,10 +1,5 @@
-import {
-  definePlugin,
-  type AnyPlugin,
-  type Plugin,
-  type Provisions,
-  type Requirements,
-} from "dougong";
+import type { AnyPlugin } from "dougong";
+import { capturePluginDeclaration } from "dougong/advanced";
 import type { Authorizer } from "../admission/permissions.js";
 import { describeArtifact, type Artifact } from "../artifacts/artifact.js";
 import {
@@ -107,7 +102,7 @@ async function loadPlugin<Reference>(
     const descriptor = Object.getOwnPropertyDescriptor(loaded, "default");
     if (!descriptor || !("value" in descriptor))
       throw new TypeError("Module must default-export a Plugin");
-    plugin = definePlugin(descriptor.value as Plugin<unknown, Requirements, Provisions, unknown>);
+    plugin = capturePluginDeclaration(descriptor.value);
   } catch (error) {
     throw new PlatformError(
       moduleInvalidCode,

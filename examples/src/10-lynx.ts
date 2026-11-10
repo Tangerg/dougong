@@ -1,4 +1,5 @@
 import {
+  createResourceAuthority,
   asyncDisposeSymbol,
   createHost,
   definePlugin,
@@ -9,6 +10,8 @@ import {
 import { createPlatform, MemoryLoader, PermissionSet } from "@dougongjs/platform";
 import { actionActivation, type ActionDeclaration } from "./action-declaration.js";
 import { exampleResult, expectFailure, type ExampleResult } from "./example.js";
+
+const resourceAuthority = createResourceAuthority();
 
 interface Filesystem {
   read(path: string): Promise<string>;
@@ -116,6 +119,7 @@ export async function lynxScenario(): Promise<ExampleResult> {
     },
   });
   const host = createHost({
+    resourceAuthority,
     name: "lynx-example",
     groups: [{ id: workspaceGroupId }],
     installations: [

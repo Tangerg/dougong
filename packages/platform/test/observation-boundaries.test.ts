@@ -1,8 +1,10 @@
 import { expect, it, vi } from "vitest";
-import { createHost } from "dougong";
+import { createResourceAuthority, createHost } from "dougong";
 import { SnapshotPublisher } from "dougong/advanced";
 import { createPlatform, MemoryLoader } from "../src";
 import { add, deferred, emptyPlugin, nextTurn, select } from "./fixtures";
+
+const resourceAuthority = createResourceAuthority();
 
 it.each(["select", "activate", "dispose"] as const)(
   "does not reject a committed Platform %s when another snapshot reporter fails",
@@ -19,7 +21,7 @@ it.each(["select", "activate", "dispose"] as const)(
       throw observerFailure;
     });
     const report = vi.fn<(error: unknown) => void>();
-    const host = createHost();
+    const host = createHost({ resourceAuthority });
     const platform = createPlatform({
       id: "notifications",
       host,
@@ -95,7 +97,7 @@ it.each(["after activation", "during notification"] as const)(
     const report = vi.fn<(error: unknown) => void>();
     const platform = createPlatform({
       id: "notifications",
-      host: createHost(),
+      host: createHost({ resourceAuthority }),
       apiVersion: "1.0.0",
       loader: new MemoryLoader(new Map([["sample", { default: emptyPlugin("sample") }]])),
       logger: { debug() {}, info() {}, warn() {}, error: report },
@@ -156,7 +158,7 @@ it("reports notifications queued by cancelled loader callbacks without rejecting
   const resume = deferred<{ default: ReturnType<typeof emptyPlugin> }>();
   const platform = createPlatform({
     id: "cancel-notifications",
-    host: createHost(),
+    host: createHost({ resourceAuthority }),
     apiVersion: "1.0.0",
     loader: {
       load(_reference: string, signal: AbortSignal) {

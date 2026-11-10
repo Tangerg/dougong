@@ -11,7 +11,8 @@ value.set(2);
 assert.equal(updates, 1);
 
 const core = await import("dougong");
-const { createHost, definePlugin } = core;
+const { createHost, createResourceAuthority, definePlugin } = core;
+const resourceAuthority = createResourceAuthority();
 assert.equal(core.disposeSymbol, disposeSymbol);
 assert.equal(core.asyncDisposeSymbol, asyncDisposeSymbol);
 const { onAbort } = await import("dougong/advanced");
@@ -29,6 +30,7 @@ const released = [];
 let child;
 let readable;
 const host = createHost({
+  resourceAuthority,
   installations: [
     {
       id: "owner",

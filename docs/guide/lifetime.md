@@ -2,6 +2,20 @@
 
 Lifetime 以组合构成资源树。根由 Instance 创建，插件通过 `child(label)` 创建子所有者。插件通过根视图 `context.lifetime` 登记资源和任务；只有 Engine 能停止 Instance。插件不能通过该视图释放整个实例。需要提前结束一组工作时，创建并保存 `child(label)` 返回的 `ChildLifetime`。
 
+应用在装配入口用 `createResourceAuthority()` 创建资源域，并通过必填的 `HostOptions.resourceAuthority` 传给该域内所有 Host。独立打包的 Core 副本也必须接收同一个 authority 对象；该协议按结构接入，不依赖某份 Core 的类身份。Core 不选择隐式默认域。
+
+```ts
+import { createHost, createResourceAuthority } from "dougong";
+
+const resourceAuthority = createResourceAuthority();
+const applicationHost = createHost({ resourceAuthority, name: "application" });
+const deliveryHost = createHost({ resourceAuthority, name: "delivery" });
+```
+
+ResourceAuthority 只裁决资源身份的接管预约与控制句柄来源。Lifetime 仍拥有实际任务、资源释放及结算义务。共享 authority 不允许多个 Lifetime 同时接管同一资源；它让不同 Host 和 Core 副本在同一处拒绝重复接管。不要为共享资源的每个 Host 分别创建 authority。不同 authority 是明确独立的域，无法互相检查裸对象；跨域应只传递使用权，释放仍由原所有者负责。
+
+Host 一次性捕获 authority 的各个方法，并保留原接收者。`claim`、`markControlHandle` 及返回的 claim 释放回调都必须同步完成。即使资源 disposer 已经成功，claim 释放失败仍会保留失败的 Lifetime 义务并隔离 Host，两步都不会重试。若 disposer 捕获与 reservation 回滚同时失败，两项错误都会保留在失败记录中。控制句柄登记完成后才调度任务的用户函数，登记失败不会启动无主工作。
+
 | 原子能力 | 承诺 |
 | --- | --- |
 | `use(resource)` | 捕获标准释放方法，成功登记后返回原资源 |
@@ -13,9 +27,9 @@ Lifetime 以组合构成资源树。根由 Instance 创建，插件通过 `child
 | `signal` | 合作式取消信号 |
 | `child[Symbol.asyncDispose]()` | 提前关闭自己创建的子树，加入同一次退出 |
 
-子 Lifetime 的释放义务属于创建它的父 Lifetime。Task、`defer`、`interrupt`、事件监听、Contribution，以及已有 Lifetime 所有者的贡献视图订阅，其返回句柄也只控制原来的登记。同一份已加载的 Core 中，`use` 和 `acquire` 拒绝再次接管这些句柄，无论目标是否为原 Lifetime，也无论句柄是否已经完成。直接调用句柄的标准释放方法即可提前结束原操作或解除登记，不会创建第二条释放义务。独立打包的 Core 副本各自识别句柄，跨副本使用时仍应由原所有者负责释放。
+子 Lifetime 的释放义务属于创建它的父 Lifetime。Task、`defer`、`interrupt`、事件监听、Contribution，以及已有 Lifetime 所有者的贡献视图订阅，其返回句柄也只控制原来的登记。同一资源域中的 `use` 和 `acquire` 拒绝再次接管这些句柄，无论目标是否为原 Lifetime、是否来自另一份 Core，也无论句柄是否已经完成。控制句柄来源不会随原操作结束而清除。直接调用句柄的标准释放方法即可提前结束原操作或解除登记，不会创建第二条释放义务。
 
-同一份已加载的 Core 也只允许一个 Lifetime 接管同一个外部资源对象。重复调用 `use`、并发 `acquire` 或从释放方法的 getter 重入登记都会被拒绝。释放仍在进行、已经超时或已经失败时，原所有者继续承担义务；只有实际释放成功后才能重新接管该对象。调用方应将共享资源交给一个明确的 Lifetime，并通过服务参数传递使用权。
+同一资源域也只允许一个 Lifetime 接管同一个外部资源对象。重复调用 `use`、并发 `acquire` 或从释放方法的 getter 重入登记都会被拒绝。释放仍在进行、已经超时或已经失败时，原所有者继续承担义务；只有实际释放成功后才能重新接管该对象。调用方应将共享资源交给一个明确的 Lifetime，并通过服务参数传递使用权。
 
 `Symbol.dispose` 必须同步完成；异步释放应使用 `Symbol.asyncDispose`。同步回调返回受支持的 Promise 或 thenable 会被拒绝，失败释放仍归原 Lifetime。Core 与 Reactive 共用同一个异步结果协议：原型链包含当前 realm 的 `Promise.prototype` 时，使用内建 `then` 验证原生品牌并观察实际结算，包括本 realm 的子类；自有 `then` 不能替代这个结算。其他对象只捕获一次可调用的 `then`，保留原 receiver，并按标准结构 thenable 规则递归解析。`Symbol.toStringTag` 只描述展示名称，既不参与协议选择，也不执行其 getter。
 

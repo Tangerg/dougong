@@ -4,6 +4,7 @@ import * as core from "dougong";
 import {
   batchSnapshotNotifications,
   captureLogger,
+  capturePluginDeclaration,
   normalizePlainRecord,
   onAbort,
   recordFields,
@@ -11,6 +12,11 @@ import {
   SerialQueue,
   SnapshotPublisher,
 } from "dougong/advanced";
+
+const resourceAuthority = core.createResourceAuthority();
+expectTypeOf(resourceAuthority).toEqualTypeOf<core.ResourceAuthority>();
+// @ts-expect-error A Host requires an explicit shared resource domain.
+core.createHost();
 
 expectTypeOf<ConstructorParameters<typeof core.RecordedFailure>>().toEqualTypeOf<
   [error: unknown, fields?: ReadonlyArray<string>]
@@ -243,9 +249,10 @@ const unconfigured = core.definePlugin({ name: "initial.unconfigured", setup() {
 const optional = core.definePlugin<string | undefined>({ name: "initial.optional", setup() {} });
 const unknown = core.definePlugin<unknown>({ name: "initial.unknown", setup() {} });
 
-expectTypeOf(core.createHost()).toEqualTypeOf<core.Host>();
-core.createHost({ name: "empty", installations: [] });
+expectTypeOf(core.createHost({ resourceAuthority })).toEqualTypeOf<core.Host>();
+core.createHost({ resourceAuthority, name: "empty", installations: [] });
 core.createHost({
+  resourceAuthority,
   installations: [
     { id: "text", plugin: text, configuration: "text" },
     { id: "number", plugin: number, configuration: 42 },
@@ -260,15 +267,27 @@ core.createHost({
 });
 
 // @ts-expect-error Initial configuration is required when the Plugin input excludes undefined.
-core.createHost({ installations: [{ id: "text", plugin: text }] });
-// @ts-expect-error Configuration cannot widen the Plugin inferred from its own declaration.
-core.createHost({ installations: [{ id: "text", plugin: text, configuration: 42 }] });
-// @ts-expect-error Setup's transformed output cannot replace the schema's input.
-core.createHost({ installations: [{ id: "parsed", plugin: parsed, configuration: 42 }] });
-// @ts-expect-error Void does not authorize arbitrary configuration.
-core.createHost({ installations: [{ id: "void", plugin: unconfigured, configuration: "text" }] });
-// @ts-expect-error An optional input remains constrained when provided.
-core.createHost({ installations: [{ id: "optional", plugin: optional, configuration: 42 }] });
+core.createHost({ resourceAuthority, installations: [{ id: "text", plugin: text }] });
+core.createHost({
+  resourceAuthority,
+  // @ts-expect-error Configuration cannot widen the Plugin inferred from its own declaration.
+  installations: [{ id: "text", plugin: text, configuration: 42 }],
+});
+core.createHost({
+  resourceAuthority,
+  // @ts-expect-error Setup's transformed output cannot replace the schema's input.
+  installations: [{ id: "parsed", plugin: parsed, configuration: 42 }],
+});
+core.createHost({
+  resourceAuthority,
+  // @ts-expect-error Void does not authorize arbitrary configuration.
+  installations: [{ id: "void", plugin: unconfigured, configuration: "text" }],
+});
+core.createHost({
+  resourceAuthority,
+  // @ts-expect-error An optional input remains constrained when provided.
+  installations: [{ id: "optional", plugin: optional, configuration: 42 }],
+});
 
 const initial: core.InitialInstallation<typeof parsed> = {
   id: "parsed",
@@ -277,12 +296,13 @@ const initial: core.InitialInstallation<typeof parsed> = {
   groupId: "workspace",
   origin: { revision: "initial" },
 };
-core.createHost({ groups: [{ id: "workspace" }], installations: [initial] });
+core.createHost({ resourceAuthority, groups: [{ id: "workspace" }], installations: [initial] });
 // @ts-expect-error Explicit InitialInstallation annotations preserve required schema input.
 const missingInitial: core.InitialInstallation<typeof parsed> = { id: "parsed", plugin: parsed };
 void missingInitial;
 
 const options: core.HostOptions<readonly [typeof text, typeof number]> = {
+  resourceAuthority,
   installations: [
     { id: "text", plugin: text, configuration: "text" },
     { id: "number", plugin: number, configuration: 42 },
@@ -294,39 +314,43 @@ const mixed = [
   { id: "text", plugin: text, configuration: "text" },
   { id: "number", plugin: number, configuration: 42 },
 ];
-core.createHost({ installations: mixed });
+core.createHost({ resourceAuthority, installations: mixed });
 const readonlyMixed = [
   { id: "text", plugin: text, configuration: "text" },
   { id: "number", plugin: number, configuration: 42 },
 ] as const;
-core.createHost({ installations: readonlyMixed });
+core.createHost({ resourceAuthority, installations: readonlyMixed });
 
 const crossed = [
   { id: "text", plugin: text, configuration: 42 },
   { id: "number", plugin: number, configuration: "text" },
 ];
 // @ts-expect-error A heterogeneous array must retain each Plugin's own input, not their union.
-core.createHost({ installations: crossed });
+core.createHost({ resourceAuthority, installations: crossed });
 const readonlyCrossed = [
   { id: "text", plugin: text, configuration: 42 },
   { id: "number", plugin: number, configuration: "text" },
 ] as const;
 // @ts-expect-error Readonly tuples must not admit cross-paired configuration either.
-core.createHost({ installations: readonlyCrossed });
+core.createHost({ resourceAuthority, installations: readonlyCrossed });
 
 function verifyDynamicInput(plugin: core.AnyPlugin, input: unknown) {
   const options: core.HostOptions = {
+    resourceAuthority,
     installations: [{ id: "dynamic", plugin, configuration: input }],
   };
   core.createHost(options);
-  core.createHost({ installations: [{ id: "dynamic", plugin }] });
+  core.createHost({ resourceAuthority, installations: [{ id: "dynamic", plugin }] });
 }
 void verifyDynamicInput;
 
 function rejectUncorrelatedInput(plugin: typeof text | typeof number) {
-  // @ts-expect-error A union Plugin does not establish which configuration input applies.
-  core.createHost({ installations: [{ id: "uncertain", plugin, configuration: "text" }] });
-  const change = core.createHost().change();
+  core.createHost({
+    resourceAuthority,
+    // @ts-expect-error A union Plugin does not establish which configuration input applies.
+    installations: [{ id: "uncertain", plugin, configuration: "text" }],
+  });
+  const change = core.createHost({ resourceAuthority }).change();
   // @ts-expect-error Separate union parameters do not establish a Plugin/input pairing.
   change.install(plugin, { id: "uncertain", configuration: "text" });
   // @ts-expect-error Explicit arguments must preserve the same pairing.
@@ -337,7 +361,7 @@ function rejectUncorrelatedInput(plugin: typeof text | typeof number) {
 }
 void rejectUncorrelatedInput;
 
-const change = core.createHost().change();
+const change = core.createHost({ resourceAuthority }).change();
 change.install(unconfigured, { id: "void" });
 change.install(optional, { id: "optional" });
 change.install(unknown, { id: "unknown" });
@@ -374,8 +398,10 @@ function verifyCorrelatedInstallation(
 
   // @ts-expect-error The handle does not identify which installed branch accepts this input.
   change.update(installation, { configuration: "text" });
-  // @ts-expect-error Explicit Plugin unions do not identify the installed branch either.
-  change.update<typeof text | typeof number>(installation, { configuration: 42 });
+  change.update<typeof text | typeof number, { configuration: number }>(installation, {
+    // @ts-expect-error Explicit Plugin unions do not identify the installed branch either.
+    configuration: 42,
+  });
   // @ts-expect-error Replacement cannot inherit input from an unknown installed branch.
   change.update(installation, { plugin: text });
   change.update(installation, { plugin: text, configuration: "replacement" });
@@ -397,7 +423,9 @@ const explicitInstallation = change.install<core.InstallationArguments<typeof pa
   configuration: "42",
 });
 expectTypeOf(explicitInstallation).toEqualTypeOf<core.Installation<typeof parsed>>();
-change.update<typeof parsed>(explicitInstallation, { configuration: "43" });
+change.update<typeof parsed, { configuration: string }>(explicitInstallation, {
+  configuration: "43",
+});
 // @ts-expect-error Explicit arguments still require schema input, not setup output.
 change.install<core.InstallationArguments<typeof parsed>>(parsed, {
   id: "explicit-wrong-schema-input",
@@ -450,8 +478,11 @@ function verifyOverlappingSchemaInputs(
   const selected = useNarrowInput ? parsed : parsedBroadInput;
   // @ts-expect-error Schema input covariance cannot collapse an inferred Plugin union.
   change.install(selected, { id: "inferred-overlapping-schema", configuration: 42 });
-  // @ts-expect-error Initial declarations use the same invariant schema input contract.
-  core.createHost({ installations: [{ id: "overlapping-schema", plugin, configuration: 42 }] });
+  core.createHost({
+    resourceAuthority,
+    // @ts-expect-error Initial declarations use the same invariant schema input contract.
+    installations: [{ id: "overlapping-schema", plugin, configuration: 42 }],
+  });
 
   const declaration: core.InstallationArguments<typeof parsed | typeof parsedBroadInput> =
     useNarrowInput
@@ -633,6 +664,7 @@ function verifyReadonlyConfigurationTypes(
   input.labels.push("two");
   output.values.push(2);
   const host = core.createHost({
+    resourceAuthority,
     installations: [{ id: "configured", plugin: configured, configuration: input }],
   });
   const change = host.change();
@@ -787,18 +819,30 @@ function verifyLoggerReturns(dynamicLogger: unknown) {
     error: synchronousMethod,
   };
   const asynchronousMethod = async () => undefined;
-  core.createHost({ logger: synchronousLogger });
-  core.createHost({ logger: captureLogger(synchronousLogger) });
-  core.createHost({ logger: console });
-  core.createHost({ logger: captureLogger(console) });
-  // @ts-expect-error Instance debug calls cannot return an asynchronous result.
-  core.createHost({ logger: { ...synchronousLogger, debug: asynchronousMethod } });
-  // @ts-expect-error Instance info calls cannot return an asynchronous result.
-  core.createHost({ logger: { ...synchronousLogger, info: asynchronousMethod } });
-  // @ts-expect-error Instance warning calls cannot return an asynchronous result.
-  core.createHost({ logger: { ...synchronousLogger, warn: asynchronousMethod } });
-  // @ts-expect-error Instance error calls cannot return an asynchronous result.
-  core.createHost({ logger: { ...synchronousLogger, error: asynchronousMethod } });
+  core.createHost({ resourceAuthority, logger: synchronousLogger });
+  core.createHost({ resourceAuthority, logger: captureLogger(synchronousLogger) });
+  core.createHost({ resourceAuthority, logger: console });
+  core.createHost({ resourceAuthority, logger: captureLogger(console) });
+  core.createHost({
+    resourceAuthority,
+    // @ts-expect-error Instance debug calls cannot return an asynchronous result.
+    logger: { ...synchronousLogger, debug: asynchronousMethod },
+  });
+  core.createHost({
+    resourceAuthority,
+    // @ts-expect-error Instance info calls cannot return an asynchronous result.
+    logger: { ...synchronousLogger, info: asynchronousMethod },
+  });
+  core.createHost({
+    resourceAuthority,
+    // @ts-expect-error Instance warning calls cannot return an asynchronous result.
+    logger: { ...synchronousLogger, warn: asynchronousMethod },
+  });
+  core.createHost({
+    resourceAuthority,
+    // @ts-expect-error Instance error calls cannot return an asynchronous result.
+    logger: { ...synchronousLogger, error: asynchronousMethod },
+  });
 
   const captured = captureLogger({
     debug: synchronousMethod,
@@ -812,16 +856,16 @@ function verifyLoggerReturns(dynamicLogger: unknown) {
   // @ts-expect-error Captured methods do not retain the backend function's own properties.
   void captured.info.backend;
   // @ts-expect-error Capturing mixed methods must not erase an asynchronous return to void.
-  core.createHost({ logger: captured });
+  core.createHost({ resourceAuthority, logger: captured });
 
   const capturedDynamic = captureLogger(dynamicLogger);
   expectTypeOf<ReturnType<typeof capturedDynamic.error>>().toEqualTypeOf<unknown>();
   // @ts-expect-error Capturing method shape cannot prove unknown calls will be synchronous.
-  core.createHost({ logger: capturedDynamic });
+  core.createHost({ resourceAuthority, logger: capturedDynamic });
   if (core.isLogger(dynamicLogger)) {
     expectTypeOf<ReturnType<typeof dynamicLogger.error>>().toEqualTypeOf<unknown>();
     // @ts-expect-error A shape guard cannot prove unknown calls will be synchronous.
-    core.createHost({ logger: dynamicLogger });
+    core.createHost({ resourceAuthority, logger: dynamicLogger });
   }
 }
 void verifyLoggerReturns;
@@ -1381,3 +1425,340 @@ function verifyInstallationSnapshot(snapshot: core.InstallationSnapshot) {
   }
 }
 void verifyInstallationSnapshot;
+
+function verifyPluginAuthoring() {
+  const text = core.service<string>("authoring/text");
+  const count = core.service<number>("authoring/count");
+
+  function rejectMissingDeclarations() {
+    // @ts-expect-error A nonempty requirement contract must exist in the actual declaration.
+    core.definePlugin<void, { text: typeof text }>({ name: "missing.requires", setup() {} });
+    // @ts-expect-error A nonempty provision contract must exist in the actual declaration.
+    core.definePlugin<void, {}, { count: typeof count }>({
+      name: "missing.provides",
+      setup: () => ({ count: 1 }),
+    });
+    core.definePlugin({
+      name: "callback.requires",
+      // @ts-expect-error A callback annotation cannot originate an undeclared dependency.
+      setup(_context: core.PluginContext<{ text: typeof text }>) {},
+    });
+    core.definePlugin({
+      name: "callback.provides",
+      // @ts-expect-error Returning a value cannot originate an undeclared provision.
+      setup: () => ({ count: 1 }),
+    });
+    core.definePlugin<void, {}, {}>({
+      name: "explicit.empty",
+      // @ts-expect-error An explicitly empty declaration cannot conceal a real provision.
+      provides: { count },
+      setup() {},
+    });
+  }
+  void rejectMissingDeclarations;
+
+  function rejectIndependentChoices(
+    disjoint: { text: typeof text } | { count: typeof count },
+    optionalBranch: {} | { text: typeof text },
+    sameKey: { value: typeof text } | { value: typeof count },
+    token: typeof text | typeof count,
+    optionalKey: { text?: typeof text },
+    openKeys: Readonly<Record<string, typeof text>>,
+    patternedKeys: Readonly<Record<`entry.${string}`, typeof text>>,
+    mixedKeys: { text: typeof text } & Readonly<Record<`entry.${string}`, typeof text>>,
+  ) {
+    // @ts-expect-error Disjoint branches do not mean the declaration provides nothing.
+    core.definePlugin({ name: "union.disjoint", provides: disjoint, setup() {} });
+    // @ts-expect-error A possible empty branch cannot authorize omitting another branch's result.
+    core.definePlugin({ name: "union.empty", provides: optionalBranch, setup() {} });
+    // @ts-expect-error A union result is not correlated with the chosen declaration branch.
+    core.definePlugin({
+      name: "union.same-key",
+      provides: sameKey,
+      setup: () => ({ value: "text" }),
+    });
+    // @ts-expect-error A token union also loses the pairing between actual Service and value.
+    core.definePlugin({
+      name: "union.token",
+      provides: { value: token },
+      setup: () => ({ value: 1 }),
+    });
+    // @ts-expect-error Optional authoring keys do not prove which setup result must exist.
+    core.definePlugin({
+      name: "keys.optional",
+      provides: optionalKey,
+      setup: () => ({ text: "text" }),
+    });
+    // @ts-expect-error An open key range cannot prove that every actual alias was returned.
+    core.definePlugin({ name: "keys.open", provides: openKeys, setup: () => ({ text: "text" }) });
+    // @ts-expect-error A template index signature is still an open set of aliases.
+    core.definePlugin({ name: "keys.patterned", provides: patternedKeys, setup: () => ({}) });
+    // @ts-expect-error One fixed alias cannot prove completeness of additional open aliases.
+    core.definePlugin({ name: "keys.mixed", provides: mixedKeys, setup: () => ({ text: "text" }) });
+  }
+  void rejectIndependentChoices;
+
+  function rejectStructuralBypasses() {
+    // @ts-expect-error Direct Plugin annotations have the same required declaration fields.
+    const missing: core.Plugin<void, { text: typeof text }> = {
+      name: "direct.requires",
+      setup() {},
+    };
+    // @ts-expect-error A direct annotation cannot invent a provision absent at runtime.
+    const provider: core.Plugin<void, {}, { text: typeof text }> = {
+      name: "direct.provides",
+      setup: () => ({ text: "text" }),
+    };
+    // @ts-expect-error A direct annotation cannot independently choose declaration and output branches.
+    const uncertain: core.Plugin<void, {}, { text: typeof text } | { count: typeof count }> = {
+      name: "direct.union",
+      provides: { text },
+      setup() {},
+    };
+    void missing;
+    void provider;
+    void uncertain;
+  }
+  void rejectStructuralBypasses;
+
+  function rejectInventedTransformations() {
+    // @ts-expect-error A string-to-number transformation requires an actual schema.
+    core.definePlugin<number, {}, {}, string>({ name: "missing.schema", setup() {} });
+    // @ts-expect-error Typed setup arithmetic cannot transform its runtime input by annotation.
+    core.definePlugin<number, {}, { count: typeof count }, string>({
+      name: "missing.schema.provider",
+      provides: { count },
+      setup: (_context, value) => ({ count: value + 1 }),
+    });
+    // @ts-expect-error Direct Plugin annotations cannot erase the required transformation.
+    const declaration: core.Plugin<number, {}, {}, string> = { name: "direct.schema", setup() {} };
+    void declaration;
+  }
+  void rejectInventedTransformations;
+
+  const parser: StandardSchemaV1<string, number> = {
+    "~standard": {
+      version: 1,
+      vendor: "authoring",
+      validate: (input) => ({ value: Number(input) }),
+    },
+  };
+  const parsed = core.definePlugin({
+    name: "valid.schema",
+    configuration: parser,
+    provides: { count },
+    setup(_context, value) {
+      expectTypeOf(value).toEqualTypeOf<number>();
+      return { count: value + 1 };
+    },
+  });
+  expectTypeOf<core.InstallationOptions<typeof parsed>["configuration"]>().toEqualTypeOf<string>();
+
+  const direct: core.Plugin<number, {}, { count: typeof count }, string> = {
+    name: "valid.annotated.schema",
+    configuration: parser,
+    provides: { count },
+    setup: (_context, value) => ({ count: value + 1 }),
+  };
+  expectTypeOf<core.InstallationOptions<typeof direct>["configuration"]>().toEqualTypeOf<string>();
+
+  const schemaFree = core.definePlugin<number>({ name: "valid.schema-free", setup() {} });
+  expectTypeOf<
+    core.InstallationOptions<typeof schemaFree>["configuration"]
+  >().toEqualTypeOf<number>();
+  const safeInput = core.definePlugin<number, {}, {}, 42>({
+    name: "valid.narrow-input",
+    setup() {},
+  });
+  expectTypeOf<core.InstallationOptions<typeof safeInput>["configuration"]>().toEqualTypeOf<42>();
+
+  function defineSelectedPlugin(useText: boolean) {
+    return useText
+      ? core.definePlugin({
+          name: "selected.text",
+          provides: { text },
+          setup: () => ({ text: "text" }),
+        })
+      : core.definePlugin({
+          name: "selected.count",
+          provides: { count },
+          setup: () => ({ count: 1 }),
+        });
+  }
+  expectTypeOf<ReturnType<typeof defineSelectedPlugin>>().toMatchTypeOf<core.AnyPlugin>();
+
+  const dependent = core.definePlugin({
+    name: "valid.dependencies",
+    requires: { text, count: core.optional(count) },
+    setup({ dependencies }) {
+      expectTypeOf(dependencies.text).toEqualTypeOf<string>();
+      expectTypeOf(dependencies.count).toEqualTypeOf<number | undefined>();
+    },
+  });
+  core.definePlugin({ ...dependent, name: "valid.composed" });
+
+  function captureUnknownModule(value: unknown) {
+    const captured = capturePluginDeclaration(value);
+    expectTypeOf(captured).toEqualTypeOf<core.AnyPlugin>();
+    // @ts-expect-error Runtime validation cannot recreate erased setup parameter types.
+    core.definePlugin(captured);
+  }
+  void captureUnknownModule;
+}
+void verifyPluginAuthoring;
+
+function verifyInstallationAuthoringBoundary(unknownModule: unknown) {
+  const count = core.service<number>("ingress/count");
+  const text = core.service<string>("ingress/text");
+  const host = core.createHost({ resourceAuthority });
+  const change = host.change();
+  const raw = {
+    name: "raw",
+    provides: { count },
+    setup(_context: unknown, configuration: number) {
+      return { count: configuration + 1 };
+    },
+  };
+  core.createHost({
+    resourceAuthority,
+    // @ts-expect-error A raw callback contract cannot be erased by initial installation inference.
+    installations: [{ id: "raw", plugin: raw, configuration: "42" }],
+  });
+  // @ts-expect-error Authoring must pass definePlugin or an explicit Plugin contract before installation.
+  change.install(raw, { id: "raw", configuration: 42 });
+  function rejectRawHandle(installation: core.Installation<typeof raw>) {
+    // @ts-expect-error An unproved declaration cannot supply an unknown configuration update contract.
+    change.update(installation, { configuration: "42" });
+    // @ts-expect-error Replacement cannot restore a contract the raw declaration never proved.
+    change.update(installation, { plugin: raw, configuration: "42" });
+  }
+  void rejectRawHandle;
+
+  const checked = core.definePlugin(raw);
+  expectTypeOf<core.InstallationOptions<typeof checked>["configuration"]>().toEqualTypeOf<number>();
+  const installation = change.install(checked, { id: "checked", configuration: 42 });
+  // @ts-expect-error Configuration-only updates preserve the checked number input.
+  change.update(installation, { configuration: "42" });
+  // @ts-expect-error Replacement input cannot be widened by an unchecked raw callback.
+  change.update(installation, { plugin: raw, configuration: "42" });
+  // @ts-expect-error A raw replacement still needs authoring proof when its input happens to match.
+  change.update(installation, { plugin: raw, configuration: 42 });
+  const annotated: core.Plugin<number, {}, { count: typeof count }> = raw;
+  core.createHost({
+    resourceAuthority,
+    installations: [{ id: "annotated", plugin: annotated, configuration: 42 }],
+  });
+
+  const wrongOutput = {
+    name: "raw.output",
+    provides: { count },
+    setup: () => ({ count: "wrong" }),
+  };
+  core.createHost({
+    resourceAuthority,
+    // @ts-expect-error Raw provision output cannot bypass its Service's number contract.
+    installations: [{ id: "wrong-output", plugin: wrongOutput }],
+  });
+  const wrongDependencies = {
+    name: "raw.dependencies",
+    requires: { value: text },
+    provides: { count },
+    setup({ dependencies }: core.PluginContext<{ value: typeof count }>) {
+      return { count: dependencies.value + 1 };
+    },
+  };
+  core.createHost({
+    resourceAuthority,
+    // @ts-expect-error Raw callback dependencies cannot contradict the actual requirement tokens.
+    installations: [{ id: "wrong-dependencies", plugin: wrongDependencies }],
+  });
+  const stringSchema: StandardSchemaV1<string, string> = {
+    "~standard": { version: 1, vendor: "ingress", validate: () => ({ value: "42" }) },
+  };
+  const wrongSchemaOutput = { ...raw, configuration: stringSchema };
+  core.createHost({
+    resourceAuthority,
+    // @ts-expect-error Raw setup cannot replace the schema output's string contract with number.
+    installations: [{ id: "wrong-schema-output", plugin: wrongSchemaOutput, configuration: "42" }],
+  });
+
+  const partlyErased = {
+    name: "partly-erased",
+    provides: { count },
+    setup(_context: never, _configuration: never) {
+      return { count: "wrong" };
+    },
+  };
+  core.createHost({
+    resourceAuthority,
+    // @ts-expect-error Never parameters alone do not erase still-known provision and output contracts.
+    installations: [{ id: "partly-erased", plugin: partlyErased }],
+  });
+  const undeclaredDependencies = {
+    name: "raw.method",
+    setup(_context: core.PluginContext<{ text: typeof text }>, _configuration: unknown) {},
+  };
+  core.createHost({
+    resourceAuthority,
+    // @ts-expect-error Method bivariance cannot disguise a known callback as erased AnyPlugin.
+    installations: [{ id: "undeclared", plugin: undeclaredDependencies }],
+  });
+
+  const base = core.definePlugin({
+    name: "base",
+    provides: { count },
+    setup: () => ({ count: 1 }),
+  });
+  const expanded = { ...base, provides: { ...base.provides, text } };
+  core.createHost({
+    resourceAuthority,
+    // @ts-expect-error Adding a provision invalidates the old setup proof carried by a spread.
+    installations: [{ id: "expanded", plugin: expanded }],
+  });
+  // @ts-expect-error Direct installation uses the same closed declaration contract.
+  change.install(expanded, { id: "expanded" });
+  const baseInstallation = change.install(base, { id: "base" });
+  // @ts-expect-error Replacement must check its actual declaration rather than erase new provision keys.
+  change.update(baseInstallation, { plugin: expanded });
+  function verifyUpdateChoice(replace: boolean) {
+    const invalid = replace
+      ? { plugin: expanded, configuration: undefined }
+      : { configuration: undefined };
+    // @ts-expect-error A configuration-only branch cannot erase another branch's authoring check.
+    change.update(baseInstallation, invalid);
+    const valid = replace
+      ? { plugin: base, configuration: undefined }
+      : { configuration: undefined };
+    change.update(baseInstallation, valid);
+  }
+  void verifyUpdateChoice;
+  const replacedSetup = { ...base, setup: () => ({ count: "wrong" }) };
+  core.createHost({
+    resourceAuthority,
+    // @ts-expect-error Spreading a checked declaration cannot prove a different setup result.
+    installations: [{ id: "wrong-setup", plugin: replacedSetup }],
+  });
+  function rejectMissingSchema(
+    declaration: Omit<core.Plugin<number, {}, { count: typeof count }, string>, "configuration">,
+  ) {
+    core.createHost({
+      resourceAuthority,
+      // @ts-expect-error Omit cannot retain a transformation proof while removing its schema.
+      installations: [{ id: "missing-schema", plugin: declaration, configuration: "42" }],
+    });
+  }
+  void rejectMissingSchema;
+
+  const recomposed = core.definePlugin({
+    ...expanded,
+    setup: () => ({ count: 1, text: "text" }),
+  });
+  core.createHost({ resourceAuthority, installations: [{ id: "recomposed", plugin: recomposed }] });
+  const renamed = { ...base, name: "renamed" };
+  core.createHost({ resourceAuthority, installations: [{ id: "renamed", plugin: renamed }] });
+  const captured = capturePluginDeclaration(unknownModule);
+  const dynamic = change.install(captured, { id: "dynamic", configuration: { external: true } });
+  change.update(dynamic, { plugin: captured, configuration: undefined });
+  core.createHost({ resourceAuthority, installations: [{ id: "captured", plugin: captured }] });
+}
+void verifyInstallationAuthoringBoundary;

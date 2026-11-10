@@ -10,7 +10,7 @@
 | 插件 / Plugins | `definePlugin`, `describePlugin`, `PluginDescriptor`, `PluginConfigurationDescriptor`, `PluginDescriptionOptions`, `Plugin`, `AnyPlugin`, `PluginContext`, `Requirements`, `Provisions`, `ResolvedRequirement`, `ResolvedRequirements`, `ProvidedServices`, `InstanceMetadata` |
 | 安装与计划 / Installation and planning | `ChangeSet`, `Group`, `Installation`, `InstallationOptions`, `InstallationArguments`, `InstallationUpdate`, `InstallationOrigin`, `InitialInstallation`, `Plan`, `PlanReport`, `BindingReport`, `ImpactReason`, `PlanOperation`, `DeclarationSnapshot`, `captureConfiguration`, `ConfigurationValue` |
 | 运行 / Execution | `createHost`, `Host`, `HostOptions`, `ApplyResult`, `HostStatus`, `InstallationState` |
-| 资源 / Resources | `LifetimeContext`, `ChildLifetime`, `LifetimeOwnership`, `Task`, `Cleanup`, `BackgroundTask`, `LifetimePhase`, `LifetimeSnapshot`, `UnresolvedObligation`, `Disposable`, `AsyncDisposable`, `Resource`, `Awaitable`, `ResolvedValue`, `disposeSymbol`, `asyncDisposeSymbol` |
+| 资源 / Resources | `createResourceAuthority`, `ResourceAuthority`, `LifetimeContext`, `ChildLifetime`, `LifetimeOwnership`, `Task`, `Cleanup`, `BackgroundTask`, `LifetimePhase`, `LifetimeSnapshot`, `UnresolvedObligation`, `Disposable`, `AsyncDisposable`, `Resource`, `Awaitable`, `ResolvedValue`, `disposeSymbol`, `asyncDisposeSymbol` |
 | 事件与贡献 / Events and contributions | `Contribution`, `ContributionView`, `ContributionOperations`, `EventListener`, `EventArguments`, `EventOperations` |
 | 观察与错误 / Observation and errors | `HostSnapshot`, `InstallationSnapshot`, `GroupSnapshot`, `SnapshotView`, `isLogger`, `Logger`, `DougongError`, `ConfigurationValidationError`, `RecordedFailure`, `isError`, `isCancellationReason`, `ErrorSnapshot`, `ErrorDetails` |
 
@@ -20,9 +20,19 @@
 
 契约身份取自令牌自身的数据字段。来自另一个 JavaScript Realm 的令牌，可凭相同的 `kind` 和 `id` 声明服务提供、声明依赖和借用服务。
 
+## Plugin 声明
+
+`Plugin<Configuration, Requires, Provides, ConfigurationInput>` 将实际 `requires`、`provides` 与 `setup` 配对。非空映射要求对应声明字段存在；回调不能反向推导出未声明依赖或提供项。声明映射只接受有限、确定且必填的字符串键，`provides` 内的单个 Service 令牌也不能独立取联合分支。需要动态选择时先构造完整 Plugin，再选择分支。可选 Service 用 `optional(token)` 声明，不把别名本身写成可选字段。
+
+没有 `configuration` schema 时，`ConfigurationInput` 必须能直接赋给 `Configuration`；常规用法只给出同一个配置类型。输入输出不兼容时，`configuration` 必须是真实的 Standard Schema，安装接受其输入，`setup` 接受其输出的深只读视图。显式 `Plugin<...>` 注解与 `definePlugin` 的检查一致，不能通过结构注解绕过这些关联。
+
+`AnyPlugin` 表示类型已擦除的声明边界，不证明配置或 Service 的具体类型。加载器从未知数据进入 Core 时使用 `dougong/advanced` 的 `capturePluginDeclaration`，不会把未知模块断言成一个具体的 `Plugin<...>`。
+
 ## Host 与安装
 
-`HostOptions` 包含 `name`、初始 `installations`、初始 `groups`、日志与错误报告端口和退出超时。每个 Installation ID 在 Host 中唯一，Group ID 也是应用声明的稳定身份。
+`start(signal?)` 与 `apply(plan, signal?)` 可取消验证或候选准备。执行前取消不消费 Plan；执行中取消须等待候选清理与恢复，结果区分 `restored` 与 `quarantined`，不会只提前结束外层 Promise。提交后的取消不改写结果。执行期间 `stop()` 与标准异步释放仍拒绝 busy，以防回调等待自己；应用持有并取消原请求信号。完整语义见[执行和结果](../guide/transactions.md#执行和结果)。
+
+`HostOptions` 必须提供 `resourceAuthority`：在装配入口用 `createResourceAuthority()` 创建一次，同一资源域中的所有 Host（包括独立 Core 副本）共享它。其余选项包含 `name`、初始 `installations`、初始 `groups`、日志与错误报告端口。可选的 `shutdownTimeoutMilliseconds` 约束每个 Lifetime 的退出等待，`restorationTimeoutMilliseconds` 约束失败后重建旧声明的准备阶段；两者不互相回退，不限制正常启动。每个 Installation ID 在 Host 中唯一，Group ID 也是应用声明的稳定身份。
 
 `createHost` 按初始列表中的每个 Plugin 推断其配置输入；异构列表也保留各自的配对。`InitialInstallation<typeof plugin>` 和 `InstallationOptions<typeof plugin>` 从同一 Plugin 类型派生配置要求。输入允许 `undefined` 时可以省略配置，包括 `void`、可选输入与 schema 默认值；否则必须提供配置。schema 转换后的输出只供 setup 使用，安装声明仍须提供转换前的输入。配置不能反向扩宽 Plugin 类型来通过检查。
 
@@ -39,9 +49,11 @@ const installation = change.install(...declaration);
 
 返回的 `Installation<First | Second>` 无法确定实际安装的分支，因此仅更新配置时，输入必须同时满足所有可能分支。替换 Plugin 时，配置与新 Plugin 保持配对；只有新 Plugin 能接受全部可能的旧输入时，才可以省略配置并继承已捕获的输入，否则必须显式提供配置。替换为无配置 Plugin 时，使用 `configuration: undefined` 明确清空可能存在的旧输入。一个 Plugin 自身声明的输入联合类型（例如 `string | number`）仍然接受其声明的每一种输入。
 
-在联合选择前使用 `definePlugin` 或明确的 `Plugin<...>` 注解，使 schema 输入保持不变性；相同输出不能让较窄的输入被自动宽化。未注解的原始对象按 TypeScript 结构规则推断，调用前已被宽化或擦除的输入关系无法由框架恢复。这一约束只存在于类型层，不给 Plugin 增加运行字段。
+安装边界要求 `definePlugin` 或明确的 `Plugin<...>` 注解建立作者合同；未注解的原始对象不会被自动视为 `AnyPlugin`。完整合同的类型证明同时保留 schema 输入的不变性，防止相同输出使较窄输入自动宽化。展开声明后修改契约，必须重新 `definePlugin`；移除 schema 或扩展 provides 不能继续借用旧证明。证明只存在于类型层，不给 Plugin 增加运行字段。未知模块通过 `capturePluginDeclaration` 进入明确擦除类型的动态边界。
 
 `install` 的显式类型参数现在描述完整参数元组：`install<InstallationArguments<typeof plugin>>(plugin, options)`；原有 `install<typeof plugin>` 形式已经移除。普通调用继续自动推断类型，无须显式参数。
+
+`update` 分别推断 Installation 的 Plugin 合同与本次完整更新值，实际替换声明也必须通过同一作者检查，不能因目标 Installation 的较宽类型而跳过。显式形式为 `update<Declaration, Update>`；原有单一类型参数形式已移除。普通调用保留自动推断与配置、替换分支的关联。
 
 需要传递安装命令时，直接保存 `const install = change.install`，可保留完整签名与已有绑定。针对已知 Plugin 集合的包装函数可以接收 `InstallationArguments<First | Second>` 并展开调用。TypeScript 5.9.3 无法证明任意泛型 `P` 的 `InstallationArguments<P>` 在再次展开后仍保留关联，因此这种泛型装饰器不能直接转发；将它宽化为 `AnyPlugin` 会丢失输入契约。
 
@@ -111,6 +123,7 @@ Host 只在选项缺省时使用默认值；显式传入 null 的名字、安装
 | `resolveValue(value)` | 按共享异步结果协议解析一次，返回 `Promise<ResolvedValue<Awaited<T>>>`；冻结的 `{ value }` 回执保留已完成结果的身份。 |
 | `captureDataArray(input, label)` | 浅拷贝自有的稠密数据索引并冻结数组，不调用输入的方法或迭代器。元素的校验归调用方。 |
 | `captureLogger(logger)` | 接管日志后端时一次捕获四个方法及其原始接收者，保留已知方法的返回类型；未知输入只证明方法形状。 |
+| `capturePluginDeclaration(input)` | 从未知输入捕获并验证不可变的 `AnyPlugin` 声明，复用 `definePlugin` 与 Core 安装边界的同一校验实现；不执行 setup 或 schema，不恢复已擦除的配置和 Service 类型。 |
 | `onAbort(signal, callback)` | 观察真实取消，回调只接收一次原因；已取消时立即回调。返回的函数用于解除观察。手动派发名为 `abort` 的事件不能取消作用域。 |
 
 `recordFields` 在编译期要求每个字段都被列出，包括可选字段和联合声明各分支的字段，并拒绝额外字段。元组每项必须是一个确定字段，不能用可能取多个字段名的联合值代替穷尽枚举。不接受无法证明完整性的宽化数组、数字或符号键，以及开放索引签名。它声明允许出现哪些字段；必填性和值的校验仍归对应输入边界。

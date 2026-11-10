@@ -1,15 +1,25 @@
 import { getEventListeners } from "node:events";
 import { expect, it, vi } from "vitest";
-import { createHost, definePlugin, event, extensionPoint, type PluginContext } from "../src/index";
+import {
+  createResourceAuthority,
+  createHost,
+  definePlugin,
+  event,
+  extensionPoint,
+  type PluginContext,
+} from "../src/index";
 import { onAbort } from "../src/advanced";
 import { SnapshotPublisher } from "../src/observation/snapshot-view";
 import { Lifetime } from "../src/lifetime/lifetime";
+
+const resourceAuthority = createResourceAuthority();
 
 it("does not grant Event listeners the hub, root Lifetime, or detach authority as their receiver", async () => {
   const notice = event<void>("authority/notice");
   let retainedContext!: PluginContext<{}>;
   let receiver: unknown = null;
   const host = createHost({
+    resourceAuthority,
     installations: [
       {
         id: "owner",
@@ -55,7 +65,7 @@ it("does not expose a mutable subscription binding to snapshot observers or thei
 it.each(["borrow", "task"] as const)(
   "settles a %s from one result without adopting its delivered value again",
   async (kind) => {
-    const owner = new Lifetime({ label: "owner", report() {} });
+    const owner = new Lifetime({ resourceAuthority, label: "owner", report() {} });
     const gate = Promise.withResolvers<void>();
     let reads = 0;
     // oxlint-disable-next-line unicorn/no-thenable -- distinguish single adoption from forwarding the resolved value
@@ -85,7 +95,7 @@ it.each(["borrow", "task"] as const)(
   async (kind) => {
     const failure = new Error("constructor access");
     const report = vi.fn<(error: unknown) => void>();
-    const owner = new Lifetime({ label: "owner", report });
+    const owner = new Lifetime({ resourceAuthority, label: "owner", report });
     const hostile = Object.defineProperty(Promise.resolve(1), "constructor", {
       get() {
         throw failure;
@@ -111,6 +121,7 @@ it("publishes executable contribution values at the same boundary as their colle
   const entered = Promise.withResolvers<void>();
   let retainedContext!: PluginContext<{}>;
   const host = createHost({
+    resourceAuthority,
     installations: [
       {
         id: "owner",
@@ -167,6 +178,7 @@ it("binds a detached public contribution updater to its original entry", async (
   const point = extensionPoint<number>("authority/detached");
   let update!: (value: number) => void;
   const host = createHost({
+    resourceAuthority,
     installations: [
       {
         id: "owner",
@@ -190,7 +202,7 @@ it("binds a detached public contribution updater to its original entry", async (
 });
 
 it("isolates listener ownership across retired Lifetime signals", async () => {
-  const lifetime = new Lifetime({ label: "root", report() {} });
+  const lifetime = new Lifetime({ resourceAuthority, label: "root", report() {} });
   const firstChild = lifetime.child("a");
   const secondChild = lifetime.child("b");
   await lifetime.dispose();
@@ -210,7 +222,12 @@ it("isolates listener ownership across retired Lifetime signals", async () => {
 
 it("propagates only an actual parent cancellation to child scopes and tasks", async () => {
   const parent = new AbortController();
-  const owner = new Lifetime({ label: "root", report() {}, startupSignal: parent.signal });
+  const owner = new Lifetime({
+    resourceAuthority,
+    label: "root",
+    report() {},
+    startupSignal: parent.signal,
+  });
   const child = owner.child("child");
   const ready = Promise.withResolvers<AbortSignal>();
   const gate = Promise.withResolvers<void>();
@@ -360,6 +377,7 @@ it("retains only ordered IDs in a snapshot when an executable contribution is re
   const token = extensionPoint<() => string>("authority/snapshot");
   let retainedContext!: PluginContext<{}>;
   const host = createHost({
+    resourceAuthority,
     installations: [
       {
         id: "owner",
@@ -397,7 +415,7 @@ it("retains only ordered IDs in a snapshot when an executable contribution is re
 it.each(["task", "acquisition"] as const)(
   "joins the real %s even when its public result is decorated by application code",
   async (kind) => {
-    const owner = new Lifetime({ label: "owner", report() {} });
+    const owner = new Lifetime({ resourceAuthority, label: "owner", report() {} });
     const entered = Promise.withResolvers<void>();
     const gate = Promise.withResolvers<void>();
     const cleanup = vi.fn<() => void>();
@@ -434,6 +452,7 @@ it.each(["event", "contribution"] as const)(
   async (kind) => {
     let retainedContext!: PluginContext<{}>;
     const host = createHost({
+      resourceAuthority,
       installations: [
         {
           id: "owner",
@@ -470,7 +489,7 @@ it.each(["event", "contribution"] as const)(
 it.each(["deferred cleanup", "child"] as const)(
   "keeps an early %s shutdown receipt from authorizing parent release",
   async (kind) => {
-    const root = new Lifetime({ label: "owner", report() {} });
+    const root = new Lifetime({ resourceAuthority, label: "owner", report() {} });
     const entered = Promise.withResolvers<void>();
     const gate = Promise.withResolvers<void>();
     const releaseParent = vi.fn<() => void>();
@@ -507,11 +526,19 @@ it.each(["deferred cleanup", "child"] as const)(
 
 it("rejects shutdown delays that native timers would overflow instead of expiring almost immediately", () => {
   const limit = 2 ** 31 - 1;
-  expect(() => createHost({ shutdownTimeoutMilliseconds: limit + 1 })).toThrow(
+  expect(() => createHost({ resourceAuthority, shutdownTimeoutMilliseconds: limit + 1 })).toThrow(
     /shutdownTimeoutMilliseconds/,
   );
   expect(
-    () => new Lifetime({ label: "invalid", report() {}, shutdownTimeoutMilliseconds: limit + 1 }),
+    () =>
+      new Lifetime({
+        resourceAuthority,
+        label: "invalid",
+        report() {},
+        shutdownTimeoutMilliseconds: limit + 1,
+      }),
   ).toThrow(/shutdownTimeoutMilliseconds/);
-  expect(createHost({ shutdownTimeoutMilliseconds: limit }).status).toBe("stopped");
+  expect(createHost({ resourceAuthority, shutdownTimeoutMilliseconds: limit }).status).toBe(
+    "stopped",
+  );
 });

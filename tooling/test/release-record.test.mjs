@@ -13,7 +13,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { expect, it } from "vitest";
 import { inspectReleaseRepository } from "../release/release-repository.mjs";
-import { executeRelease } from "./release-fixture.mjs";
+import { executeRelease, releaseTestTimeout } from "./release-fixture.mjs";
 
 const fixture = fileURLToPath(new URL("./fixtures/release-record.mjs", import.meta.url));
 const packageDirectories = ["reactive", "dougong", "platform"];
@@ -59,7 +59,11 @@ async function recordRelease(scenario, inspect) {
     try {
       result = await executeRelease([fixture, scenario], { cwd: workspace, env: environment });
     } catch (error) {
-      if (scenario !== "cancel-before-record" || error.signal !== "SIGTERM") throw error;
+      if (
+        !(scenario === "cancel-before-record" && error.signal === "SIGTERM") &&
+        !(scenario === "cancel-during-record" && error.signal === "SIGINT")
+      )
+        throw error;
       result = { status: error.status, signal: error.signal, stderr: error.stderr };
     }
     const observation = JSON.parse(
@@ -174,6 +178,21 @@ it("cancels before ref publication and removes private recording files without l
     expect(git(["tag", "--list"])).toBe("");
   });
 });
+
+it(
+  "settles the locked ref and its index before honoring repeated cancellation",
+  async () => {
+    await recordRelease("cancel-during-record", ({ result, source, git }) => {
+      expect(result).toMatchObject({ status: null, signal: "SIGINT" });
+      expect(git(["rev-parse", "HEAD^"])).toBe(source);
+      expect(git(["log", "-1", "--format=%B"])).toBe("chore: release 1.1.0");
+      expect(git(["status", "--porcelain"])).toBe("");
+      expect(git(["tag", "--list"])).toBe("");
+      expect(git(["ls-remote", "origin", "refs/heads/main"])).toBe(`${source}\trefs/heads/main`);
+    });
+  },
+  releaseTestTimeout,
+);
 
 it("synchronizes a completed ref update even when its command acknowledgement failed", async () => {
   await recordRelease("after-effect-failure", ({ result, observation, git, workspace }) => {

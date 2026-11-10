@@ -1,11 +1,16 @@
 import { describe, expect, it, vi } from "vitest";
-import { createHost, definePlugin } from "dougong";
+import { createResourceAuthority, createHost, definePlugin } from "dougong";
 import { createPlatform, MemoryLoader } from "../src";
 import { add, deferred, emptyPlugin, fixture, nextTurn, select } from "./fixtures";
 
+const resourceAuthority = createResourceAuthority();
+
 describe("Platform lifecycle", () => {
   it("disposes through the standard resource protocol and detaches its views", async () => {
-    const { host, platform } = fixture(new Map([["sample", emptyPlugin("sample")]]));
+    const { host, platform } = fixture(
+      resourceAuthority,
+      new Map([["sample", emptyPlugin("sample")]]),
+    );
     const registration = await select(platform, "sample", "sample");
     const view = platform.diagnostics;
     await host.start();
@@ -46,7 +51,7 @@ describe("Platform lifecycle", () => {
         await release.promise;
       },
     });
-    const { host, platform } = fixture(new Map([["one", plugin]]));
+    const { host, platform } = fixture(resourceAuthority, new Map([["one", plugin]]));
     const registration = await select(platform, "sample", "one");
     await host.start();
     const activation = platform.activate([registration]);
@@ -79,7 +84,7 @@ describe("Platform lifecycle", () => {
         });
       },
     });
-    const { host, platform } = fixture(new Map([["one", plugin]]));
+    const { host, platform } = fixture(resourceAuthority, new Map([["one", plugin]]));
     const registration = await select(platform, "sample", "one");
     await host.start();
     await platform.activate([registration]);
@@ -100,7 +105,7 @@ describe("Platform lifecycle", () => {
     const entered = deferred();
     const release = deferred();
     const setup = vi.fn<() => void>();
-    const host = createHost();
+    const host = createHost({ resourceAuthority });
     const platform = createPlatform({
       id: "late",
       host,
@@ -133,7 +138,7 @@ describe("Platform lifecycle", () => {
         });
       },
     });
-    const { host, platform } = fixture(new Map([["one", SERVICE]]));
+    const { host, platform } = fixture(resourceAuthority, new Map([["one", SERVICE]]));
     const registration = await select(platform, "sample", "one");
     await host.start();
     await platform.activate([registration]);
@@ -148,6 +153,7 @@ describe("Platform lifecycle", () => {
 
   it("refuses to remove a dependency that an installed artifact still requires", async () => {
     const { platform } = fixture(
+      resourceAuthority,
       new Map([
         ["dependency", emptyPlugin("dependency")],
         ["root", emptyPlugin("root")],
@@ -167,7 +173,7 @@ describe("Platform lifecycle", () => {
   });
 
   it("places installations in an explicit Group and checks ownership before loading", async () => {
-    const host = createHost({ groups: [{ id: "extensions" }] });
+    const host = createHost({ resourceAuthority, groups: [{ id: "extensions" }] });
     const group = host.group("extensions")!;
     const load = vi.fn<() => { default: ReturnType<typeof emptyPlugin> }>(() => ({
       default: emptyPlugin("sample"),
@@ -195,7 +201,7 @@ describe("Platform lifecycle", () => {
   });
 
   it("rejects an uncommitted or foreign Group at construction", () => {
-    const host = createHost();
+    const host = createHost({ resourceAuthority });
     const group = host.change().group("pending");
     expect(() =>
       createPlatform({
@@ -215,7 +221,7 @@ describe("Platform lifecycle", () => {
       warn: vi.fn<() => void>(),
       error: vi.fn<() => void>(),
     };
-    const host = createHost();
+    const host = createHost({ resourceAuthority });
     const platform = createPlatform({
       id: "observer",
       host,
@@ -245,7 +251,7 @@ describe("Platform lifecycle", () => {
     };
     const platform = createPlatform({
       id: "sink",
-      host: createHost(),
+      host: createHost({ resourceAuthority }),
       apiVersion: "1.0.0",
       loader: new MemoryLoader(new Map()),
       logger,
@@ -259,8 +265,8 @@ describe("Platform lifecycle", () => {
   });
 
   it("captures options instead of following later replacement of the caller's record", async () => {
-    const first = createHost();
-    const second = createHost();
+    const first = createHost({ resourceAuthority });
+    const second = createHost({ resourceAuthority });
     const options = {
       id: "capture",
       host: first,
@@ -279,13 +285,14 @@ describe("Platform lifecycle", () => {
   it.each(["", " event", "event ", null])(
     "validates activation event %j before dispatch",
     async (event) => {
-      const { platform } = fixture();
+      const { platform } = fixture(resourceAuthority);
       await expect(platform.trigger(event as never)).rejects.toThrow(TypeError);
     },
   );
 
   it("activates every matching root in one batch", async () => {
     const { host, platform } = fixture(
+      resourceAuthority,
       new Map([
         ["one", emptyPlugin("one")],
         ["two", emptyPlugin("two")],
@@ -306,8 +313,8 @@ describe("Platform lifecycle", () => {
   });
 
   it("rejects foreign registration handles and malformed options", async () => {
-    const one = fixture().platform;
-    const two = fixture().platform;
+    const one = fixture(resourceAuthority).platform;
+    const two = fixture(resourceAuthority).platform;
     const registration = await select(one, "sample", "one");
     await expect(two.activate([registration])).rejects.toThrow("different Platform");
     await expect(one.activate([registration], { signal: {} } as never)).rejects.toThrow(
@@ -336,7 +343,7 @@ describe("Platform lifecycle", () => {
   ])("validates Platform constructor capabilities", (override) => {
     const options = {
       id: "validation",
-      host: createHost(),
+      host: createHost({ resourceAuthority }),
       apiVersion: "1.0.0",
       loader: new MemoryLoader(new Map()),
     };
@@ -346,7 +353,7 @@ describe("Platform lifecycle", () => {
   });
 
   it("does not preserve ambiguous legacy registration properties", async () => {
-    const { platform } = fixture();
+    const { platform } = fixture(resourceAuthority);
     const [registration] = await platform.select([add(platform, "sample", "one")]);
     expect("manifest" in registration).toBe(false);
     expect("update" in registration).toBe(false);
@@ -372,7 +379,7 @@ it.each(["remove", "dispose"] as const)(
         });
       },
     });
-    const host = createHost();
+    const host = createHost({ resourceAuthority });
     const platform = createPlatform({
       id: "real-release",
       host,
@@ -427,7 +434,7 @@ it("captures the logger's adopted method and original receiver exactly once", as
   };
   const platform = createPlatform({
     id: "log",
-    host: createHost(),
+    host: createHost({ resourceAuthority }),
     apiVersion: "1.0.0",
     loader: new MemoryLoader(new Map()),
     logger,
@@ -448,7 +455,7 @@ it("captures the logger's adopted method and original receiver exactly once", as
 });
 
 it("lets an activation policy await disposal without joining its own callback", async () => {
-  const host = createHost();
+  const host = createHost({ resourceAuthority });
   const completed = deferred();
   const platform = createPlatform({
     id: "policy-disposal",

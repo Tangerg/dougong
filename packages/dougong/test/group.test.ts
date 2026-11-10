@@ -1,10 +1,12 @@
 import { expect, it, vi } from "vitest";
-import { createHost, definePlugin, service } from "../src/index";
+import { createResourceAuthority, createHost, definePlugin, service } from "../src/index";
+
+const resourceAuthority = createResourceAuthority();
 
 it("groups installation ownership without creating another capability namespace", async () => {
   const serviceA = service<number>("group/a"),
     serviceB = service<number>("group/b");
-  const host = createHost();
+  const host = createHost({ resourceAuthority });
   const change = host.change();
   const parent = change.group("parent"),
     child = change.group("child", parent),
@@ -44,6 +46,7 @@ it("removes descendants in one plan and preserves unrelated Instances", async ()
   const stopped = vi.fn<() => void>(),
     otherStarted = vi.fn<() => void>();
   const host = createHost({
+    resourceAuthority,
     groups: [{ id: "root" }, { id: "child", parentId: "root" }],
     installations: [
       {
@@ -75,6 +78,7 @@ it("plans overlapping Group removals once for each affected Installation", async
   const plugin = definePlugin({ name: "group.member", setup() {} });
   const ids = ["outer", "inner", "sibling", "keep"];
   const host = createHost({
+    resourceAuthority,
     groups: [
       { id: "outer" },
       { id: "inner", parentId: "outer" },
@@ -95,32 +99,33 @@ it("plans overlapping Group removals once for each affected Installation", async
 });
 
 it("rejects duplicate, missing and cyclic Group ownership", async () => {
-  expect(() => createHost({ groups: [{ id: "x" }, { id: "x" }] })).toThrowError(
+  expect(() => createHost({ resourceAuthority, groups: [{ id: "x" }, { id: "x" }] })).toThrowError(
     expect.objectContaining({ code: "GROUP_CONFLICT" }),
   );
-  expect(() => createHost({ groups: [{ id: "x", parentId: "y" }] })).toThrowError(
-    expect.objectContaining({ code: "GROUP_MISSING" }),
-  );
+  expect(() =>
+    createHost({ resourceAuthority, groups: [{ id: "x", parentId: "y" }] }),
+  ).toThrowError(expect.objectContaining({ code: "GROUP_MISSING" }));
   expect(() =>
     createHost({
+      resourceAuthority,
       groups: [
         { id: "x", parentId: "y" },
         { id: "y", parentId: "x" },
       ],
     }),
   ).toThrowError(expect.objectContaining({ code: "GROUP_CYCLE" }));
-  const host = createHost({ groups: [{ id: "x" }] });
+  const host = createHost({ resourceAuthority, groups: [{ id: "x" }] });
   const duplicate = host.change();
   duplicate.group("x");
   await expect(host.plan(duplicate)).rejects.toMatchObject({ code: "GROUP_CONFLICT" });
-  const other = createHost({ groups: [{ id: "foreign" }] });
+  const other = createHost({ resourceAuthority, groups: [{ id: "foreign" }] });
   expect(() => host.change().group("child", other.group("foreign"))).toThrowError(
     expect.objectContaining({ code: "GROUP_FOREIGN" }),
   );
 });
 
 it("rejects late plans targeting removed Group identity", async () => {
-  const host = createHost({ groups: [{ id: "x" }] });
+  const host = createHost({ resourceAuthority, groups: [{ id: "x" }] });
   const group = host.group("x")!;
   const pending = host.change();
   pending.install(definePlugin({ name: "a", setup() {} }), { id: "a", group });
@@ -135,6 +140,7 @@ it("rejects late plans targeting removed Group identity", async () => {
 
 it("rejects conflicting edits inside a removed subtree", async () => {
   const host = createHost({
+    resourceAuthority,
     groups: [{ id: "x" }],
     installations: [{ id: "a", groupId: "x", plugin: definePlugin({ name: "a", setup() {} }) }],
   });
@@ -151,7 +157,7 @@ it("constructs a deep child-first group declaration without depending on the Jav
     id: String(depth - 1 - index),
     ...(index === depth - 1 ? {} : { parentId: String(depth - 2 - index) }),
   }));
-  const host = createHost({ groups });
+  const host = createHost({ resourceAuthority, groups });
   expect(host.group(String(depth - 1))?.parentId).toBe(String(depth - 2));
   const change = host.change();
   change.removeGroup(host.group("0")!);

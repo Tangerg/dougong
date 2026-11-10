@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import filesystem, { readFileSync, writeFileSync } from "node:fs";
+import filesystem, { appendFileSync, readFileSync, writeFileSync } from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
 import { join, resolve } from "node:path";
 import { inspectReleaseRepository } from "../../release/release-repository.mjs";
@@ -162,6 +162,7 @@ try {
       "changed-symref",
       "aliased-main",
       "cancel-before-record",
+      "cancel-during-record",
       "projection-failure",
     ].includes(scenario)
   ) {
@@ -188,6 +189,20 @@ try {
         observation.otherOwnerHead = repository.source.head;
       }
       if (scenario === "cancel-before-record") process.kill(process.pid, "SIGTERM");
+      if (scenario === "cancel-during-record") {
+        const settlementDelayMilliseconds = 3_000;
+        appendFileSync(
+          join(record.directory, "reference-transaction"),
+          `
+            if (import.meta.main && process.argv[2] === "prepared") {
+              process.kill(${process.pid}, "SIGINT");
+              await new Promise(resolve => setTimeout(resolve, 100));
+              process.kill(${process.pid}, "SIGTERM");
+              await new Promise(resolve => setTimeout(resolve, ${settlementDelayMilliseconds}));
+            }
+          `,
+        );
+      }
       if (scenario === "projection-failure") {
         observation.releaseCommit = record.commit;
         return recordCommit(record, {

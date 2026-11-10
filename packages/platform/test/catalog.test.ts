@@ -1,12 +1,19 @@
 import { describe, expect, it, vi } from "vitest";
-import { createHost, definePlugin, type ConfigurationValue } from "dougong";
+import {
+  createResourceAuthority,
+  createHost,
+  definePlugin,
+  type ConfigurationValue,
+} from "dougong";
 import { createPlatform, MemoryLoader } from "../src";
 import { add, emptyPlugin, fixture, select, VALUE, valuePlugin } from "./fixtures";
+
+const resourceAuthority = createResourceAuthority();
 
 describe("Catalog and selection ownership", () => {
   it("keeps availability, selection and committed origin distinct", async () => {
     const plugin = valuePlugin("sample", 1);
-    const { host, platform } = fixture(new Map([["one", plugin]]));
+    const { host, platform } = fixture(resourceAuthority, new Map([["one", plugin]]));
     const artifact = add(platform, "sample", "one");
     expect(platform.catalog.get("sample", "1.0.0")).toBe(artifact);
     expect(platform.diagnostics.get().registrations.size).toBe(0);
@@ -29,7 +36,7 @@ describe("Catalog and selection ownership", () => {
   });
 
   it("does not reuse a removed Artifact revision for different bytes", () => {
-    const { platform } = fixture();
+    const { platform } = fixture(resourceAuthority);
     const artifact = add(platform, "sample", "one");
     platform.catalog.remove(artifact);
     expect(() => add(platform, "sample", "different")).toThrow(
@@ -39,8 +46,8 @@ describe("Catalog and selection ownership", () => {
   });
 
   it("rejects foreign and forged Catalog handles", async () => {
-    const first = fixture().platform;
-    const second = fixture().platform;
+    const first = fixture(resourceAuthority).platform;
+    const second = fixture(resourceAuthority).platform;
     const artifact = add(first, "sample", "one");
     await expect(second.select([artifact])).rejects.toThrow(
       expect.objectContaining({ code: "ARTIFACT_UNAVAILABLE" }),
@@ -56,7 +63,7 @@ describe("Catalog and selection ownership", () => {
   });
 
   it("rejects unowned artifacts without evaluating their properties", async () => {
-    const { platform } = fixture();
+    const { platform } = fixture(resourceAuthority);
     const getter = vi.fn<() => never>(() => {
       throw new Error("must not run");
     });
@@ -77,7 +84,7 @@ describe("Catalog and selection ownership", () => {
   });
 
   it("rejects an obsolete configuration key before reserving the revision", () => {
-    const { platform } = fixture();
+    const { platform } = fixture(resourceAuthority);
     const declaration = {
       revision: "one",
       manifest: { name: "reader", version: "1.0.0" },
@@ -104,7 +111,7 @@ describe("Catalog and selection ownership", () => {
         received = configuration;
       },
     });
-    const { host, platform } = fixture(new Map([["configuration", plugin]]));
+    const { host, platform } = fixture(resourceAuthority, new Map([["configuration", plugin]]));
     const configuration = { nested: { count: 1 } };
     const artifact = add(platform, "configuration", "configuration", "1.0.0", { configuration });
     configuration.nested.count = 8;
@@ -120,7 +127,7 @@ describe("Catalog and selection ownership", () => {
   it.each([Promise.resolve(1), new Date(), () => 1, new Map()])(
     "rejects configuration outside the shared data protocol",
     (configuration) => {
-      const { platform } = fixture();
+      const { platform } = fixture(resourceAuthority);
       expect(() =>
         add(platform, "configuration", "configuration", "1.0.0", { configuration }),
       ).toThrow(TypeError);
@@ -128,7 +135,7 @@ describe("Catalog and selection ownership", () => {
   );
 
   it("advances only selectionRevision when a new target is chosen", async () => {
-    const { host, platform } = fixture();
+    const { host, platform } = fixture(resourceAuthority);
     const one = add(platform, "sample", "one");
     const two = add(platform, "sample", "two", "2.0.0");
     const [registration] = await platform.select([one]);
@@ -143,7 +150,7 @@ describe("Catalog and selection ownership", () => {
   });
 
   it("does not expose Catalog mutation authority beyond its contract", () => {
-    const { platform } = fixture();
+    const { platform } = fixture(resourceAuthority);
     expect(Object.keys(platform.catalog).sort()).toEqual(["add", "get", "list", "remove"]);
     const artifact = add(platform, "sample", "one");
     const snapshot = platform.catalog.list();
@@ -155,7 +162,7 @@ describe("Catalog and selection ownership", () => {
   it("keeps manifests compatible with concrete application API and prerelease versions", () => {
     const platform = createPlatform({
       id: "prerelease",
-      host: createHost(),
+      host: createHost({ resourceAuthority }),
       apiVersion: "1.2.3-beta.1",
       loader: new MemoryLoader(new Map()),
     });
@@ -170,7 +177,10 @@ describe("Catalog and selection ownership", () => {
   });
 
   it("distinguishes stopped installations from running generations", async () => {
-    const { host, platform } = fixture(new Map([["sample", emptyPlugin("sample")]]));
+    const { host, platform } = fixture(
+      resourceAuthority,
+      new Map([["sample", emptyPlugin("sample")]]),
+    );
     const registration = await select(platform, "sample", "sample");
     await platform.activate([registration]);
     expect(registration.status).toBe("installed");
@@ -183,7 +193,10 @@ describe("Catalog and selection ownership", () => {
   });
 
   it("does not attribute malformed or foreign Core source metadata to a selected artifact", async () => {
-    const { host, platform } = fixture(new Map([["sample", emptyPlugin("sample")]]));
+    const { host, platform } = fixture(
+      resourceAuthority,
+      new Map([["sample", emptyPlugin("sample")]]),
+    );
     const registration = await select(platform, "sample", "sample");
     await platform.activate([registration]);
     const origins: ReadonlyArray<Readonly<Record<string, ConfigurationValue>>> = [
@@ -215,7 +228,7 @@ describe("Catalog and selection ownership", () => {
   it.each([undefined, "", " whitespace", "whitespace "])(
     "requires an explicit stable revision %j",
     (revision) => {
-      const { platform } = fixture();
+      const { platform } = fixture(resourceAuthority);
       expect(() =>
         platform.catalog.add({
           revision,
@@ -227,7 +240,7 @@ describe("Catalog and selection ownership", () => {
   );
 
   it("rejects absent references and malformed Artifact records", () => {
-    const { platform } = fixture();
+    const { platform } = fixture(resourceAuthority);
     expect(() =>
       platform.catalog.add({
         revision: "one",

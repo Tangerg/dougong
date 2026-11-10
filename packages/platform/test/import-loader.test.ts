@@ -1,7 +1,9 @@
 import { expect, it, vi } from "vitest";
-import { createHost } from "dougong";
+import { createResourceAuthority, createHost } from "dougong";
 import { createPlatform, ImportLoader } from "../src";
 import { add, deferred } from "./fixtures";
+
+const resourceAuthority = createResourceAuthority();
 
 it.each(["selection", "admission"] as const)(
   "keeps captured import revisions stable when a URL changes during %s",
@@ -89,7 +91,10 @@ function importFixture(initialRevision: string) {
   const entered = deferred();
   const resume = deferred();
   const info = vi.fn<(message: unknown) => void>();
-  const host = createHost({ logger: { debug() {}, info, warn() {}, error() {} } });
+  const host = createHost({
+    resourceAuthority,
+    logger: { debug() {}, info, warn() {}, error() {} },
+  });
   const platform = createPlatform({
     id: "imports",
     host,

@@ -2,6 +2,14 @@
 
 `definePlugin` 接受 `name`、可选的 Standard Schema `configuration`、`requires`、`provides` 与 `setup`。setup 的返回值必须准确匹配提供声明。配置通过 `setup(context, configuration)` 的第二个参数传入。同一份 Core 会直接复用 `definePlugin` 产出的不可变声明，供多个 Installation 装配。传入可变声明时，每次仍会重新捕获其字段。
 
+`requires` 与 `provides` 是依赖和提供契约的唯一声明来源；`setup` 的参数注解与返回值不能反向补出缺失声明。显式 `Plugin<...>` 类型与 `definePlugin` 遵守相同规则：非空映射必须有对应字段。别名必须是有限、确定、必填的字符串键；可选 Service 依赖写成 `requires: { cache: optional(CACHE) }`，别名 `cache` 本身仍然存在。
+
+安装声明必须先通过 `definePlugin` 或明确的 `Plugin<...>` 注解建立作者合同，不能把未检查的原始对象直接传给 `createHost`、`change.install` 或替换操作。展开已有 Plugin 后若修改依赖、提供项、schema 或 setup，重新调用 `definePlugin` 检查组合后的完整声明；旧声明的类型证明不能授权新增别名或移除转换 schema。加载器面对未知模块时使用 `dougong/advanced` 的 `capturePluginDeclaration`，得到明确擦除具体类型的 `AnyPlugin`。
+
+不要把分别选择的 `provides` 联合与 `setup` 返回值组合起来；它们可能落在不同分支。类型边界也拒绝可选别名、开放索引和单个别名内的 Service 令牌联合。动态选择时，先分别定义完整的 Plugin，再在这些 Plugin 之间选择；需要复用代码时，提取共同的业务能力，再由各 Plugin 组合。
+
+没有 schema 时，配置输入直接传给 `setup`，因此输入类型必须能赋给配置输出类型。常规无 schema 插件只声明一个配置类型，例如 `definePlugin<{ port: number }>(...)`。字符串转换为数字之类的输入输出差异必须由实际的 Standard Schema 声明，不能只用类型参数声称发生了转换。schema 的输入决定安装配置的类型，输出决定 `setup` 第二个参数的类型。
+
 配置验证结果遵循 Standard Schema 的结构协议：结果、Issue 和 PathSegment 的协议成员可以来自继承或访问器，Core 按需要各捕获一次。携带所需字段的函数对象也可实现这些协议，Core 不会调用它们。`issues` 和 `path` 的稠密数组按索引捕获，无关元数据不会被读取或保留。存在非 `undefined` 的 `issues` 即拒绝配置；成功的 `value` 再进入不可变数据捕获，最终配置值本身仍须满足纯数据约束。
 
 ```ts

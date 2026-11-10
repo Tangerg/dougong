@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { event, extensionPoint, service } from "../src/contracts/contracts";
-import type { Resource } from "../src/contracts/resource";
+import { createResourceAuthority, type Resource } from "../src/contracts/resource";
 import { ContractRegistry } from "../src/contracts/contract-registry";
 import { Lifetime, type ChildLifetime, type LifetimeContext } from "../src/lifetime/lifetime";
 import { EventHub } from "../src/events/event-hub";
@@ -8,6 +8,8 @@ import { ContributionRegistry } from "../src/contributions/contribution-registry
 import { createHost } from "../src/execution/host";
 import { definePlugin } from "../src/composition/plugin";
 import type { Host } from "../src/execution/host-api";
+
+const resourceAuthority = createResourceAuthority();
 
 const RESOURCE_COUNT = 64;
 const RELEASE_PASSES = 8;
@@ -51,8 +53,8 @@ async function release(resource: Resource) {
 
 describe("lifetime retention", () => {
   it("does not retain a completed Task payload after rejecting another owner", async () => {
-    const owner = new Lifetime({ label: "task-owner", report() {} });
-    const other = new Lifetime({ label: "other", report() {} });
+    const owner = new Lifetime({ resourceAuthority, label: "task-owner", report() {} });
+    const other = new Lifetime({ resourceAuthority, label: "other", report() {} });
     try {
       const reference = await rejectedTaskAdoption(owner, other);
       expect(owner.snapshot().tasks).toBe(0);
@@ -66,7 +68,7 @@ describe("lifetime retention", () => {
   });
 
   it("detaches terminal resources while their parent is still active", async () => {
-    const owner = new Lifetime({ label: "active", report: () => undefined });
+    const owner = new Lifetime({ resourceAuthority, label: "active", report: () => undefined });
     const events = new EventHub().scope(owner, () => undefined);
     const registry = new ContributionRegistry(() => undefined);
     const items = extensionPoint<number>("retention/items");
@@ -251,7 +253,7 @@ async function createAndReleaseResources(
 }
 
 async function releasedStore(registry: ContributionRegistry) {
-  const owner = new Lifetime({ label: "store-owner", report: () => undefined });
+  const owner = new Lifetime({ resourceAuthority, label: "store-owner", report: () => undefined });
   const point = extensionPoint<number>("retention/released-store");
   const store = registry.store<number>(point);
   const reference = new WeakRef(store);
@@ -328,6 +330,7 @@ async function retainedHandle(kind: (typeof HANDLE_KINDS)[number]) {
     void loggerPayload;
   };
   const host = createHost({
+    resourceAuthority,
     logger: { debug: write, info: write, warn: write, error: write },
     installations: [{ id: "retained", plugin }],
   });
@@ -343,6 +346,7 @@ async function retainedHandle(kind: (typeof HANDLE_KINDS)[number]) {
 async function releasedChild() {
   let child!: ChildLifetime;
   const host = createHost({
+    resourceAuthority,
     installations: [
       {
         id: "child",
@@ -368,7 +372,7 @@ async function historicalSnapshot(fail: boolean) {
       if (fail) throw new Error("historical", { cause: host });
     },
   });
-  host = createHost({ installations: [{ id: "historical", plugin }] });
+  host = createHost({ resourceAuthority, installations: [{ id: "historical", plugin }] });
   await host.start().catch((error) => {
     if (!fail) throw error;
   });
@@ -378,7 +382,10 @@ async function historicalSnapshot(fail: boolean) {
 }
 
 async function abandonedHost() {
-  const host = createHost({ installations: [{ id: "abandoned", plugin: empty }] });
+  const host = createHost({
+    resourceAuthority,
+    installations: [{ id: "abandoned", plugin: empty }],
+  });
   await host.start();
   return new WeakRef(host);
 }
@@ -389,6 +396,7 @@ async function terminalView(kind: "diagnostics" | "contributions", afterQuaranti
   const observerPayload = { notifications: 0 };
   const point = extensionPoint<number>("retention/terminal-view");
   const host = createHost({
+    resourceAuthority,
     onError: reporter,
     installations: [
       {
@@ -450,6 +458,7 @@ async function completedLateRetirement() {
   let owner!: LifetimeContext;
   let provided!: WeakRef<object>;
   const host = createHost({
+    resourceAuthority,
     shutdownTimeoutMilliseconds: 1,
     onError: reporter,
     installations: [
@@ -514,7 +523,7 @@ function discardedWriter() {
 }
 
 async function removedInstallation() {
-  const host = createHost({ installations: [{ id: "removed", plugin: empty }] });
+  const host = createHost({ resourceAuthority, installations: [{ id: "removed", plugin: empty }] });
   const installation = host.installation("removed")!;
   await host.start();
   const change = host.change();
@@ -525,7 +534,7 @@ async function removedInstallation() {
 }
 
 async function rejectedCandidate(stack: boolean) {
-  const host = createHost();
+  const host = createHost({ resourceAuthority });
   await host.start();
   const change = host.change();
   const installation = change.install(
@@ -546,6 +555,7 @@ async function rejectedCandidate(stack: boolean) {
 
 async function removedGroup() {
   const host = createHost({
+    resourceAuthority,
     groups: [{ id: "parent" }],
     installations: [{ id: "owned", plugin: empty, groupId: "parent" }],
   });
@@ -562,6 +572,7 @@ async function lateGroup() {
   const entered = Promise.withResolvers<void>();
   const resume = Promise.withResolvers<void>();
   const host = createHost({
+    resourceAuthority,
     groups: [{ id: "parent" }],
     installations: [
       {
@@ -595,14 +606,14 @@ async function lateGroup() {
 }
 
 function unappliedGroup() {
-  const host = createHost();
+  const host = createHost({ resourceAuthority });
   const change = host.change();
   return { group: change.group("unapplied"), reference: new WeakRef(host) };
 }
 
 async function abandonedInstallation(planned: boolean) {
   const onError = () => undefined;
-  const host = createHost({ onError });
+  const host = createHost({ resourceAuthority, onError });
   const change = host.change();
   const installation = change.install(empty, { id: "pending" });
   if (planned) await host.plan(change);
@@ -610,7 +621,7 @@ async function abandonedInstallation(planned: boolean) {
 }
 
 it("keeps stale Plan reports and pending identities without retaining their plugin payload", async () => {
-  const host = createHost();
+  const host = createHost({ resourceAuthority });
   const { plan, pending, reference } = await retainedCandidate(host);
   // A separate in-flight validation still holds the old base. It does not own other plans.
   const entered = Promise.withResolvers<void>();
@@ -674,6 +685,7 @@ async function terminalHandles() {
   const onError = () => undefined;
   const payload = { calls: 0 };
   const host = createHost({
+    resourceAuthority,
     onError,
     installations: [
       {
@@ -749,7 +761,7 @@ function stalledValidation(entered: () => void, finish: Promise<void>) {
 
 async function obsoleteValidation(finish: Promise<void>) {
   const onError = () => undefined;
-  const host = createHost({ onError });
+  const host = createHost({ resourceAuthority, onError });
   const change = host.change();
   const entered = Promise.withResolvers<void>();
   change.install(stalledValidation(entered.resolve, finish), {

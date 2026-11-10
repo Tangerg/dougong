@@ -1,8 +1,10 @@
 import { expect, it, vi } from "vitest";
-import { createHost, definePlugin, disposeSymbol } from "dougong";
+import { createResourceAuthority, createHost, definePlugin, disposeSymbol } from "dougong";
 import { createPlatform, type Artifact } from "../src";
 import { RegistrationRecord } from "../src/catalog/registration";
 import { add, deferred, emptyPlugin, fixture } from "./fixtures";
+
+const resourceAuthority = createResourceAuthority();
 
 it("accepts a whole selection before notifying observers or cancelling superseded loading", async () => {
   const entered = deferred();
@@ -10,7 +12,7 @@ it("accepts a whole selection before notifying observers or cancelling supersede
   const cancelled: string[][] = [];
   const platform = createPlatform({
     id: "selection",
-    host: createHost(),
+    host: createHost({ resourceAuthority }),
     apiVersion: "1.0.0",
     loader: {
       async load(name: string, signal: AbortSignal) {
@@ -62,8 +64,8 @@ it("accepts a whole selection before notifying observers or cancelling supersede
 });
 
 it("rejects an unavailable member without advancing any selected revision", async () => {
-  const { platform } = fixture();
-  const foreign = fixture().platform;
+  const { platform } = fixture(resourceAuthority);
+  const foreign = fixture(resourceAuthority).platform;
   const original = add(platform, "sample", "one");
   const replacement = add(platform, "sample", "two", "2.0.0");
   const unavailable = add(foreign, "foreign", "foreign");
@@ -87,7 +89,7 @@ it("rejects an unavailable member without advancing any selected revision", asyn
 });
 
 it("rechecks the complete captured batch when the selection enters its queue", async () => {
-  const { platform } = fixture();
+  const { platform } = fixture(resourceAuthority);
   const original = add(platform, "sample", "one");
   const replacement = add(platform, "sample", "two", "2.0.0");
   const withdrawn = add(platform, "withdrawn", "withdrawn");
@@ -107,7 +109,7 @@ it("rechecks the complete captured batch when the selection enters its queue", a
 });
 
 it("captures indexed input before queuing and returns the same positional membership", async () => {
-  const { platform } = fixture();
+  const { platform } = fixture(resourceAuthority);
   const first = add(platform, "first", "one");
   const second = add(platform, "second", "two");
   const replacement = add(platform, "replacement", "three");
@@ -132,7 +134,7 @@ it("captures indexed input before queuing and returns the same positional member
 });
 
 it("rejects duplicate names, sparse arrays and accessors before any selection", async () => {
-  const { platform } = fixture();
+  const { platform } = fixture(resourceAuthority);
   const first = add(platform, "sample", "one");
   const second = add(platform, "sample", "two", "2.0.0");
   const getter = vi.fn<() => typeof first>(() => first);
@@ -157,7 +159,7 @@ it("rejects duplicate names, sparse arrays and accessors before any selection", 
 });
 
 it("rejects unowned Artifact identities without reading their fields", async () => {
-  const { platform } = fixture();
+  const { platform } = fixture(resourceAuthority);
   const first = add(platform, "first", "one");
   const getter = vi.fn<() => typeof first.manifest>(() => first.manifest);
   const forged = Object.defineProperty({}, "manifest", { get: getter }) as Artifact<string>;
@@ -174,7 +176,7 @@ it("rejects unowned Artifact identities without reading their fields", async () 
 
 it("materializes an unobserved selection history only when its snapshot is requested", async () => {
   const snapshot = vi.spyOn(RegistrationRecord.prototype, "snapshot");
-  const { platform } = fixture();
+  const { platform } = fixture(resourceAuthority);
   const count = 256;
   try {
     for (let index = 0; index < count; index++) {
@@ -194,7 +196,7 @@ it("materializes an unobserved selection history only when its snapshot is reque
 });
 
 it("starts subscription comparisons at the current snapshot and ignores unrelated Host changes", async () => {
-  const { host, platform } = fixture();
+  const { host, platform } = fixture(resourceAuthority);
   const artifact = add(platform, "sample", "one");
   await platform.select([artifact]);
   const changed = vi.fn<() => void>();

@@ -1,5 +1,13 @@
 import { afterEach, expect, it, vi } from "vitest";
-import { createHost, definePlugin, extensionPoint, type HostSnapshot } from "../src";
+import {
+  createResourceAuthority,
+  createHost,
+  definePlugin,
+  extensionPoint,
+  type HostSnapshot,
+} from "../src";
+
+const resourceAuthority = createResourceAuthority();
 
 afterEach(() => vi.useRealTimers());
 
@@ -7,6 +15,7 @@ it("seals terminal views after delivering the final committed snapshot", async (
   const items = extensionPoint<number>("terminal-observation/items");
   let starts = 0;
   const host = createHost({
+    resourceAuthority,
     installations: [
       {
         id: "original",
@@ -71,6 +80,7 @@ it("seals terminal views after delivering the final committed snapshot", async (
 it("keeps stopped Host views active across restart", async () => {
   const items = extensionPoint<number>("terminal-observation/restart");
   const host = createHost({
+    resourceAuthority,
     installations: [
       {
         id: "owner",
@@ -102,6 +112,7 @@ it("delivers late shutdown progress before sealing observation without a new rev
   const release = Promise.withResolvers<void>();
   const report = vi.fn<(error: unknown) => void>();
   const host = createHost({
+    resourceAuthority,
     shutdownTimeoutMilliseconds,
     onError: report,
     installations: [

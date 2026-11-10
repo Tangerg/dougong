@@ -2,9 +2,13 @@ import { describe, expect, it, vi } from "vitest";
 import { Lifetime } from "../src/lifetime/lifetime";
 import { EventHub } from "../src/events/event-hub";
 import { createHost } from "../src/execution/host";
+import { createResourceAuthority } from "../src/contracts/resource";
 import { definePlugin } from "../src/composition/plugin";
 
-const createLifetime = () => new Lifetime({ label: "diagnostic-owner", report: () => undefined });
+const resourceAuthority = createResourceAuthority();
+
+const createLifetime = () =>
+  new Lifetime({ resourceAuthority, label: "diagnostic-owner", report: () => undefined });
 
 describe("Lifetime diagnostic projections", () => {
   it("reads direct resource membership and keeps historical counts immutable", async () => {
@@ -79,6 +83,7 @@ describe("Lifetime diagnostic projections", () => {
     const failure = new Error("observer failed");
     const report = vi.fn<(error: unknown) => void>();
     const host = createHost({
+      resourceAuthority,
       onError: report,
       installations: [
         {
@@ -145,6 +150,7 @@ it("preserves the original child publication failure at its owner without a seco
 it("removes a finished child before publishing its terminal diagnostics", async () => {
   let close!: () => Promise<void>;
   const host = createHost({
+    resourceAuthority,
     installations: [
       {
         id: "owner",

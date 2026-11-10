@@ -3,7 +3,6 @@ import { RecordedFailure } from "../contracts/recorded-failure.js";
 import {
   asyncDisposeSymbol,
   disposeSymbol,
-  markOwnedControlHandle,
   type AsyncDisposable,
   type Awaitable,
   type Publication,
@@ -30,6 +29,7 @@ export function createDisposalReason() {
 
 interface CleanupBinding {
   readonly cleanup: Cleanup;
+  readonly releaseClaim?: () => void;
   readonly detach: () => void;
   readonly releaseFailed: (error: unknown) => void;
   readonly changed: () => void;
@@ -68,37 +68,57 @@ export class CleanupRecord {
     const state = this.#state;
     if (state.phase === "forgotten") return Promise.resolve();
     if (state.phase !== "owned") return state.completion;
-    const { cleanup, detach, releaseFailed, changed } = state.binding;
-    const completion = Promise.withResolvers<void>();
-    const receipt = Object.freeze(completion.promise);
-    this.#state = { phase: "releasing", completion: receipt };
+    const { cleanup, releaseClaim, detach } = state.binding;
+    const completion = this.#beginRelease();
     void Promise.resolve()
       .then(() => resolveValue(cleanup()))
+      .then(() => {
+        releaseClaim?.();
+      })
       .then(
         () => {
-          this.#state = { phase: "released", completion: receipt };
+          this.#state = { phase: "released", completion: completion.promise };
           detach();
           completion.resolve();
         },
-        (error: unknown) => {
-          releaseFailed(error);
-          this.#state = {
-            phase: "failed",
-            completion: receipt,
-            failure: new RecordedFailure(error),
-          };
-          changed();
-          completion.reject(error);
-        },
+        (error: unknown) => this.#fail(state.binding, completion, error),
       );
-    return receipt;
+    return completion.promise;
   }
 
   forget() {
     const state = this.#state;
     if (state.phase !== "owned") return;
+    const completion = this.#beginRelease();
+    // Forgetting reports synchronously; shutdown may observe its retained receipt later.
+    void completion.promise.catch(() => undefined);
+    try {
+      state.binding.releaseClaim?.();
+    } catch (error) {
+      this.#fail(state.binding, completion, error);
+      throw error;
+    }
     this.#state = { phase: "forgotten" };
     state.binding.detach();
+    completion.resolve();
+  }
+
+  #beginRelease() {
+    const completion = Promise.withResolvers<void>();
+    Object.freeze(completion.promise);
+    this.#state = { phase: "releasing", completion: completion.promise };
+    return completion;
+  }
+
+  #fail(binding: CleanupBinding, completion: PromiseWithResolvers<void>, error: unknown) {
+    binding.releaseFailed(error);
+    this.#state = {
+      phase: "failed",
+      completion: completion.promise,
+      failure: new RecordedFailure(error),
+    };
+    binding.changed();
+    completion.reject(error);
   }
 }
 
@@ -146,6 +166,7 @@ export class TaskRecord<T> {
   readonly settled: Promise<void>;
   #controller: AbortController | undefined;
   #detach: (() => void) | undefined;
+  #launch: { start(): void; fail(error: unknown): void } | undefined;
 
   constructor(
     task: BackgroundTask<T>,
@@ -168,7 +189,8 @@ export class TaskRecord<T> {
         });
       }
     };
-    const result = Promise.resolve().then(() => resolveValue(task(controller.signal)));
+    const completion = Promise.withResolvers<ResolvedValue<Awaited<T>>>();
+    const result = completion.promise;
     this.settled = Object.freeze(
       result.then(
         () => this.#settle(),
@@ -178,14 +200,35 @@ export class TaskRecord<T> {
         },
       ),
     );
-    this.handle = markOwnedControlHandle(
-      Object.freeze({
-        result,
-        // A bound method keeps the retained handle out of this constructor's closure context,
-        // which still references the task function and its error reporter.
-        [asyncDisposeSymbol]: this.#dispose.bind(this),
-      }),
-    );
+    this.#launch = {
+      start() {
+        void Promise.resolve()
+          .then(() => resolveValue(task(controller.signal)))
+          .then(completion.resolve, completion.reject);
+      },
+      fail(error) {
+        reporter = undefined;
+        completion.reject(error);
+      },
+    };
+    this.handle = Object.freeze({
+      result,
+      // A bound method keeps the retained handle out of this constructor's closure context,
+      // which still references the task function and its error reporter.
+      [asyncDisposeSymbol]: this.#dispose.bind(this),
+    });
+  }
+
+  start() {
+    const launch = this.#launch;
+    this.#launch = undefined;
+    launch?.start();
+  }
+
+  failStart(error: unknown) {
+    const launch = this.#launch;
+    this.#launch = undefined;
+    launch?.fail(error);
   }
 
   cancel(reason: unknown) {

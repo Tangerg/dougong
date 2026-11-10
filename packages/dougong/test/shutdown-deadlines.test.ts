@@ -1,5 +1,13 @@
 import { afterEach, expect, it, vi } from "vitest";
-import { createHost, definePlugin, service, type ChildLifetime } from "../src";
+import {
+  createResourceAuthority,
+  createHost,
+  definePlugin,
+  service,
+  type ChildLifetime,
+} from "../src";
+
+const resourceAuthority = createResourceAuthority();
 
 afterEach(() => vi.useRealTimers());
 
@@ -25,6 +33,7 @@ it.each([
     const replacementSetup = vi.fn<() => void>();
     let child!: ChildLifetime;
     const host = createHost({
+      resourceAuthority,
       shutdownTimeoutMilliseconds,
       onError: report,
       installations: [
@@ -122,6 +131,7 @@ it("preserves a nested deadline even when its rejection resumes cleanup before t
   const report = vi.fn<(error: unknown) => void>();
   let child!: ChildLifetime;
   const host = createHost({
+    resourceAuthority,
     shutdownTimeoutMilliseconds,
     onError: report,
     installations: [
@@ -168,6 +178,7 @@ it("returns a root deadline through its owning command without a second quaranti
   const report = vi.fn<(error: unknown) => void>();
   const cleanup = vi.fn<() => Promise<void>>(() => release.promise);
   const host = createHost({
+    resourceAuthority,
     shutdownTimeoutMilliseconds,
     onError: report,
     installations: [

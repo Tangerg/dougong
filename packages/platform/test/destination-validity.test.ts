@@ -1,7 +1,9 @@
 import { expect, it, vi } from "vitest";
-import { createHost, definePlugin } from "dougong";
+import { createResourceAuthority, createHost, definePlugin } from "dougong";
 import { createPlatform, type Loader } from "../src";
 import { deferred, emptyPlugin, nextTurn, select } from "./fixtures";
+
+const resourceAuthority = createResourceAuthority();
 
 it.each([
   { stage: "load admission", destination: "group" },
@@ -21,6 +23,7 @@ it.each([
       },
     });
     const host = createHost({
+      resourceAuthority,
       groups: [{ id: "delivery" }],
       installations: [{ id: "native", plugin: native }],
     });

@@ -2,7 +2,7 @@
 
 External artifact selection, admission and lazy activation compiled into Dougong plans.
 
-Upgrading from 0.9? Read the [migration guide](https://tangerg.github.io/dougong/en/guide/migrating-to-0.10) and [0.10.0 release notes](https://tangerg.github.io/dougong/en/reference/release-0.10.0). From 0.8.3, complete [Migrating to 0.9.0](https://tangerg.github.io/dougong/en/guide/migrating-to-0.9) first.
+Read the [upgrade guide](https://tangerg.github.io/dougong/en/guide/upgrading) for migration steps and release notes for your target version.
 
 Platform owns available artifacts and the user's selected targets. Dougong owns committed
 installations, their source information, running generations and resources. Platform uses
@@ -11,7 +11,7 @@ only the public `dougong` and `dougong/advanced` protocols.
 ## A complete lifecycle
 
 ```ts
-import { asyncDisposeSymbol, createHost, definePlugin, service } from "dougong";
+import { asyncDisposeSymbol, createHost, createResourceAuthority, definePlugin, service } from "dougong";
 import { createPlatform, MemoryLoader } from "@dougongjs/platform";
 
 const COUNTER = service<{ value: number }>("example/counter");
@@ -23,7 +23,8 @@ const counter = definePlugin({
   },
 });
 
-const host = createHost();
+const resourceAuthority = createResourceAuthority();
+const host = createHost({ resourceAuthority });
 try {
   await host.start();
   const platform = createPlatform({
@@ -149,9 +150,11 @@ while the Platform is active. A loader must not recursively wait for its own mod
 
 Cancellation before the Core handoff ends the caller's wait, even for a validator or
 authorizer that never settles. A late preparation cannot submit its Plan or overwrite
-the selected Registration's last failure. Once Core execution has started,
-Platform awaits and reports its actual outcome rather than calling a committed operation
-cancelled. Dynamic import side effects are outside Core rollback.
+the selected Registration's last failure. After Core handoff, the caller's signal continues
+into `host.apply(plan, signal)`. Core cancels preparation and owns cleanup, actual settlement,
+restoration and quarantine; Platform reports that outcome, including cleanup failures.
+Once publication commits, late cancellation cannot rewrite success. Dynamic import side
+effects are outside Core rollback.
 
 ## Admission
 

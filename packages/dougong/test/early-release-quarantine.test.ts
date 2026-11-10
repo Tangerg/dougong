@@ -1,11 +1,14 @@
 import { expect, it, vi } from "vitest";
 import {
+  createResourceAuthority,
   createHost,
   definePlugin,
   service,
   type AsyncDisposable,
   type LifetimeContext,
 } from "../src";
+
+const resourceAuthority = createResourceAuthority();
 
 it.each(["child", "cleanup"] as const)(
   "quarantines early %s release failure and retains its providers",
@@ -22,6 +25,7 @@ it.each(["child", "cleanup"] as const)(
     const report = vi.fn<(error: unknown) => void>((error) => reported.resolve(error));
     let early!: AsyncDisposable;
     const host = createHost({
+      resourceAuthority,
       onError: report,
       installations: [
         {
@@ -93,6 +97,7 @@ it("does not commit a candidate after its early child release fails during prepa
   const setupLater = vi.fn<() => void>();
   const value = service<number>("preparing-release/value");
   const host = createHost({
+    resourceAuthority,
     onError() {},
     installations: [
       {
@@ -150,6 +155,7 @@ it("blocks an active transition when an unaffected Instance loses a cleanup obli
   let lifetime!: LifetimeContext;
   let early!: AsyncDisposable;
   const host = createHost({
+    resourceAuthority,
     onError() {},
     installations: [
       {
@@ -221,6 +227,7 @@ it("seals Host ingress before inspecting a failed cleanup's error", async () => 
     },
   });
   const host = createHost({
+    resourceAuthority,
     onError() {},
     installations: [
       {

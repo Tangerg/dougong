@@ -86,8 +86,10 @@ export { RecordedFailure, type ErrorSnapshot } from "./contracts/recorded-failur
 export {
   disposeSymbol,
   asyncDisposeSymbol,
+  createResourceAuthority,
   type Disposable,
   type AsyncDisposable,
   type Resource,
+  type ResourceAuthority,
   type Awaitable,
 } from "./contracts/resource.js";

@@ -70,7 +70,13 @@ async function publishCandidates(session, request, repository, registry, candida
     try {
       await registry.publish(entry, upload);
     } catch (cause) {
-      if (session.signal.aborted) throw cause;
+      if (session.signal.aborted) {
+        console.error(
+          `  ${name}@${version}: publication was interrupted; the registry outcome is unknown. ` +
+            `Re-running \`${resumeCommand}\` verifies the registry before uploading.`,
+        );
+        throw cause;
+      }
       if (published.length) console.error(`  Already on the registry: ${published.join(", ")}`);
       console.error(`  Fix the cause and re-run \`${resumeCommand}\`; it resumes from here.`);
       throw new Error(`${name} failed to publish.`, { cause });

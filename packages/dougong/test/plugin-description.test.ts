@@ -1,6 +1,7 @@
 import type { StandardJSONSchemaV1, StandardSchemaV1 } from "@standard-schema/spec";
 import { expect, it, vi } from "vitest";
 import {
+  createResourceAuthority,
   createHost,
   definePlugin,
   extensionPoint,
@@ -9,6 +10,8 @@ import {
   ConfigurationValidationError,
 } from "../src/index.js";
 import { describePlugin } from "../src/composition/plugin-description.js";
+
+const resourceAuthority = createResourceAuthority();
 
 it("derives immutable contract descriptions without running setup", () => {
   const value = service<number>("description/value");
@@ -72,6 +75,7 @@ it("describes schema absence without claiming a required typed configuration is 
   expect(describePlugin(plugin).configuration).toEqual({ status: "schemaAbsent" });
   expect(received).not.toHaveBeenCalled();
   const host = createHost({
+    resourceAuthority,
     installations: [{ id: "configured", plugin, configuration: { port: 8080 } }],
   });
   try {
@@ -190,7 +194,7 @@ it("keeps schema export separate from Plan validation and execution", async () =
       setup(configuration);
     },
   });
-  const host = createHost();
+  const host = createHost({ resourceAuthority });
   await host.start();
   const change = host.change();
   change.install(plugin, { id: "configured", configuration: "42" });
@@ -295,6 +299,7 @@ it("identifies the failing Installation when a Plan validates several configurat
     setup() {},
   });
   const host = createHost({
+    resourceAuthority,
     installations: [
       { id: "valid", plugin, configuration: 1 },
       { id: "invalid", plugin, configuration: -1 },

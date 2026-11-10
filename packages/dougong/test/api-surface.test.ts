@@ -1,7 +1,10 @@
+import { createResourceAuthority } from "dougong";
 import { runInNewContext } from "node:vm";
 import budget from "../../../tooling/architecture/public-api.json" with { type: "json" };
 import { describe, expect, it } from "vitest";
 import * as core from "../src/index";
+
+const resourceAuthority = createResourceAuthority();
 
 describe("public API surface", () => {
   it("captures structured error context as bounded data without retaining custom resources", () => {
@@ -448,7 +451,7 @@ describe("public API surface", () => {
       },
     });
 
-    const host = core.createHost();
+    const host = core.createHost({ resourceAuthority });
     const change = host.change();
     const group = change.group("empty");
     const installation = change.install(plugin, { id: "plugin", group });

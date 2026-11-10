@@ -2,6 +2,20 @@
 
 Lifetimes compose into a resource tree. Each Instance creates a root; plugins create child owners through `child(label)`. The root view `context.lifetime` registers resources and tasks; only the Engine can stop the Instance. To end a group of operations early, retain the `ChildLifetime` returned by `child(label)`.
 
+Create a resource domain with `createResourceAuthority()` at the application assembly boundary and pass it through the required `HostOptions.resourceAuthority` to every Host in that domain. Independently bundled copies of Core must receive the same authority object. This structural protocol does not depend on a Core copy's class identity, and Core does not select an implicit default domain.
+
+```ts
+import { createHost, createResourceAuthority } from "dougong";
+
+const resourceAuthority = createResourceAuthority();
+const applicationHost = createHost({ resourceAuthority, name: "application" });
+const deliveryHost = createHost({ resourceAuthority, name: "delivery" });
+```
+
+ResourceAuthority arbitrates resource identity reservations and control handle provenance. Lifetime still owns actual tasks, resource release, and settlement. Sharing an authority does not permit multiple Lifetime owners: it gives Hosts and Core copies one place to reject competing adoption. Do not create a separate authority for each Host that shares resources. Different authorities declare independent domains and cannot inspect each other's raw objects; pass access across domains while leaving release with the original owner.
+
+Host captures each authority method once with its original receiver. `claim`, `markControlHandle`, and returned claim-release callbacks must complete synchronously. A failed claim release retains a failed Lifetime obligation and quarantines the Host, even if the resource disposer already succeeded; neither operation is retried. If disposal-method capture and reservation rollback both fail, both errors remain in the retained failure. Task control registration completes before user work is scheduled, so failed registration cannot start unowned work.
+
 | Primitive | Guarantee |
 | --- | --- |
 | `use(resource)` | Captures the standard disposer and returns the resource after registration |
@@ -13,9 +27,9 @@ Lifetimes compose into a resource tree. Each Instance creates a root; plugins cr
 | `signal` | Cooperative cancellation |
 | `child[Symbol.asyncDispose]()` | Closes the child subtree you created and joins its single shutdown |
 
-A child Lifetime belongs to the parent that created it. Tasks, `defer`, `interrupt`, Event listeners, Contributions, and contribution view subscriptions with a Lifetime owner also return handles that control their original registration. Within one loaded copy of Core, `use` and `acquire` reject these handles, regardless of which Lifetime is targeted or whether the handle has completed. Call the handle's standard disposal method directly to end the original operation or unregister it without creating another release obligation. Across separately bundled copies, keep each handle with its original owner.
+A child Lifetime belongs to the parent that created it. Tasks, `defer`, `interrupt`, Event listeners, Contributions, and contribution view subscriptions with a Lifetime owner also return handles that control their original registration. Within one resource domain, `use` and `acquire` reject these handles regardless of which Lifetime or Core copy is targeted, including after the handle completes. Control handle provenance outlives the original operation. Call the handle's standard disposal method directly to end the original operation or unregister it without creating another release obligation.
 
-Within one loaded Core, an external resource object can also have only one Lifetime owner. Repeated `use`, competing `acquire` calls, and registration reentered through a disposal-method getter are rejected. Pending, timed-out, or failed cleanup keeps its original obligation; the same object can be adopted again only after the actual release succeeds. Give shared resources one explicit Lifetime and pass access through Service parameters.
+Within one resource domain, an external resource object can also have only one Lifetime owner. Repeated `use`, competing `acquire` calls, and registration reentered through a disposal-method getter are rejected. Pending, timed-out, or failed cleanup keeps its original obligation; the same object can be adopted again only after the actual release succeeds. Give shared resources one explicit Lifetime and pass access through Service parameters.
 
 `Symbol.dispose` must finish synchronously; use `Symbol.asyncDispose` for asynchronous release. A synchronous callback returning a supported Promise or thenable is rejected, and failed release remains owned by the original Lifetime. Core and Reactive share one asynchronous result protocol. A prototype chain containing this realm's `Promise.prototype` selects intrinsic `then`, which validates the native brand and observes actual settlement, including local subclasses; an own `then` cannot replace it. Other objects use one captured callable `then` with its original receiver and standard recursive thenable resolution. `Symbol.toStringTag` describes presentation only: it neither selects a protocol nor has its getter evaluated.
 

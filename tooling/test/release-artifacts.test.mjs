@@ -1047,6 +1047,9 @@ it.each([
       stagesRetained: false,
     });
     expect(Object.keys(result.publishedAfterFirstAttempt)).toEqual(uploaded);
+    expect(result.interrupted.stderr.includes("the registry outcome is unknown")).toBe(
+      attempts > 0,
+    );
     const probe = result.calls.filter(({ command }) => command === "signal-probe");
     expect(probe).toEqual(
       expect.arrayContaining([

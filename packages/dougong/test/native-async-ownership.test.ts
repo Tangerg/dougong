@@ -1,5 +1,7 @@
 import { expect, it } from "vitest";
-import { createHost, definePlugin, service } from "../src/index";
+import { createResourceAuthority, createHost, definePlugin, service } from "../src/index";
+
+const resourceAuthority = createResourceAuthority();
 
 it("an asynchronous disposer must retain ownership until a native Promise settles", async () => {
   const provider = service<object>("audit/provider");
@@ -9,6 +11,7 @@ it("an asynchronous disposer must retain ownership until a native Promise settle
   let providerReleased = false;
   let consumerReleased = false;
   const host = createHost({
+    resourceAuthority,
     installations: [
       {
         id: "provider",
@@ -63,6 +66,7 @@ it("a foreground borrow must wait for the native callback Promise", async () => 
   // oxlint-disable-next-line unicorn/no-thenable -- A Proxy would lose the native Promise brand.
   Object.defineProperty(pending.promise, "then", { value: undefined });
   const host = createHost({
+    resourceAuthority,
     installations: [
       {
         id: "owner",

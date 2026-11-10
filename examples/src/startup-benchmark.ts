@@ -1,4 +1,6 @@
-import { createHost, definePlugin, service, type Service } from "dougong";
+import { createResourceAuthority, createHost, definePlugin, service, type Service } from "dougong";
+
+const resourceAuthority = createResourceAuthority();
 
 const maximumTimerDelayMilliseconds = 2_147_483_647;
 
@@ -20,7 +22,7 @@ async function measure(operation: () => Promise<unknown>) {
 }
 
 async function measureIndependent(plugins: number, delayMilliseconds: number) {
-  const host = createHost({ name: "benchmark-independent" });
+  const host = createHost({ resourceAuthority, name: "benchmark-independent" });
   const initial = host.change();
   for (let index = 0; index < plugins; index++) {
     initial.install(
@@ -44,7 +46,7 @@ function link(index: number): Service<number> {
 }
 
 async function measureChained(plugins: number, delayMilliseconds: number) {
-  const host = createHost({ name: "benchmark-chained" });
+  const host = createHost({ resourceAuthority, name: "benchmark-chained" });
   const initial = host.change();
   initial.install(
     definePlugin({

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { createHost, definePlugin, type AnyPlugin } from "dougong";
+import { createResourceAuthority, createHost, definePlugin, type AnyPlugin } from "dougong";
 import { createPlatform } from "../src";
 import {
   add,
@@ -12,11 +12,13 @@ import {
   valuePlugin,
 } from "./fixtures";
 
+const resourceAuthority = createResourceAuthority();
+
 describe("selection and activation races", () => {
   it("rejects a late old selection even when the Host revision has not changed", async () => {
     const entered = deferred();
     const release = deferred();
-    const host = createHost();
+    const host = createHost({ resourceAuthority });
     const platform = createPlatform({
       id: "selection",
       host,
@@ -54,7 +56,7 @@ describe("selection and activation races", () => {
     const entered = deferred();
     const release = deferred();
     const loaded: string[] = [];
-    const host = createHost();
+    const host = createHost({ resourceAuthority });
     const platform = createPlatform({
       id: "sharing",
       host,
@@ -97,7 +99,7 @@ describe("selection and activation races", () => {
     const entered = deferred();
     const release = deferred();
     const setup = vi.fn<() => void>(() => undefined);
-    const host = createHost();
+    const host = createHost({ resourceAuthority });
     const load = vi.fn<() => Promise<{ default: AnyPlugin }>>(async () => {
       entered.resolve();
       await release.promise;
@@ -127,7 +129,7 @@ describe("selection and activation races", () => {
     const entered = deferred();
     const release = deferred();
     let calls = 0;
-    const host = createHost();
+    const host = createHost({ resourceAuthority });
     const platform = createPlatform({
       id: "retry",
       host,
@@ -171,7 +173,7 @@ describe("selection and activation races", () => {
         return { value: { value: 1 } };
       },
     });
-    const host = createHost();
+    const host = createHost({ resourceAuthority });
     const platform = createPlatform({
       id: "commit",
       host,
@@ -201,7 +203,7 @@ describe("selection and activation races", () => {
     await host.stop();
   });
 
-  it("reports a committed result when cancellation arrives after Core execution starts", async () => {
+  it("cancels handed-off setup and reports Core's restored outcome", async () => {
     const entered = deferred();
     const release = deferred();
     const plugin = definePlugin({
@@ -211,7 +213,7 @@ describe("selection and activation races", () => {
         await release.promise;
       },
     });
-    const host = createHost();
+    const host = createHost({ resourceAuthority });
     const platform = createPlatform({
       id: "late-cancel",
       host,
@@ -226,14 +228,16 @@ describe("selection and activation races", () => {
     const controller = new AbortController();
     await host.start();
     const activation = platform.activate([registration], { signal: controller.signal });
+    const outcome = activation.catch((error: unknown) => error);
     await entered.promise;
     controller.abort();
     release.resolve();
-    expect(await activation).toEqual({
-      stateRevision: host.stateRevision,
-      affectedInstallations: [registration.installation!.id],
+    expect(await outcome).toMatchObject({
+      code: "TRANSITION_FAILED",
+      details: { outcome: "restored", phase: "prepare" },
     });
-    expect(registration.status).toBe("installed");
+    expect(registration.status).toBe("failed");
+    expect(registration.activeOrigin).toBeUndefined();
     await platform[Symbol.asyncDispose]();
     await host.stop();
   });
@@ -242,7 +246,7 @@ describe("selection and activation races", () => {
     const entered = deferred();
     const release = deferred();
     const setup = vi.fn<() => void>();
-    const host = createHost();
+    const host = createHost({ resourceAuthority });
     const platform = createPlatform({
       id: "remove-load",
       host,
@@ -271,7 +275,7 @@ describe("selection and activation races", () => {
   it("cancels before admission if a loading observer disposes the Platform", async () => {
     const authorize = vi.fn<() => void>();
     const load = vi.fn<() => void>();
-    const host = createHost();
+    const host = createHost({ resourceAuthority });
     const platform = createPlatform({
       id: "observer-cancel",
       host,
@@ -292,7 +296,7 @@ describe("selection and activation races", () => {
   });
 
   it("rejects a removed selection handle without touching its replacement", async () => {
-    const host = createHost();
+    const host = createHost({ resourceAuthority });
     const platform = createPlatform({
       id: "identity",
       host,
@@ -319,7 +323,7 @@ describe("selection and activation races", () => {
   it("does not silently reload code when Core state changes after a reuse preview", async () => {
     const gate = deferred();
     const entered = deferred();
-    const host = createHost();
+    const host = createHost({ resourceAuthority });
     const modules = new Map<string, AnyPlugin>([
       ["dependency", emptyPlugin("dependency")],
       ["root", emptyPlugin("root")],
@@ -359,7 +363,10 @@ describe("selection and activation races", () => {
 it.each([true, false])(
   "derives trigger roots from the selection admitted before it (next matches: %s)",
   async (matches) => {
-    const { host, platform } = fixture(new Map([["module", emptyPlugin("sample")]]));
+    const { host, platform } = fixture(
+      resourceAuthority,
+      new Map([["module", emptyPlugin("sample")]]),
+    );
     const first = await select(platform, "sample", "module", {
       activation: matches ? [] : ["open"],
     });
@@ -380,7 +387,7 @@ it("withdraws a loaded activation while another activation owns the Core handoff
   const releaseLoader = deferred();
   const platform = createPlatform({
     id: "handoff",
-    host: createHost(),
+    host: createHost({ resourceAuthority }),
     apiVersion: "1.0.0",
     loader: {
       async load(name: string) {
@@ -432,7 +439,7 @@ it.each(["select", "remove", "dispose"] as const)(
     const observed: unknown[] = [];
     const platform = createPlatform({
       id: "projection",
-      host: createHost(),
+      host: createHost({ resourceAuthority }),
       apiVersion: "1.0.0",
       loader: {
         load(_reference: string, signal: AbortSignal) {
@@ -492,7 +499,10 @@ it.each(["revision", "quarantine"] as const)(
           });
       },
     });
-    const host = createHost({ installations: [{ id: "native", plugin: native }] });
+    const host = createHost({
+      resourceAuthority,
+      installations: [{ id: "native", plugin: native }],
+    });
     await host.start();
     let hold = true;
     const platform = createPlatform({

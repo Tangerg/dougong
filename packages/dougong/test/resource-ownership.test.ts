@@ -1,8 +1,17 @@
 import { expect, it, vi } from "vitest";
-import { createHost, definePlugin, type LifetimeContext, type Resource } from "../src";
+import {
+  createResourceAuthority,
+  createHost,
+  definePlugin,
+  type LifetimeContext,
+  type Resource,
+} from "../src";
 import { Lifetime } from "../src/lifetime/lifetime";
 
-const lifetime = () => new Lifetime({ label: "resource-owner", report: () => undefined });
+const resourceAuthority = createResourceAuthority();
+
+const lifetime = () =>
+  new Lifetime({ resourceAuthority, label: "resource-owner", report: () => undefined });
 
 it.each(["use", "acquire"] as const)(
   "rejects primitive resource identities at the %s boundary without recording an obligation",
@@ -10,6 +19,7 @@ it.each(["use", "acquire"] as const)(
     let context!: LifetimeContext;
     const release = vi.fn<() => void>();
     const host = createHost({
+      resourceAuthority,
       installations: [
         {
           id: "owner",
@@ -151,6 +161,7 @@ it("releases a failed capture claim so the resource can be corrected and adopted
 it("keeps a timed out resource claimed until its actual cleanup settles", async () => {
   vi.useFakeTimers();
   const first = new Lifetime({
+    resourceAuthority,
     label: "timed-out",
     report: () => undefined,
     shutdownTimeoutMilliseconds: 10,

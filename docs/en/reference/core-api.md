@@ -10,7 +10,7 @@ The main `dougong` package is the actual kernel. Its default surface exposes one
 | 插件 / Plugins | `definePlugin`, `describePlugin`, `PluginDescriptor`, `PluginConfigurationDescriptor`, `PluginDescriptionOptions`, `Plugin`, `AnyPlugin`, `PluginContext`, `Requirements`, `Provisions`, `ResolvedRequirement`, `ResolvedRequirements`, `ProvidedServices`, `InstanceMetadata` |
 | 安装与计划 / Installation and planning | `ChangeSet`, `Group`, `Installation`, `InstallationOptions`, `InstallationArguments`, `InstallationUpdate`, `InstallationOrigin`, `InitialInstallation`, `Plan`, `PlanReport`, `BindingReport`, `ImpactReason`, `PlanOperation`, `DeclarationSnapshot`, `captureConfiguration`, `ConfigurationValue` |
 | 运行 / Execution | `createHost`, `Host`, `HostOptions`, `ApplyResult`, `HostStatus`, `InstallationState` |
-| 资源 / Resources | `LifetimeContext`, `ChildLifetime`, `LifetimeOwnership`, `Task`, `Cleanup`, `BackgroundTask`, `LifetimePhase`, `LifetimeSnapshot`, `UnresolvedObligation`, `Disposable`, `AsyncDisposable`, `Resource`, `Awaitable`, `ResolvedValue`, `disposeSymbol`, `asyncDisposeSymbol` |
+| 资源 / Resources | `createResourceAuthority`, `ResourceAuthority`, `LifetimeContext`, `ChildLifetime`, `LifetimeOwnership`, `Task`, `Cleanup`, `BackgroundTask`, `LifetimePhase`, `LifetimeSnapshot`, `UnresolvedObligation`, `Disposable`, `AsyncDisposable`, `Resource`, `Awaitable`, `ResolvedValue`, `disposeSymbol`, `asyncDisposeSymbol` |
 | 事件与贡献 / Events and contributions | `Contribution`, `ContributionView`, `ContributionOperations`, `EventListener`, `EventArguments`, `EventOperations` |
 | 观察与错误 / Observation and errors | `HostSnapshot`, `InstallationSnapshot`, `GroupSnapshot`, `SnapshotView`, `isLogger`, `Logger`, `DougongError`, `ConfigurationValidationError`, `RecordedFailure`, `isError`, `isCancellationReason`, `ErrorSnapshot`, `ErrorDetails` |
 
@@ -20,9 +20,19 @@ A plugin receives a `LifetimeContext` with work and resource registration capabi
 
 Contract identities use their own data fields. A token from another JavaScript realm can supply a provision, declare a requirement or identify a borrow with the same `kind` and `id`.
 
+## Plugin declarations
+
+`Plugin<Configuration, Requires, Provides, ConfigurationInput>` pairs the actual `requires` and `provides` declarations with `setup`. Nonempty mappings require their declaration fields, and callbacks cannot infer undeclared dependencies or provisions. Mappings accept only finite, definite, required string keys; an individual Service token in `provides` cannot independently choose a union branch either. Define complete Plugins before selecting between branches. Declare optional Services with `optional(token)` rather than optional alias fields.
+
+Without a `configuration` schema, `ConfigurationInput` must be directly assignable to `Configuration`; ordinary callers declare the same configuration type for both. Incompatible input and output require an actual Standard Schema: installation accepts its input, and `setup` receives a deeply readonly view of its output. Explicit `Plugin<...>` annotations enforce the same relationships as `definePlugin`.
+
+`AnyPlugin` is an erased declaration boundary and proves no particular configuration or Service value type. Loaders use `capturePluginDeclaration` from `dougong/advanced` to accept unknown module data without asserting it to a concrete `Plugin<...>`.
+
 ## Host and installation
 
-`HostOptions` contains `name`, initial `installations`, initial `groups`, logging and error-reporting ports, and shutdown timeout. Installation IDs are unique within a Host. Group IDs are stable identities declared by the application.
+`start(signal?)` and `apply(plan, signal?)` can cancel validation or candidate preparation. Cancellation before execution does not consume a Plan. Cancellation during execution joins candidate cleanup and recovery, distinguishing `restored` from `quarantined`; it does not merely abandon an outer Promise. Cancellation after commit cannot rewrite the outcome. `stop()` and standard asynchronous disposal still reject busy during execution to prevent callback self-waits; applications retain and cancel the original request signal. See [Execution and results](../guide/transactions.md#execution-and-results).
+
+`HostOptions` requires `resourceAuthority`; create it once with `createResourceAuthority()` and pass the same authority to every Host sharing the resource domain, including Hosts from separate Core bundles. Other options include `name`, initial `installations`, initial `groups`, and logging and error-reporting ports. Optional `shutdownTimeoutMilliseconds` bounds each Lifetime's shutdown wait, while `restorationTimeoutMilliseconds` bounds preparation when reconstructing previous declarations after a failure; neither falls back to the other or limits normal startup. Installation IDs are unique within a Host. Group IDs are stable identities declared by the application.
 
 `createHost` infers configuration input from each Plugin in the initial list, preserving each pairing in heterogeneous lists. `InitialInstallation<typeof plugin>` and `InstallationOptions<typeof plugin>` derive their configuration requirement from the same Plugin type. Configuration may be omitted when its input accepts `undefined`, including `void`, optional inputs and schema defaults; otherwise it is required. Schema output belongs to setup, while installation declarations still require the schema input. Configuration cannot widen the inferred Plugin type to pass type checking.
 
@@ -39,9 +49,11 @@ const installation = change.install(...declaration);
 
 The resulting `Installation<First | Second>` cannot establish its installed branch, so configuration-only updates must satisfy every possible branch. A replacement keeps configuration paired with its new Plugin. Configuration may be omitted to retain captured input only when the replacement accepts every possible previous input; otherwise it must be supplied explicitly. When replacing with an unconfigured Plugin, use `configuration: undefined` to clear a possible previous input. A single Plugin whose input is itself a union, such as `string | number`, still accepts every declared input member.
 
-Use `definePlugin` or an explicit `Plugin<...>` annotation before selecting between Plugins so schema input remains invariant; equal outputs cannot silently widen a narrower input. Unannotated raw objects follow TypeScript's structural inference, and the framework cannot reconstruct input relationships already widened or erased before a call. This constraint exists only in types and adds no runtime field to a Plugin.
+Installation requires an authoring contract established by `definePlugin` or an explicit `Plugin<...>` annotation; an unannotated raw object is not automatically treated as `AnyPlugin`. The complete contract proof also keeps schema input invariant so equal outputs cannot widen narrower input. After spreading a declaration and changing its contract, call `definePlugin` again; removing a schema or expanding provides cannot retain the old proof. The proof exists only in types and adds no runtime field to a Plugin. Unknown modules enter the explicitly erased dynamic boundary through `capturePluginDeclaration`.
 
 An explicit `install` type argument now describes the complete tuple: `install<InstallationArguments<typeof plugin>>(plugin, options)`. The former `install<typeof plugin>` form has been removed. Ordinary calls continue to infer their types without explicit arguments.
+
+`update` infers the Installation's Plugin contract and the complete update value separately. The actual replacement declaration must pass the same authoring check rather than disappear into the target Installation's broader type. Its explicit form is `update<Declaration, Update>`; the former single type argument has been removed. Ordinary calls retain automatic inference and the pairing between configuration and replacement branches.
 
 To pass the installation command elsewhere, retain `const install = change.install`; its full signature and existing binding remain intact. A wrapper for a known Plugin set can accept `InstallationArguments<First | Second>` and spread it into the call. TypeScript 5.9.3 cannot prove that an unresolved generic `InstallationArguments<P>` preserves its correlation when spread again, so that generic decorator cannot forward directly. Widening it to `AnyPlugin` would erase the input contract.
 
@@ -111,6 +123,7 @@ Use `dougong/advanced` for adapters and domain extensions. These primitives expo
 | `resolveValue(value)` | Resolve one asynchronous result through the shared protocol and return `Promise<ResolvedValue<Awaited<T>>>`; the frozen `{ value }` receipt preserves the fulfilled identity. |
 | `captureDataArray(input, label)` | Freeze a shallow copy of dense own index data without invoking the input’s methods or iterator. The caller validates the elements. |
 | `captureLogger(logger)` | Capture the four methods and their original receiver once, preserving known return types; unknown input establishes only the method shape. |
+| `capturePluginDeclaration(input)` | Capture and validate an immutable `AnyPlugin` from unknown input through the same implementation used by `definePlugin` and Core installation; it runs neither setup nor schema and cannot recover erased configuration or Service types. |
 | `onAbort(signal, callback)` | Observe genuine cancellation once, passing its reason immediately if already aborted. The returned function detaches the callback. Dispatching an event named `abort` does not cancel a scope. |
 
 `recordFields` requires every field at compile time, including optional fields and fields from each union member, and rejects extra fields. Each tuple element must name one definite field; a union-valued element cannot stand in for an exhaustive enumeration. Widened arrays, numeric or symbol keys, and open index signatures cannot prove completeness. The set declares which fields may occur; the input boundary still owns required-field and value validation.

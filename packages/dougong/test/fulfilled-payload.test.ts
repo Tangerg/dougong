@@ -1,6 +1,8 @@
 import { expect, it } from "vitest";
-import { createHost, definePlugin, service } from "../src/index";
+import { createResourceAuthority, createHost, definePlugin, service } from "../src/index";
 import { Lifetime } from "../src/lifetime/lifetime";
+
+const resourceAuthority = createResourceAuthority();
 
 it("acquire must not discard an already-fulfilled native Promise resource on a second then read", async () => {
   let reads = 0;
@@ -21,7 +23,7 @@ it("acquire must not discard an already-fulfilled native Promise resource on a s
   const ready = Promise.resolve(resource);
   expect(await ready).toBe(resource);
   expect(reads).toBe(1);
-  const owner = new Lifetime({ label: "fulfilled-resource", report() {} });
+  const owner = new Lifetime({ resourceAuthority, label: "fulfilled-resource", report() {} });
   let receipt: unknown;
   try {
     receipt = await owner.acquire(() => ready);
@@ -40,6 +42,7 @@ it("acquire must not discard an already-fulfilled native Promise resource on a s
 it("a borrow must deliver the fulfilled callback payload without adopting it again", async () => {
   const capability = service<object>("fulfilled/value");
   const host = createHost({
+    resourceAuthority,
     installations: [
       {
         id: "owner",
@@ -90,6 +93,7 @@ it("spawn must preserve a fulfilled native Promise payload", async () => {
   );
   const ready = Promise.resolve(payload);
   const owner = new Lifetime({
+    resourceAuthority,
     label: "fulfilled-task",
     report(error) {
       failures.push(error);

@@ -1,4 +1,4 @@
-import { createHost, definePlugin, service, type AnyPlugin } from "dougong";
+import { createHost, definePlugin, service, type AnyPlugin, type ResourceAuthority } from "dougong";
 import {
   createPlatform,
   MemoryLoader,
@@ -17,8 +17,11 @@ export function emptyPlugin(name: string) {
   return definePlugin({ name, setup() {} });
 }
 
-export function fixture(modules: ReadonlyMap<string, AnyPlugin> = new Map()) {
-  const host = createHost();
+export function fixture(
+  resourceAuthority: ResourceAuthority,
+  modules: ReadonlyMap<string, AnyPlugin> = new Map(),
+) {
+  const host = createHost({ resourceAuthority });
   const platform = createPlatform({
     id: "test",
     host,

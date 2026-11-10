@@ -1,7 +1,16 @@
 import { expect, it, vi } from "vitest";
-import { createHost, definePlugin, event, extensionPoint, type PluginContext } from "../src";
+import {
+  createResourceAuthority,
+  createHost,
+  definePlugin,
+  event,
+  extensionPoint,
+  type PluginContext,
+} from "../src";
 import { batchSnapshotNotifications, SnapshotPublisher } from "../src/advanced";
 import { Lifetime } from "../src/lifetime/lifetime";
+
+const resourceAuthority = createResourceAuthority();
 
 function brokenPublisher() {
   const observerFailure = new Error("foreign observer failed");
@@ -22,6 +31,7 @@ async function runningOwner() {
   let context!: PluginContext<{}>;
   const report = vi.fn<(error: unknown) => void>();
   const host = createHost({
+    resourceAuthority,
     onError: report,
     installations: [
       {
@@ -205,6 +215,7 @@ it("preserves a failed publication withdrawal and its parent resources without m
   const report = vi.fn<(error: unknown) => void>();
   using diagnostics = new SnapshotPublisher(() => undefined, report);
   const root = new Lifetime({
+    resourceAuthority,
     label: "publication-owner",
     report,
     changed: () => batchSnapshotNotifications(() => diagnostics.invalidate(), report),

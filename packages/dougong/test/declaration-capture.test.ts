@@ -2,6 +2,7 @@ import { runInNewContext } from "node:vm";
 import type { StandardSchemaV1 } from "@standard-schema/spec";
 import { expect, it, vi } from "vitest";
 import {
+  createResourceAuthority,
   ConfigurationValidationError,
   createHost,
   definePlugin,
@@ -10,13 +11,18 @@ import {
   service,
 } from "../src/index";
 
+const resourceAuthority = createResourceAuthority();
+
 it("captures plugin declarations and configuration before external mutation", async () => {
   const token = service<number>("capture/value");
   const requirements = { input: optional(token) };
   const configuration = { port: 1 };
   const setup = vi.fn<(_context: unknown, _configuration: unknown) => void>();
   const plugin = definePlugin({ name: "capture", requires: requirements, setup });
-  const host = createHost({ installations: [{ id: "a", plugin, configuration }] });
+  const host = createHost({
+    resourceAuthority,
+    installations: [{ id: "a", plugin, configuration }],
+  });
   configuration.port = 2;
   requirements.input = optional(service<number>("capture/other"));
   await host.start();
@@ -50,7 +56,10 @@ it("captures update configuration when staged and validator output when planned"
       seen.push(configuration);
     },
   });
-  const host = createHost({ installations: [{ id: "a", plugin, configuration: { input: 1 } }] });
+  const host = createHost({
+    resourceAuthority,
+    installations: [{ id: "a", plugin, configuration: { input: 1 } }],
+  });
   await host.start();
   const configuration = { input: 2 };
   const change = host.change();
@@ -66,7 +75,10 @@ it("captures update configuration when staged and validator output when planned"
 
 it("replaces source atomically with implementation and preserves it for configuration-only updates", async () => {
   const plugin = definePlugin({ name: "a", setup() {} });
-  const host = createHost({ installations: [{ id: "a", plugin, origin: { version: "1" } }] });
+  const host = createHost({
+    resourceAuthority,
+    installations: [{ id: "a", plugin, origin: { version: "1" } }],
+  });
   const id = host.installation("a")!;
   const first = host.change();
   first.update(id, { configuration: { x: 1 } });
@@ -109,6 +121,7 @@ it.each(["omitted", "replacement-undefined", "configuration-undefined"] as const
     });
     const origin = { revision: "original" };
     const host = createHost({
+      resourceAuthority,
       installations: [{ id: "configured", plugin: original, configuration: "captured", origin }],
     });
     try {
@@ -153,6 +166,7 @@ it("accepts the same cross-realm Contract identity for provisions, requirements 
     setup: ({ dependencies }) => received(dependencies.value),
   });
   const host = createHost({
+    resourceAuthority,
     installations: [
       { id: "provider", plugin: provider },
       { id: "consumer", plugin: consumer },
@@ -171,6 +185,7 @@ it("runs a foreign-realm Plugin with its own declarations, configuration and pro
   const token = service<number>("realm/configured");
   const options = runInNewContext(
     `({
+      resourceAuthority,
       installations: [{
         id: "provider",
         configuration: { input: 7 },
@@ -185,7 +200,7 @@ it("runs a foreign-realm Plugin with its own declarations, configuration and pro
         },
       }],
     })`,
-    { token },
+    { token, resourceAuthority },
   ) as HostOptions;
   const host = createHost(options);
   try {
@@ -199,6 +214,7 @@ it("runs a foreign-realm Plugin with its own declarations, configuration and pro
 it("captures optional token identity only once during use", async () => {
   const token = service<number>("capture/optional");
   const host = createHost({
+    resourceAuthority,
     installations: [
       {
         id: "a",
@@ -218,7 +234,7 @@ it("does not execute custom iterators on declarations or validation issues", () 
   });
   for (const key of ["installations", "groups"] as const) {
     const array = Object.assign([], { [Symbol.iterator]: iterator });
-    expect(() => createHost({ [key]: array })).toThrow(/dense/);
+    expect(() => createHost({ resourceAuthority, [key]: array })).toThrow(/dense/);
   }
   const issues = Object.assign([{ message: "real" }], { [Symbol.iterator]: iterator });
   expect(new ConfigurationValidationError(issues).issues).toEqual([{ message: "real" }]);
@@ -253,9 +269,12 @@ it("rejects duplicate installation IDs before reading the conflicting initial Pl
   const original = { id: "same", plugin };
   const conflict = { code: "INSTALLATION_CONFLICT" };
   expect(() =>
-    createHost({ installations: [original, { id: original.id, plugin: conflicting }] }),
+    createHost({
+      resourceAuthority,
+      installations: [original, { id: original.id, plugin: conflicting }],
+    }),
   ).toThrowError(expect.objectContaining(conflict));
-  const host = createHost({ installations: [original] });
+  const host = createHost({ resourceAuthority, installations: [original] });
   const committed = host.installation(original.id)!;
   const change = host.change();
   change.remove(committed);

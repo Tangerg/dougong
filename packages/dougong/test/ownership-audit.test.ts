@@ -1,5 +1,14 @@
 import { expect, it, vi } from "vitest";
-import { createHost, definePlugin, event, extensionPoint, service } from "../src";
+import {
+  createResourceAuthority,
+  createHost,
+  definePlugin,
+  event,
+  extensionPoint,
+  service,
+} from "../src";
+
+const resourceAuthority = createResourceAuthority();
 
 it("publishes committed Host availability only with the matching contribution snapshot", async () => {
   const value = service<number>("audit/committed-value");
@@ -13,7 +22,10 @@ it("publishes committed Host availability only with the matching contribution sn
         return { value: current };
       },
     });
-  const host = createHost({ installations: [{ id: "provider", plugin: plugin(1) }] });
+  const host = createHost({
+    resourceAuthority,
+    installations: [{ id: "provider", plugin: plugin(1) }],
+  });
   const installation = host.installation("provider")!;
   const contributions = host.contributions(values);
   await host.start();
@@ -56,6 +68,7 @@ it.each(["startup", "change"] as const)(
       },
     });
     const host = createHost({
+      resourceAuthority,
       installations: [{ id: "owner", plugin: operation === "startup" ? broken : original }],
     });
     if (operation === "change") await host.start();
@@ -87,6 +100,7 @@ it.each(["startup", "change"] as const)(
 it("projects sealed descendants before resource withdrawal can notify observers", async () => {
   const notice = event<void>("audit/sealed-lifetime");
   const host = createHost({
+    resourceAuthority,
     installations: [
       {
         id: "owner",
@@ -120,6 +134,7 @@ it("projects sealed descendants before resource withdrawal can notify observers"
 
 it("projects Installation status from the same committed owner as Host diagnostics", async () => {
   const host = createHost({
+    resourceAuthority,
     installations: [
       { id: "owner", plugin: definePlugin({ name: "audit.projection", setup() {} }) },
     ],
@@ -156,6 +171,7 @@ it("keeps dependency and group membership committed while a Plan validates", asy
     setup() {},
   });
   const host = createHost({
+    resourceAuthority,
     groups: [{ id: "consumers" }, { id: "empty", parentId: "consumers" }],
     installations: [
       { id: "provider", plugin: provider },
@@ -201,6 +217,7 @@ it("keeps dependency and group membership committed while a Plan validates", asy
 it("reports committed removal observer failures without changing the transition outcome", async () => {
   const report = vi.fn<(error: unknown) => void>();
   const host = createHost({
+    resourceAuthority,
     onError: report,
     installations: [{ id: "owner", plugin: definePlugin({ name: "audit.terminal", setup() {} }) }],
   });
@@ -246,6 +263,7 @@ it("rejects executable Contract identities before validation can read a differen
 it("rejects the stale concurrent removal Plan without releasing one Installation twice", async () => {
   const cleanup = vi.fn<() => void>();
   const host = createHost({
+    resourceAuthority,
     installations: [
       {
         id: "owner",

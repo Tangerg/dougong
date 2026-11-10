@@ -1,5 +1,6 @@
 import { expect, it, vi } from "vitest";
 import {
+  createResourceAuthority,
   createHost,
   definePlugin,
   event,
@@ -11,6 +12,8 @@ import {
 } from "../src";
 import { ContributionRegistry } from "../src/contributions/contribution-registry";
 import { Lifetime } from "../src/lifetime/lifetime";
+
+const resourceAuthority = createResourceAuthority();
 
 it.each(["left", "right"])(
   "publishes the whole contribution batch before notifying %s",
@@ -26,7 +29,10 @@ it.each(["left", "right"])(
           if (value < 0) throw new Error("activation failed");
         },
       });
-    const host = createHost({ installations: [{ id: "owner", plugin: declaration(1) }] });
+    const host = createHost({
+      resourceAuthority,
+      installations: [{ id: "owner", plugin: declaration(1) }],
+    });
     const installation = host.installation("owner")!;
     const leftView = host.contributions(left);
     const rightView = host.contributions(right);
@@ -68,11 +74,11 @@ it.each(["left", "right"])(
 it("publishes a changed contribution key even when both values are undefined", async () => {
   const registry = new ContributionRegistry(() => undefined);
   const store = registry.store(extensionPoint<undefined>("boundary.items"));
-  const owner = new Lifetime({ label: "owner", report: () => undefined });
+  const owner = new Lifetime({ resourceAuthority, label: "owner", report: () => undefined });
   const old = store.stage("owner/old", undefined, owner, () => undefined);
   owner.publish();
   const changed = vi.fn<() => void>();
-  using _subscription = store.subscribe(changed, () => () => undefined);
+  using _subscription = store.subscribe(changed, owner);
   registry.beginBatch();
   old[Symbol.dispose]();
   store.stage("owner/new", undefined, owner, () => undefined);
@@ -90,6 +96,7 @@ it("keeps an entered event callback borrowed until it settles before closing its
   let child!: ChildLifetime;
   let emit!: () => Promise<void>;
   const host = createHost({
+    resourceAuthority,
     installations: [
       {
         id: "owner",
@@ -122,6 +129,7 @@ it("closes incoming subscriptions before diagnostics can reenter shutdown", asyn
   let item!: Contribution<number>;
   const listener = vi.fn<() => void>();
   const host = createHost({
+    resourceAuthority,
     installations: [
       {
         id: "source",
@@ -171,6 +179,7 @@ it("closes all descendant event entrances before cancellation and while tasks se
   let emit!: () => Promise<void>;
   const heard = vi.fn<() => void>();
   const host = createHost({
+    resourceAuthority,
     installations: [
       {
         id: "owner",
@@ -259,6 +268,7 @@ it("owns frozen Contract identities after normalizing structural declarations", 
   mutable.id = "mutated";
   optionalToken.service.id = "also-mutated";
   const host = createHost({
+    resourceAuthority,
     installations: [
       { id: "provider", plugin: provider },
       { id: "consumer", plugin: consumer },
@@ -274,7 +284,7 @@ it("owns frozen Contract identities after normalizing structural declarations", 
 });
 
 it("allows a cancelling parent task to await its child's disposal", async () => {
-  const owner = new Lifetime({ label: "owner", report: () => undefined });
+  const owner = new Lifetime({ resourceAuthority, label: "owner", report: () => undefined });
   const parent = owner.handle.child("parent");
   const child = parent.child("child");
   const entered = Promise.withResolvers<void>();
@@ -300,7 +310,7 @@ it("allows a cancelling parent task to await its child's disposal", async () => 
 });
 
 it("validates a contribution callback before looking up the contribution", async () => {
-  const host = createHost();
+  const host = createHost({ resourceAuthority });
   const view = host.contributions(extensionPoint<number>("boundary.callback"));
   await expect(view.use("missing", 1 as never)).rejects.toThrowError(
     new TypeError("Contribution callback must be a function"),

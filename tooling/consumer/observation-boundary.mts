@@ -1,5 +1,7 @@
-import { asyncDisposeSymbol, createHost, disposeSymbol } from "dougong";
+import { createResourceAuthority, asyncDisposeSymbol, createHost, disposeSymbol } from "dougong";
 import { batchSnapshotNotifications, SnapshotPublisher } from "dougong/advanced";
+
+const resourceAuthority = createResourceAuthority();
 
 export async function verifyObservationBoundary() {
   const observerFailure = new Error("Packed snapshot observer failed");
@@ -17,7 +19,7 @@ export async function verifyObservationBoundary() {
   publisher.view.subscribe(() => {
     throw observerFailure;
   });
-  const host = createHost({ onError: report });
+  const host = createHost({ resourceAuthority, onError: report });
   let observed = false;
   const subscription = host.diagnostics.subscribe(() => {
     if (!observed && host.status === "running") {

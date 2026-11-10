@@ -1,6 +1,8 @@
-import { createHost, definePlugin } from "dougong";
+import { createResourceAuthority, createHost, definePlugin } from "dougong";
 import { batch, computed, observe, signal } from "@dougongjs/reactive";
 import { exampleResult, nextTurn, type ExampleResult } from "./example.js";
+
+const resourceAuthority = createResourceAuthority();
 
 export async function reactiveLifetime(): Promise<ExampleResult> {
   const origin = signal("https://api.example");
@@ -19,6 +21,7 @@ export async function reactiveLifetime(): Promise<ExampleResult> {
   });
 
   const host = createHost({
+    resourceAuthority,
     name: "reactive-lifetime",
     installations: [{ id: "connection", plugin: connectionPlugin }],
   });

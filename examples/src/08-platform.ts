@@ -1,4 +1,5 @@
 import {
+  createResourceAuthority,
   asyncDisposeSymbol,
   createHost,
   definePlugin,
@@ -8,6 +9,8 @@ import {
 import { createPlatform, MemoryLoader, PermissionSet } from "@dougongjs/platform";
 import { actionActivation, type ActionDeclaration } from "./action-declaration.js";
 import { exampleResult, type ExampleResult } from "./example.js";
+
+const resourceAuthority = createResourceAuthority();
 
 type Command = ActionDeclaration & { readonly run: () => string };
 const remoteAction = Object.freeze({ id: "remote.run", title: "Run remote command" });
@@ -31,6 +34,7 @@ export async function lazyPlatform(): Promise<ExampleResult> {
     },
   });
   const host = createHost({
+    resourceAuthority,
     name: "lazy-platform",
     installations: [{ id: "shell", plugin: shell }],
   });

@@ -154,10 +154,7 @@ class ChangeSetDraft {
     return installation.facade as unknown as Installation<Arguments[0]>;
   }
 
-  update<Declaration extends AnyPlugin>(
-    installation: Installation<Declaration>,
-    update: NoInfer<InstallationUpdate<Declaration>>,
-  ) {
+  update(installation: object, update: unknown) {
     const { port } = this.#requireOpen();
     const input = normalizePlainRecord(update, "Installation update", {
       fields: installationUpdateFields,
@@ -171,7 +168,7 @@ class ChangeSetDraft {
     const replacement: NormalizedInstallationUpdate = hasPlugin
       ? {
           kind: "replace",
-          plugin: normalizePlugin(input.plugin as AnyPlugin),
+          plugin: normalizePlugin(input.plugin),
           origin: captureOrigin(input.origin),
           ...(hasConfiguration ? { configuration: captureConfiguration(input.configuration) } : {}),
         }

@@ -1,6 +1,15 @@
 import { expect, it, vi } from "vitest";
-import { createHost, definePlugin, optional, service, type Disposable } from "../src/index";
+import {
+  createResourceAuthority,
+  createHost,
+  definePlugin,
+  optional,
+  service,
+  type Disposable,
+} from "../src/index";
 import { Lifetime } from "../src/lifetime/lifetime";
+
+const resourceAuthority = createResourceAuthority();
 
 interface StorageResource extends Disposable {
   flush(): void;
@@ -42,6 +51,7 @@ it.each(["stop", "update", "remove"] as const)(
       },
     });
     const host = createHost({
+      resourceAuthority,
       onError: report,
       installations: [
         { id: "provider", plugin: provider },
@@ -109,7 +119,7 @@ it.each(["stop", "update", "remove"] as const)(
 
 it("seals new work while delivering an already admitted acquisition to its Task", async () => {
   const report = vi.fn<(error: unknown) => void>();
-  const owner = new Lifetime({ label: "owner", report });
+  const owner = new Lifetime({ resourceAuthority, label: "owner", report });
   const entered = Promise.withResolvers<void>();
   const opening = Promise.withResolvers<Disposable>();
   const release = vi.fn<() => void>();
@@ -147,7 +157,7 @@ it("seals new work while delivering an already admitted acquisition to its Task"
 
 it("preserves a factory's independent AbortError instead of treating its name as cancellation", async () => {
   const report = vi.fn<(error: unknown) => void>();
-  const owner = new Lifetime({ label: "owner", report });
+  const owner = new Lifetime({ resourceAuthority, label: "owner", report });
   const failure = new DOMException("independent factory failure", "AbortError");
   const task = owner.spawn(() => owner.acquire(() => Promise.reject(failure)));
   try {
@@ -162,7 +172,7 @@ it("preserves a factory's independent AbortError instead of treating its name as
 
 it("reclaims a genuinely cancelled acquisition once with its original cancellation reason", async () => {
   const report = vi.fn<(error: unknown) => void>();
-  const owner = new Lifetime({ label: "owner", report });
+  const owner = new Lifetime({ resourceAuthority, label: "owner", report });
   const entered = Promise.withResolvers<AbortSignal>();
   const opening = Promise.withResolvers<Disposable>();
   const release = vi.fn<() => void>();

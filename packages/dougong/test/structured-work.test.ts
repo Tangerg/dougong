@@ -1,13 +1,17 @@
+import { createResourceAuthority } from "dougong";
 import { describe, expect, it, vi } from "vitest";
 import { event, extensionPoint } from "../src/contracts/contracts";
 import { Lifetime } from "../src/lifetime/lifetime";
 import { EventHub } from "../src/events/event-hub";
 import { ContributionRegistry } from "../src/contributions/contribution-registry";
 
+const resourceAuthority = createResourceAuthority();
+
 function lifetime(
   options: { shutdownTimeoutMilliseconds?: number; report?: (error: unknown) => void } = {},
 ) {
   return new Lifetime({
+    resourceAuthority,
     label: "test",
     report: options.report ?? (() => undefined),
     ...(options.shutdownTimeoutMilliseconds === undefined
@@ -84,7 +88,12 @@ describe("structured work boundaries", () => {
 
   it("blocks a whole ownership tree without aborting or releasing borrowed resources", async () => {
     const changed = vi.fn<() => void>();
-    const owner = new Lifetime({ label: "blocked", report: () => undefined, changed });
+    const owner = new Lifetime({
+      resourceAuthority,
+      label: "blocked",
+      report: () => undefined,
+      changed,
+    });
     const child = owner.resolveOwner({ lifetime: owner.child("child") });
     const pending = Promise.withResolvers<void>();
     const release = vi.fn<() => void>();
@@ -511,7 +520,7 @@ it.each(["use", "acquire"] as const)(
       await expect(async () => {
         if (operation === "use") child.use(resource);
         else await child.acquire(() => resource);
-      }).rejects.toThrow("Lifetime handles cannot be adopted as resources");
+      }).rejects.toThrow("Owned control handles cannot be adopted as resources");
     }
     expect(root.snapshot().children[0]?.children[0]).toMatchObject({
       cleanups: 1,

@@ -7,7 +7,7 @@ pnpm add dougong
 ```
 
 ```ts
-import { asyncDisposeSymbol, createHost, definePlugin, service } from "dougong";
+import { asyncDisposeSymbol, createHost, createResourceAuthority, definePlugin, service } from "dougong";
 
 const GREETER = service<{ greet(name: string): string }>("application/greeter");
 const greeter = definePlugin({
@@ -18,7 +18,9 @@ const greeter = definePlugin({
   },
 });
 
+const resourceAuthority = createResourceAuthority();
 const host = createHost({
+  resourceAuthority,
   name: "application",
   installations: [{ id: "greeter", plugin: greeter }],
 });

@@ -1,10 +1,12 @@
 import { expect, it, vi } from "vitest";
-import { createHost, definePlugin, type AnyPlugin } from "dougong";
+import { createResourceAuthority, createHost, definePlugin, type AnyPlugin } from "dougong";
 import { createPlatform, defineManifest, type Platform, type Registration } from "../src";
 import { add, emptyPlugin, fixture, nextTurn, select } from "./fixtures";
 
+const resourceAuthority = createResourceAuthority();
+
 it("enumerates current command handles independently of historical snapshots", async () => {
-  const { platform } = fixture();
+  const { platform } = fixture(resourceAuthority);
   const artifact = add(platform, "sample", "module");
   const [first] = await platform.select([artifact]);
   const previous = platform.registrations();
@@ -19,7 +21,10 @@ it("enumerates current command handles independently of historical snapshots", a
 });
 
 it("preserves Platform snapshot identity and notifications across unrelated Core state", async () => {
-  const { host, platform } = fixture(new Map([["sample", emptyPlugin("sample")]]));
+  const { host, platform } = fixture(
+    resourceAuthority,
+    new Map([["sample", emptyPlugin("sample")]]),
+  );
   const registration = await select(platform, "sample", "sample");
   const before = platform.diagnostics.get();
   const changed = vi.fn<() => void>();
@@ -39,7 +44,7 @@ it("preserves Platform snapshot identity and notifications across unrelated Core
 });
 
 it("does not mark an installed selected root as failed because another root failed", async () => {
-  const { platform } = fixture(new Map([["good", emptyPlugin("good")]]));
+  const { platform } = fixture(resourceAuthority, new Map([["good", emptyPlugin("good")]]));
   const good = await select(platform, "good", "good");
   const bad = await select(platform, "bad", "missing");
   await platform.activate([good]);
@@ -53,7 +58,10 @@ it("does not mark an installed selected root as failed because another root fail
 });
 
 it("does not accept a different artifact name as the selected revision's active origin", async () => {
-  const { host, platform } = fixture(new Map([["sample", emptyPlugin("sample")]]));
+  const { host, platform } = fixture(
+    resourceAuthority,
+    new Map([["sample", emptyPlugin("sample")]]),
+  );
   const sample = await select(platform, "sample", "sample");
   await platform.activate([sample]);
   const change = host.change();
@@ -126,7 +134,7 @@ it.each(["validation", "admission", "setup", "release"] as const)(
         if (phase === "release") lifetime.defer(probe);
       },
     });
-    const host = createHost();
+    const host = createHost({ resourceAuthority });
     platform = createPlatform({
       id: "reentry",
       host,
@@ -150,7 +158,7 @@ it.each(["validation", "admission", "setup", "release"] as const)(
 it("does not pin withdrawn artifact references or loaded plugins for a live Platform", async () => {
   const platform = createPlatform({
     id: "cache-lifetime",
-    host: createHost(),
+    host: createHost({ resourceAuthority }),
     apiVersion: "1.0.0",
     loader: { load: (reference: { plugin: AnyPlugin }) => ({ default: reference.plugin }) },
   });
@@ -174,7 +182,7 @@ it("detaches an aborted caller while a different caller still waits on a shared 
   const resume = Promise.withResolvers<void>();
   const platform = createPlatform({
     id: "waiter-lifetime",
-    host: createHost(),
+    host: createHost({ resourceAuthority }),
     apiVersion: "1.0.0",
     loader: {
       async load() {
@@ -222,6 +230,7 @@ async function expectCollected(references: ReadonlyArray<WeakRef<object>>) {
 
 it("validates cycles in retained committed origins as well as the selected closure", async () => {
   const { host, platform } = fixture(
+    resourceAuthority,
     new Map([
       ["existing", emptyPlugin("existing")],
       ["new", emptyPlugin("new")],
@@ -260,7 +269,7 @@ it("records one immutable diagnostic for selections rejected by the same atomic 
   });
   const platform = createPlatform({
     id: "batch",
-    host: createHost(),
+    host: createHost({ resourceAuthority }),
     apiVersion: "1.0.0",
     loader: { load: emptyPlugin },
     authorizer: {

@@ -9,7 +9,6 @@ import type { Lifetime } from "../lifetime/lifetime.js";
 import type { ResolvedValue } from "../internal/async-result.js";
 import {
   disposeSymbol,
-  markOwnedControlHandle,
   type Disposable,
   type Publication,
   type Awaitable,
@@ -19,7 +18,6 @@ import {
   ContributionSubscription,
   ContributionViewHandle,
   ContributionViewLease,
-  type ContributionLease,
   type ContributionSource,
   type ContributionView,
   type ContributionViewState,
@@ -73,7 +71,8 @@ class ContributionRecord<T> implements Publication {
   ) {
     this.#id = id;
     this.#state = { phase: "active", store, value: initialValue, owner, detachFromOwner };
-    this.handle = markOwnedControlHandle(new ContributionHandle(this));
+    this.handle = new ContributionHandle(this);
+    owner.resourceAuthority.markControlHandle(this.handle);
   }
 
   publish() {
@@ -156,10 +155,10 @@ export class ContributionStore<T> implements ContributionSource<T> {
     }
   }
 
-  view(lease: ContributionLease, owner: Lifetime): ContributionView<T> {
+  view(owner: Lifetime): ContributionView<T> {
     this.#views++;
     const state: ContributionViewState<T> = {
-      binding: { phase: "active", source: this, lease, owner },
+      binding: { phase: "active", source: this, owner },
     };
     let releaseView: (() => void) | undefined;
     const viewLease = new ContributionViewLease(state, () => {
@@ -173,7 +172,7 @@ export class ContributionStore<T> implements ContributionSource<T> {
       }
     });
     try {
-      releaseView = lease(viewLease);
+      releaseView = owner.own(viewLease);
     } catch (error) {
       state.binding = undefined;
       this.#views--;
@@ -214,9 +213,9 @@ export class ContributionStore<T> implements ContributionSource<T> {
     return this.#publisher.view.get();
   }
 
-  subscribe(listener: () => void, lease?: ContributionLease) {
+  subscribe(listener: () => void, owner?: Lifetime) {
     const publisherSubscription = this.#publisher.view.subscribe(listener);
-    if (!lease) return publisherSubscription;
+    if (!owner) return publisherSubscription;
     this.#subscriptions++;
     let releaseFromOwner: (() => void) | undefined;
     const subscription = new ContributionSubscription(publisherSubscription, () => {
@@ -230,8 +229,8 @@ export class ContributionStore<T> implements ContributionSource<T> {
       }
     });
     try {
-      releaseFromOwner = lease(subscription);
-      markOwnedControlHandle(subscription);
+      releaseFromOwner = owner.own(subscription);
+      owner.resourceAuthority.markControlHandle(subscription);
     } catch (error) {
       subscription[disposeSymbol]();
       throw error;

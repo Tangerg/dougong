@@ -4,7 +4,7 @@ import type { Host, HostOptions } from "./host-api.js";
 import type { AnyPlugin } from "../composition/plugin.js";
 
 export function createHost<const Declarations extends ReadonlyArray<AnyPlugin>>(
-  options?: HostOptions<Declarations>,
+  options: HostOptions<Declarations>,
 ): Host {
   const engine = new Engine(options);
   return Object.freeze({
@@ -23,7 +23,7 @@ export function createHost<const Declarations extends ReadonlyArray<AnyPlugin>>(
     change: () => engine.change(),
     plan: engine.plan.bind(engine),
     apply: engine.apply.bind(engine),
-    start: () => engine.start(),
+    start: engine.start.bind(engine),
     stop: () => engine.stop(),
     use: engine.use.bind(engine),
     contributions: engine.contributions.bind(engine),

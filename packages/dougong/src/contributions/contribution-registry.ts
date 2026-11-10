@@ -58,7 +58,7 @@ export class ContributionRegistry {
       });
     }
     const store = this.store<T>(token);
-    return owner ? store.view((resource) => owner.own(resource), owner) : store.hostView();
+    return owner ? store.view(owner) : store.hostView();
   }
 
   sealHostViews() {

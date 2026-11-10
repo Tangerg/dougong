@@ -2,15 +2,21 @@ import { setImmediate } from "node:timers/promises";
 import { describe, expect, it, vi } from "vitest";
 import { event, extensionPoint } from "../src/contracts/contracts";
 import { isCancellationReason } from "../src/contracts/errors";
-import type { AsyncDisposable, Disposable } from "../src/contracts/resource";
+import {
+  createResourceAuthority,
+  type AsyncDisposable,
+  type Disposable,
+} from "../src/contracts/resource";
 import { Lifetime, type Task } from "../src/lifetime/lifetime";
 import { EventHub } from "../src/events/event-hub";
 import { ContributionRegistry } from "../src/contributions/contribution-registry";
 import { createHost } from "../src/execution/host";
 import { definePlugin } from "../src/composition/plugin";
 
+const resourceAuthority = createResourceAuthority();
+
 const lifetime = (report: (error: unknown) => void = () => undefined) =>
-  new Lifetime({ label: "test", report });
+  new Lifetime({ resourceAuthority, label: "test", report });
 
 describe("structured lifetime", () => {
   it("classifies only canonical cancellation reasons after the signal aborts", () => {
@@ -62,7 +68,12 @@ describe("structured lifetime", () => {
 
   it("uses actual cancellation to close every scoped operation and reclaim late acquisitions", async () => {
     const controller = new AbortController();
-    const owner = new Lifetime({ label: "owner", startupSignal: controller.signal, report() {} });
+    const owner = new Lifetime({
+      resourceAuthority,
+      label: "owner",
+      startupSignal: controller.signal,
+      report() {},
+    });
     const ready = Promise.withResolvers<void>();
     const finish = Promise.withResolvers<void>();
     const release = vi.fn<() => void>();
@@ -304,6 +315,7 @@ describe("structured lifetime", () => {
     const notified = vi.fn<() => void>();
     let emit!: (value: string) => Promise<void>;
     const host = createHost({
+      resourceAuthority,
       installations: [
         {
           id: "emitter",
@@ -467,7 +479,7 @@ describe("structured lifetime", () => {
 
   it("settles apply only after contribution publication and coalesces a complete batch", async () => {
     const items = extensionPoint<string>("batch");
-    const host = createHost();
+    const host = createHost({ resourceAuthority });
     await host.start();
     const view = host.contributions(items);
     const sizes: number[] = [];

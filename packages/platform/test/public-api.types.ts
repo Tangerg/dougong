@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { expectTypeOf } from "vitest";
 import {
+  createResourceAuthority,
   createHost,
   definePlugin,
   type InitialInstallation,
@@ -23,6 +24,8 @@ import {
   type Registration,
   type RegistrationSnapshot,
 } from "@dougongjs/platform";
+
+const resourceAuthority = createResourceAuthority();
 
 const invalidPolicy: Authorizer = {
   // @ts-expect-error Denials must throw or reject so a false result cannot open admission.
@@ -49,7 +52,7 @@ void [loadingBlocker, validationBlocker, permissionBlocker, busyBlocker];
 const plugin = definePlugin({ name: "types", setup() {} });
 const platform = createPlatform({
   id: "types",
-  host: createHost(),
+  host: createHost({ resourceAuthority }),
   apiVersion: "1.0.0",
   loader: new MemoryLoader(new Map([["module", { default: plugin }]])),
   logger: {
@@ -115,7 +118,7 @@ importLoader.load(importReference.href, new AbortController().signal);
 importLoader.load(importReference, new AbortController().signal);
 const importPlatform = createPlatform({
   id: "import-types",
-  host: createHost(),
+  host: createHost({ resourceAuthority }),
   apiVersion: "1.0.0",
   loader: importLoader,
 });
@@ -155,7 +158,7 @@ platform.dispose();
 async function usePlatform() {
   await using owned = createPlatform({
     id: "scope",
-    host: createHost(),
+    host: createHost({ resourceAuthority }),
     apiVersion: "1.0.0",
     loader: new MemoryLoader(new Map<string, unknown>()),
   });
@@ -204,6 +207,7 @@ expectTypeOf<InitialInstallation<typeof transformed>["configuration"]>().toEqual
   z.input<typeof transformSchema>
 >();
 createHost({
+  resourceAuthority,
   installations: [
     { id: "defaulted", plugin: defaulted },
     { id: "explicit-default", plugin: defaulted, configuration: undefined },
@@ -213,14 +217,23 @@ createHost({
     { id: "transformed", plugin: transformed, configuration: "42" },
   ],
 });
-// @ts-expect-error A default permits omission without accepting a different input type.
-createHost({ installations: [{ id: "wrong-default", plugin: defaulted, configuration: "42" }] });
-// @ts-expect-error Transform output cannot substitute for the declared input.
-createHost({ installations: [{ id: "wrong-transform", plugin: transformed, configuration: 42 }] });
-// @ts-expect-error Transform input is still required without a default or optional input.
-createHost({ installations: [{ id: "missing-transform", plugin: transformed }] });
+createHost({
+  resourceAuthority,
+  // @ts-expect-error A default permits omission without accepting a different input type.
+  installations: [{ id: "wrong-default", plugin: defaulted, configuration: "42" }],
+});
+createHost({
+  resourceAuthority,
+  // @ts-expect-error Transform output cannot substitute for the declared input.
+  installations: [{ id: "wrong-transform", plugin: transformed, configuration: 42 }],
+});
+createHost({
+  resourceAuthority,
+  // @ts-expect-error Transform input is still required without a default or optional input.
+  installations: [{ id: "missing-transform", plugin: transformed }],
+});
 
-const change = createHost().change();
+const change = createHost({ resourceAuthority }).change();
 change.install(defaulted, { id: "defaulted" });
 change.install(optional, { id: "optional" });
 change.install(transformed, { id: "transformed", configuration: "42" });

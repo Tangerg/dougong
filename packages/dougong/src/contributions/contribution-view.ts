@@ -11,11 +11,9 @@ export interface ContributionView<T> extends SnapshotView<ReadonlyArray<string>>
   ): Promise<ResolvedValue<Awaited<Result>>>;
 }
 
-export type ContributionLease = (resource: Disposable) => () => void;
-
 export interface ContributionSource<T> {
   snapshot(): ReadonlyArray<string>;
-  subscribe(listener: () => void, lease?: ContributionLease): Disposable;
+  subscribe(listener: () => void, owner?: Lifetime): Disposable;
   use<Result>(
     id: string,
     callback: (value: T) => Awaitable<Result>,
@@ -25,7 +23,6 @@ export interface ContributionSource<T> {
 interface ActiveViewBinding<T> {
   readonly phase: "active";
   readonly source: ContributionSource<T>;
-  readonly lease?: ContributionLease;
   readonly owner?: Lifetime;
 }
 
@@ -78,7 +75,7 @@ export class ContributionViewHandle<T> implements ContributionView<T> {
     return binding.source.subscribe(() => {
       if (binding.owner && !binding.owner.acceptsWork) return;
       return listener();
-    }, binding.lease);
+    }, binding.owner);
   }
 
   #requireBinding() {

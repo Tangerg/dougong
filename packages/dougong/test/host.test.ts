@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  createResourceAuthority,
   createHost,
   definePlugin,
   service,
@@ -12,6 +13,8 @@ import {
   type PluginContext,
   type Logger,
 } from "../src/index";
+
+const resourceAuthority = createResourceAuthority();
 
 const value = service<number>("host/value");
 const output = service<number>("host/output");
@@ -60,6 +63,7 @@ describe("Host execution", () => {
       },
     });
     const host = createHost({
+      resourceAuthority,
       installations: [
         { id: "b", plugin: outputProvider },
         { id: "a", plugin: valueProvider },
@@ -97,6 +101,7 @@ describe("Host execution", () => {
         },
       });
     const host = createHost({
+      resourceAuthority,
       installations: [
         { id: "a", plugin: make("a") },
         { id: "b", plugin: make("b") },
@@ -113,6 +118,7 @@ describe("Host execution", () => {
     const entered = Promise.withResolvers<void>();
     const completed = vi.fn<() => void>();
     const host = createHost({
+      resourceAuthority,
       installations: [
         {
           id: "waiter",
@@ -155,6 +161,7 @@ describe("Host execution", () => {
       },
     });
     const host = createHost({
+      resourceAuthority,
       installations: [
         { id: "provider", plugin: provider(3) },
         { id: "consumer", plugin: consumer },
@@ -183,6 +190,7 @@ describe("Host execution", () => {
       },
     });
     const host = createHost({
+      resourceAuthority,
       installations: [
         { id: "provider", plugin: provider(1, () => count.provider++) },
         { id: "consumer", plugin: consumer },
@@ -221,7 +229,10 @@ describe("Host execution", () => {
         return { output: dependencies.value ?? 0 };
       },
     });
-    const host = createHost({ installations: [{ id: "consumer", plugin: consumer }] });
+    const host = createHost({
+      resourceAuthority,
+      installations: [{ id: "consumer", plugin: consumer }],
+    });
     await host.start();
     expect((await read(host, output)).value).toBe(0);
     const add = host.change();
@@ -240,11 +251,12 @@ describe("Host execution", () => {
   it("rejects conflicts, missing providers, cycles and cross-kind identities before setup", async () => {
     const setup = vi.fn<() => void>();
     const missing = definePlugin({ name: "missing", requires: { value }, setup });
-    expect(() => createHost({ installations: [{ id: "missing", plugin: missing }] })).toThrowError(
-      expect.objectContaining({ code: "SERVICE_MISSING" }),
-    );
+    expect(() =>
+      createHost({ resourceAuthority, installations: [{ id: "missing", plugin: missing }] }),
+    ).toThrowError(expect.objectContaining({ code: "SERVICE_MISSING" }));
     expect(() =>
       createHost({
+        resourceAuthority,
         installations: [
           { id: "a", plugin: provider(1) },
           { id: "b", plugin: provider(2) },
@@ -265,13 +277,14 @@ describe("Host execution", () => {
     });
     expect(() =>
       createHost({
+        resourceAuthority,
         installations: [
           { id: "a", plugin: valueProvider },
           { id: "b", plugin: outputProvider },
         ],
       }),
     ).toThrowError(expect.objectContaining({ code: "SERVICE_CYCLE" }));
-    const host = createHost();
+    const host = createHost({ resourceAuthority });
     host.contributions(extensionPoint(value.id));
     const change = host.change();
     change.install(provider(1), { id: "a" });
@@ -292,7 +305,10 @@ describe("Host execution", () => {
         return { sender: { send: () => events.emit(ping, undefined) } };
       },
     });
-    const host = createHost({ installations: [{ id: "emitter", plugin: emitter }] });
+    const host = createHost({
+      resourceAuthority,
+      installations: [{ id: "emitter", plugin: emitter }],
+    });
     await host.start();
     const change = host.change();
     change.install(
@@ -332,6 +348,7 @@ describe("Host execution", () => {
   it("rejects preparation-time event emission", async () => {
     const ping = event<void>("host/preparing");
     const host = createHost({
+      resourceAuthority,
       installations: [
         {
           id: "a",
@@ -344,7 +361,10 @@ describe("Host execution", () => {
   });
 
   it("returns Busy without changing or consuming an approved plan", async () => {
-    const host = createHost({ installations: [{ id: "a", plugin: provider(1) }] });
+    const host = createHost({
+      resourceAuthority,
+      installations: [{ id: "a", plugin: provider(1) }],
+    });
     await host.start();
     const entered = Promise.withResolvers<void>(),
       exit = Promise.withResolvers<void>();
@@ -371,7 +391,10 @@ describe("Host execution", () => {
   });
 
   it("does not deadlock a callback that requests its own shutdown", async () => {
-    const host = createHost({ installations: [{ id: "a", plugin: provider(1) }] });
+    const host = createHost({
+      resourceAuthority,
+      installations: [{ id: "a", plugin: provider(1) }],
+    });
     await host.start();
     await host.use(value, async () => {
       await expect(host.stop()).rejects.toMatchObject({ code: "HOST_BUSY" });
@@ -393,7 +416,7 @@ describe("Host execution", () => {
         return { value: owned };
       },
     });
-    const host = createHost({ installations: [{ id: "a", plugin }] });
+    const host = createHost({ resourceAuthority, installations: [{ id: "a", plugin }] });
     await host.start();
     await expect(replace(host, "a", provider(2))).rejects.toMatchObject({
       code: "HOST_QUARANTINED",
@@ -409,6 +432,7 @@ describe("Host execution", () => {
 
   it("restores old declarations and source on activation failure", async () => {
     const host = createHost({
+      resourceAuthority,
       installations: [{ id: "a", plugin: provider(1), origin: { version: "1" } }],
     });
     await host.start();
@@ -441,7 +465,7 @@ describe("Host execution", () => {
         if (++starts > 1) throw new Error("restore failed");
       },
     });
-    const host = createHost({ installations: [{ id: "a", plugin: old }] });
+    const host = createHost({ resourceAuthority, installations: [{ id: "a", plugin: old }] });
     await host.start();
     await expect(
       replace(
@@ -460,6 +484,7 @@ describe("Host execution", () => {
 
   it("quarantines startup cleanup failures", async () => {
     const host = createHost({
+      resourceAuthority,
       installations: [
         {
           id: "a",
@@ -489,7 +514,10 @@ describe("Host execution", () => {
         starts();
       },
     });
-    const host = createHost({ installations: [{ id: "consumer", plugin: consumer }] });
+    const host = createHost({
+      resourceAuthority,
+      installations: [{ id: "consumer", plugin: consumer }],
+    });
     const view = host.contributions(items);
     await host.start();
     const change = host.change();
@@ -518,7 +546,11 @@ describe("Host execution", () => {
 
   it("keeps observer failures outside the committed outcome", async () => {
     const report = vi.fn<(error: unknown) => void>();
-    const host = createHost({ onError: report, installations: [{ id: "a", plugin: provider(1) }] });
+    const host = createHost({
+      resourceAuthority,
+      onError: report,
+      installations: [{ id: "a", plugin: provider(1) }],
+    });
     const subscription = host.diagnostics.subscribe(() => {
       throw new Error("observer");
     });
@@ -532,6 +564,7 @@ describe("Host execution", () => {
   it("observes failing asynchronous error reporters through the terminal logger", async () => {
     const logger: Logger = { debug() {}, info() {}, warn() {}, error: vi.fn<Logger["error"]>() };
     const host = createHost({
+      resourceAuthority,
       logger,
       onError: async () => {
         throw new Error("report");
@@ -554,6 +587,7 @@ describe("Host execution", () => {
     };
     let retainedContext!: PluginContext<{}>;
     const host = createHost({
+      resourceAuthority,
       name: "demo",
       logger,
       installations: [
@@ -592,16 +626,23 @@ describe("Host execution", () => {
     { logger: {} },
     { onError: 1 },
     { shutdownTimeoutMilliseconds: 0 },
+    { restorationTimeoutMilliseconds: 0 },
+    { restorationTimeoutMilliseconds: null },
+    { restorationTimeoutMilliseconds: Number.NaN },
+    { restorationTimeoutMilliseconds: Number.POSITIVE_INFINITY },
+    { restorationTimeoutMilliseconds: 2 ** 31 },
+    { restorationTimeoutMilliseconds: "1000" },
     { groups: {} },
     { installations: {} },
   ])("validates Host input %j", (options) => {
-    expect(() => createHost(options as never)).toThrow(TypeError);
+    expect(() => createHost({ resourceAuthority, ...options } as never)).toThrow(TypeError);
   });
 
   it.each([undefined, {}, null, { extra: 1 }, { value: 1, extra: 1 }])(
     "rejects malformed setup output %j",
     async (result) => {
       const host = createHost({
+        resourceAuthority,
         installations: [
           {
             id: "a",
@@ -618,6 +659,7 @@ describe("Host execution", () => {
 
   it("rejects a value from a declaration without provisions", async () => {
     const host = createHost({
+      resourceAuthority,
       installations: [{ id: "a", plugin: definePlugin({ name: "a", setup: () => ({}) as never }) }],
     });
     await expect(host.start()).rejects.toMatchObject({
@@ -639,6 +681,7 @@ describe("Host execution", () => {
         },
       );
       const host = createHost({
+        resourceAuthority,
         installations: [
           {
             id: "provider",
@@ -678,7 +721,7 @@ it("reports the concrete Service cycle even in a dependency graph deeper than th
   }));
   let reason: unknown;
   try {
-    createHost({ installations });
+    createHost({ resourceAuthority, installations });
   } catch (error) {
     reason = error;
   }

@@ -1,6 +1,15 @@
 import { expect, it, vi } from "vitest";
 import type { StandardSchemaV1 } from "@standard-schema/spec";
-import { createHost, definePlugin, optional, service, type Plan } from "../src/index";
+import {
+  createResourceAuthority,
+  createHost,
+  definePlugin,
+  optional,
+  service,
+  type Plan,
+} from "../src/index";
+
+const resourceAuthority = createResourceAuthority();
 
 const value = service<number>("plan/value");
 const provider = (number: number) =>
@@ -14,6 +23,7 @@ const provider = (number: number) =>
 
 it("reports the exact declarations and provider identities for each change kind", async () => {
   const host = createHost({
+    resourceAuthority,
     installations: [
       {
         id: "consumer",
@@ -105,6 +115,7 @@ it("explains declaration origins, both binding states and publication order with
     setup() {},
   });
   const host = createHost({
+    resourceAuthority,
     installations: [
       {
         id: "provider",
@@ -160,7 +171,7 @@ it("explains declaration origins, both binding states and publication order with
 });
 
 it("reports declaration-only changes without claiming runtime stop or publish work", async () => {
-  const host = createHost();
+  const host = createHost({ resourceAuthority });
   const change = host.change();
   const group = change.group("root");
   change.install(provider(1), { id: "provider", group });
@@ -195,8 +206,8 @@ it("captures normalized configuration once and consumes only the issuing Host pl
       return { value: configuration.n };
     },
   });
-  const host = createHost(),
-    other = createHost();
+  const host = createHost({ resourceAuthority }),
+    other = createHost({ resourceAuthority });
   const change = host.change();
   change.install(plugin, { id: "configured", configuration: "3" });
   const plan = await host.plan(change);
@@ -219,6 +230,7 @@ it("captures normalized configuration once and consumes only the issuing Host pl
 it("rejects stale plans before touching resources", async () => {
   const dispose = vi.fn<() => void>();
   const host = createHost({
+    resourceAuthority,
     installations: [
       {
         id: "a",
@@ -254,7 +266,7 @@ it("rejects stale plans before touching resources", async () => {
 
 it("does not execute setup while planning and retains empty change identity", async () => {
   const setup = vi.fn<() => void>();
-  const host = createHost();
+  const host = createHost({ resourceAuthority });
   const change = host.change();
   change.install(definePlugin({ name: "a", setup }), { id: "a" });
   const plan = await host.plan(change);
@@ -280,7 +292,7 @@ it("restores using captured configuration without rerunning its validator", asyn
       started.push("old");
     },
   });
-  const host = createHost({ installations: [{ id: "a", plugin: old }] });
+  const host = createHost({ resourceAuthority, installations: [{ id: "a", plugin: old }] });
   await host.start();
   const change = host.change();
   change.update(host.installation("a")!, {
@@ -300,8 +312,8 @@ it("restores using captured configuration without rerunning its validator", asyn
 });
 
 it("makes a ChangeSet one-shot and rejects foreign authorities", async () => {
-  const host = createHost(),
-    other = createHost();
+  const host = createHost({ resourceAuthority }),
+    other = createHost({ resourceAuthority });
   const change = host.change(),
     foreign = other.change();
   const installation = change.install(provider(1), { id: "a" });
@@ -318,6 +330,7 @@ it("makes a ChangeSet one-shot and rejects foreign authorities", async () => {
 it("reports validation failure without changing the running generation", async () => {
   const stop = vi.fn<() => void>();
   const host = createHost({
+    resourceAuthority,
     installations: [
       {
         id: "a",
@@ -343,7 +356,7 @@ it("reports validation failure without changing the running generation", async (
 });
 
 it("orders independent Installations by committed declarations even when drafts are staged out of order", async () => {
-  const host = createHost();
+  const host = createHost({ resourceAuthority });
   const starts: string[] = [];
   const plugin = definePlugin({
     name: "ordered",

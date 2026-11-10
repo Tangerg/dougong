@@ -1,11 +1,21 @@
 import { expect, it, vi } from "vitest";
-import { createHost, definePlugin, event, extensionPoint, service } from "../src/index";
+import {
+  createResourceAuthority,
+  createHost,
+  definePlugin,
+  event,
+  extensionPoint,
+  service,
+} from "../src/index";
 import type { Contribution } from "../src/index";
+
+const resourceAuthority = createResourceAuthority();
 
 it("publishes dynamic contribution membership and Lifetime ownership before notifying either view", async () => {
   const point = extensionPoint<number>("items");
   let add!: () => Contribution<number>;
   const host = createHost({
+    resourceAuthority,
     installations: [
       {
         id: "owner",
@@ -47,6 +57,7 @@ it("broadcasts to available owners while a sealed listener waits for its depende
   const available = vi.fn<() => void>();
   let emit!: () => Promise<void>;
   const host = createHost({
+    resourceAuthority,
     installations: [
       {
         id: "listener",
@@ -106,6 +117,7 @@ it("rejects invalid ownership declarations before either publication can escape 
   const point = extensionPoint<number>("items");
   const readOwner = vi.fn<() => unknown>();
   const host = createHost({
+    resourceAuthority,
     installations: [
       {
         id: "owner",

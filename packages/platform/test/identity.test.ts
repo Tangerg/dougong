@@ -1,11 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { createHost } from "dougong";
+import { createResourceAuthority, createHost } from "dougong";
 import { createPlatform, MemoryLoader } from "../src";
 import { fixture, select, VALUE, valuePlugin } from "./fixtures";
 
+const resourceAuthority = createResourceAuthority();
+
 describe("Registration installation authority", () => {
   it("never adopts another Platform's installation through a matching id and revision", async () => {
-    const host = createHost();
+    const host = createHost({ resourceAuthority });
     const first = createPlatform({
       id: "shared-name",
       host,
@@ -38,7 +40,7 @@ describe("Registration installation authority", () => {
   });
 
   it("lets Core arbitrate concurrent attempts at the same installation identity", async () => {
-    const host = createHost();
+    const host = createHost({ resourceAuthority });
     const platforms = [1, 2].map((value) =>
       createPlatform({
         id: "race",
@@ -67,7 +69,10 @@ describe("Registration installation authority", () => {
   });
 
   it("does not reuse, update or remove a new Core identity that inherited the same id and origin data", async () => {
-    const { host, platform } = fixture(new Map([["module", valuePlugin("sample", 1)]]));
+    const { host, platform } = fixture(
+      resourceAuthority,
+      new Map([["module", valuePlugin("sample", 1)]]),
+    );
     const registration = await select(platform, "sample", "module");
     await host.start();
     await platform.activate([registration]);

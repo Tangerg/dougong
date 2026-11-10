@@ -5,7 +5,8 @@ import type { ActivationPlan } from "./plan.js";
 
 export class ActivationOperation<Reference> {
   readonly signal: AbortSignal;
-  #controller: AbortController | undefined;
+  readonly #controller: AbortController;
+  #phase: "preparing" | "executing" | "settled" = "preparing";
   #detachCaller: (() => void) | undefined;
   readonly #completion = Promise.withResolvers<void>();
   readonly plan: ActivationPlan<Reference>;
@@ -28,7 +29,7 @@ export class ActivationOperation<Reference> {
   }
 
   get handedOff() {
-    return this.#controller === undefined;
+    return this.#phase === "executing";
   }
   get settled() {
     return this.#completion.promise;
@@ -40,9 +41,7 @@ export class ActivationOperation<Reference> {
 
   handoff() {
     this.checkpoint();
-    this.#controller = undefined;
-    this.#detachCaller?.();
-    this.#detachCaller = undefined;
+    this.#phase = "executing";
   }
 
   statusFor(registration: RegistrationRecord<Reference>, revision: number) {
@@ -51,8 +50,8 @@ export class ActivationOperation<Reference> {
   }
 
   supersede(registration: RegistrationRecord<Reference>) {
-    if (this.#roles.has(registration)) {
-      this.#controller?.abort(
+    if (this.#phase === "preparing" && this.#roles.has(registration)) {
+      this.#controller.abort(
         new PlatformError(
           selectionSupersededCode,
           `Selection for '${registration.name}' changed during activation`,
@@ -62,11 +61,13 @@ export class ActivationOperation<Reference> {
   }
 
   cancel() {
-    this.#controller?.abort();
+    if (this.#phase !== "settled") this.#controller.abort();
   }
 
   finish() {
+    this.#phase = "settled";
     this.#detachCaller?.();
+    this.#detachCaller = undefined;
     this.#completion.resolve();
   }
 }

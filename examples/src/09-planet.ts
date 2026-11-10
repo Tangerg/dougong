@@ -1,4 +1,5 @@
 import {
+  createResourceAuthority,
   asyncDisposeSymbol,
   createHost,
   definePlugin,
@@ -9,6 +10,8 @@ import {
 import { createPlatform, MemoryLoader, PermissionSet } from "@dougongjs/platform";
 import { computed, signal, type ReadonlySignal } from "@dougongjs/reactive";
 import { exampleResult, type ExampleResult } from "./example.js";
+
+const resourceAuthority = createResourceAuthority();
 
 interface Track {
   readonly query: string;
@@ -151,6 +154,7 @@ export async function planetScenario(): Promise<ExampleResult> {
   });
 
   const host = createHost({
+    resourceAuthority,
     name: "planet-example",
     installations: [
       { id: "audio", plugin: audioAdapter },

@@ -1,7 +1,9 @@
 import { expect, it } from "vitest";
-import { createHost, definePlugin } from "dougong";
+import { createResourceAuthority, createHost, definePlugin } from "dougong";
 import { createPlatform, type RegistrationSnapshot } from "../src";
 import { add, deferred, emptyPlugin, fixture, select } from "./fixtures";
+
+const resourceAuthority = createResourceAuthority();
 
 it("pairs installed origins with stopped, changing and running execution", async () => {
   const preparing = deferred();
@@ -19,7 +21,7 @@ it("pairs installed origins with stopped, changing and running execution", async
       await prepared.promise;
     },
   });
-  const { host, platform } = fixture(new Map([["stable", plugin]]));
+  const { host, platform } = fixture(resourceAuthority, new Map([["stable", plugin]]));
   const registration = await select(platform, "sample", "stable");
   await platform.activate([registration]);
   const origin = registration.activeOrigin;
@@ -81,7 +83,7 @@ it("pairs installed origins with stopped, changing and running execution", async
 });
 
 it("retains a failed selection's diagnostic while removing its metadata", async () => {
-  const { platform } = fixture();
+  const { platform } = fixture(resourceAuthority);
   const registration = await select(platform, "sample", "missing");
   expect(platform.diagnostics.get().registrations.get("sample")).toMatchObject({
     status: "selected",
@@ -123,7 +125,7 @@ it("retains the previous failure during activation and clears it only after comm
   let attempts = 0;
   const platform = createPlatform({
     id: "retry",
-    host: createHost(),
+    host: createHost({ resourceAuthority }),
     apiVersion: "1.0.0",
     loader: {
       async load() {
@@ -170,7 +172,7 @@ it("preserves a selected revision's failure when its previous execution is quara
       });
     },
   });
-  const { host, platform } = fixture(new Map([["stable", plugin]]));
+  const { host, platform } = fixture(resourceAuthority, new Map([["stable", plugin]]));
   const registration = await select(platform, "sample", "stable");
   await host.start();
   await platform.activate([registration]);

@@ -1,5 +1,7 @@
-import { createHost, definePlugin, service } from "dougong";
+import { createResourceAuthority, createHost, definePlugin, service } from "dougong";
 import { exampleResult, type ExampleResult } from "./example.js";
+
+const resourceAuthority = createResourceAuthority();
 
 interface Clock {
   now(): string;
@@ -25,6 +27,7 @@ export async function serviceBasics(): Promise<ExampleResult> {
   });
 
   const host = createHost({
+    resourceAuthority,
     name: "service-basics",
     installations: [
       { id: "greeter", plugin: greeterPlugin },

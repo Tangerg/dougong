@@ -2,6 +2,7 @@ import { getEventListeners } from "node:events";
 import { setImmediate } from "node:timers/promises";
 import { describe, expect, it, vi } from "vitest";
 import {
+  createResourceAuthority,
   createHost,
   definePlugin,
   type HostOptions,
@@ -14,7 +15,9 @@ import { observe, signal } from "@dougongjs/reactive";
 import { SerialQueue } from "dougong/advanced";
 import { acquireForLifetime } from "../src/retired-acquisition";
 
-async function createFixture(options: HostOptions = {}) {
+const resourceAuthority = createResourceAuthority();
+
+async function createFixture(options: Omit<HostOptions, "resourceAuthority"> = {}) {
   const report = vi.fn<(error: unknown) => void>();
   let owner!: LifetimeContext;
   const plugin = definePlugin({
@@ -24,6 +27,7 @@ async function createFixture(options: HostOptions = {}) {
     },
   });
   const host = createHost({
+    resourceAuthority,
     onError: report,
     ...options,
     installations: [{ id: "application", plugin }],

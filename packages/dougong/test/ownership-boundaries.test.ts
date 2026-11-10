@@ -1,5 +1,6 @@
 import { expect, it, vi } from "vitest";
 import {
+  createResourceAuthority,
   createHost,
   definePlugin,
   extensionPoint,
@@ -9,10 +10,13 @@ import {
   type Task,
 } from "../src";
 
+const resourceAuthority = createResourceAuthority();
+
 it.each(["historical failure", "prototype", "constructor"])(
   "keeps cleanup outcome authority out of an external error's %s",
   async (source) => {
     const failedHost = createHost({
+      resourceAuthority,
       installations: [
         {
           id: "failure",
@@ -35,7 +39,10 @@ it.each(["historical failure", "prototype", "constructor"])(
       provides: { value },
       setup: () => ({ value: 1 }),
     });
-    const host = createHost({ installations: [{ id: "owner", plugin: original }] });
+    const host = createHost({
+      resourceAuthority,
+      installations: [{ id: "owner", plugin: original }],
+    });
     const installation = host.installation("owner")!;
     await host.start();
     const failure =
@@ -73,7 +80,7 @@ it("withdraws setup resources after an inaccessible non-Error rejection", async 
   const reason = Proxy.revocable({}, {});
   reason.revoke();
   const released = vi.fn<() => void>();
-  const host = createHost();
+  const host = createHost({ resourceAuthority });
   await host.start();
   const change = host.change();
   const installation = change.install(
@@ -105,6 +112,7 @@ it("preserves an inaccessible Task rejection that occurs after cancellation", as
   const reports: unknown[] = [];
   let task!: Task;
   const host = createHost({
+    resourceAuthority,
     onError: (error) => {
       reports.push(error);
     },
@@ -143,7 +151,7 @@ it("discards a rejected Installation even when its original failure has an inacc
   const cause = Proxy.revocable({}, {});
   cause.revoke();
   const failure = new Error("original setup failure", { cause: cause.proxy });
-  const host = createHost();
+  const host = createHost({ resourceAuthority });
   await host.start();
   const change = host.change();
   const installation = change.install(
@@ -168,6 +176,7 @@ it("keeps committed membership and revision behind a parent removal transaction"
   const entered = Promise.withResolvers<void>();
   const resume = Promise.withResolvers<void>();
   const host = createHost({
+    resourceAuthority,
     groups: [{ id: "child" }],
     installations: [
       {
@@ -211,6 +220,7 @@ it("includes empty descendants in an explicitly planned subtree removal", async 
   const entered = Promise.withResolvers<void>();
   const resume = Promise.withResolvers<void>();
   const host = createHost({
+    resourceAuthority,
     groups: [{ id: "parent" }, { id: "empty", parentId: "parent" }],
     installations: [
       {
@@ -253,6 +263,7 @@ it.each([false, true])(
     const oldService = service<number>("owned/old");
     const nextService = service<number>("owned/next");
     const host = createHost({
+      resourceAuthority,
       installations: [
         {
           id: "provider",
@@ -315,6 +326,7 @@ it("captures ContributionStore identity independently of a mutable input token",
   const mutable = { ...original };
   let retainedContext!: PluginContext<{}>;
   const host = createHost({
+    resourceAuthority,
     installations: [
       {
         id: "owner",
@@ -343,6 +355,7 @@ it("preserves independent sibling failures even when one is an AbortError", asyn
   const failures = [new Error("independent A"), new DOMException("independent B", "AbortError")];
   const aborted: boolean[] = [];
   const host = createHost({
+    resourceAuthority,
     installations: failures.map((failure, index) => ({
       id: `failure-${index}`,
       plugin: definePlugin({
@@ -369,6 +382,7 @@ it.each([false, true])(
     const entered = Promise.withResolvers<void>();
     let task!: Task;
     const host = createHost({
+      resourceAuthority,
       onError: report,
       installations: [
         {
@@ -403,6 +417,7 @@ it("reports a Task's AbortError when only its public signal properties claim can
   const report = vi.fn<(error: unknown) => void>();
   let task!: Task;
   const host = createHost({
+    resourceAuthority,
     onError: report,
     installations: [
       {
@@ -432,6 +447,7 @@ it("keeps independently disposed Tasks from sharing cancellation provenance", as
   let first!: Task;
   let second!: Task;
   const host = createHost({
+    resourceAuthority,
     onError: report,
     installations: [
       {
@@ -474,6 +490,7 @@ it("keeps independently disposed Tasks from sharing cancellation provenance", as
 
 it("retains an immutable historical snapshot while a removed Installation detaches", async () => {
   const host = createHost({
+    resourceAuthority,
     installations: [{ id: "owner", plugin: definePlugin({ name: "owned.snapshot", setup() {} }) }],
   });
   await host.start();
@@ -496,7 +513,7 @@ it("retains an immutable historical snapshot while a removed Installation detach
 });
 
 it("does not let a removed Group handle address a new Group with the same id", async () => {
-  const host = createHost({ groups: [{ id: "group" }] });
+  const host = createHost({ resourceAuthority, groups: [{ id: "group" }] });
   const original = host.group("group")!;
   const removing = host.change();
   removing.removeGroup(original);

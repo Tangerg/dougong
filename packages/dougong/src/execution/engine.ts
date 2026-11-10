@@ -18,7 +18,7 @@ import {
   type Service,
 } from "../contracts/contracts.js";
 import type { Logger } from "../contracts/logging.js";
-import { disposeSymbol, type Awaitable } from "../contracts/resource.js";
+import { disposeSymbol, type Awaitable, type ResourceAuthority } from "../contracts/resource.js";
 import { EventHub } from "../events/event-hub.js";
 import { ContributionRegistry } from "../contributions/contribution-registry.js";
 import { SnapshotPublisher, batchSnapshotNotifications } from "../observation/snapshot-view.js";
@@ -46,17 +46,12 @@ import type {
 } from "../composition/declarations.js";
 import type { HostSnapshot, HostStatus } from "../inspection/diagnostics.js";
 import type { ApplyResult, HostOptions } from "./host-api.js";
-import type { CommittedState } from "./committed-state.js";
+import type { CommittedState, NextCommittedState } from "./committed-state.js";
 import { captureHostOptions } from "./host-options.js";
 import { installationExecution, projectHostSnapshot } from "./host-snapshot.js";
 import { Instance } from "./instance.js";
 import { Retirements, type ExecutionScope } from "./retirements.js";
-
-interface Transition {
-  readonly phase: "starting" | "changing" | "stopping";
-  readonly affected: ReadonlySet<InstallationRecord>;
-  readonly scopes: ExecutionScope[];
-}
+import { ExecutionTransition } from "./transition.js";
 
 type FailurePhase = "stop" | "prepare" | "restore" | "publish" | "release";
 
@@ -86,9 +81,11 @@ class PreparationFailures {
 
 export class Engine {
   readonly name: string;
+  readonly #resourceAuthority: ResourceAuthority;
   readonly #logger: Logger<unknown>;
   readonly #onError: (error: unknown) => unknown;
   readonly #shutdownTimeoutMilliseconds: number | undefined;
+  readonly #restorationTimeoutMilliseconds: number | undefined;
   readonly #contracts = new ContractRegistry();
   readonly #events = new EventHub();
   readonly #contributions: ContributionRegistry;
@@ -99,7 +96,7 @@ export class Engine {
   readonly #retirements: Retirements;
   readonly #publisher: SnapshotPublisher<HostSnapshot>;
   #state: CommittedState;
-  #transition: Transition | undefined;
+  #transition: ExecutionTransition | undefined;
   // Diagnostics of the last failed transition: a commit clears it, but never advances because of it.
   #failure: RecordedFailure | undefined;
   // Instances that quarantine could not release; late completion only removes entries.
@@ -108,12 +105,14 @@ export class Engine {
   #observationPhase: "active" | "closing" | "closed" = "active";
   #generation = 0;
 
-  constructor(options: HostOptions = {}) {
+  constructor(options: HostOptions) {
     const captured = captureHostOptions(options, this.#identities);
+    this.#resourceAuthority = captured.resourceAuthority;
     this.name = captured.name;
     this.#logger = captured.logger;
     this.#onError = captured.onError ?? ((error: unknown) => this.#logger.error(error));
     this.#shutdownTimeoutMilliseconds = captured.shutdownTimeoutMilliseconds;
+    this.#restorationTimeoutMilliseconds = captured.restorationTimeoutMilliseconds;
     this.#contributions = new ContributionRegistry((error) => this.#report(error));
     this.#retirements = new Retirements((instance, error) =>
       this.#reportReleaseFailure(instance, error),
@@ -124,7 +123,6 @@ export class Engine {
       graph: InstallationGraph.build(captured.declarations),
       configurations: new Map(),
       phase: "stopped",
-      instances: new Map(),
     });
     this.#publisher = new SnapshotPublisher(
       () => this.#snapshot(),
@@ -199,14 +197,14 @@ export class Engine {
     }
   }
 
-  apply(plan: Plan): Promise<ApplyResult> {
+  apply(plan: Plan, signal?: AbortSignal): Promise<ApplyResult> {
     if (this.#isQuarantined()) return Promise.reject(quarantinedHost(this.#state.revision));
     if (this.#transition) return Promise.reject(this.#busyTransition());
-    return this.#commands.run(() => this.#execute(plan)).then(({ value }) => value);
+    return this.#commands.run(() => this.#execute(plan, signal), signal).then(({ value }) => value);
   }
 
-  start(): Promise<ApplyResult> {
-    return this.#lifecycle("start");
+  start(signal?: AbortSignal): Promise<ApplyResult> {
+    return this.#lifecycle("start", signal);
   }
   stop(): Promise<ApplyResult> {
     return this.#lifecycle("stop");
@@ -248,7 +246,7 @@ export class Engine {
     return this.#contributions.view<T>(token);
   }
 
-  #lifecycle(intent: "start" | "stop") {
+  #lifecycle(intent: "start" | "stop", signal?: AbortSignal) {
     if (this.#isQuarantined()) return Promise.reject(quarantinedHost(this.#state.revision));
     if (this.#transition) return Promise.reject(this.#busyTransition());
     return this.#commands
@@ -262,28 +260,37 @@ export class Engine {
         }
         // Validation is user code too: reserve the same transition before entering it.
         if (intent === "start") {
-          this.#transition = {
-            phase: "starting",
-            affected: new Set(this.#state.graph.declarations.keys()),
-            scopes: [],
-          };
+          this.#transition = new ExecutionTransition(
+            "starting",
+            new Set(this.#state.graph.declarations.keys()),
+            signal,
+          );
           this.#notify();
         }
         try {
-          const prepared = await compileTransition(this.#state, [], intent, this.#contracts);
-          return await this.#execute(this.#plans.issue(prepared, this.#state));
+          const prepared = await compileTransition(
+            this.#state,
+            [],
+            intent,
+            this.#contracts,
+            this.#transition?.signal,
+          );
+          this.#transition?.checkpoint();
+          return await this.#execute(this.#plans.issue(prepared, this.#state), signal);
         } finally {
           if (this.#transition) {
+            this.#transition.close();
             this.#transition = undefined;
             this.#notify();
           }
         }
-      })
+      }, signal)
       .then(({ value }) => value);
   }
 
-  async #execute(plan: Plan): Promise<ApplyResult> {
+  async #execute(plan: Plan, signal?: AbortSignal): Promise<ApplyResult> {
     this.#assertHealthy();
+    if (signal) AbortSignal.prototype.throwIfAborted.call(signal);
     const prepared = this.#plans.read(plan, this.#state.revision);
     if (prepared.report.intent === "change" && prepared.report.operations.length === 0) {
       this.#plans.consume(plan);
@@ -302,22 +309,28 @@ export class Engine {
     for (const instance of affectedInstances) instance.lifetime.seal();
     const reserved = this.#transition;
     // Startup validation and preparation share one visible transition; scopes are not snapshot state.
-    const transition = (this.#transition = reserved ?? {
-      phase: prepared.report.intent === "stop" ? "stopping" : "changing",
-      affected: prepared.affected,
-      scopes: [],
-    });
-    transition.scopes.push(previous);
+    const transition = (this.#transition =
+      reserved ??
+      new ExecutionTransition(
+        prepared.report.intent === "stop" ? "stopping" : "changing",
+        prepared.affected,
+        signal,
+      ));
+    if (previous.phase === "running") transition.scopes.push(previous);
     // Diagnostics observers may register new contributions synchronously at transition ingress.
     this.#contributions.beginBatch();
     if (!reserved) this.#notify();
     try {
-      if (previous.phase === "stopped" && prepared.report.intent !== "start")
+      if (previous.phase === "stopped" && prepared.report.intent !== "start") {
+        transition.checkpoint();
+        transition.close();
         return this.#commitStopped(prepared, writer);
+      }
       await this.#stopAffected(previous, affectedInstances, prepared, writer);
       if (prepared.report.intent === "stop") return this.#commitStopped(prepared, writer);
       return await this.#startCandidate(prepared, previous, writer, transition);
     } finally {
+      transition.close();
       this.#transition = undefined;
       this.#detachUncommitted(prepared.graph.declarations.keys());
       batchSnapshotNotifications(() => {
@@ -329,6 +342,7 @@ export class Engine {
 
   // Busy rejects before the Plan is consumed, so the caller may retry the same Plan.
   #idleAffectedInstances(previous: CommittedState, prepared: PreparedTransition) {
+    if (previous.phase !== "running") return [];
     const instances = previous.graph.order
       .filter((record) => prepared.affected.has(record))
       .flatMap((record) => previous.instances.get(record) ?? []);
@@ -347,7 +361,7 @@ export class Engine {
 
   #commitStopped(prepared: PreparedTransition, writer: ContractRegistryWriter) {
     writer.commit();
-    this.#commit(prepared, new Map(), "stopped");
+    this.#commit(prepared);
     return this.#result(prepared.report.affectedInstallations);
   }
 
@@ -357,6 +371,7 @@ export class Engine {
     prepared: PreparedTransition,
     writer: ContractRegistryWriter,
   ) {
+    if (previous.phase !== "running") return;
     const stopErrors = await this.#retirements.release([previous], new Set(affectedInstances));
     if (
       this.#isQuarantined() ||
@@ -372,18 +387,20 @@ export class Engine {
     prepared: PreparedTransition,
     previous: CommittedState,
     writer: ContractRegistryWriter,
-    transition: Transition,
+    transition: ExecutionTransition,
   ): Promise<ApplyResult> {
-    const retained = new Map(previous.instances);
+    const retained = new Map(previous.phase === "running" ? previous.instances : []);
     for (const record of prepared.affected) retained.delete(record);
     const instances = new Map(retained);
     const scope: ExecutionScope = { graph: prepared.graph, instances };
     transition.scopes.push(scope);
     const failures = new PreparationFailures((error) => this.#report(error));
     try {
-      await this.#prepare(prepared, instances, writer, failures);
+      await this.#prepare(prepared, instances, writer, failures, transition);
+      transition.checkpoint();
       // A concurrent durable claim can still reject this candidate without publishing anything.
       writer.commit();
+      transition.close();
       failures.seal();
     } catch (error) {
       writer.discard();
@@ -393,10 +410,11 @@ export class Engine {
         prepared,
         scope,
         failures.seal(error),
+        transition,
       );
     }
     try {
-      this.#commit(prepared, instances, "running");
+      this.#commit(prepared, instances);
     } catch (error) {
       writer.discard();
       throw await this.#quarantine(this.#state, [error], prepared, "publish");
@@ -412,6 +430,7 @@ export class Engine {
     prepared: PreparedTransition,
     scope: ExecutionScope,
     failure: unknown,
+    transition: ExecutionTransition,
   ): Promise<DougongError> {
     if (this.#isQuarantined()) return this.#quarantine(previous, [failure], prepared, "prepare");
     const candidates = new Set(
@@ -432,7 +451,8 @@ export class Engine {
       this.#failure = new RecordedFailure(failure);
       return this.#transitionError("Startup failed", failure, "restored", affected, "prepare");
     }
-    await this.#restore(previous, retained, prepared, failure);
+    if (previous.phase === "quarantined") return quarantinedHost(this.#state.revision);
+    await this.#restore(previous, retained, prepared, failure, transition);
     return this.#transitionError(
       "Change failed; previous declarations were restored",
       failure,
@@ -447,38 +467,50 @@ export class Engine {
     execution: Map<InstallationRecord, Instance>,
     writer: ContractRegistryWriter,
     failures: PreparationFailures,
+    transition: ExecutionTransition,
   ) {
     const generation = ++this.#generation;
     for (const layer of prepared.graph.layers) {
       this.#assertHealthy();
+      transition.checkpoint();
       // Prepared providers must stay available until their consumers finish cleanup.
       const layerCancellation = new AbortController();
-      const instances = layer
-        .filter((record) => prepared.affected.has(record))
-        .map((record) => {
-          const instance = new Instance(record, prepared.graph.declarationFor(record), generation, {
-            hostName: this.name,
-            logger: this.#logger,
-            report: (error) => this.#report(error),
-            releaseFailed: (failure) => this.#releaseFailed(instance, failure),
-            changed: () => {
-              if (
-                this.#state.instances.get(record) === instance ||
-                this.#unresolved.includes(instance)
-              )
-                this.#notify();
-            },
-            events: this.#events,
-            contributions: this.#contributions,
-            contracts: writer,
-            startupSignal: layerCancellation.signal,
-            shutdownTimeoutMilliseconds: this.#shutdownTimeoutMilliseconds,
-          });
-          execution.set(record, instance);
-          return instance;
-        });
+      const detachCancellation = onAbort(transition.signal, (reason) =>
+        layerCancellation.abort(reason),
+      );
       try {
-        await Promise.all(
+        const instances = layer
+          .filter((record) => prepared.affected.has(record))
+          .map((record) => {
+            const instance = new Instance(
+              record,
+              prepared.graph.declarationFor(record),
+              generation,
+              {
+                resourceAuthority: this.#resourceAuthority,
+                hostName: this.name,
+                logger: this.#logger,
+                report: (error) => this.#report(error),
+                releaseFailed: (failure) => this.#releaseFailed(instance, failure),
+                changed: () => {
+                  if (
+                    (this.#state.phase === "running" &&
+                      this.#state.instances.get(record) === instance) ||
+                    this.#unresolved.includes(instance)
+                  )
+                    this.#notify();
+                },
+                events: this.#events,
+                contributions: this.#contributions,
+                contracts: writer,
+                startupSignal: layerCancellation.signal,
+                shutdownTimeoutMilliseconds: this.#shutdownTimeoutMilliseconds,
+              },
+            );
+            execution.set(record, instance);
+            return instance;
+          });
+        const preparation = Promise.all(
           instances.map(async (instance) => {
             const signal = instance.lifetime.signal;
             const dependencies: Record<string, unknown> = Object.create(null);
@@ -505,29 +537,34 @@ export class Engine {
             }
           }),
         );
+        await transition.waitFor(preparation);
         this.#assertHealthy();
         for (const instance of instances)
           AbortSignal.prototype.throwIfAborted.call(instance.lifetime.signal);
       } catch (error) {
         layerCancellation.abort(error);
         throw error;
+      } finally {
+        detachCancellation();
       }
     }
   }
 
   async #restore(
-    previous: CommittedState,
+    previous: Extract<CommittedState, { readonly phase: "running" }>,
     retained: Map<InstallationRecord, Instance>,
     failed: PreparedTransition,
     error: unknown,
+    transition: ExecutionTransition,
   ) {
     this.#assertHealthy();
     const instances = new Map(retained);
     const scope: ExecutionScope = { graph: previous.graph, instances };
-    this.#transition!.scopes.push(scope);
+    transition.scopes.push(scope);
     const failures = new PreparationFailures((failure) => this.#report(failure));
     const writer = this.#contracts.writer(previous.graph.contractKinds);
     try {
+      transition.beginRestoration(this.#restorationTimeoutMilliseconds);
       await this.#prepare(
         {
           graph: previous.graph,
@@ -537,9 +574,12 @@ export class Engine {
         instances,
         writer,
         failures,
+        transition,
       );
+      transition.checkpoint();
       failures.seal();
       writer.commit();
+      transition.close();
       const recorded = new RecordedFailure(error);
       this.#advance({ ...previous, instances });
       this.#failure = recorded;
@@ -548,6 +588,7 @@ export class Engine {
         this.#assertHealthy();
       }
     } catch (restoreError) {
+      transition.close();
       writer.discard();
       const cleanupErrors = this.#isQuarantined()
         ? []
@@ -568,18 +609,15 @@ export class Engine {
     }
   }
 
-  #commit(
-    prepared: PreparedTransition,
-    instances: ReadonlyMap<InstallationRecord, Instance>,
-    phase: "stopped" | "running",
-  ) {
+  #commit(prepared: PreparedTransition, instances?: ReadonlyMap<InstallationRecord, Instance>) {
     const previous = this.#state;
     this.#advance({
       groups: prepared.groups,
       graph: prepared.graph,
       configurations: prepared.configurations,
-      phase,
-      instances,
+      ...(instances === undefined
+        ? { phase: "stopped" as const }
+        : { phase: "running" as const, instances }),
     });
     this.#failure = undefined;
     this.#assertHealthy();
@@ -590,13 +628,13 @@ export class Engine {
       if (!prepared.graph.declarations.has(record))
         record.detach({ status: "removed", origin: undefined });
     }
-    for (const [record, instance] of instances) {
+    for (const [record, instance] of instances ?? []) {
       if (prepared.affected.has(record)) instance.publish();
       this.#assertHealthy();
     }
   }
 
-  #advance(next: Omit<CommittedState, "revision">) {
+  #advance(next: NextCommittedState) {
     this.#assertHealthy();
     const revision = this.#state.revision + 1;
     this.#state = Object.freeze({ ...next, revision });
@@ -618,7 +656,7 @@ export class Engine {
     if (!descendantDeadline && root.phase !== "active" && root.phase !== "sealed") return;
     const record = instance.installation;
     if (
-      this.#state.instances.get(record) !== instance &&
+      (this.#state.phase !== "running" || this.#state.instances.get(record) !== instance) &&
       !this.#transition?.scopes.some((scope) => scope.instances.get(record) === instance)
     )
       return;
@@ -645,7 +683,10 @@ export class Engine {
         ),
       );
     }
-    const execution = [previous, ...(this.#transition?.scopes ?? [])];
+    const execution = [
+      ...(previous.phase === "running" ? [previous] : []),
+      ...(this.#transition?.scopes ?? []),
+    ];
     const owned = new Set(execution.flatMap((scope) => [...scope.instances.values()]));
     const remaining = [...owned].filter((instance) => instance.lifetime.phase !== "disposed");
     const affectedInstallations = prepared?.report.affectedInstallations ?? [
@@ -676,7 +717,12 @@ export class Engine {
     };
     void work.then(forget, forget);
     for (const instance of remaining) instance.lifetime.block();
-    this.#advance({ ...previous, phase: "quarantined", instances: new Map() });
+    this.#advance({
+      phase: "quarantined",
+      groups: previous.groups,
+      graph: previous.graph,
+      configurations: previous.configurations,
+    });
     this.#unresolved = Object.freeze(remaining);
     this.#failure = undefined;
     this.#notify();

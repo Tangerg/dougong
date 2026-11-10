@@ -1,6 +1,7 @@
 import { expect, it, vi } from "vitest";
 import type { StandardSchemaV1 } from "@standard-schema/spec";
 import {
+  createResourceAuthority,
   createHost,
   definePlugin,
   event,
@@ -9,6 +10,8 @@ import {
   type PluginContext,
   type Task,
 } from "../src";
+
+const resourceAuthority = createResourceAuthority();
 
 function failureMessages(error: unknown): string[] {
   if (!(error instanceof Error)) return [];
@@ -24,6 +27,7 @@ it.each([false, true])(
   async (unclean) => {
     const starts = vi.fn<() => void>();
     const host = createHost({
+      resourceAuthority,
       installations: [
         { id: "a", plugin: definePlugin({ name: "a", setup: starts }) },
         { id: "b", plugin: definePlugin({ name: "b", setup() {} }) },
@@ -91,6 +95,7 @@ it("keeps old Lifetime capabilities during rejected candidate validation", async
   let retainedContext!: PluginContext<{}>;
   const stopped = vi.fn<() => void>();
   const host = createHost({
+    resourceAuthority,
     installations: [
       {
         id: "a",
@@ -154,6 +159,7 @@ it.each(["cleanup", "restore", "stop"] as const)(
       setup: () => ({ value: 1 }),
     });
     const host = createHost({
+      resourceAuthority,
       installations: [
         { id: "provider", plugin: provider },
         {
@@ -209,7 +215,7 @@ it.each(["cleanup", "restore", "stop"] as const)(
 );
 
 it("retains a Group's committed first change while a subsequent candidate rolls back", async () => {
-  const host = createHost();
+  const host = createHost({ resourceAuthority });
   await host.start();
   const entered = Promise.withResolvers<void>();
   const resume = Promise.withResolvers<void>();
@@ -256,7 +262,10 @@ it("retains a Group's committed first change while a subsequent candidate rolls 
 it.each(["install", "create", "remove"] as const)(
   "rejects concurrent child %s execution and then rejects its stale base revision",
   async (kind) => {
-    const host = createHost({ groups: [{ id: "parent" }, { id: "child", parentId: "parent" }] });
+    const host = createHost({
+      resourceAuthority,
+      groups: [{ id: "parent" }, { id: "child", parentId: "parent" }],
+    });
     await host.start();
     const entered = Promise.withResolvers<void>();
     const resume = Promise.withResolvers<void>();
@@ -311,6 +320,7 @@ it("rejects a concurrent start and preserves quarantined ownership after the act
   });
   let attempts = 0;
   const host = createHost({
+    resourceAuthority,
     installations: [
       { id: "provider", plugin: provider },
       {
@@ -351,6 +361,7 @@ it("retains a provider when its timed out consumer can still use its resources",
   let alive = true;
   let task!: Task;
   const host = createHost({
+    resourceAuthority,
     shutdownTimeoutMilliseconds: 5,
     installations: [
       {
@@ -400,6 +411,7 @@ it("reports late setup failure and refreshes unresolved ownership after the dead
   const finished = Promise.withResolvers<void>();
   const report = vi.fn<(error: unknown) => void>();
   const host = createHost({
+    resourceAuthority,
     shutdownTimeoutMilliseconds: 5,
     onError: report,
     installations: [
@@ -468,7 +480,7 @@ it("rejects lifecycle reentry from startup validation and releases execution own
     },
     setup,
   });
-  host = createHost({ installations: [{ id: "owner", plugin }] });
+  host = createHost({ resourceAuthority, installations: [{ id: "owner", plugin }] });
   await expect(host.start()).rejects.toMatchObject({ code: "HOST_BUSY" });
   expect(host.status).toBe("stopped");
   expect(host.stateRevision).toBe(0);
@@ -488,7 +500,7 @@ it("rejects lifecycle reentry from startup validation and releases execution own
 });
 
 it("consumes a stale Plan and detaches the Installation identities it can no longer commit", async () => {
-  const host = createHost();
+  const host = createHost({ resourceAuthority });
   const change = host.change();
   const candidate = change.install(definePlugin({ name: "plan.stale-candidate", setup() {} }), {
     id: "candidate",
@@ -508,6 +520,7 @@ it.each([false, true])(
     const validating = Promise.withResolvers<void>();
     const finish = Promise.withResolvers<void>();
     const host = createHost({
+      resourceAuthority,
       installations: [
         {
           id: "owner",
@@ -569,6 +582,7 @@ it.each([false, true])(
     const blocked = Promise.withResolvers<void>();
     const later = vi.fn<() => { value: null }>(() => ({ value: null }));
     const host = createHost({
+      resourceAuthority,
       installations: [
         {
           id: "owner",
@@ -634,7 +648,7 @@ it.each([false, true])(
       entered.resolve();
       return blocked.promise;
     });
-    const host = createHost();
+    const host = createHost({ resourceAuthority });
     const controller = new AbortController();
     controller.signal.addEventListener("abort", (event) => event.stopImmediatePropagation());
     const change = host.change();
@@ -672,7 +686,7 @@ it.each([false, true])(
 
 it("ends caller cancellation authority when the Host issues its Plan", async () => {
   const controller = new AbortController();
-  const host = createHost();
+  const host = createHost({ resourceAuthority });
   const change = host.change();
   const pending = change.install(definePlugin({ name: "issued", setup() {} }), { id: "issued" });
   const plan = await host.plan(change, controller.signal);
@@ -687,6 +701,7 @@ it("opens contribution publication before announcing an admitted transition to o
   const entered = Promise.withResolvers<void>();
   const finish = Promise.withResolvers<void>();
   const host = createHost({
+    resourceAuthority,
     installations: [
       {
         id: "owner",
@@ -741,7 +756,7 @@ it("opens contribution publication before announcing an admitted transition to o
 });
 
 it("keeps the revision authority's shared rejection stable across planning callers", async () => {
-  const host = createHost();
+  const host = createHost({ resourceAuthority });
   const entered = Promise.withResolvers<void>();
   const release = Promise.withResolvers<void>();
   let validating = 0;
@@ -787,6 +802,7 @@ it("keeps the revision authority's shared rejection stable across planning calle
 it("records a failed startup without advancing the committed revision", async () => {
   const failure = new Error("broken setup");
   const host = createHost({
+    resourceAuthority,
     installations: [
       {
         id: "broken",

@@ -1,7 +1,15 @@
-import { asyncDisposeSymbol, createHost, definePlugin, service } from "dougong";
+import {
+  createResourceAuthority,
+  asyncDisposeSymbol,
+  createHost,
+  definePlugin,
+  service,
+} from "dougong";
 import { MemoryLoader } from "@dougongjs/platform";
 import { DeploymentController } from "./deployment-controller.js";
 import { exampleResult, expectFailure, type ExampleResult } from "./example.js";
+
+const resourceAuthority = createResourceAuthority();
 
 interface Greeter {
   greet(): string;
@@ -32,7 +40,7 @@ export async function declarativePlan(): Promise<ExampleResult> {
       toolStarts++;
     },
   });
-  const host = createHost({ name: "declarative-plan-example" });
+  const host = createHost({ resourceAuthority, name: "declarative-plan-example" });
   await host.start();
   const deployment = new DeploymentController({
     id: "deployment",

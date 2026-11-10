@@ -8,6 +8,7 @@ import { RecordedFailure } from "../contracts/recorded-failure.js";
 import { abortReason, isAborted, onAbort } from "../internal/abort.js";
 import { normalizePlainRecord, recordFields } from "../internal/record.js";
 import { assertTrimmedText } from "../internal/text.js";
+import { captureTimerDelay } from "../internal/timer.js";
 import { assertSynchronous, resolveValue, type ResolvedValue } from "../internal/async-result.js";
 import { batchSnapshotNotifications } from "../observation/snapshot-view.js";
 import type {
@@ -29,14 +30,13 @@ import {
 import {
   asyncDisposeSymbol,
   captureDisposer,
-  claimResource,
   disposeSymbol,
-  markOwnedControlHandle,
   type AsyncDisposable,
   type Awaitable,
   type Disposable,
   type Publication,
   type Resource,
+  type ResourceAuthority,
 } from "../contracts/resource.js";
 
 export type {
@@ -72,6 +72,7 @@ const ownershipFields = recordFields<LifetimeOwnership>()("lifetime");
 const lifetimeAuthorities = new WeakMap<object, Lifetime>();
 
 export interface LifetimeOptions {
+  readonly resourceAuthority: ResourceAuthority;
   readonly label: string;
   readonly report: (error: unknown) => void;
   readonly releaseFailed?: (failure: ReleaseFailure) => void;
@@ -104,6 +105,7 @@ class Visibility {
 }
 
 export class Lifetime {
+  readonly resourceAuthority: ResourceAuthority;
   readonly #label: string;
   #cancellation: { readonly signal: AbortSignal; abort?(reason: unknown): void } =
     new AbortController();
@@ -130,13 +132,17 @@ export class Lifetime {
     assertTrimmedText(options.label, "Lifetime label");
     if (typeof options.report !== "function")
       throw new TypeError("Lifetime error reporter must be a function");
+    this.resourceAuthority = options.resourceAuthority;
     this.#label = options.label;
     this.#observer = {
       report: options.report,
       releaseFailed: options.releaseFailed,
       changed: options.changed,
     };
-    this.#shutdownTimeoutMilliseconds = shutdownTimeout(options.shutdownTimeoutMilliseconds);
+    this.#shutdownTimeoutMilliseconds = captureTimerDelay(
+      options.shutdownTimeoutMilliseconds,
+      "shutdownTimeoutMilliseconds",
+    );
     this.#visibility = ownership?.visibility ?? new Visibility();
     this.#detachFromParent = ownership?.detach;
     Object.freeze(this.#settlement.promise);
@@ -168,6 +174,7 @@ export class Lifetime {
       acquire: <T>(factory: (signal: AbortSignal) => AcquisitionResult<T>) => this.acquire(factory),
       interrupt: (callback: Cleanup) => this.interrupt(callback),
     });
+    this.resourceAuthority.markControlHandle(handle);
     lifetimeAuthorities.set(handle, this);
     return handle;
   }
@@ -272,16 +279,28 @@ export class Lifetime {
 
   #adopt(resource: Resource, reservedAcquisition = false) {
     if (!reservedAcquisition) this.#requireActive();
-    if (lifetimeAuthorities.has(resource))
-      throw new TypeError("Lifetime handles cannot be adopted as resources");
     // A protocol getter may reenter adoption before the release record exists.
-    const releaseClaim = claimResource(resource);
+    const releaseClaim = this.resourceAuthority.claim(resource);
     let release: Cleanup;
     try {
       release = captureDisposer(resource);
       if (!reservedAcquisition) this.#requireActive();
     } catch (error) {
-      releaseClaim();
+      // Failed capture still owns its reservation until rollback succeeds.
+      this.#own(
+        () => undefined,
+        "cleanup",
+        () => {
+          try {
+            releaseClaim();
+          } catch (releaseError) {
+            throw new AggregateError(
+              [error, releaseError],
+              "Resource adoption and reservation release failed",
+            );
+          }
+        },
+      ).forget();
       throw error;
     }
     return this.#own(release, "cleanup", releaseClaim);
@@ -291,20 +310,25 @@ export class Lifetime {
     this.#requireActive();
     if (typeof cleanup !== "function") throw new TypeError("Cleanup must be a function");
     const record = this.#own(cleanup, "cleanup");
-    return markOwnedControlHandle(Object.freeze({ [asyncDisposeSymbol]: () => record.dispose() }));
+    const handle = Object.freeze({ [asyncDisposeSymbol]: () => record.dispose() });
+    this.resourceAuthority.markControlHandle(handle);
+    return handle;
   }
 
   interrupt(callback: Cleanup): Disposable {
     this.#requireActive();
     if (typeof callback !== "function") throw new TypeError("Interrupt must be a function");
     const record = this.#own(callback, "interrupt");
-    return markOwnedControlHandle(Object.freeze({ [disposeSymbol]: () => record.forget() }));
+    const handle = Object.freeze({ [disposeSymbol]: () => record.forget() });
+    this.resourceAuthority.markControlHandle(handle);
+    return handle;
   }
 
   child(label: string): ChildLifetime {
     const { report, releaseFailed, changed } = this.#requireActive();
     const child = new Lifetime(
       {
+        resourceAuthority: this.resourceAuthority,
         label,
         report,
         ...(releaseFailed && { releaseFailed }),
@@ -342,7 +366,14 @@ export class Lifetime {
       this.#changed();
     });
     this.#tasks.add(record);
-    this.#changed();
+    try {
+      this.resourceAuthority.markControlHandle(record.handle);
+      this.#changed();
+      record.start();
+    } catch (error) {
+      record.failStart(error);
+      throw error;
+    }
     return record.handle;
   }
 
@@ -581,9 +612,9 @@ export class Lifetime {
     const records = kind === "cleanup" ? this.#cleanups : this.#interrupts;
     const record: CleanupRecord = new CleanupRecord(++this.#sequence, kind, {
       cleanup,
+      ...(releaseClaim && { releaseClaim }),
       detach: () => {
         records.delete(record);
-        releaseClaim?.();
         this.#changed();
       },
       releaseFailed: (error) => this.#notifyReleaseFailure(error, kind),
@@ -616,20 +647,4 @@ export class Lifetime {
     }
     return observer;
   }
-}
-
-// Native timers use a signed 32-bit millisecond delay; overflow can expire almost immediately.
-const maximumTimerDelay = 2 ** 31 - 1;
-export function shutdownTimeout(value: unknown): number | undefined {
-  if (value === undefined) return;
-  if (
-    typeof value !== "number" ||
-    !Number.isFinite(value) ||
-    value <= 0 ||
-    value > maximumTimerDelay
-  )
-    throw new TypeError(
-      `shutdownTimeoutMilliseconds must be a positive finite number no greater than ${maximumTimerDelay}`,
-    );
-  return value;
 }

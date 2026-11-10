@@ -24,7 +24,7 @@ export function installationExecution(
   state: CommittedState,
   changing: ReadonlySet<InstallationRecord> | undefined,
 ): InstallationExecution {
-  const instance = state.instances.get(record);
+  const instance = state.phase === "running" ? state.instances.get(record) : undefined;
   const isChanging = changing?.has(record) ?? false;
   if (instance) return { status: isChanging ? "changing" : "running", instance };
   if (state.phase === "quarantined") return { status: "quarantined", instance: undefined };

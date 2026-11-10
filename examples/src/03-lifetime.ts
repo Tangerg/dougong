@@ -1,5 +1,13 @@
-import { asyncDisposeSymbol, createHost, definePlugin, type ChildLifetime } from "dougong";
+import {
+  createResourceAuthority,
+  asyncDisposeSymbol,
+  createHost,
+  definePlugin,
+  type ChildLifetime,
+} from "dougong";
 import { exampleResult, whenAborted, type ExampleResult } from "./example.js";
+
+const resourceAuthority = createResourceAuthority();
 
 export async function lifetimeOwnership(): Promise<ExampleResult> {
   const trace: string[] = [];
@@ -30,6 +38,7 @@ export async function lifetimeOwnership(): Promise<ExampleResult> {
   });
 
   const host = createHost({
+    resourceAuthority,
     name: "lifetime",
     installations: [{ id: "editor", plugin: editorPlugin }],
   });

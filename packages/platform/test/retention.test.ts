@@ -1,7 +1,9 @@
 import { expect, it } from "vitest";
-import { createHost, definePlugin } from "dougong";
+import { createResourceAuthority, createHost, definePlugin } from "dougong";
 import { createPlatform } from "../src";
 import { nextTurn, select } from "./fixtures";
+
+const resourceAuthority = createResourceAuthority();
 
 it("detaches terminal handles, diagnostic views and historical failures from live capabilities", async () => {
   const collectGarbage = (globalThis as typeof globalThis & { gc?: () => void }).gc;
@@ -28,7 +30,7 @@ it("detaches terminal handles, diagnostic views and historical failures from liv
 });
 
 async function createDetachedViews() {
-  const host = createHost();
+  const host = createHost({ resourceAuthority });
   const loader = {
     load() {
       throw new Error("historical failure", { cause: host });
@@ -98,7 +100,7 @@ async function abandonPreparation(
     return pending;
   };
   const logger = { debug() {}, info() {}, warn() {}, error() {} };
-  const host = createHost({ logger });
+  const host = createHost({ resourceAuthority, logger });
   const loader = {
     load(_reference: object, signal: AbortSignal) {
       signal.addEventListener("abort", (event) => event.stopImmediatePropagation());
@@ -157,7 +159,7 @@ it("releases admission, loader and logger capabilities while application code re
     const loader = { load: () => ({ default: definePlugin({ name: "sample", setup() {} }) }) };
     const authorizer = { authorize() {} };
     const logger = { debug() {}, info() {}, warn() {}, error() {} };
-    const host = createHost();
+    const host = createHost({ resourceAuthority });
     const platform = createPlatform({
       id: "retained",
       host,

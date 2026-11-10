@@ -1,5 +1,6 @@
 import { expect, it, vi } from "vitest";
 import {
+  createResourceAuthority,
   captureConfiguration,
   createHost,
   definePlugin,
@@ -9,8 +10,11 @@ import {
   service,
 } from "../src/index";
 
+const resourceAuthority = createResourceAuthority();
+
 it("exposes staging commands without granting access to committed Installation records", async () => {
   const host = createHost({
+    resourceAuthority,
     installations: [{ id: "original", plugin: definePlugin({ name: "original", setup() {} }) }],
   });
   const original = host.installation("original")!;
@@ -25,7 +29,10 @@ it("exposes staging commands without granting access to committed Installation r
 });
 
 it("rejects creation in a subtree removed by the same change in either command order", async () => {
-  const host = createHost({ groups: [{ id: "parent" }, { id: "existing", parentId: "parent" }] });
+  const host = createHost({
+    resourceAuthority,
+    groups: [{ id: "parent" }, { id: "existing", parentId: "parent" }],
+  });
   const parent = host.group("parent")!;
   const existing = host.group("existing")!;
   for (const removalFirst of [true, false]) {
@@ -40,7 +47,7 @@ it("rejects creation in a subtree removed by the same change in either command o
 });
 
 it("consumes an authorized Plan permanently invalidated by a new Contract kind before effects", async () => {
-  const host = createHost();
+  const host = createHost({ resourceAuthority });
   await host.start();
   const value = service<number>("authority/new-kind");
   const setup = vi.fn<() => { value: number }>(() => ({ value: 1 }));
@@ -59,7 +66,7 @@ it("consumes an authorized Plan permanently invalidated by a new Contract kind b
 });
 
 it("validates a candidate's own staged Contract kind even after a competing durable claim", async () => {
-  const host = createHost();
+  const host = createHost({ resourceAuthority });
   await host.start();
   const staged = event<void>("authority/staged-kind");
   const competing = extensionPoint<number>(staged.id);
@@ -126,6 +133,7 @@ it("provides callable logging methods without authority to retire the Instance l
   const output = vi.fn<Logger["info"]>();
   let logger!: Logger;
   const host = createHost({
+    resourceAuthority,
     logger: { debug: output, info: output, warn: output, error: output },
     installations: [
       {
@@ -157,7 +165,7 @@ it("provides callable logging methods without authority to retire the Instance l
 it.each(["name", "groups", "installations"] as const)(
   "rejects an explicitly null %s rather than silently applying an empty/default Host",
   (field) => {
-    expect(() => createHost({ [field]: null } as never)).toThrow(TypeError);
+    expect(() => createHost({ resourceAuthority, [field]: null } as never)).toThrow(TypeError);
   },
 );
 
@@ -167,6 +175,7 @@ it("gives application callbacks only their explicit context", async () => {
     receivers.push(this);
   };
   const host = createHost({
+    resourceAuthority,
     onError: report,
     installations: [
       {
@@ -190,7 +199,7 @@ it("gives application callbacks only their explicit context", async () => {
 });
 
 it("rechecks durable Contract kinds before issuing a Plan after asynchronous validation", async () => {
-  const host = createHost();
+  const host = createHost({ resourceAuthority });
   const entered = Promise.withResolvers<void>();
   const resumed = Promise.withResolvers<void>();
   const shared = service<number>("issue/kind");
@@ -240,6 +249,7 @@ it.each(["start", "change"] as const)(
       },
     });
     const host = createHost({
+      resourceAuthority,
       installations: [{ id: "old", plugin: definePlugin({ name: "old", setup() {} }) }],
     });
     const old = host.installation("old");
@@ -282,6 +292,7 @@ it("adopts logger methods once, preserving the backend receiver for both plugin 
     },
   };
   const host = createHost({
+    resourceAuthority,
     logger,
     installations: [
       {

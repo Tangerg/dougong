@@ -12,20 +12,23 @@ import type { InitialInstallation } from "../composition/declarations.js";
 import { captureDataArray } from "../internal/data-array.js";
 import { normalizePlainRecord, recordFields } from "../internal/record.js";
 import { assertTrimmedText } from "../internal/text.js";
-import { shutdownTimeout } from "../lifetime/lifetime.js";
+import { captureTimerDelay } from "../internal/timer.js";
 import type { HostOptions } from "./host-api.js";
+import { captureResourceAuthority, type ResourceAuthority } from "../contracts/resource.js";
 
 const defaultHostName = "host";
 
 type InitialGroup = NonNullable<HostOptions["groups"]>[number];
 
 const hostOptionFields = recordFields<HostOptions>()(
+  "resourceAuthority",
   "name",
   "installations",
   "groups",
   "logger",
   "onError",
   "shutdownTimeoutMilliseconds",
+  "restorationTimeoutMilliseconds",
 );
 const initialGroupFields = recordFields<InitialGroup>()("id", "parentId");
 const initialInstallationFields = recordFields<InitialInstallation>()(
@@ -37,10 +40,12 @@ const initialInstallationFields = recordFields<InitialInstallation>()(
 );
 
 export interface CapturedHostOptions {
+  readonly resourceAuthority: ResourceAuthority;
   readonly name: string;
   readonly logger: Logger<unknown>;
   readonly onError: ((error: unknown) => unknown) | undefined;
   readonly shutdownTimeoutMilliseconds: number | undefined;
+  readonly restorationTimeoutMilliseconds: number | undefined;
   readonly groups: ReadonlyMap<string, GroupNode>;
   readonly declarations: ReadonlyMap<InstallationRecord, InstallationDeclaration>;
 }
@@ -51,12 +56,20 @@ export function captureHostOptions(
   identities: HostIdentities,
 ): CapturedHostOptions {
   const input = normalizePlainRecord(options, "Host options", { fields: hostOptionFields });
+  const resourceAuthority = captureResourceAuthority(input.resourceAuthority);
   const name = input.name === undefined ? defaultHostName : input.name;
   assertTrimmedText(name, "Host name");
   if (input.onError !== undefined && typeof input.onError !== "function")
     throw new TypeError("Host onError must be a function");
   const logger = captureLogger(input.logger === undefined ? console : input.logger);
-  const timeout = shutdownTimeout(input.shutdownTimeoutMilliseconds);
+  const shutdownTimeoutMilliseconds = captureTimerDelay(
+    input.shutdownTimeoutMilliseconds,
+    "shutdownTimeoutMilliseconds",
+  );
+  const restorationTimeoutMilliseconds = captureTimerDelay(
+    input.restorationTimeoutMilliseconds,
+    "restorationTimeoutMilliseconds",
+  );
   const initialGroups = captureDataArray(
     input.groups === undefined ? [] : input.groups,
     "Initial Groups",
@@ -68,10 +81,12 @@ export function captureHostOptions(
   const groups = captureInitialGroups(initialGroups, identities);
   const declarations = captureInitialInstallations(initialInstallations, groups, identities);
   return Object.freeze({
+    resourceAuthority,
     name,
     logger,
     onError: input.onError as ((error: unknown) => unknown) | undefined,
-    shutdownTimeoutMilliseconds: timeout,
+    shutdownTimeoutMilliseconds,
+    restorationTimeoutMilliseconds,
     groups,
     declarations,
   });

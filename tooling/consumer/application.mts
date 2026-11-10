@@ -1,4 +1,5 @@
 import {
+  createResourceAuthority,
   createHost,
   DougongError,
   definePlugin,
@@ -15,6 +16,8 @@ import { bridge, computed } from "@dougongjs/reactive";
 import type * as Reactive from "@dougongjs/reactive";
 import { createPlatform, MemoryLoader } from "@dougongjs/platform";
 import { verifyObservationBoundary } from "./observation-boundary.mjs";
+
+const resourceAuthority = createResourceAuthority();
 
 function assert(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Error(message);
@@ -58,7 +61,10 @@ assert(
   JSON.stringify(description).includes("consumer/greeting"),
   "Description is not serializable data",
 );
-const host = createHost({ installations: [{ id: "greeting", plugin: greeting }] });
+const host = createHost({
+  resourceAuthority,
+  installations: [{ id: "greeting", plugin: greeting }],
+});
 await host.start();
 assert(!(Symbol.asyncDispose in owner), "Plugin root can bypass Engine shutdown");
 const actions = host.contributions(ACTIONS);

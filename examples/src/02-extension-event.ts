@@ -1,4 +1,5 @@
 import {
+  createResourceAuthority,
   disposeSymbol,
   createHost,
   definePlugin,
@@ -8,6 +9,8 @@ import {
   type ContributionView,
 } from "dougong";
 import { exampleResult, type ExampleResult } from "./example.js";
+
+const resourceAuthority = createResourceAuthority();
 
 interface Command {
   readonly id: string;
@@ -47,6 +50,7 @@ export async function extensionAndEvent(): Promise<ExampleResult> {
   });
 
   const host = createHost({
+    resourceAuthority,
     name: "extension-event",
     installations: [
       { id: "shell", plugin: shellPlugin },

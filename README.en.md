@@ -4,10 +4,10 @@
 
 A TypeScript plugin composition kernel with immutable plans, atomic publication, owned resource lifetimes and structured inspection.
 
-Upgrading from 0.10? Read the [migration guide](./docs/en/guide/migrating-to-0.11.md) and [0.11.0 release notes](./docs/en/reference/release-0.11.0.md). For earlier versions, first complete [Migrating to 0.9.0](./docs/en/guide/migrating-to-0.9.md) and [Migrating to 0.10.0](./docs/en/guide/migrating-to-0.10.md) as applicable.
+Read the [upgrade guide](./docs/en/guide/upgrading.md) for migration steps and release notes for your target version.
 
 ```ts
-import { asyncDisposeSymbol, createHost, definePlugin, service } from "dougong";
+import { asyncDisposeSymbol, createHost, createResourceAuthority, definePlugin, service } from "dougong";
 
 const GREETER = service<{ greet(name: string): string }>("application/greeter");
 const greeter = definePlugin({
@@ -18,7 +18,9 @@ const greeter = definePlugin({
   },
 });
 
+const resourceAuthority = createResourceAuthority();
 const host = createHost({
+  resourceAuthority,
   name: "application",
   installations: [{ id: "greeter", plugin: greeter }],
 });

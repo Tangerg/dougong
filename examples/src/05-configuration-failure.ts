@@ -1,5 +1,6 @@
 import type { StandardSchemaV1 } from "@standard-schema/spec";
 import {
+  createResourceAuthority,
   ConfigurationValidationError,
   createHost,
   definePlugin,
@@ -8,6 +9,8 @@ import {
   service,
 } from "dougong";
 import { exampleResult, expectFailure, type ExampleResult } from "./example.js";
+
+const resourceAuthority = createResourceAuthority();
 
 interface Cache {
   readonly capacity: number;
@@ -86,7 +89,7 @@ export async function configurationAndFailure(): Promise<ExampleResult> {
     },
   });
 
-  const host = createHost({ name: "configuration-failure" });
+  const host = createHost({ resourceAuthority, name: "configuration-failure" });
   const initial = host.change();
   const cacheInstallation = initial.install(cachePlugin, {
     id: "cache",

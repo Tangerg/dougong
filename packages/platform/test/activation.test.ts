@@ -1,16 +1,25 @@
 import { describe, expect, it, vi } from "vitest";
-import { createHost, definePlugin, optional, service, type AnyPlugin } from "dougong";
+import {
+  createResourceAuthority,
+  createHost,
+  definePlugin,
+  optional,
+  service,
+  type AnyPlugin,
+} from "dougong";
 import { createPlatform, MemoryLoader, type Platform } from "../src";
 import { ActivationPlan } from "../src/activation/plan";
 import { ArtifactCatalog } from "../src/catalog/catalog";
 import { RegistrationRecord } from "../src/catalog/registration";
 import { add, deferred, emptyPlugin, fixture, select, VALUE, valuePlugin } from "./fixtures";
 
+const resourceAuthority = createResourceAuthority();
+
 describe("activation compilation", () => {
   it("previews metadata without authorizing, loading or running code", async () => {
     const load = vi.fn<() => void>();
     const authorize = vi.fn<() => void>();
-    const host = createHost();
+    const host = createHost({ resourceAuthority });
     const platform = createPlatform({
       id: "preview",
       host,
@@ -65,7 +74,7 @@ describe("activation compilation", () => {
       ["dependency", dependencyPlugin],
       ["root", root],
     ]);
-    const host = createHost();
+    const host = createHost({ resourceAuthority });
     const platform = createPlatform({
       id: "closure",
       host,
@@ -106,6 +115,7 @@ describe("activation compilation", () => {
       },
     });
     const { host, platform } = fixture(
+      resourceAuthority,
       new Map([
         ["dependency", emptyPlugin("dependency")],
         ["root", root],
@@ -128,7 +138,10 @@ describe("activation compilation", () => {
   });
 
   it("does not stop live code when loading a replacement fails", async () => {
-    const { host, platform } = fixture(new Map([["one", valuePlugin("sample", 1)]]));
+    const { host, platform } = fixture(
+      resourceAuthority,
+      new Map([["one", valuePlugin("sample", 1)]]),
+    );
     const registration = await select(platform, "sample", "one");
     await host.start();
     await platform.activate([registration]);
@@ -154,6 +167,7 @@ describe("activation compilation", () => {
       },
     });
     const { host, platform } = fixture(
+      resourceAuthority,
       new Map([
         ["dependency", emptyPlugin("dependency")],
         ["root", root],
@@ -185,7 +199,7 @@ describe("activation compilation", () => {
         throw new Error("new setup failed");
       },
     });
-    const host = createHost();
+    const host = createHost({ resourceAuthority });
     const admitted: string[] = [];
     let permitted = "1.0.0";
     const platform = createPlatform({
@@ -226,7 +240,7 @@ describe("activation compilation", () => {
   });
 
   it("projects committed source data even before Platform's Host subscriber runs", async () => {
-    const host = createHost();
+    const host = createHost({ resourceAuthority });
     let platform: Platform<string>;
     const observations: Array<{ committed: unknown; projected: unknown }> = [];
     host.diagnostics.subscribe(() => {
@@ -269,7 +283,7 @@ describe("activation compilation", () => {
       ["consumer1", emptyPlugin("consumer")],
       ["consumer2", emptyPlugin("consumer")],
     ]);
-    const { host, platform } = fixture(modules);
+    const { host, platform } = fixture(resourceAuthority, modules);
     const dependency = await select(platform, "dependency", "dependency-first");
     const consumer = await select(platform, "consumer", "consumer1", {
       dependencies: { dependency: "^1" },
@@ -299,6 +313,7 @@ describe("activation compilation", () => {
 
   it("compiles removals and new providers into one valid Core plan", async () => {
     const { host, platform } = fixture(
+      resourceAuthority,
       new Map([
         ["old", valuePlugin("old", 1)],
         ["new", valuePlugin("new", 2)],
@@ -323,7 +338,7 @@ describe("activation compilation", () => {
     const load = vi.fn<() => void>();
     const platform = createPlatform({
       id: "contradiction",
-      host: createHost(),
+      host: createHost({ resourceAuthority }),
       apiVersion: "1.0.0",
       loader: { load },
     });
@@ -345,7 +360,7 @@ describe("activation compilation", () => {
   });
 
   it("returns all structural blockers in a data-only preview", async () => {
-    const { platform } = fixture();
+    const { platform } = fixture(resourceAuthority);
     const registration = await select(platform, "root", "root", {
       dependencies: { absent: "*", other: "*" },
     });
@@ -360,6 +375,7 @@ describe("activation compilation", () => {
 
   it("records a blocked closure on activation and clears it when its dependency becomes available", async () => {
     const { platform } = fixture(
+      resourceAuthority,
       new Map(["root", "dependency"].map((name) => [name, emptyPlugin(name)])),
     );
     const root = await select(platform, "root", "root", { dependencies: { dependency: "*" } });
@@ -380,6 +396,7 @@ describe("activation compilation", () => {
 
   it("reports selected closure and unchanged consumer blockers together", async () => {
     const { platform } = fixture(
+      resourceAuthority,
       new Map([
         ["dependency", emptyPlugin("dependency")],
         ["consumer", emptyPlugin("consumer")],
@@ -407,7 +424,7 @@ describe("activation compilation", () => {
   });
 
   it("rejects cycles and incompatible selected dependencies before module evaluation", async () => {
-    const { platform } = fixture();
+    const { platform } = fixture(resourceAuthority);
     const one = await select(platform, "one", "one", { dependencies: { two: "^2" } });
     await select(platform, "two", "two", { dependencies: { one: "*" } });
     const codes = platform.preview([one]).blockers.map((item) => item.code);
@@ -421,7 +438,7 @@ describe("activation compilation", () => {
     const release = deferred();
     const loaded: string[] = [];
     let allowed = true;
-    const host = createHost();
+    const host = createHost({ resourceAuthority });
     const platform = createPlatform({
       id: "admission",
       host,
@@ -458,7 +475,7 @@ describe("activation compilation", () => {
   it("reauthorizes cached code before a new generation is committed", async () => {
     const plugin = emptyPlugin("sample");
     const load = vi.fn<() => { default: typeof plugin }>(() => ({ default: plugin }));
-    const host = createHost();
+    const host = createHost({ resourceAuthority });
     let allowActivation = false;
     const operations: string[] = [];
     const platform = createPlatform({
@@ -487,7 +504,7 @@ describe("activation compilation", () => {
   it.each(["update", "remove"] as const)(
     "authorizes the committed consumer revision before a provider %s restarts it",
     async (command) => {
-      const host = createHost();
+      const host = createHost({ resourceAuthority });
       const setup = vi.fn<() => void>();
       const consumer = definePlugin({
         name: "consumer",
@@ -565,6 +582,7 @@ describe("activation compilation", () => {
         setup,
       });
       const { host, platform } = fixture(
+        resourceAuthority,
         new Map<string, AnyPlugin>([
           ["consumer", consumer],
           ["provider", valuePlugin("provider", 1)],
@@ -601,7 +619,7 @@ describe("activation compilation", () => {
       },
     },
   ])("rejects invalid module boundaries", async (module) => {
-    const host = createHost();
+    const host = createHost({ resourceAuthority });
     const platform = createPlatform({
       id: "invalid-module",
       host,
@@ -617,7 +635,7 @@ describe("activation compilation", () => {
   });
 
   it("rejects a valid Plugin with a different authorized identity", async () => {
-    const { platform } = fixture(new Map([["one", emptyPlugin("other")]]));
+    const { platform } = fixture(resourceAuthority, new Map([["one", emptyPlugin("other")]]));
     const registration = await select(platform, "sample", "one");
     await expect(platform.activate([registration])).rejects.toMatchObject({
       code: "ARTIFACT_IDENTITY",
@@ -629,7 +647,7 @@ describe("activation compilation", () => {
     const reason = { privateResource: () => undefined };
     const platform = createPlatform({
       id: "failure",
-      host: createHost(),
+      host: createHost({ resourceAuthority }),
       apiVersion: "1.0.0",
       loader: {
         load() {
@@ -652,7 +670,7 @@ describe("activation compilation", () => {
     reason.revoke();
     const platform = createPlatform({
       id: "admission-failure",
-      host: createHost(),
+      host: createHost({ resourceAuthority }),
       apiVersion: "1.0.0",
       loader: new MemoryLoader(new Map()),
       authorizer: {

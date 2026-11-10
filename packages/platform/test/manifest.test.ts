@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { createHost } from "dougong";
+import { createResourceAuthority, createHost } from "dougong";
 import { z } from "zod";
 import {
   createPlatform,
@@ -12,6 +12,8 @@ import {
 } from "../src";
 
 import { emptyPlugin, fixture, select } from "./fixtures";
+
+const resourceAuthority = createResourceAuthority();
 
 describe("manifest declarations", () => {
   it("captures and freezes every declared collection", () => {
@@ -61,7 +63,7 @@ describe("manifest declarations", () => {
       expect(() =>
         createPlatform({
           id: "version",
-          host: createHost(),
+          host: createHost({ resourceAuthority }),
           apiVersion: version,
           loader: new MemoryLoader(new Map()),
         }),
@@ -100,7 +102,7 @@ describe("manifest declarations", () => {
     const modules = new Map(
       ["consumer", ...Object.keys(dependencies)].map((name) => [name, emptyPlugin(name)]),
     );
-    const { platform } = fixture(modules);
+    const { platform } = fixture(resourceAuthority, modules);
     const root = await select(platform, "consumer", "consumer", manifest);
     expect(
       platform.preview([root]).blockers.map((blocker) => blocker.dependencyPath.at(-1)),
@@ -290,7 +292,7 @@ describe("loaders and permission policy", () => {
     expect(() =>
       createPlatform({
         id: invalid,
-        host: createHost(),
+        host: createHost({ resourceAuthority }),
         apiVersion: "1.0.0",
         loader: new MemoryLoader(new Map()),
       }),
@@ -313,7 +315,7 @@ describe("loaders and permission policy", () => {
   });
 
   it("projects permission fields into Registration diagnostics", async () => {
-    const { platform } = fixture();
+    const { platform } = fixture(resourceAuthority);
     const registration = await select(platform, "reader", "reader", { permissions: ["disk:read"] });
     await expect(platform.activate([registration])).rejects.toBeInstanceOf(PermissionDeniedError);
     expect(registration.error?.snapshot.fields).toEqual({
