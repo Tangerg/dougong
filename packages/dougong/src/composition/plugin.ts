@@ -1,32 +1,32 @@
 import type { StandardJSONSchemaV1, StandardSchemaV1 } from "@standard-schema/spec";
 import {
+  contractKindName,
   normalizeContract,
   normalizeRequirement,
+  requiredContract,
   type ContractIdentity,
   type ContractKind,
   type ExtensionPoint,
   type OptionalService,
   type Requirement,
   type Service,
+  type ServiceIdentity,
 } from "../contracts/contracts.js";
-import type {
-  ContributionView,
-  ContributionOperations,
-} from "../contributions/contribution-store.js";
+import type { ContributionView } from "../contributions/contribution-view.js";
+import type { ContributionOperations } from "../contributions/contribution-registry.js";
 import type { LifetimeContext } from "../lifetime/lifetime.js";
 import type { Logger } from "../contracts/logging.js";
 import type { EventOperations } from "../events/event-hub.js";
 import type { Awaitable } from "../contracts/resource.js";
 import { normalizePlainRecord, recordFields } from "../internal/record.js";
+import { assertTrimmedText } from "../internal/text.js";
 import type { ReadonlyConfiguration } from "./configuration.js";
 
 export type { Awaitable } from "../contracts/resource.js";
 
 export type Requirements = Readonly<Record<string, Requirement>>;
 
-export type Provisions = Readonly<
-  Record<string, Extract<Requirement, { readonly kind: "service" }>>
->;
+export type Provisions = Readonly<Record<string, ServiceIdentity>>;
 
 type ServiceValue<T> = T extends Service<infer Value> ? Value : never;
 
@@ -160,12 +160,7 @@ function normalizePluginDeclaration(plugin: AnyPlugin): AnyPlugin {
   if (capturedDeclarations.has(plugin)) return plugin;
   const declaration = normalizePlainRecord(plugin, "Plugin declaration", { fields: pluginFields });
   const { name, configuration, setup } = declaration;
-  if (typeof name !== "string" || !name.trim()) {
-    throw new TypeError("Plugin name must be a non-empty string");
-  }
-  if (name !== name.trim()) {
-    throw new TypeError("Plugin name cannot start or end with whitespace");
-  }
+  assertTrimmedText(name, "Plugin name");
   if (typeof setup !== "function") {
     throw new TypeError(`Plugin '${name}' must define setup()`);
   }
@@ -242,9 +237,12 @@ function captureSchemaConverter(value: unknown, name: string): StandardJSONSchem
 }
 
 class PluginContracts {
+  readonly #pluginName: string;
   readonly #declarations = new Map<string, PluginContractDeclaration>();
 
-  constructor(private readonly pluginName: string) {}
+  constructor(pluginName: string) {
+    this.#pluginName = pluginName;
+  }
 
   normalizeRequirements(declarations: Requirements): Requirements {
     const requires: Record<string, Requirement> = Object.create(null);
@@ -255,11 +253,7 @@ class PluginContracts {
         `Plugin requirement '${alias}' must be a Service or ExtensionPoint`,
         `Optional requirement '${alias}' must wrap a Service`,
       );
-      this.#remember(
-        "requirement",
-        alias,
-        requirement.kind === "optional" ? requirement.service : requirement,
-      );
+      this.#remember("requirement", alias, requiredContract(requirement));
       requires[alias] = requirement;
     }
     return Object.freeze(requires);
@@ -284,10 +278,7 @@ class PluginContracts {
   }
 
   #assertAlias(alias: string, role: PluginContractDeclaration["role"]) {
-    if (!alias.trim()) throw new TypeError(`Plugin ${role} alias cannot be empty`);
-    if (alias !== alias.trim()) {
-      throw new TypeError(`Plugin ${role} alias cannot start or end with whitespace`);
-    }
+    assertTrimmedText(alias, `Plugin ${role} alias`);
   }
 
   #remember(role: PluginContractDeclaration["role"], alias: string, contract: ContractIdentity) {
@@ -298,25 +289,19 @@ class PluginContracts {
     }
     if (previous.kind !== contract.kind) {
       throw new TypeError(
-        `Plugin '${this.pluginName}' uses Contract '${contract.id}' as both ${contractLabel(previous.kind)} and ${contractLabel(contract.kind)}`,
+        `Plugin '${this.#pluginName}' uses Contract '${contract.id}' as both ${contractKindName(previous.kind)} and ${contractKindName(contract.kind)}`,
       );
     }
-    const label = contractLabel(contract.kind);
+    const label = contractKindName(contract.kind);
     if (previous.role !== role) {
       throw new TypeError(
-        `Plugin '${this.pluginName}' cannot both require and provide ${label} '${contract.id}'`,
+        `Plugin '${this.#pluginName}' cannot both require and provide ${label} '${contract.id}'`,
       );
     }
     throw new TypeError(
-      `Plugin '${this.pluginName}' ${role} aliases '${previous.alias}' and '${alias}' reference the same ${label} '${contract.id}'`,
+      `Plugin '${this.#pluginName}' ${role} aliases '${previous.alias}' and '${alias}' reference the same ${label} '${contract.id}'`,
     );
   }
-}
-
-function contractLabel(kind: ContractKind) {
-  if (kind === "extensionPoint") return "ExtensionPoint";
-  if (kind === "event") return "Event";
-  return "Service";
 }
 
 export function normalizePlugin(plugin: AnyPlugin): NormalizedPlugin {

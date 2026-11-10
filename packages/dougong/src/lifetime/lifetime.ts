@@ -1,13 +1,13 @@
 import {
   DougongError,
-  isCancellationReason,
-  RecordedFailure,
   lifetimeBusyCode,
   lifetimeDisposedCode,
   shutdownTimeoutCode,
 } from "../contracts/errors.js";
+import { RecordedFailure } from "../contracts/recorded-failure.js";
 import { abortReason, isAborted, onAbort } from "../internal/abort.js";
 import { normalizePlainRecord, recordFields } from "../internal/record.js";
+import { assertTrimmedText } from "../internal/text.js";
 import { assertSynchronous, resolveValue, type ResolvedValue } from "../internal/async-result.js";
 import { batchSnapshotNotifications } from "../observation/snapshot-view.js";
 import type {
@@ -16,6 +16,16 @@ import type {
   ObligationKind,
   UnresolvedObligation,
 } from "./lifetime-diagnostics.js";
+import {
+  CleanupRecord,
+  PublicationRecord,
+  TaskRecord,
+  createDisposalReason,
+  type BackgroundTask,
+  type Cleanup,
+  type CleanupKind,
+  type Task,
+} from "./obligations.js";
 import {
   asyncDisposeSymbol,
   captureDisposer,
@@ -34,14 +44,7 @@ export type {
   LifetimeSnapshot,
   UnresolvedObligation,
 } from "./lifetime-diagnostics.js";
-
-export interface Task<T = void> extends AsyncDisposable {
-  readonly result: Promise<ResolvedValue<T>>;
-  [Symbol.asyncDispose](): Promise<void>;
-}
-
-export type Cleanup = () => Awaitable<unknown>;
-export type BackgroundTask<T> = (signal: AbortSignal) => Awaitable<T>;
+export type { BackgroundTask, Cleanup, Task } from "./obligations.js";
 
 type AcquisitionResult<T> = T & NoInfer<Awaited<T> extends Resource ? unknown : never>;
 
@@ -73,7 +76,7 @@ export interface LifetimeOptions {
   readonly report: (error: unknown) => void;
   readonly releaseFailed?: (failure: ReleaseFailure) => void;
   readonly changed?: () => void;
-  readonly parentSignal?: AbortSignal;
+  readonly startupSignal?: AbortSignal;
   readonly shutdownTimeoutMilliseconds?: number;
 }
 
@@ -83,184 +86,21 @@ export interface ReleaseFailure {
   readonly error: unknown;
 }
 
+// A whole tree shares one observer; a disposed scope drops it so retired handles retain no callbacks.
+interface LifetimeObserver {
+  readonly report: (error: unknown) => void;
+  readonly releaseFailed: ((failure: ReleaseFailure) => void) | undefined;
+  readonly changed: (() => void) | undefined;
+}
+
 interface ChildOwnership {
   readonly visibility: Visibility;
   readonly detach: (child: Lifetime) => void;
 }
 
+// Only the root publishes; its children share the flag so later registrations publish at once.
 class Visibility {
   published = false;
-}
-
-function createDisposalReason() {
-  const reason = new DOMException("Resource disposed", "AbortError");
-  // Independent cancellation needs its own identity, without retaining completed stack frames.
-  Reflect.set(reason, "stack", undefined);
-  return Object.freeze(reason);
-}
-
-class CleanupRecord {
-  readonly id: number;
-  readonly kind: "cleanup" | "interrupt";
-  #cleanup: Cleanup | undefined;
-  #detach: (() => void) | undefined;
-  #completion: Promise<void> | undefined;
-  #failure: RecordedFailure | undefined;
-  #releaseFailed: ((error: unknown) => void) | undefined;
-  #changed: (() => void) | undefined;
-
-  constructor(
-    id: number,
-    kind: "cleanup" | "interrupt",
-    cleanup: Cleanup,
-    detach: () => void,
-    releaseFailed: (error: unknown) => void,
-    changed: () => void,
-  ) {
-    this.#releaseFailed = releaseFailed;
-    this.#changed = changed;
-    this.id = id;
-    this.kind = kind;
-    this.#cleanup = cleanup;
-    this.#detach = detach;
-  }
-
-  get failure() {
-    return this.#failure;
-  }
-
-  dispose(): Promise<void> {
-    if (this.#completion) return this.#completion;
-    const cleanup = this.#cleanup;
-    if (!cleanup) return Promise.resolve();
-    const completion = Promise.withResolvers<void>();
-    this.#completion = Object.freeze(completion.promise);
-    void Promise.resolve()
-      .then(() => resolveValue(cleanup()))
-      .then(
-        () => {
-          this.#cleanup = undefined;
-          const detach = this.#detach;
-          this.#detach = undefined;
-          this.#releaseFailed = undefined;
-          this.#changed = undefined;
-          detach?.();
-          completion.resolve();
-        },
-        (error) => {
-          // A failed release still belongs to this record; retrying an arbitrary callback is unsafe.
-          this.#releaseFailed?.(error);
-          this.#failure = new RecordedFailure(error);
-          this.#changed?.();
-          completion.reject(error);
-        },
-      );
-    return completion.promise;
-  }
-
-  forget() {
-    if (this.#completion) return;
-    this.#cleanup = undefined;
-    this.#releaseFailed = undefined;
-    this.#changed = undefined;
-    const detach = this.#detach;
-    this.#detach = undefined;
-    detach?.();
-  }
-}
-
-class PublicationRecord {
-  readonly id: number;
-  readonly publication: Publication;
-  failure: { readonly reason: unknown; recorded: RecordedFailure | undefined } | undefined;
-  #releaseFailed: ((error: unknown) => void) | undefined;
-
-  constructor(id: number, publication: Publication, releaseFailed: (error: unknown) => void) {
-    this.id = id;
-    this.publication = publication;
-    this.#releaseFailed = releaseFailed;
-  }
-
-  withdraw(): boolean {
-    if (this.failure) return false;
-    try {
-      assertSynchronous(
-        this.publication[disposeSymbol](),
-        "Publication withdrawal must be synchronous",
-      );
-    } catch (error) {
-      this.failure = { reason: error, recorded: undefined };
-      this.#releaseFailed?.(error);
-      this.failure.recorded = new RecordedFailure(error);
-      return false;
-    }
-    this.#releaseFailed = undefined;
-    return true;
-  }
-}
-
-class TaskRecord<T> {
-  readonly handle: Task<Awaited<T>>;
-  #controller: AbortController | undefined;
-  #detach: (() => void) | undefined;
-  readonly settled: Promise<void>;
-
-  constructor(
-    task: BackgroundTask<T>,
-    report: ((error: unknown) => void) | undefined,
-    detach: () => void,
-  ) {
-    const controller = new AbortController();
-    this.#controller = controller;
-    this.#detach = detach;
-    let reporter = report;
-    const failed = (error: unknown) => {
-      if (!reporter) return;
-      const notify = reporter;
-      reporter = undefined;
-      try {
-        if (!isCancellationReason(controller.signal, error)) notify(error);
-      } catch (reporterError) {
-        queueMicrotask(() => {
-          throw reporterError;
-        });
-      }
-    };
-    const result = Promise.resolve().then(() => resolveValue(task(controller.signal)));
-    this.settled = Object.freeze(
-      result.then(
-        () => this.#settle(),
-        (error: unknown) => {
-          failed(error);
-          this.#settle();
-        },
-      ),
-    );
-    this.handle = markOwnedControlHandle(
-      Object.freeze({
-        result,
-        [asyncDisposeSymbol]: this.#dispose.bind(this),
-      }),
-    );
-  }
-
-  #settle() {
-    this.#controller = undefined;
-    const detach = this.#detach;
-    this.#detach = undefined;
-    detach?.();
-  }
-
-  #dispose() {
-    this.cancel(createDisposalReason());
-    return this.settled;
-  }
-
-  cancel(reason: unknown) {
-    const controller = this.#controller;
-    this.#controller = undefined;
-    controller?.abort(reason);
-  }
 }
 
 export class Lifetime {
@@ -277,33 +117,33 @@ export class Lifetime {
   readonly #foreground = new Set<Promise<void>>();
   readonly #settlement = Promise.withResolvers<void>();
   readonly #shutdownTimeoutMilliseconds: number | undefined;
-  #report: ((error: unknown) => void) | undefined;
-  #releaseFailed: ((failure: ReleaseFailure) => void) | undefined;
-  #changed: (() => void) | undefined;
+  #observer: LifetimeObserver | undefined;
   #phase: LifetimePhase = "active";
   #sequence = 0;
-  #detachParentAbort: (() => void) | undefined;
+  #detachStartupAbort: (() => void) | undefined;
   #detachFromParent: ((child: Lifetime) => void) | undefined;
   #completion: Promise<void> | undefined;
   #timeoutFailure: RecordedFailure | undefined;
   #handle: LifetimeContext | undefined;
 
   constructor(options: LifetimeOptions, ownership?: ChildOwnership) {
-    validateLabel(options.label);
+    assertTrimmedText(options.label, "Lifetime label");
     if (typeof options.report !== "function")
       throw new TypeError("Lifetime error reporter must be a function");
     this.#label = options.label;
-    this.#report = options.report;
-    this.#releaseFailed = options.releaseFailed;
-    this.#changed = options.changed;
+    this.#observer = {
+      report: options.report,
+      releaseFailed: options.releaseFailed,
+      changed: options.changed,
+    };
     this.#shutdownTimeoutMilliseconds = shutdownTimeout(options.shutdownTimeoutMilliseconds);
     this.#visibility = ownership?.visibility ?? new Visibility();
     this.#detachFromParent = ownership?.detach;
     Object.freeze(this.#settlement.promise);
     // A deadline may end the caller's wait before the real shutdown rejects.
     void this.#settlement.promise.catch(() => undefined);
-    if (options.parentSignal) {
-      this.#detachParentAbort = onAbort(options.parentSignal, (reason) => {
+    if (options.startupSignal) {
+      this.#detachStartupAbort = onAbort(options.startupSignal, (reason) => {
         this.block();
         this.#cancelTree(reason);
       });
@@ -462,13 +302,13 @@ export class Lifetime {
   }
 
   child(label: string): ChildLifetime {
-    this.#requireActive();
+    const { report, releaseFailed, changed } = this.#requireActive();
     const child = new Lifetime(
       {
         label,
-        report: this.#report!,
-        ...(this.#releaseFailed && { releaseFailed: this.#releaseFailed }),
-        ...(this.#changed && { changed: this.#changed }),
+        report,
+        ...(releaseFailed && { releaseFailed }),
+        ...(changed && { changed }),
         ...(this.#shutdownTimeoutMilliseconds === undefined
           ? {}
           : { shutdownTimeoutMilliseconds: this.#shutdownTimeoutMilliseconds }),
@@ -479,7 +319,7 @@ export class Lifetime {
       },
     );
     this.#children.add(child);
-    this.#changed?.();
+    this.#changed();
     const handle = child.#context({ [asyncDisposeSymbol]: () => child.dispose() });
     child.#handle = handle;
     return handle;
@@ -489,7 +329,8 @@ export class Lifetime {
     return this.#startTask(task, (error) => this.#reportError(error));
   }
 
-  prepare<T>(task: BackgroundTask<T>): Promise<ResolvedValue<Awaited<T>>> {
+  // The caller receives the failure, so it is not also sent to the error reporter.
+  run<T>(task: BackgroundTask<T>): Promise<ResolvedValue<Awaited<T>>> {
     return this.#startTask(task).result;
   }
 
@@ -498,10 +339,10 @@ export class Lifetime {
     if (typeof task !== "function") throw new TypeError("Task must be a function");
     const record: TaskRecord<T> = new TaskRecord(task, report, () => {
       this.#tasks.delete(record);
-      this.#changed?.();
+      this.#changed();
     });
     this.#tasks.add(record);
-    this.#changed?.();
+    this.#changed();
     return record.handle;
   }
 
@@ -525,29 +366,28 @@ export class Lifetime {
       });
     const detach = () => {
       this.#acquisitions.delete(join);
-      this.#changed?.();
+      this.#changed();
     };
     // Shutdown joins its own settlement reaction, never an application-overridable result.
     const join = completion.then(detach, detach);
     this.#acquisitions.add(join);
-    this.#changed?.();
+    this.#changed();
     return completion;
   }
 
   stage<T extends Publication>(create: (detach: () => void) => T): T {
-    this.#requireActive();
-    const report = this.#report;
+    const { report } = this.#requireActive();
     let record: PublicationRecord | undefined;
     const publication = create(() => {
       if (record && !record.failure) this.#publications.delete(record);
-      this.#changed?.();
+      this.#changed();
     });
     record = new PublicationRecord(++this.#sequence, publication, (error) =>
       this.#notifyReleaseFailure(error, "publication"),
     );
     this.#publications.add(record);
     batchSnapshotNotifications(() => {
-      this.#changed?.();
+      this.#changed();
       if (this.published) publication.publish();
     }, report);
     return publication;
@@ -561,10 +401,10 @@ export class Lifetime {
     const release = () => {
       this.#foreground.delete(obligation.promise);
       obligation.resolve();
-      this.#changed?.();
+      this.#changed();
     };
     try {
-      this.#changed?.();
+      this.#changed();
       const result = resolveValue(callback());
       // The receipt carries data; this reaction alone releases the foreground obligation.
       void result.then(release, release);
@@ -604,20 +444,32 @@ export class Lifetime {
   }
 
   detachStartupSignal() {
-    this.#detachParentAbort?.();
-    this.#detachParentAbort = undefined;
+    this.#detachStartupAbort?.();
+    this.#detachStartupAbort = undefined;
   }
 
-  dispose(options?: { readonly cancelForeground?: boolean }): Promise<void> {
+  // Disposal requires idleness: in-flight foreground work rejects it with LIFETIME_BUSY.
+  dispose(): Promise<void> {
     if (this.#completion) return this.#completion;
     if (this.#phase === "disposed") return Promise.resolve();
-    const report = this.#report;
     try {
-      if (options?.cancelForeground) this.block();
-      else this.seal();
+      this.seal();
     } catch (error) {
       return Promise.reject(error);
     }
+    return this.#shutdown();
+  }
+
+  // Stopping closes ingress even while foreground work runs; shutdown then cancels and joins it.
+  stop(): Promise<void> {
+    if (this.#completion) return this.#completion;
+    if (this.#phase === "disposed") return Promise.resolve();
+    this.block();
+    return this.#shutdown();
+  }
+
+  #shutdown(): Promise<void> {
+    const { report } = this.#observer!;
     const entering = [...this.#tree()].filter((scope) => !scope.#completion);
     const errors: unknown[] = [];
     // Reserve every real join before withdrawal or cancellation can reenter a child or its parent.
@@ -628,7 +480,7 @@ export class Lifetime {
     try {
       batchSnapshotNotifications(() => {
         for (const scope of entering) scope.#withdraw();
-        this.#changed?.();
+        this.#changed();
       }, report);
     } catch (error) {
       errors.push(error);
@@ -659,7 +511,7 @@ export class Lifetime {
       this.#phase = "quarantined";
       this.#notifyReleaseFailure(failure, "shutdown");
       this.#timeoutFailure = new RecordedFailure(failure);
-      this.#changed?.();
+      this.#changed();
       completion.reject(failure);
     }, this.#shutdownTimeoutMilliseconds);
     void this.settled.then(
@@ -685,8 +537,7 @@ export class Lifetime {
     for (const result of await Promise.allSettled(interruptions)) {
       if (result.status === "rejected") errors.push(result.reason);
     }
-    const tasks = [...this.#tasks].map((task) => task.settled);
-    await Promise.all(tasks);
+    await Promise.all([...this.#tasks].map((task) => task.settled));
     await Promise.allSettled([...this.#acquisitions]);
     await Promise.all(this.#foreground);
     const childResults = await children;
@@ -703,7 +554,7 @@ export class Lifetime {
     this.#timeoutFailure = undefined;
     if (errors.length) {
       this.#phase = "quarantined";
-      this.#changed?.();
+      this.#changed();
       throw new AggregateError(errors, "Lifetime has unresolved cleanup obligations");
     }
     this.#phase = "disposed";
@@ -713,10 +564,9 @@ export class Lifetime {
     const detach = this.#detachFromParent;
     this.#detachFromParent = undefined;
     detach?.(this);
-    this.#report = undefined;
-    this.#releaseFailed = undefined;
-    this.#changed?.();
-    this.#changed = undefined;
+    const observer = this.#observer;
+    this.#observer = undefined;
+    observer?.changed?.();
   }
 
   #withdraw() {
@@ -727,39 +577,44 @@ export class Lifetime {
     }
   }
 
-  #own(cleanup: Cleanup, kind: "cleanup" | "interrupt", releaseClaim?: () => void) {
+  #own(cleanup: Cleanup, kind: CleanupKind, releaseClaim?: () => void) {
     const records = kind === "cleanup" ? this.#cleanups : this.#interrupts;
-    let record: CleanupRecord;
-    record = new CleanupRecord(
-      ++this.#sequence,
-      kind,
+    const record: CleanupRecord = new CleanupRecord(++this.#sequence, kind, {
       cleanup,
-      () => {
+      detach: () => {
         records.delete(record);
         releaseClaim?.();
-        this.#changed?.();
+        this.#changed();
       },
-      (error) => this.#notifyReleaseFailure(error, kind),
-      () => this.#changed?.(),
-    );
+      releaseFailed: (error) => this.#notifyReleaseFailure(error, kind),
+      changed: () => this.#changed(),
+    });
     records.add(record);
-    this.#changed?.();
+    this.#changed();
     return record;
   }
 
+  #changed() {
+    this.#observer?.changed?.();
+  }
+
   #reportError(error: unknown) {
-    const report = this.#report;
-    if (report) assertSynchronous(report(error), "Lifetime error reporters must be synchronous");
+    const observer = this.#observer;
+    if (observer)
+      assertSynchronous(observer.report(error), "Lifetime error reporters must be synchronous");
   }
 
   #notifyReleaseFailure(error: unknown, kind: ObligationKind) {
-    this.#releaseFailed?.(Object.freeze({ owner: this, kind, error }));
+    this.#observer?.releaseFailed?.(Object.freeze({ owner: this, kind, error }));
   }
 
-  #requireActive() {
-    if (!this.acceptsWork) {
+  // An accepting scope always still holds its observer; disposal drops both together.
+  #requireActive(): LifetimeObserver {
+    const observer = this.#observer;
+    if (!this.acceptsWork || !observer) {
       throw new DougongError(lifetimeDisposedCode, "Lifetime is closed to new work");
     }
+    return observer;
   }
 }
 
@@ -777,10 +632,4 @@ export function shutdownTimeout(value: unknown): number | undefined {
       `shutdownTimeoutMilliseconds must be a positive finite number no greater than ${maximumTimerDelay}`,
     );
   return value;
-}
-
-function validateLabel(label: string) {
-  if (typeof label !== "string" || !label.trim() || label !== label.trim()) {
-    throw new TypeError("Lifetime label must be a non-empty trimmed string");
-  }
 }

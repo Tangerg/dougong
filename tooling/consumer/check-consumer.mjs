@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { execFileSync } from "node:child_process";
-import { cpSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -13,7 +13,8 @@ import { installConsumerDependencies } from "./install-dependencies.mjs";
 import { verifyBrowserBundle } from "./browser-runner.mjs";
 
 const root = fileURLToPath(new URL("../../", import.meta.url));
-const workspace = mkdtempSync(join(tmpdir(), "dougong-packed-consumer-"));
+// Bundlers report resolved module paths; a symlinked temporary root (macOS /var) would never match.
+const workspace = realpathSync(mkdtempSync(join(tmpdir(), "dougong-packed-consumer-")));
 const modules = join(workspace, "node_modules");
 const packed = new Map();
 try {

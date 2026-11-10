@@ -11,7 +11,7 @@ const result = await host.apply(plan);
 console.log(result.stateRevision, result.affectedInstallations);
 ```
 
-Planning captures configuration, runs schemas, validates contracts and groups, resolves bindings, computes affected closure and produces a read-only `PlanReport`. It does not run setup, acquire plugin runtime resources or publish listeners. Schema validators are application code and should avoid external effects. The report contains the baseline revision, operations, before/after bindings, origin changes, impact reasons, preparation order, stop order, publication order and atomic-publication guarantee.
+Planning captures configuration, runs schemas, validates contracts and groups, resolves bindings, computes affected closure and produces a read-only `PlanReport`. It does not run setup, acquire plugin runtime resources or publish listeners. Schema validators are application code and should avoid external effects. The report contains the baseline revision, operations, before/after bindings, origin changes, impact reasons, preparation order, stop order and atomic-publication guarantee.
 
 A Plan is issued by one Host and can be consumed once. Before execution effects, apply checks authority, consumption and `stateRevision`. Another commit or a failure that changes running state invalidates old Plans. Task counts and notification counts do not.
 

@@ -4,14 +4,14 @@ import type {
   Installation,
   InitialInstallation,
 } from "../composition/declarations.js";
-import type { HostStatus } from "../contracts/status.js";
 import type { Logger } from "../contracts/logging.js";
 import type { Service, OptionalService, ExtensionPoint } from "../contracts/contracts.js";
-import type { ContributionView } from "../contributions/contribution-store.js";
+import type { ContributionView } from "../contributions/contribution-view.js";
 import type { SnapshotView } from "../observation/snapshot-view.js";
-import type { HostSnapshot } from "../inspection/diagnostics.js";
+import type { HostSnapshot, HostStatus } from "../inspection/diagnostics.js";
 import type { Awaitable } from "../contracts/resource.js";
-import type { Plan, BindingReport } from "../composition/plan.js";
+import type { Plan } from "../composition/plan.js";
+import type { BindingReport } from "../composition/installation-graph.js";
 import type { AnyPlugin } from "../composition/plugin.js";
 import type { ResolvedValue } from "../internal/async-result.js";
 

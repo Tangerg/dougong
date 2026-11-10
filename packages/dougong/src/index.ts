@@ -13,7 +13,6 @@ export {
 } from "./contracts/contracts.js";
 export { createHost } from "./execution/host.js";
 export type { Host, HostOptions, ApplyResult } from "./execution/host-api.js";
-export type { HostStatus, InstallationState } from "./contracts/status.js";
 export type { ResolvedValue } from "./internal/async-result.js";
 export type {
   ChangeSet,
@@ -24,6 +23,7 @@ export type {
   InstallationUpdate,
   InstallationOrigin,
   InitialInstallation,
+  InstallationState,
 } from "./composition/declarations.js";
 export {
   definePlugin,
@@ -47,13 +47,14 @@ export {
 export type {
   Plan,
   PlanReport,
-  BindingReport,
   ImpactReason,
   PlanOperation,
   DeclarationSnapshot,
 } from "./composition/plan.js";
+export type { BindingReport } from "./composition/installation-graph.js";
 export type {
   HostSnapshot,
+  HostStatus,
   InstallationSnapshot,
   GroupSnapshot,
 } from "./inspection/diagnostics.js";
@@ -69,22 +70,19 @@ export type {
   LifetimeSnapshot,
   UnresolvedObligation,
 } from "./lifetime/lifetime.js";
-export type {
-  Contribution,
-  ContributionView,
-  ContributionOperations,
-} from "./contributions/contribution-store.js";
+export type { Contribution } from "./contributions/contribution-store.js";
+export type { ContributionView } from "./contributions/contribution-view.js";
+export type { ContributionOperations } from "./contributions/contribution-registry.js";
 export type { EventListener, EventOperations, EventArguments } from "./events/event-hub.js";
 export { isLogger, type Logger } from "./contracts/logging.js";
 export {
   DougongError,
   ConfigurationValidationError,
-  RecordedFailure,
   isError,
   isCancellationReason,
-  type ErrorSnapshot,
   type ErrorDetails,
 } from "./contracts/errors.js";
+export { RecordedFailure, type ErrorSnapshot } from "./contracts/recorded-failure.js";
 export {
   disposeSymbol,
   asyncDisposeSymbol,

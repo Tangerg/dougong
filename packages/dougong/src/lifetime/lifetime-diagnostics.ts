@@ -1,4 +1,4 @@
-import type { ErrorSnapshot } from "../contracts/errors.js";
+import type { ErrorSnapshot } from "../contracts/recorded-failure.js";
 
 export type LifetimePhase = "active" | "sealed" | "disposing" | "disposed" | "quarantined";
 export type ObligationKind = "cleanup" | "interrupt" | "publication" | "shutdown";

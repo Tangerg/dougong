@@ -196,7 +196,7 @@ describe("Host execution", () => {
     expect(plan.report.affectedInstallations).toEqual(["provider", "consumer"]);
     expect(plan.report.reasons).toContainEqual({
       installation: "consumer",
-      kind: "provider_changed",
+      kind: "providerChanged",
       contract: value.id,
       provider: "provider",
       previousProvider: "provider",

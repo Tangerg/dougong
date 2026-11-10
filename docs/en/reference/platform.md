@@ -43,7 +43,7 @@ When `status === "installed"`, the same snapshot has an `ArtifactOrigin` in `act
 
 Diagnostics materialize snapshots when read or observed by a subscriber. Consecutive unobserved selections do not repeatedly traverse every Registration. Unchanged snapshots preserve identity, and unrelated Core activity does not notify Platform observers. A subscription establishes its comparison baseline from the current state. Disposal retains a final snapshot and detaches runtime resources.
 
-`ActivationPreview.deferred` explicitly contains admission, module_validation, configuration_validation, core_binding and setup. Preview is not proof that runtime validation passed. Activation captures selection revision and Artifact identity and rechecks after preparation; stale work cannot overwrite a newer selection.
+`ActivationPreview.deferred` explicitly contains `admission`, `moduleValidation`, `configurationValidation`, `coreBinding` and `setup`. Preview is not proof that runtime validation passed. Activation captures selection revision and Artifact identity and rechecks after preparation; stale work cannot overwrite a newer selection.
 
 `ActivationBlocker["code"]` contains only the four delivery dependency planning failures: `REGISTRATION_DEPENDENCY_MISSING`, `REGISTRATION_DEPENDENCY_INCOMPATIBLE`, `REGISTRATION_DEPENDENCY_INACTIVE` and `REGISTRATION_CYCLE`. Loading, permission and Core execution failures cannot be preview blockers; their own execution boundaries report them.
 

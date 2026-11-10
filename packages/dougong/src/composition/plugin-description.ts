@@ -1,15 +1,17 @@
 import type { StandardJSONSchemaV1 } from "@standard-schema/spec";
 import { normalizePlainRecord, recordFields } from "../internal/record.js";
 import { assertSynchronous } from "../internal/async-result.js";
+import { assertTrimmedText } from "../internal/text.js";
 import { captureConfiguration, type ConfigurationValue } from "./configuration.js";
 import { normalizePlugin, type AnyPlugin } from "./plugin.js";
+import { requiredContract } from "../contracts/contracts.js";
 
 export interface PluginDescriptionOptions {
   readonly jsonSchemaTarget?: StandardJSONSchemaV1.Target;
 }
 
 export type PluginConfigurationDescriptor =
-  | { readonly status: "schema_absent" }
+  | { readonly status: "schemaAbsent" }
   | { readonly status: "unavailable"; readonly vendor: string }
   | {
       readonly status: "available";
@@ -32,6 +34,7 @@ export interface PluginDescriptor {
 }
 
 const descriptionOptionFields = recordFields<PluginDescriptionOptions>()("jsonSchemaTarget");
+const defaultJSONSchemaTarget: StandardJSONSchemaV1.Target = "draft-2020-12";
 
 export function describePlugin(
   plugin: AnyPlugin,
@@ -40,14 +43,13 @@ export function describePlugin(
   const input = normalizePlainRecord(options, "Plugin description options", {
     fields: descriptionOptionFields,
   });
-  const target = input.jsonSchemaTarget === undefined ? "draft-2020-12" : input.jsonSchemaTarget;
-  if (typeof target !== "string" || !target || target.trim() !== target) {
-    throw new TypeError("JSON Schema target must be a non-empty trimmed string");
-  }
+  const target =
+    input.jsonSchemaTarget === undefined ? defaultJSONSchemaTarget : input.jsonSchemaTarget;
+  assertTrimmedText(target, "JSON Schema target");
   const declaration = normalizePlugin(plugin);
   const schema = declaration.configuration?.["~standard"];
   let configuration: PluginConfigurationDescriptor;
-  if (!schema) configuration = Object.freeze({ status: "schema_absent" });
+  if (!schema) configuration = Object.freeze({ status: "schemaAbsent" });
   else if (!schema.jsonSchema)
     configuration = Object.freeze({ status: "unavailable", vendor: schema.vendor });
   else {
@@ -64,7 +66,7 @@ export function describePlugin(
     name: declaration.name,
     requires: Object.freeze(
       Object.entries(declaration.requires).map(([alias, requirement]) => {
-        const token = requirement.kind === "optional" ? requirement.service : requirement;
+        const token = requiredContract(requirement);
         return Object.freeze({
           alias,
           id: token.id,

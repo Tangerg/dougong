@@ -2,14 +2,17 @@ import { DougongError, groupCycleCode, groupMissingCode } from "../contracts/err
 import type { Group } from "./declarations.js";
 
 export class GroupNode {
+  readonly id: string;
+  readonly parent: GroupNode | undefined;
   readonly facade: Group;
-  constructor(
-    readonly id: string,
-    readonly parent: GroupNode | undefined,
-  ) {
+
+  constructor(id: string, parent: GroupNode | undefined) {
+    this.id = id;
+    this.parent = parent;
     this.facade = Object.freeze({ id, parentId: parent?.id }) as Group;
     Object.freeze(this);
   }
+
   get parentId() {
     return this.parent?.id;
   }

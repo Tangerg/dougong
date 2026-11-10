@@ -21,11 +21,12 @@ export interface ActivationBlocker {
   readonly dependencyPath: ReadonlyArray<string>;
 }
 
+// Preview validates only the delivery graph; these checks run during activation itself.
 const deferredChecks = Object.freeze([
   "admission",
-  "module_validation",
-  "configuration_validation",
-  "core_binding",
+  "moduleValidation",
+  "configurationValidation",
+  "coreBinding",
   "setup",
 ] as const);
 
@@ -251,7 +252,7 @@ function assertNoBlockers(blockers: ReadonlyArray<ActivationBlocker>) {
       new PlatformError(item.code, item.message, {
         details: {
           outcome: "rejected",
-          phase: "artifact_planning",
+          phase: "artifactPlanning",
           dependencyPath: item.dependencyPath,
         },
       }),

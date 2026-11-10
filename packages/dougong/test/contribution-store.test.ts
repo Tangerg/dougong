@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { extensionPoint } from "../src/contracts/contracts";
-import { ContributionRegistry, ContributionStore } from "../src/contributions/contribution-store";
+import { ContributionRegistry } from "../src/contributions/contribution-registry";
+import { ContributionStore } from "../src/contributions/contribution-store";
 import { Lifetime } from "../src/lifetime/lifetime";
 import type { Disposable } from "../src/contracts/resource";
 
@@ -8,8 +9,7 @@ const owner = () => new Lifetime({ label: "owner", report: () => undefined });
 
 function createStore<T>() {
   return new ContributionStore<T>(
-    (store) => store.publishSnapshot(),
-    () => undefined,
+    { invalidate: (store) => store.publishSnapshot(), release: () => undefined },
     () => undefined,
   );
 }
@@ -27,11 +27,11 @@ describe("ContributionStore invariants", () => {
   it("rejects duplicate and foreign claims without disturbing the owner", async () => {
     const store = createStore<number>();
     const lifetime = owner();
-    store.stage("owner", "item", 1, lifetime);
-    expect(() => store.stage("owner", "item", 2, lifetime)).toThrow(
+    store.stage("owner/item", 1, lifetime, () => undefined);
+    expect(() => store.stage("owner/item", 2, lifetime, () => undefined)).toThrow(
       "Duplicate contribution 'owner/item'",
     );
-    const foreign = createStore<number>().stage("other", "item", 2, lifetime);
+    const foreign = createStore<number>().stage("other/item", 2, lifetime, () => undefined);
     expect(() => store.publishClaim("owner/item", foreign as never)).toThrow(
       "not the current claim",
     );
@@ -49,7 +49,7 @@ describe("ContributionStore invariants", () => {
   it("projects only published claims and reads each value from its record", async () => {
     const store = createStore<number>();
     const lifetime = owner();
-    const contribution = store.stage("owner", "item", 1, lifetime);
+    const contribution = store.stage("owner/item", 1, lifetime, () => undefined);
     contribution.update(2);
     expect(store.snapshot().length).toBe(0);
     lifetime.publish();
@@ -64,7 +64,7 @@ describe("ContributionStore invariants", () => {
   it("keeps duplicate listener functions as independent subscriptions", async () => {
     const store = createStore<number>();
     const lifetime = owner();
-    const contribution = store.stage("owner", "item", 1, lifetime);
+    const contribution = store.stage("owner/item", 1, lifetime, () => undefined);
     let notifications = 0;
     const listener = () => {
       notifications++;
@@ -86,14 +86,16 @@ describe("ContributionStore invariants", () => {
   it("commits publication state before notifying reentrant subscribers", async () => {
     let releases = 0;
     const store = new ContributionStore<number>(
-      (current) => current.publishSnapshot(),
-      () => undefined,
-      () => {
-        releases++;
+      {
+        invalidate: (current) => current.publishSnapshot(),
+        release: () => {
+          releases++;
+        },
       },
+      () => undefined,
     );
     const lifetime = owner();
-    const contribution = store.stage("owner", "item", 1, lifetime);
+    const contribution = store.stage("owner/item", 1, lifetime, () => undefined);
     let subscription!: Disposable;
     subscription = store.subscribe(
       () => {
@@ -121,12 +123,11 @@ describe("ContributionStore invariants", () => {
       throw reporterFailure;
     });
     const store = new ContributionStore<number>(
-      (current) => current.publishSnapshot(),
+      { invalidate: (current) => current.publishSnapshot(), release: () => undefined },
       report,
-      () => undefined,
     );
     const lifetime = owner();
-    const contribution = store.stage("owner", "item", 1, lifetime);
+    const contribution = store.stage("owner/item", 1, lifetime, () => undefined);
     const subscription = store.subscribe(
       () => {
         throw subscriberFailure;
@@ -165,8 +166,8 @@ describe("ContributionStore invariants", () => {
       throw reporterFailure;
     });
     const registry = new ContributionRegistry(report);
-    const firstStore = registry.get<number>(extensionPoint("contribution/batch-first"));
-    const secondStore = registry.get<number>(extensionPoint("contribution/batch-second"));
+    const firstStore = registry.store<number>(extensionPoint("contribution/batch-first"));
+    const secondStore = registry.store<number>(extensionPoint("contribution/batch-second"));
     const lifetime = owner();
     const firstSubscription = firstStore.subscribe(
       () => {
@@ -180,8 +181,8 @@ describe("ContributionStore invariants", () => {
       },
       () => () => undefined,
     );
-    firstStore.stage("owner", "item", 1, lifetime);
-    secondStore.stage("owner", "item", 2, lifetime);
+    firstStore.stage("owner/item", 1, lifetime, () => undefined);
+    secondStore.stage("owner/item", 2, lifetime, () => undefined);
     registry.beginBatch();
     lifetime.publish();
     registry.endBatch();
@@ -210,11 +211,11 @@ describe("ContributionStore invariants", () => {
 
   it("publishes changed iteration order even when each key keeps its value", async () => {
     const registry = new ContributionRegistry(() => undefined);
-    const store = registry.get<number>(extensionPoint("contribution/reordered"));
+    const store = registry.store<number>(extensionPoint("contribution/reordered"));
     const lifetime = owner();
     const view = store.hostView();
-    const first = store.stage("owner", "first", 1, lifetime);
-    store.stage("owner", "second", 2, lifetime);
+    const first = store.stage("owner/first", 1, lifetime, () => undefined);
+    store.stage("owner/second", 2, lifetime, () => undefined);
     lifetime.publish();
     const before = view.get();
     const seen: string[][] = [];
@@ -223,7 +224,7 @@ describe("ContributionStore invariants", () => {
     });
     registry.beginBatch();
     first[Symbol.dispose]();
-    store.stage("owner", "first", 1, lifetime);
+    store.stage("owner/first", 1, lifetime, () => undefined);
     registry.endBatch();
     expect([...view.get()]).toEqual(["owner/second", "owner/first"]);
     expect(view.get()).not.toBe(before);
@@ -237,15 +238,19 @@ describe("ContributionStore invariants", () => {
     const rejected = extensionPoint<number>("contribution/rejected");
     const claimed = extensionPoint<number>("contribution/claimed");
     const lifetime = owner();
-    const unused = registry.get(rejected);
-    expect(() => unused.stage("owner", "  ", 1, lifetime)).toThrow(TypeError);
-    expect(registry.get(rejected)).not.toBe(unused);
-    const held = registry.get(claimed);
-    const claim = held.stage("owner", "item", 1, lifetime);
-    expect(() => held.stage("owner", "item", 2, lifetime)).toThrow(TypeError);
-    expect(registry.get(claimed)).toBe(held);
+    const unused = registry.store(rejected);
+    expect(() =>
+      unused.stage("owner/item", 1, lifetime, () => {
+        throw new TypeError("conflicting Contract kind");
+      }),
+    ).toThrow(TypeError);
+    expect(registry.store(rejected)).not.toBe(unused);
+    const held = registry.store(claimed);
+    const claim = held.stage("owner/item", 1, lifetime, () => undefined);
+    expect(() => held.stage("owner/item", 2, lifetime, () => undefined)).toThrow(TypeError);
+    expect(registry.store(claimed)).toBe(held);
     claim[Symbol.dispose]();
-    expect(registry.get(claimed)).not.toBe(held);
+    expect(registry.store(claimed)).not.toBe(held);
     await lifetime.dispose();
   });
 
@@ -253,9 +258,8 @@ describe("ContributionStore invariants", () => {
     function createRetainedStore() {
       const reporter = { report() {} };
       const store = new ContributionStore<number>(
-        (current) => current.publishSnapshot(),
+        { invalidate: (current) => current.publishSnapshot(), release: () => undefined },
         reporter.report.bind(reporter),
-        () => undefined,
       );
       const view = store.hostView();
       store.sealHostView();

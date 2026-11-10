@@ -4,7 +4,7 @@ import type { Resource } from "../src/contracts/resource";
 import { ContractRegistry } from "../src/contracts/contract-registry";
 import { Lifetime, type ChildLifetime, type LifetimeContext } from "../src/lifetime/lifetime";
 import { EventHub } from "../src/events/event-hub";
-import { ContributionRegistry } from "../src/contributions/contribution-store";
+import { ContributionRegistry } from "../src/contributions/contribution-registry";
 import { createHost } from "../src/execution/host";
 import { definePlugin } from "../src/composition/plugin";
 import type { Host } from "../src/execution/host-api";
@@ -253,9 +253,9 @@ async function createAndReleaseResources(
 async function releasedStore(registry: ContributionRegistry) {
   const owner = new Lifetime({ label: "store-owner", report: () => undefined });
   const point = extensionPoint<number>("retention/released-store");
-  const store = registry.get<number>(point);
+  const store = registry.store<number>(point);
   const reference = new WeakRef(store);
-  store.stage("owner", "item", 1, owner);
+  store.stage("owner/item", 1, owner, () => undefined);
   registry.view(point, owner);
   owner.publish();
   await owner.dispose();

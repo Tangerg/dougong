@@ -2,7 +2,8 @@
 
 import { disposeSymbol, type Disposable } from "../contracts/resource.js";
 import { assertSynchronous, type SynchronousResult } from "../internal/async-result.js";
-import { RecordedFailure } from "../contracts/errors.js";
+import { RecordedFailure } from "../contracts/recorded-failure.js";
+import { combineFailures } from "../internal/failures.js";
 
 export interface SnapshotView<T> {
   get(): T;
@@ -59,8 +60,7 @@ class SnapshotNotificationQueue {
         this.#boundary = previousBoundary;
       }
     }
-    if (errors.length === 1) throw errors[0];
-    if (errors.length > 1) throw new AggregateError(errors, "Snapshot batch failed");
+    if (errors.length) throw combineFailures(errors, "Snapshot batch failed");
   }
 
   enqueue(subscriptions: ReadonlySet<SnapshotSubscription>) {
@@ -121,8 +121,8 @@ type SnapshotPublisherState<T> =
   | { readonly phase: "disposed" };
 
 type SnapshotResult<T> =
-  | { readonly phase: "value"; readonly value: T }
-  | { readonly phase: "error"; readonly error: RecordedFailure };
+  | { readonly outcome: "value"; readonly value: T }
+  | { readonly outcome: "error"; readonly error: RecordedFailure };
 
 export class SnapshotPublisher<T> implements Disposable {
   readonly #subscriptions = new Set<SnapshotSubscription>();
@@ -137,7 +137,7 @@ export class SnapshotPublisher<T> implements Disposable {
       throw new TypeError("Snapshot error reporter must be a function");
     }
     this.#state = { phase: "active", read, report };
-    this.#snapshot = { phase: "value", value: read() };
+    this.#snapshot = { outcome: "value", value: read() };
     Object.freeze(this);
   }
 
@@ -175,7 +175,7 @@ export class SnapshotPublisher<T> implements Disposable {
     const state = this.#state;
     if (state.phase === "active") this.#materialize(state.read);
     const snapshot = this.#snapshot;
-    if (snapshot.phase === "error") throw snapshot.error;
+    if (snapshot.outcome === "error") throw snapshot.error;
     return snapshot.value;
   }
 
@@ -197,12 +197,12 @@ export class SnapshotPublisher<T> implements Disposable {
       this.#dirty = false;
       this.#reading = true;
       try {
-        this.#snapshot = { phase: "value", value: read() };
+        this.#snapshot = { outcome: "value", value: read() };
       } catch (error) {
         this.#dirty = true;
         if (this.#state.phase === "disposed") {
           // A terminal read cannot retain an obsolete successful value after its final read failed.
-          this.#snapshot = { phase: "error", error: new RecordedFailure(error) };
+          this.#snapshot = { outcome: "error", error: new RecordedFailure(error) };
         }
         throw error;
       } finally {

@@ -1,30 +1,24 @@
 import {
   asyncDisposeSymbol,
   disposeSymbol,
-  isError,
-  type RecordedFailure,
   type AnyPlugin,
   type ApplyResult,
   type Disposable,
   type Group,
   type Host,
   type HostSnapshot,
-  type Logger,
   type Plan,
   type SnapshotView,
 } from "dougong";
 import {
   batchSnapshotNotifications,
   captureDataArray,
-  captureLogger,
   normalizePlainRecord,
   recordFields,
-  resolveValue,
-  ReadonlyMapSnapshot,
   SerialQueue,
   SnapshotPublisher,
 } from "dougong/advanced";
-import { captureAuthorizer, PermissionSet, type Authorizer } from "../admission/permissions.js";
+import type { Authorizer } from "../admission/permissions.js";
 import {
   artifactOrigin,
   assertCompatibleManifest,
@@ -32,25 +26,22 @@ import {
   type Artifact,
   type ArtifactDescriptor,
 } from "../artifacts/artifact.js";
-import { isConcreteVersion, isRegistrationIdPart } from "../artifacts/manifest.js";
+import { isTrimmedText } from "../artifacts/manifest.js";
 import { ArtifactCatalog, type Catalog } from "../catalog/catalog.js";
 import {
   RegistrationRecord,
   type RegistrationPort,
   type Registration,
-  type RegistrationSnapshot,
 } from "../catalog/registration.js";
 import {
   PlatformError,
-  recordPlatformFailure,
   artifactIdentityCode,
   platformBusyCode,
   platformUnavailableCode,
   registrationUnavailableCode,
   activationStaleCode,
-  activationFailedCode,
 } from "../errors.js";
-import type { Loader } from "../loaders/loader.js";
+import { recordActivationFailure } from "./activation-failure.js";
 import { LoadedModules } from "./loading.js";
 import { ActivationOperation } from "./operation.js";
 import { Preparation } from "./preparation.js";
@@ -60,15 +51,14 @@ import {
   type ActivationPreviewOptions,
   type ActivationPreview,
 } from "./plan.js";
-
-export type PlatformStatus = "active" | "disposing" | "disposed";
-
-export interface PlatformSnapshot {
-  readonly id: string;
-  readonly apiVersion: string;
-  readonly status: PlatformStatus;
-  readonly registrations: ReadonlyMap<string, RegistrationSnapshot>;
-}
+import {
+  diagnosticView,
+  projectPlatformSnapshot,
+  terminalReporter,
+  type PlatformSnapshot,
+  type PlatformStatus,
+} from "./platform-diagnostics.js";
+import { capturePlatformOptions, type PlatformOptions } from "./platform-options.js";
 
 export interface Platform<Reference> extends AsyncDisposable {
   readonly id: string;
@@ -95,16 +85,6 @@ export interface Platform<Reference> extends AsyncDisposable {
   [Symbol.asyncDispose](): Promise<void>;
 }
 
-export interface PlatformOptions<Reference> {
-  readonly id: string;
-  readonly host: Host;
-  readonly group?: Group;
-  readonly apiVersion: string;
-  readonly loader: Loader<Reference>;
-  readonly authorizer?: Authorizer;
-  readonly logger?: Logger<unknown>;
-}
-
 interface PlatformPorts {
   readonly host: Host;
   readonly authorizer: Authorizer;
@@ -121,15 +101,13 @@ type PlatformState =
     }
   | { readonly phase: "disposed" };
 
-const optionFields = recordFields<PlatformOptions<unknown>>()(
-  "id",
-  "host",
-  "group",
-  "apiVersion",
-  "loader",
-  "authorizer",
-  "logger",
-);
+// The one command driving Core; callbacks inside it cannot queue another command behind it.
+type CoreCommand<Reference> =
+  | { readonly kind: "activation"; readonly operation: ActivationOperation<Reference> }
+  | { readonly kind: "disposal" };
+
+const disposalCommand = Object.freeze({ kind: "disposal" } as const);
+
 const activationOptionFields = recordFields<ActivationOptions<unknown>>()("signal", "remove");
 const previewOptionFields = recordFields<ActivationPreviewOptions<unknown>>()("remove");
 
@@ -149,9 +127,10 @@ class DeliveryPlatform<Reference> implements Platform<Reference> {
   readonly #registrationPort: RegistrationPort<Reference> = {
     installation: (installationId) => this.#ports().host.installation(installationId),
     operation: (registration, revision) => {
-      if (this.#executing === "disposal") return "removing";
+      const command = this.#executing;
+      if (command?.kind === "disposal") return "removing";
       // The command actually driving Core takes precedence over requests still preparing.
-      const executing = this.#executing?.statusFor(registration, revision);
+      const executing = command?.operation.statusFor(registration, revision);
       if (executing) return executing;
       for (const operation of this.#operations) {
         const status = operation.statusFor(registration, revision);
@@ -163,50 +142,27 @@ class DeliveryPlatform<Reference> implements Platform<Reference> {
   readonly #viewBinding: { synchronize: (() => void) | undefined };
   #hostSnapshot: HostSnapshot | undefined;
   #projection: PlatformSnapshot;
-  #executing: ActivationOperation<Reference> | "disposal" | undefined;
+  #executing: CoreCommand<Reference> | undefined;
   #subscription: Disposable | undefined;
   #state: PlatformState;
 
   constructor(options: PlatformOptions<Reference>) {
-    const declaration = normalizePlainRecord(options, "Platform options", { fields: optionFields });
-    const { id, host, group, apiVersion, loader, authorizer, logger } = declaration;
-    if (!isRegistrationIdPart(id))
-      throw new TypeError("Platform id must be a non-empty trimmed Unicode identifier");
-    if (typeof apiVersion !== "string" || !isConcreteVersion(apiVersion))
-      throw new TypeError("Platform apiVersion must be a semantic version");
-    if (
-      !host ||
-      typeof host.change !== "function" ||
-      typeof host.plan !== "function" ||
-      typeof host.apply !== "function" ||
-      typeof host.installation !== "function" ||
-      !host.diagnostics
-    ) {
-      throw new TypeError("Platform host must implement planning, execution and inspection");
-    }
-    if (group !== undefined && host.group(group.id) !== group)
-      throw new TypeError("Platform Group must be committed in its Host");
-    const load = loader?.load;
-    if (typeof load !== "function") throw new TypeError("Platform loader must implement load()");
-    const admission = captureAuthorizer(
-      authorizer === undefined ? new PermissionSet() : authorizer,
-    );
-    const capturedLogger = captureLogger(logger === undefined ? console : logger);
-
+    const { id, apiVersion, host, group, loader, authorizer, logger } =
+      capturePlatformOptions(options);
     this.id = id;
     this.apiVersion = apiVersion;
     const ports: PlatformPorts = Object.freeze({
       host,
       group,
-      authorizer: admission,
-      reportNotificationFailure: reporter(capturedLogger),
+      authorizer,
+      reportNotificationFailure: terminalReporter(logger),
     });
     this.#state = { phase: "active", ports };
     this.#catalog = new ArtifactCatalog(apiVersion);
     this.catalog = this.#catalog.facade;
     this.#modules = new LoadedModules({
-      loader: { load: (reference, signal) => Reflect.apply(load, loader, [reference, signal]) },
-      authorizer: admission,
+      loader,
+      authorizer,
       assertPlacement: () => this.#assertPlacement(),
     });
     this.#hostSnapshot = host.diagnostics.get();
@@ -282,7 +238,7 @@ class DeliveryPlatform<Reference> implements Platform<Reference> {
 
   async trigger(event: string, options: ActivationOptions<Reference> = {}) {
     this.#assertActive();
-    if (typeof event !== "string" || !event || event.trim() !== event)
+    if (!isTrimmedText(event))
       throw new TypeError("Activation event must be a non-empty trimmed string");
     return this.#activate(event, options);
   }
@@ -325,7 +281,7 @@ class DeliveryPlatform<Reference> implements Platform<Reference> {
           );
         }
       }
-      return await this.#execute(operation, () =>
+      return await this.#execute({ kind: "activation", operation }, () =>
         this.#commitActivation(operation, roots, removing, loaded),
       );
     } catch (error) {
@@ -348,12 +304,13 @@ class DeliveryPlatform<Reference> implements Platform<Reference> {
   #startDisposal() {
     const state = this.#state;
     if (state.phase === "disposed") return Promise.resolve();
-    if (this.#executing === "disposal" || this.#executing?.handedOff)
+    const command = this.#executing;
+    if (command?.kind === "disposal" || command?.operation.handedOff)
       return Promise.reject(this.#busy());
     if (state.phase === "disposing") return state.completion;
     const operations = [...this.#operations];
     const completion = Promise.all(operations.map((operation) => operation.settled)).then(() =>
-      this.#execute("disposal", () => this.#release()),
+      this.#execute(disposalCommand, () => this.#release()),
     );
     this.#state = { phase: "disposing", ports: state.ports, completion };
     this.#publishBeforeCancellation(() => {
@@ -670,20 +627,20 @@ class DeliveryPlatform<Reference> implements Platform<Reference> {
     });
   }
 
-  #execute<T>(owner: ActivationOperation<Reference> | "disposal", command: () => Promise<T>) {
+  #execute<T>(command: CoreCommand<Reference>, run: () => Promise<T>) {
     return this.#queue
       .run(
         async () => {
-          this.#executing = owner;
+          this.#executing = command;
           try {
             this.#publish();
-            return await command();
+            return await run();
           } finally {
             this.#executing = undefined;
             this.#publish();
           }
         },
-        owner === "disposal" ? undefined : owner.signal,
+        command.kind === "activation" ? command.operation.signal : undefined,
       )
       .then(({ value }) => value);
   }
@@ -704,27 +661,16 @@ class DeliveryPlatform<Reference> implements Platform<Reference> {
   }
 
   #snapshot(previous?: PlatformSnapshot): PlatformSnapshot {
-    const installations = new Map(
-      this.#hostSnapshot?.installations.map((installation) => [installation.id, installation]),
+    return projectPlatformSnapshot(
+      {
+        id: this.id,
+        apiVersion: this.apiVersion,
+        status: this.status,
+        registrations: this.#registrations,
+        hostSnapshot: this.#hostSnapshot,
+      },
+      previous,
     );
-    let changed =
-      previous?.status !== this.status || previous.registrations.size !== this.#registrations.size;
-    const entries = [...this.#registrations].map(([name, registration]) => {
-      const before = previous?.registrations.get(name);
-      const installation = registration.installation
-        ? installations.get(registration.id)
-        : undefined;
-      const next = registration.snapshot(installation, before);
-      if (before !== next) changed = true;
-      return [name, next] as const;
-    });
-    if (!changed && previous) return previous;
-    return Object.freeze({
-      id: this.id,
-      apiVersion: this.apiVersion,
-      status: this.status,
-      registrations: new ReadonlyMapSnapshot(entries),
-    });
   }
 }
 
@@ -738,57 +684,4 @@ export function createPlatform<Reference>(
   options: PlatformOptions<Reference>,
 ): Platform<Reference> {
   return new DeliveryPlatform(options);
-}
-
-// A retained view must not capture its owner's constructor scope after the binding is detached.
-function diagnosticView<T>(
-  view: SnapshotView<T>,
-  binding: { synchronize: (() => void) | undefined },
-): SnapshotView<T> {
-  const get = () => {
-    binding.synchronize?.();
-    return view.get();
-  };
-  return Object.freeze({
-    get,
-    subscribe(listener: () => void) {
-      if (typeof listener !== "function") return view.subscribe(listener);
-      let previous = get();
-      return view.subscribe(() => {
-        const current = get();
-        if (current === previous) return;
-        previous = current;
-        return listener();
-      });
-    },
-  });
-}
-
-function reporter(logger: Logger<unknown>) {
-  return (error: unknown) => {
-    try {
-      // The terminal sink has no lower reporter, but its rejection must still be observed.
-      void resolveValue(logger.error(error)).catch(() => undefined);
-    } catch {
-      // Observer failures must not change the outcome of a committed operation.
-    }
-  };
-}
-
-function recordActivationFailure<Reference>(plan: ActivationPlan<Reference>, error: unknown) {
-  const failure = isError(error)
-    ? error
-    : new PlatformError(activationFailedCode, "Activation failed with a non-Error value", {
-        cause: error,
-      });
-  let recorded: RecordedFailure | undefined;
-  for (const selection of plan.selections) {
-    if (selection.registration.actionFor(selection.artifact) !== "reuse") {
-      selection.registration.fail(
-        selection.revision,
-        (recorded ??= recordPlatformFailure(failure)),
-      );
-    }
-  }
-  return failure;
 }

@@ -1,4 +1,4 @@
-export { PlatformError, PermissionDeniedError, type PlatformErrorCode } from "./errors.js";
+export { PlatformError, type PlatformErrorCode } from "./errors.js";
 export { defineManifest, type Manifest, type ManifestInput } from "./artifacts/manifest.js";
 export type {
   Artifact,
@@ -13,14 +13,15 @@ export type {
   RegistrationStatus,
 } from "./catalog/registration.js";
 export { ImportLoader, MemoryLoader, type Loader } from "./loaders/loader.js";
-export { PermissionSet, type Authorizer, type AdmissionRequest } from "./admission/permissions.js";
 export {
-  createPlatform,
-  type PlatformOptions,
-  type PlatformSnapshot,
-  type PlatformStatus,
-  type Platform,
-} from "./activation/platform.js";
+  PermissionDeniedError,
+  PermissionSet,
+  type Authorizer,
+  type AdmissionRequest,
+} from "./admission/permissions.js";
+export { createPlatform, type Platform } from "./activation/platform.js";
+export type { PlatformOptions } from "./activation/platform-options.js";
+export type { PlatformSnapshot, PlatformStatus } from "./activation/platform-diagnostics.js";
 export type {
   ActivationOptions,
   ActivationPreviewOptions,

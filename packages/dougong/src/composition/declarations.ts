@@ -1,7 +1,9 @@
 import type { AnyPlugin, Plugin } from "./plugin.js";
 import type { ConfigurationValue } from "./configuration.js";
-import type { InstallationState } from "../contracts/status.js";
+
 export type InstallationOrigin = Readonly<Record<string, ConfigurationValue>>;
+export type InstallationState =
+  "pending" | "stopped" | "running" | "changing" | "removed" | "quarantined";
 
 declare const installationBrand: unique symbol;
 declare const groupBrand: unique symbol;

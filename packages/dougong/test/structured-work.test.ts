@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { event, extensionPoint } from "../src/contracts/contracts";
 import { Lifetime } from "../src/lifetime/lifetime";
 import { EventHub } from "../src/events/event-hub";
-import { ContributionRegistry } from "../src/contributions/contribution-store";
+import { ContributionRegistry } from "../src/contributions/contribution-registry";
 
 function lifetime(
   options: { shutdownTimeoutMilliseconds?: number; report?: (error: unknown) => void } = {},
@@ -73,7 +73,7 @@ describe("structured work boundaries", () => {
       released = true;
     });
     const call = owner.borrow(() => pending.promise);
-    await expect(owner.dispose()).rejects.toMatchObject({ code: "BUSY" });
+    await expect(owner.dispose()).rejects.toMatchObject({ code: "LIFETIME_BUSY" });
     expect(owner.phase).toBe("active");
     expect(released).toBe(false);
     pending.resolve();
@@ -102,7 +102,7 @@ describe("structured work boundaries", () => {
     expect(abort).not.toHaveBeenCalled();
     expect(release).not.toHaveBeenCalled();
     expect(() => child.borrow(() => undefined)).toThrow("closed");
-    await expect(owner.dispose()).rejects.toMatchObject({ code: "BUSY" });
+    await expect(owner.dispose()).rejects.toMatchObject({ code: "LIFETIME_BUSY" });
     pending.resolve();
     await foreground;
     await owner.dispose();
@@ -127,7 +127,7 @@ describe("structured work boundaries", () => {
     );
     owner.publish();
     const delivery = hub.emit("work", undefined);
-    await expect(owner.dispose()).rejects.toMatchObject({ code: "BUSY" });
+    await expect(owner.dispose()).rejects.toMatchObject({ code: "LIFETIME_BUSY" });
     pending.resolve();
     await delivery;
     await owner.dispose();
@@ -165,7 +165,7 @@ describe("structured work boundaries", () => {
     events.on(notice, () => pending.promise, { lifetime: child });
     owner.publish();
     const delivery = events.emit(notice);
-    await expect(child[Symbol.asyncDispose]()).rejects.toMatchObject({ code: "BUSY" });
+    await expect(child[Symbol.asyncDispose]()).rejects.toMatchObject({ code: "LIFETIME_BUSY" });
     expect(owner.busy).toBe(true);
     expect(released).toBe(false);
     pending.resolve();
@@ -201,7 +201,7 @@ describe("structured work boundaries", () => {
     const view = registry.view<{ run(): Promise<void> }>(point);
     owner.publish();
     const invocation = view.use("plugin/run", (command) => command.run());
-    await expect(owner.dispose()).rejects.toMatchObject({ code: "BUSY" });
+    await expect(owner.dispose()).rejects.toMatchObject({ code: "LIFETIME_BUSY" });
     pending.resolve();
     await invocation;
     await owner.dispose();
@@ -366,7 +366,7 @@ describe("structured work boundaries", () => {
     expect(count).toBe(depth);
     const gate = Promise.withResolvers<void>();
     const borrowed = leaf.borrow(() => gate.promise);
-    await expect(owner.dispose()).rejects.toMatchObject({ code: "BUSY" });
+    await expect(owner.dispose()).rejects.toMatchObject({ code: "LIFETIME_BUSY" });
     gate.resolve();
     await borrowed;
     await owner.dispose();
@@ -379,13 +379,13 @@ describe("structured work boundaries", () => {
     const owner = lifetime({ report });
     const pending = Promise.withResolvers<void>();
     const started = Promise.withResolvers<void>();
-    const preparation = owner.prepare(async (signal) => {
+    const work = owner.run(async (signal) => {
       started.resolve();
       await pending.promise;
       signal.throwIfAborted();
     });
     await started.promise;
-    const rejected = preparation.catch((error) => error);
+    const rejected = work.catch((error) => error);
     let stopped = false;
     const stopping = owner.dispose().then(() => {
       stopped = true;

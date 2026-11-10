@@ -1,13 +1,14 @@
 import type { ContractRegistryWriter } from "../contracts/contract-registry.js";
 import { DougongError, providesInvalidCode, serviceUnavailableCode } from "../contracts/errors.js";
-import { ScopedLogger, type Logger } from "../contracts/logging.js";
+import type { Logger } from "../contracts/logging.js";
 import type { EventHub } from "../events/event-hub.js";
-import type { ContributionRegistry } from "../contributions/contribution-store.js";
+import type { ContributionRegistry } from "../contributions/contribution-registry.js";
 import { Lifetime, type ReleaseFailure } from "../lifetime/lifetime.js";
 import type { InstallationRecord, InstallationDeclaration } from "../composition/installation.js";
 import type { InstanceContext } from "../composition/plugin.js";
 import { normalizePlainRecord } from "../internal/record.js";
 import type { Awaitable } from "../contracts/resource.js";
+import { ScopedLogger } from "./scoped-logger.js";
 
 export interface InstanceEnvironment {
   readonly hostName: string;
@@ -23,22 +24,30 @@ export interface InstanceEnvironment {
 }
 
 export class Instance {
+  readonly installation: InstallationRecord;
+  readonly declaration: InstallationDeclaration;
+  readonly generation: number;
   readonly lifetime: Lifetime;
   readonly settled: Promise<void>;
+  readonly #environment: InstanceEnvironment;
   readonly #services = new Map<string, unknown>();
 
   constructor(
-    readonly installation: InstallationRecord,
-    readonly declaration: InstallationDeclaration,
-    readonly generation: number,
-    private readonly environment: InstanceEnvironment,
+    installation: InstallationRecord,
+    declaration: InstallationDeclaration,
+    generation: number,
+    environment: InstanceEnvironment,
   ) {
+    this.installation = installation;
+    this.declaration = declaration;
+    this.generation = generation;
+    this.#environment = environment;
     this.lifetime = new Lifetime({
-      label: installation.id + "@" + generation,
+      label: `${installation.id}@${generation}`,
       report: environment.report,
       releaseFailed: environment.releaseFailed,
       changed: environment.changed,
-      parentSignal: environment.startupSignal,
+      startupSignal: environment.startupSignal,
       ...(environment.shutdownTimeoutMilliseconds === undefined
         ? {}
         : { shutdownTimeoutMilliseconds: environment.shutdownTimeoutMilliseconds }),
@@ -49,7 +58,7 @@ export class Instance {
 
   async prepare(dependencies: Readonly<Record<string, unknown>>, configuration: unknown) {
     const signal = this.lifetime.signal;
-    const environment = this.environment;
+    const environment = this.#environment;
     const metadata = Object.freeze({
       hostName: environment.hostName,
       installationId: this.installation.id,
@@ -57,21 +66,23 @@ export class Instance {
       generation: this.generation,
       groupId: this.installation.groupId,
     });
+    const remember = environment.contracts.remember.bind(environment.contracts);
     const context: InstanceContext = Object.freeze({
       dependencies,
       lifetime: this.lifetime.handle,
-      events: environment.events.scope(this.lifetime, (token) =>
-        environment.contracts.remember(token),
-      ),
-      contributions: environment.contributions.scope(this.lifetime, this.installation.id, (token) =>
-        environment.contracts.remember(token),
-      ),
+      events: environment.events.scope(this.lifetime, remember),
+      contributions: environment.contributions.scope(this.lifetime, this.installation.id, remember),
       metadata,
       logger: this.lifetime.use(new ScopedLogger(environment.logger, metadata)).handle,
     });
     const { setup } = this.declaration.plugin;
-    const { value: output } = await this.lifetime.prepare(() => setup(context, configuration));
+    const { value: output } = await this.lifetime.run(() => setup(context, configuration));
     AbortSignal.prototype.throwIfAborted.call(signal);
+    this.#provide(output, signal);
+  }
+
+  // Setup output is plugin data: capture the declared aliases once, then publish them together.
+  #provide(output: unknown, signal: AbortSignal) {
     const entries = Object.entries(this.declaration.plugin.provides);
     const invalidOutput = (message: string, options?: ErrorOptions) =>
       new DougongError(providesInvalidCode, message, {
@@ -92,10 +103,10 @@ export class Instance {
       throw invalidOutput("Plugin returned invalid or unreadable provided Services", { cause });
     }
     AbortSignal.prototype.throwIfAborted.call(signal);
-    for (const [alias, token] of entries) {
+    for (const [alias] of entries) {
       if (!Object.hasOwn(values, alias)) throw invalidOutput("Plugin did not provide " + alias);
-      this.#services.set(token.id, values[alias]);
     }
+    for (const [alias, token] of entries) this.#services.set(token.id, values[alias]);
   }
 
   read(serviceId: string): unknown {

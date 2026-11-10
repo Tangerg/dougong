@@ -33,7 +33,7 @@ it("derives immutable contract descriptions without running setup", () => {
       { alias: "items", id: items.id, kind: "extensionPoint", optional: false },
     ],
     provides: [{ alias: "result", id: result.id }],
-    configuration: { status: "schema_absent" },
+    configuration: { status: "schemaAbsent" },
   });
   expect(setup).not.toHaveBeenCalled();
   expect(JSON.parse(JSON.stringify(descriptor))).toEqual(descriptor);
@@ -69,7 +69,7 @@ it("describes schema absence without claiming a required typed configuration is 
       received(configuration);
     },
   });
-  expect(describePlugin(plugin).configuration).toEqual({ status: "schema_absent" });
+  expect(describePlugin(plugin).configuration).toEqual({ status: "schemaAbsent" });
   expect(received).not.toHaveBeenCalled();
   const host = createHost({
     installations: [{ id: "configured", plugin, configuration: { port: 8080 } }],

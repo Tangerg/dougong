@@ -24,7 +24,7 @@ Contribution IDs describe the committed collection snapshot, not guaranteed avai
 | `ARTIFACT_DUPLICATE` | The name and revision already exist; use a genuinely new delivery identity. |
 | `ARTIFACT_IDENTITY` | The loaded Plugin identity differs from the Manifest, or Platform cannot identify the committed Artifact for an indirect restart. |
 | `ARTIFACT_UNAVAILABLE` | The Artifact is unavailable in this Catalog. |
-| `BUSY` | The resource owner has foreground borrows and cannot synchronously seal this operation. |
+| `LIFETIME_BUSY` | The resource owner has foreground borrows and cannot synchronously seal this operation. |
 | `CHANGE_CONFLICT` | A change contains conflicting declaration intent. |
 | `CHANGE_FOREIGN` | The ChangeSet belongs to another Host. |
 | `CONFIGURATION_INVALID` | Standard Schema validation failed; inspect issues and correct the input. |

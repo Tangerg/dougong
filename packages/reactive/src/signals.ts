@@ -205,8 +205,8 @@ class SignalNode<T> implements ReactiveNode {
 }
 
 type ComputedResult<T> =
-  | { readonly phase: "value"; readonly value: T }
-  | { readonly phase: "error"; readonly error: unknown };
+  | { readonly outcome: "value"; readonly value: T }
+  | { readonly outcome: "error"; readonly error: unknown };
 
 // Unobserved computed nodes hold no subscriptions, so live sources cannot retain unused derived values.
 class ComputedNode<T> implements ReactiveNode {
@@ -272,7 +272,7 @@ class ComputedNode<T> implements ReactiveNode {
 
   #readResult(): T {
     const result = this.#result!;
-    if (result.phase === "error") throw result.error;
+    if (result.outcome === "error") throw result.error;
     return result.value;
   }
 
@@ -342,9 +342,9 @@ class ComputedNode<T> implements ReactiveNode {
 
     if (
       !current ||
-      (next.phase === "value"
-        ? current.phase !== "value" || !Object.is(current.value, next.value)
-        : current.phase !== "error" || !Object.is(current.error, next.error))
+      (next.outcome === "value"
+        ? current.outcome !== "value" || !Object.is(current.value, next.value)
+        : current.outcome !== "error" || !Object.is(current.error, next.error))
     ) {
       this.#version++;
     }
@@ -372,9 +372,9 @@ class ComputedNode<T> implements ReactiveNode {
       const calculate = this.#calculate;
       const value = calculate();
       assertSynchronous(value, "Computed signal calculations must be synchronous");
-      return { phase: "value", value };
+      return { outcome: "value", value };
     } catch (error) {
-      return { phase: "error", error };
+      return { outcome: "error", error };
     } finally {
       activeSources = previous;
       this.#sources = undefined;

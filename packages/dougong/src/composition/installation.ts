@@ -1,6 +1,5 @@
 import { DougongError, installationConflictCode } from "../contracts/errors.js";
-import type { InstallationState } from "../contracts/status.js";
-import type { Installation, InstallationOrigin } from "./declarations.js";
+import type { Installation, InstallationOrigin, InstallationState } from "./declarations.js";
 import { normalizePlugin, type AnyPlugin, type NormalizedPlugin } from "./plugin.js";
 import { captureConfiguration, type ConfigurationValue } from "./configuration.js";
 import type { GroupNode } from "./group.js";
@@ -58,15 +57,18 @@ export class PendingInstallations {
   }
 }
 
+// The status projection is read through whichever owner currently holds this identity:
+// a pending draft or Plan, then the Engine; a terminal projection remains after the last owner leaves.
 export class InstallationRecord {
+  readonly id: string;
+  readonly group: GroupNode | undefined;
   readonly facade: Installation;
   #read: (() => InstallationProjection) | undefined;
   #terminal: InstallationProjection = Object.freeze({ status: "pending", origin: undefined });
 
-  constructor(
-    readonly id: string,
-    readonly group: GroupNode | undefined,
-  ) {
+  constructor(id: string, group: GroupNode | undefined) {
+    this.id = id;
+    this.group = group;
     const record = this;
     this.facade = Object.freeze({
       id,

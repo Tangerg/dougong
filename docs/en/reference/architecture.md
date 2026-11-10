@@ -46,7 +46,7 @@ ChangeSet captures intent, Plan fixes validation results and execution arrangeme
 
 Planning checks the final declaration graph, configuration, bindings and impact without running plugin setup. Accepted configuration and validated output are captured as immutable data, so later input mutation cannot change an approved plan. Validators remain application code and should avoid external effects; the framework cannot make arbitrary validators pure. Restoring previous declarations reuses their validated output rather than consulting a validator whose answer may have changed.
 
-A Plan binds Host identity, state revision and one-use authority. Serializing its report transmits explanation, not executable authority across processes. Foreign, stale and consumed Plans fail before execution effects. Busy rejection does not consume a Plan, although its baseline must still match when attempted later. Task progress updates diagnostics without advancing graph revision; an empty operation does not manufacture a new graph commit.
+A Plan binds Host identity, state revision and one-use authority. Serializing its report transmits explanation, not executable authority across processes. Foreign, stale and consumed Plans fail before execution effects. Busy rejection does not consume a Plan, although its baseline must still match when attempted later. Task progress updates diagnostics without advancing graph revision; neither an empty operation nor a failed startup manufactures a new graph commit.
 
 Successful Promise completion communicates success. `ApplyResult` carries only `stateRevision` and `affectedInstallations`, without a constant success discriminator repeating the same result. Failures reject, and structured errors distinguish rejection, restoration and quarantine.
 
@@ -90,7 +90,7 @@ Admission permits an attempt; it does not sandbox same-realm JavaScript. A Loade
 
 | Directory | Responsibility |
 | --- | --- |
-| `packages/dougong/src/contracts` | Identity, protocols, statuses, error and logging contracts |
+| `packages/dougong/src/contracts` | Identity, protocols, error and logging contracts |
 | `packages/dougong/src/internal` | Shared low-level record, queue and protocol primitives |
 | `packages/dougong/src/observation` | Stable snapshots and publication |
 | `packages/dougong/src/lifetime` | Resource ownership and shutdown |

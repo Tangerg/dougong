@@ -46,7 +46,7 @@ ChangeSet 收集意图，Plan 固化在一个 `stateRevision` 上的验证结果
 
 规划检查最终声明图、配置、绑定和影响范围；它不运行插件 setup。配置只接受不可变捕获的数据，验证输出也被捕获，防止调用者在预览后修改输入。验证器仍是应用代码，应避免外部副作用；框架不能把任意验证器变成纯函数。恢复旧声明时复用已经验证的配置输出，不重新询问一个可能变化的验证器。
 
-Plan 同时绑定 Host、状态修订和一次性权限。序列化报告只能传递说明，不能跨进程恢复执行权限。外来、过期或已消费的 Plan 在执行副作用之前被拒绝；忙碌拒绝不消费 Plan，等待后仍需满足原状态修订。任务进度会使诊断更新，却不推进图修订；无变更操作也不会制造一次虚假的图提交。
+Plan 同时绑定 Host、状态修订和一次性权限。序列化报告只能传递说明，不能跨进程恢复执行权限。外来、过期或已消费的 Plan 在执行副作用之前被拒绝；忙碌拒绝不消费 Plan，等待后仍需满足原状态修订。任务进度会使诊断更新，却不推进图修订；无变更操作和失败的启动也不会制造一次虚假的图提交。
 
 成功通过 Promise 正常完成表达。`ApplyResult` 只携带 `stateRevision` 和 `affectedInstallations`，避免再用一个固定成功标记重复表示同一结果。失败通过拒绝传播，结构化错误说明拒绝、恢复或隔离的区别。
 
@@ -90,7 +90,7 @@ Platform 负责发现发行物、记录选择、准入和加载，然后把依�
 
 | Directory | Responsibility |
 | --- | --- |
-| `packages/dougong/src/contracts` | Identity, protocols, statuses, error and logging contracts |
+| `packages/dougong/src/contracts` | Identity, protocols, error and logging contracts |
 | `packages/dougong/src/internal` | Shared low-level record, queue and protocol primitives |
 | `packages/dougong/src/observation` | Stable snapshots and publication |
 | `packages/dougong/src/lifetime` | Resource ownership and shutdown |

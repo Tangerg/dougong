@@ -1,8 +1,8 @@
 import type { StandardSchemaV1 } from "@standard-schema/spec";
 import { abortReason, isAborted } from "../internal/abort.js";
 import { captureDataArray } from "../internal/data-array.js";
+import { assertTrimmedText } from "../internal/text.js";
 
-export const lifetimeBusyCode = "BUSY";
 export const changeConflictCode = "CHANGE_CONFLICT";
 export const changeForeignCode = "CHANGE_FOREIGN";
 const configurationInvalidCode = "CONFIGURATION_INVALID";
@@ -19,6 +19,7 @@ export const hostQuarantinedCode = "HOST_QUARANTINED";
 export const installationConflictCode = "INSTALLATION_CONFLICT";
 export const installationForeignCode = "INSTALLATION_FOREIGN";
 export const installationRemovedCode = "INSTALLATION_REMOVED";
+export const lifetimeBusyCode = "LIFETIME_BUSY";
 export const lifetimeDisposedCode = "LIFETIME_DISPOSED";
 export const planConsumedCode = "PLAN_CONSUMED";
 export const planForeignCode = "PLAN_FOREIGN";
@@ -31,24 +32,8 @@ export const serviceUnavailableCode = "SERVICE_UNAVAILABLE";
 export const shutdownTimeoutCode = "SHUTDOWN_TIMEOUT";
 export const transitionFailedCode = "TRANSITION_FAILED";
 
-const maximumDiagnosticFields = 8;
-const maximumDiagnosticFieldNameLength = 256;
-const maximumDiagnosticFieldTextLength = 256;
-const maximumDiagnosticFieldItems = 8;
-const maximumErrorDepth = 4;
-const maximumRecordedErrors = 32;
-const maximumErrorNameLength = 256;
-const maximumErrorCodeLength = 256;
-const maximumErrorMessageLength = 4096;
-const maximumErrorStackLength = 16384;
-const maximumAggregateErrors = 8;
-const maximumValidationIssues = 8;
-const maximumValidationPathSegments = 16;
-const maximumValidationPathSegmentLength = 256;
-const maximumErrorDetailTextLength = 256;
-const maximumErrorDetailPathItems = 32;
-
-const detailKinds = {
+// One schema serves both strict construction and bounded diagnostic projection.
+export const detailKinds = Object.freeze({
   outcome: "outcome",
   phase: "text",
   installation: "text",
@@ -57,8 +42,10 @@ const detailKinds = {
   affectedInstallations: "path",
   stateRevision: "revision",
   expectedRevision: "revision",
-} as const;
-const outcomes = ["rejected", "restored", "quarantined"] as const;
+} as const);
+export const outcomes = Object.freeze(["rejected", "restored", "quarantined"] as const);
+
+export type DetailField = keyof typeof detailKinds;
 
 interface DetailValues {
   readonly outcome: (typeof outcomes)[number];
@@ -68,51 +55,41 @@ interface DetailValues {
 }
 
 export type ErrorDetails = {
-  readonly [Field in keyof typeof detailKinds]?: DetailValues[(typeof detailKinds)[Field]];
+  readonly [Field in DetailField]?: DetailValues[(typeof detailKinds)[Field]];
 };
 
-interface DetailBounds {
-  readonly clip: (text: string, limit: number) => string;
-  readonly strings: (
-    value: unknown,
-    limit: number,
-    itemLength: number,
-  ) => ReadonlyArray<string> | undefined;
+export function isDetailRevision(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
 }
 
-// The constructor rejects invalid declarations; diagnostics can only project readable, bounded fields.
-function captureDetails(source: object, bounds?: DetailBounds): ErrorDetails {
+// Construction rejects invalid declarations instead of silently dropping a caller's detail.
+function captureDetails(source: object): ErrorDetails {
   const fields: Record<string, string | number | ReadonlyArray<string>> = {};
-  for (const key of bounds ? Object.keys(detailKinds) : Reflect.ownKeys(source)) {
+  for (const key of Reflect.ownKeys(source)) {
     if (typeof key !== "string" || !Object.hasOwn(detailKinds, key))
       throw new TypeError(`Unknown error detail '${String(key)}'`);
-    const raw: unknown = bounds ? readErrorProperty(source, key) : Reflect.get(source, key);
+    const raw: unknown = Reflect.get(source, key);
     if (raw === undefined) continue;
-    let field: DetailValues[keyof DetailValues] | undefined;
-    switch (detailKinds[key as keyof ErrorDetails]) {
-      case "outcome":
-        field = outcomes.find((outcome) => outcome === raw);
-        break;
-      case "text":
-        if (typeof raw === "string")
-          field = bounds ? bounds.clip(raw, maximumErrorDetailTextLength) : raw;
-        break;
-      case "revision":
-        if (typeof raw === "number" && Number.isSafeInteger(raw) && raw >= 0) field = raw;
-        break;
-      case "path":
-        if (bounds)
-          field = bounds.strings(raw, maximumErrorDetailPathItems, maximumErrorDetailTextLength);
-        else {
-          const items = captureDataArray(raw, key);
-          if (items.every((item): item is string => typeof item === "string")) field = items;
-        }
-        break;
-    }
-    if (field !== undefined) fields[key] = field;
-    else if (!bounds) throw new TypeError(`Invalid error detail '${key}'`);
+    const field = captureDetail(detailKinds[key as DetailField], raw, key);
+    if (field === undefined) throw new TypeError(`Invalid error detail '${key}'`);
+    fields[key] = field;
   }
   return Object.freeze(fields);
+}
+
+function captureDetail(kind: (typeof detailKinds)[DetailField], raw: unknown, key: string) {
+  switch (kind) {
+    case "outcome":
+      return outcomes.find((outcome) => outcome === raw);
+    case "text":
+      return typeof raw === "string" ? raw : undefined;
+    case "revision":
+      return isDetailRevision(raw) ? raw : undefined;
+    case "path": {
+      const items = captureDataArray(raw, key);
+      return items.every((item): item is string => typeof item === "string") ? items : undefined;
+    }
+  }
 }
 
 export class DougongError<Code extends string = string> extends Error {
@@ -125,9 +102,7 @@ export class DougongError<Code extends string = string> extends Error {
     message: string,
     options?: ErrorOptions & { readonly details?: ErrorDetails },
   ) {
-    if (typeof code !== "string" || code.trim() !== code || code.length === 0) {
-      throw new TypeError("DougongError code must be a non-empty trimmed string");
-    }
+    assertTrimmedText(code, "DougongError code");
     if (typeof message !== "string") throw new TypeError("DougongError message must be a string");
     super(message, options);
     this.code = code;
@@ -147,195 +122,6 @@ export function quarantinedHost(revision: number) {
   });
 }
 
-export type ErrorSnapshot = {
-  readonly name: string;
-  readonly message: string;
-  readonly code?: string;
-  readonly stack?: string;
-  readonly cause?: ErrorSnapshot;
-  readonly errors?: ReadonlyArray<ErrorSnapshot>;
-  readonly details?: ErrorDetails;
-  readonly fields?: Readonly<Record<string, string | ReadonlyArray<string>>>;
-  readonly issues?: ReadonlyArray<{
-    readonly message: string;
-    readonly path?: ReadonlyArray<string | number>;
-  }>;
-  readonly truncated?: true;
-} & (
-  | { readonly error: ErrorSnapshot; readonly suppressed: ErrorSnapshot }
-  | { readonly error?: never; readonly suppressed?: never }
-);
-
-// Terminal diagnostics must not retain application resources through Error causes or custom fields.
-export class RecordedFailure extends Error {
-  override readonly name = "RecordedFailure";
-  readonly code: string | undefined;
-  readonly #snapshot: ErrorSnapshot;
-
-  get snapshot() {
-    return this.#snapshot;
-  }
-
-  static #recorded(value: unknown) {
-    return value !== null && typeof value === "object" && #snapshot in value
-      ? value.#snapshot
-      : undefined;
-  }
-
-  constructor(error: unknown, fields: ReadonlyArray<string> = []) {
-    const names = captureDataArray(fields, "Diagnostic field names");
-    if (
-      names.length > maximumDiagnosticFields ||
-      names.some(
-        (name) =>
-          typeof name !== "string" || !name || name.length > maximumDiagnosticFieldNameLength,
-      )
-    ) {
-      throw new TypeError(
-        `Select at most ${maximumDiagnosticFields} diagnostic field names of 1–${maximumDiagnosticFieldNameLength} characters each`,
-      );
-    }
-    const snapshot =
-      RecordedFailure.#recorded(error) ??
-      captureError(error, RecordedFailure.#recorded, new Set(names));
-    super(snapshot.message);
-    this.code = snapshot.code;
-    this.#snapshot = snapshot;
-    // Replace even a missing stack so V8 constructor frames cannot retain the recorded application.
-    this.stack = snapshot.stack ?? `${this.name}: ${snapshot.message}`;
-    Object.freeze(this);
-  }
-}
-
-function captureError(
-  error: unknown,
-  recorded: (value: unknown) => ErrorSnapshot | undefined,
-  fieldNames: ReadonlySet<string>,
-): ErrorSnapshot {
-  const seen = new Set<unknown>();
-  let remaining = maximumRecordedErrors;
-  const visit = (raw: unknown, depth: number, fromSnapshot = false): ErrorSnapshot => {
-    // A nested record still shares this report's depth and size budget.
-    const sealed = fromSnapshot ? (raw as ErrorSnapshot) : recorded(raw);
-    const value = sealed ?? raw;
-    if (depth > maximumErrorDepth || remaining-- <= 0 || seen.has(value)) {
-      return Object.freeze({
-        name: "TruncatedError",
-        message: "Error chain truncated",
-        truncated: true,
-      });
-    }
-    if (!sealed && !isError(value)) {
-      const message =
-        value === null ||
-        ["string", "number", "boolean", "undefined", "bigint", "symbol"].includes(typeof value)
-          ? String(value)
-          : "Non-Error object omitted";
-      return Object.freeze({
-        name: "NonError",
-        message: message.slice(0, maximumErrorMessageLength),
-        ...(message.length > maximumErrorMessageLength ? { truncated: true as const } : {}),
-      });
-    }
-    seen.add(value);
-    let truncated = sealed?.truncated ?? false;
-    const clip = (raw: string, limit: number) => {
-      if (raw.length > limit) truncated = true;
-      return raw.slice(0, limit);
-    };
-    const string = (key: string, limit: number) => {
-      const raw = readErrorProperty(value, key);
-      return typeof raw === "string" ? clip(raw, limit) : undefined;
-    };
-    const list = (raw: unknown, limit: number) => {
-      if (!isRecordableArray(raw)) return undefined;
-      const length = readErrorProperty(raw, "length");
-      if (typeof length !== "number" || !Number.isSafeInteger(length) || length < 0) {
-        return undefined;
-      }
-      if (length > limit) truncated = true;
-      return Array.from({ length: Math.min(length, limit) }, (_, index) =>
-        readErrorProperty(raw, index),
-      );
-    };
-    const name = string("name", maximumErrorNameLength) ?? "Error";
-    const message = string("message", maximumErrorMessageLength) ?? "";
-    const stack = string("stack", maximumErrorStackLength);
-    const code = string("code", maximumErrorCodeLength);
-    const cause = readErrorProperty(value, "cause");
-    const errors = list(readErrorProperty(value, "errors"), maximumAggregateErrors);
-    const strings = (raw: unknown, limit: number, itemLength: number) => {
-      const items = list(raw, limit);
-      return (
-        items &&
-        Object.freeze(
-          items
-            .filter((item): item is string => typeof item === "string")
-            .map((item) => clip(item, itemLength)),
-        )
-      );
-    };
-    let fields = sealed?.fields;
-    if (!sealed && fieldNames.size) {
-      const entries: Array<[string, string | ReadonlyArray<string>]> = [];
-      for (const key of fieldNames) {
-        const raw = ownDataField(value, key)?.value;
-        const data =
-          typeof raw === "string"
-            ? clip(raw, maximumDiagnosticFieldTextLength)
-            : strings(raw, maximumDiagnosticFieldItems, maximumDiagnosticFieldTextLength);
-        if (data !== undefined) entries.push([key, data]);
-      }
-      if (entries.length) fields = Object.freeze(Object.fromEntries(entries));
-    }
-    const issues = list(readErrorProperty(value, "issues"), maximumValidationIssues)?.map(
-      (issue) => {
-        const message = readErrorProperty(issue, "message");
-        const path = list(readErrorProperty(issue, "path"), maximumValidationPathSegments)?.map(
-          (part) => {
-            const key = part && typeof part === "object" ? readErrorProperty(part, "key") : part;
-            if (typeof key === "number" && Number.isFinite(key)) return key;
-            return isPropertyKey(key)
-              ? clip(String(key), maximumValidationPathSegmentLength)
-              : "[omitted]";
-          },
-        );
-        return Object.freeze({
-          message: typeof message === "string" ? clip(message, maximumErrorMessageLength) : "",
-          ...(path ? { path: Object.freeze(path) } : {}),
-        });
-      },
-    );
-    const rawDetails = readErrorProperty(value, "details");
-    const details =
-      rawDetails !== null && typeof rawDetails === "object"
-        ? captureDetails(rawDetails, { clip, strings })
-        : undefined;
-    const child = (value: unknown) => visit(value, depth + 1, !!sealed);
-    // Native and downlevel suppression store both failures as own data, even when a subclass renames the Error.
-    const primary = ownDataField(value, "error");
-    const suppressed = primary && ownDataField(value, "suppressed");
-    const snapshot = {
-      name,
-      message,
-      ...(code === undefined ? {} : { code }),
-      ...(stack === undefined ? {} : { stack }),
-      ...(cause === undefined ? {} : { cause: child(cause) }),
-      ...(errors === undefined ? {} : { errors: Object.freeze(errors.map(child)) }),
-      ...(fields === undefined ? {} : { fields }),
-      ...(issues === undefined ? {} : { issues: Object.freeze(issues) }),
-      ...(details === undefined ? {} : { details }),
-      ...(truncated ? { truncated: true as const } : {}),
-    };
-    return Object.freeze(
-      primary && suppressed
-        ? { ...snapshot, error: child(primary.value), suppressed: child(suppressed.value) }
-        : snapshot,
-    );
-  };
-  return visit(error, 0);
-}
-
 // Unreadable prototypes do not prove that a rejection value is an Error.
 export function isError(value: unknown): value is Error {
   try {
@@ -351,16 +137,8 @@ export function isError(value: unknown): value is Error {
   }
 }
 
-function isRecordableArray(value: unknown): value is unknown[] {
-  try {
-    return Array.isArray(value);
-  } catch {
-    return false;
-  }
-}
-
 // Selecting a domain field must not invoke a second application getter while recording a failure.
-function ownDataField(value: unknown, key: string) {
+export function ownDataField(value: unknown, key: string) {
   try {
     const descriptor = Object.getOwnPropertyDescriptor(value, key);
     return descriptor && "value" in descriptor ? descriptor : undefined;
@@ -369,7 +147,8 @@ function ownDataField(value: unknown, key: string) {
   }
 }
 
-function readErrorProperty(value: unknown, key: PropertyKey): unknown {
+// A throwing accessor on a rejection value must not replace the failure being reported.
+export function readErrorProperty(value: unknown, key: PropertyKey): unknown {
   try {
     return value && typeof value === "object"
       ? (value as Record<PropertyKey, unknown>)[key]
@@ -379,20 +158,8 @@ function readErrorProperty(value: unknown, key: PropertyKey): unknown {
   }
 }
 
-// Only normalization grants provenance; copying constructors or prototypes cannot authorize reclassification.
-const normalizedFailures = new WeakSet<Error>();
-
-export function normalizeFailure(error: unknown, code: string, message: string): Error {
-  let reason = error;
-  if (isError(error)) {
-    if (!normalizedFailures.has(error)) return error;
-    if ((error as DougongError).code === code) return error;
-    reason = error.cause;
-  }
-  const failure = new DougongError(code, message, { cause: reason });
-  Object.freeze(failure);
-  normalizedFailures.add(failure);
-  return failure;
+export function isPropertyKey(value: unknown): value is PropertyKey {
+  return typeof value === "string" || typeof value === "number" || typeof value === "symbol";
 }
 
 // Names alone cannot establish causality after cancellation overtakes an independent rejection.
@@ -486,8 +253,4 @@ function captureValidationArray(input: unknown, label: string): ReadonlyArray<un
     values.push(input[index]);
   }
   return Object.freeze(values);
-}
-
-function isPropertyKey(value: unknown): value is PropertyKey {
-  return typeof value === "string" || typeof value === "number" || typeof value === "symbol";
 }

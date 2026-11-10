@@ -15,9 +15,11 @@ export interface BridgeOwner {
   readonly defer: (dispose: () => unknown) => AsyncDisposable;
 }
 
+const disposedBridgeMessage = "Readable bridge has been disposed";
+
 type BridgeValue<T> =
-  | { readonly phase: "value"; readonly source: Readable<T>; readonly value: T }
-  | { readonly phase: "error"; readonly source: Readable<T>; readonly error: unknown }
+  | { readonly outcome: "value"; readonly source: Readable<T>; readonly value: T }
+  | { readonly outcome: "error"; readonly source: Readable<T>; readonly error: unknown }
   | undefined;
 
 class ReadableBridge<T> implements Disposable {
@@ -28,12 +30,12 @@ class ReadableBridge<T> implements Disposable {
   readonly view: ReadonlySignal<T>;
 
   constructor(source: Readable<T>) {
-    this.#value = signal<BridgeValue<T>>({ phase: "value", source, value: source.get() });
+    this.#value = signal<BridgeValue<T>>({ outcome: "value", source, value: source.get() });
     this.view = Object.freeze({
       get: () => {
         const state = this.#value?.get();
-        if (!state) throw new Error("Readable bridge has been disposed");
-        if (state.phase === "error") throw state.error;
+        if (!state) throw new Error(disposedBridgeMessage);
+        if (state.outcome === "error") throw state.error;
         return state.value;
       },
       subscribe: (listener: () => void) => this.#subscribe(listener),
@@ -54,7 +56,7 @@ class ReadableBridge<T> implements Disposable {
         "BridgeOwner.defer() must return an AsyncDisposable",
       );
       const state = this.#value?.get();
-      if (!state) throw new Error("Readable bridge has been disposed");
+      if (!state) throw new Error(disposedBridgeMessage);
       const release = captureUnsubscribe(state.source.subscribe(() => this.#refresh()));
       this.#release = release;
       if (!this.#value?.get()) {
@@ -64,7 +66,7 @@ class ReadableBridge<T> implements Disposable {
         } catch (error) {
           this.#failure = { value: error };
         }
-        throw new Error("Readable bridge has been disposed");
+        throw new Error(disposedBridgeMessage);
       }
       // Re-read after subscription so a source change during attachment cannot be lost.
       this.#refresh();
@@ -98,20 +100,20 @@ class ReadableBridge<T> implements Disposable {
         const { source } = before;
         let next: BridgeValue<T>;
         try {
-          next = { phase: "value", source, value: source.get() };
+          next = { outcome: "value", source, value: source.get() };
         } catch (error) {
-          next = { phase: "error", source, error };
+          next = { outcome: "error", source, error };
         }
         if (this.#reading !== read || this.#value?.get() !== before) return;
         if (
-          before.phase === "value" &&
-          next.phase === "value" &&
+          before.outcome === "value" &&
+          next.outcome === "value" &&
           Object.is(before.value, next.value)
         )
           return;
         if (
-          before.phase === "error" &&
-          next.phase === "error" &&
+          before.outcome === "error" &&
+          next.outcome === "error" &&
           Object.is(before.error, next.error)
         )
           return;
@@ -124,7 +126,7 @@ class ReadableBridge<T> implements Disposable {
 
   #subscribe(listener: () => void): Disposable {
     const value = this.#value;
-    if (!value?.get()) throw new Error("Readable bridge has been disposed");
+    if (!value?.get()) throw new Error(disposedBridgeMessage);
     assertListener(listener);
     const subscription = value.subscribe(() => {
       // A batch may deliver termination later. Keep the slot until delivery or explicit withdrawal.

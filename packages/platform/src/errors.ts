@@ -1,5 +1,4 @@
-import { DougongError, RecordedFailure, type ErrorDetails } from "dougong";
-import { captureDataArray } from "dougong/advanced";
+import { DougongError, type ErrorDetails } from "dougong";
 
 export const manifestInvalidCode = "MANIFEST_INVALID";
 export const apiIncompatibleCode = "API_INCOMPATIBLE";
@@ -8,7 +7,7 @@ export const artifactUnavailableCode = "ARTIFACT_UNAVAILABLE";
 export const artifactIdentityCode = "ARTIFACT_IDENTITY";
 export const moduleLoadFailedCode = "MODULE_LOAD_FAILED";
 export const moduleInvalidCode = "MODULE_INVALID";
-const permissionDeniedCode = "PERMISSION_DENIED";
+export const permissionDeniedCode = "PERMISSION_DENIED";
 export const platformBusyCode = "PLATFORM_BUSY";
 export const platformUnavailableCode = "PLATFORM_UNAVAILABLE";
 export const registrationUnavailableCode = "REGISTRATION_UNAVAILABLE";
@@ -50,42 +49,4 @@ export class PlatformError extends DougongError<PlatformErrorCode> {
   ) {
     super(code, message, options);
   }
-}
-
-export class PermissionDeniedError extends PlatformError {
-  override readonly name: string = "PermissionDeniedError";
-  readonly manifestName: string;
-  readonly denied: ReadonlyArray<string>;
-
-  constructor(manifestName: string, denied: ReadonlyArray<string>) {
-    if (typeof manifestName !== "string" || !manifestName || manifestName.trim() !== manifestName) {
-      throw new TypeError("PermissionDeniedError manifestName must be a non-empty trimmed string");
-    }
-    const immutableDenied = Object.freeze(
-      captureDataArray(denied, "PermissionDeniedError denied permissions").map(
-        (permission, index) => {
-          if (typeof permission !== "string" || !permission || permission.trim() !== permission) {
-            throw new TypeError(
-              `PermissionDeniedError denied permission at index ${index} must be a non-empty trimmed string`,
-            );
-          }
-          return permission;
-        },
-      ),
-    );
-    super(
-      permissionDeniedCode,
-      `Manifest '${manifestName}' was denied permissions: ${immutableDenied.join(", ")}`,
-      { details: { outcome: "rejected", phase: "admission" } },
-    );
-    this.manifestName = manifestName;
-    this.denied = immutableDenied;
-  }
-}
-
-export function recordPlatformFailure(error: unknown) {
-  return new RecordedFailure(error, [
-    "manifestName",
-    "denied",
-  ] satisfies (keyof PermissionDeniedError)[]);
 }

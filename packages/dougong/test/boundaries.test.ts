@@ -9,7 +9,7 @@ import {
   type ChildLifetime,
   type Contribution,
 } from "../src";
-import { ContributionRegistry } from "../src/contributions/contribution-store";
+import { ContributionRegistry } from "../src/contributions/contribution-registry";
 import { Lifetime } from "../src/lifetime/lifetime";
 
 it.each(["left", "right"])(
@@ -67,15 +67,15 @@ it.each(["left", "right"])(
 
 it("publishes a changed contribution key even when both values are undefined", async () => {
   const registry = new ContributionRegistry(() => undefined);
-  const store = registry.get(extensionPoint<undefined>("boundary.items"));
+  const store = registry.store(extensionPoint<undefined>("boundary.items"));
   const owner = new Lifetime({ label: "owner", report: () => undefined });
-  const old = store.stage("owner", "old", undefined, owner);
+  const old = store.stage("owner/old", undefined, owner, () => undefined);
   owner.publish();
   const changed = vi.fn<() => void>();
   using _subscription = store.subscribe(changed, () => () => undefined);
   registry.beginBatch();
   old[Symbol.dispose]();
-  store.stage("owner", "new", undefined, owner);
+  store.stage("owner/new", undefined, owner, () => undefined);
   registry.endBatch();
   expect(store.snapshot()).toEqual(["owner/new"]);
   expect((await store.use("owner/new", (value) => value)).value).toBeUndefined();
@@ -106,7 +106,7 @@ it("keeps an entered event callback borrowed until it settles before closing its
   });
   await host.start();
   const emission = emit();
-  await expect(child[Symbol.asyncDispose]()).rejects.toMatchObject({ code: "BUSY" });
+  await expect(child[Symbol.asyncDispose]()).rejects.toMatchObject({ code: "LIFETIME_BUSY" });
   expect(child.signal.aborted).toBe(false);
   finish.resolve();
   await emission;
@@ -297,4 +297,12 @@ it("allows a cancelling parent task to await its child's disposal", async () => 
   expect(childReleased).toBe(true);
   expect(parentCompleted).toBe(true);
   await owner.dispose();
+});
+
+it("validates a contribution callback before looking up the contribution", async () => {
+  const host = createHost();
+  const view = host.contributions(extensionPoint<number>("boundary.callback"));
+  await expect(view.use("missing", 1 as never)).rejects.toThrowError(
+    new TypeError("Contribution callback must be a function"),
+  );
 });

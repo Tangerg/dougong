@@ -1,8 +1,10 @@
-import type { ErrorSnapshot } from "../contracts/errors.js";
+import type { ErrorSnapshot } from "../contracts/recorded-failure.js";
 import type { InstallationOrigin } from "../composition/declarations.js";
-import type { HostStatus } from "../contracts/status.js";
 import type { LifetimeSnapshot } from "../lifetime/lifetime-diagnostics.js";
-import type { BindingReport } from "../composition/plan.js";
+import type { BindingReport } from "../composition/installation-graph.js";
+
+export type HostStatus =
+  "stopped" | "starting" | "running" | "changing" | "stopping" | "quarantined";
 
 export type InstallationSnapshot = {
   readonly id: string;

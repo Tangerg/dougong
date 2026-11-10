@@ -105,7 +105,7 @@ Host 只在选项缺省时使用默认值；显式传入 null 的名字、安装
 | --- | --- |
 | `SnapshotPublisher`、`ReadonlyMapSnapshot` | 发布快照、提供只读集合。 |
 | `batchSnapshotNotifications` | 在一个同步回调中批量发布，并可绑定通知的终端错误边界。返回 Promise 不能延长此次发布边界。 |
-| `SerialQueue` | 顺序执行提交的操作。`run(operation, signal)` 返回 `Promise<ResolvedValue<Awaited<T>>>`，`settled` 只等待完成；信号可立即撤回仍在排队的操作。操作开始后，由它自己决定结算。 |
+| `SerialQueue` | 顺序执行提交的操作。`run(operation, signal)` 返回 `Promise<ResolvedValue<Awaited<T>>>`，`settled()` 只等待此前已提交的操作完成；信号可立即撤回仍在排队的操作。操作开始后，由它自己决定结算。 |
 | `normalizePlainRecord` | 捕获普通记录的数据字段。插件配置请用 `captureConfiguration`。 |
 | `recordFields<T>()(...keys)` | 从声明类型建立穷尽的允许字段集合，供 `normalizePlainRecord` 使用。 |
 | `resolveValue(value)` | 按共享异步结果协议解析一次，返回 `Promise<ResolvedValue<Awaited<T>>>`；冻结的 `{ value }` 回执保留已完成结果的身份。 |
@@ -123,10 +123,10 @@ Node 与浏览器使用同一份公开 API 组合：源信号的原生监听器�
 
 ## 声明描述与可执行计划
 
-`describePlugin(plugin, { jsonSchemaTarget })` 从 Plugin 的同一声明投影 `PluginDescriptor`，供文档、UI 与代理读取。描述不执行 setup 或 validate，不推测擦除后的 TypeScript 接口。`PluginConfigurationDescriptor.status` 区分 `schema_absent`（未声明运行时配置 schema）、`unavailable`（有验证器但无 JSON Schema 出口）、`available`（提供标准 JSON Schema 出口）；默认 target 为 `draft-2020-12`。`schema_absent` 不能说明是否需要配置，其结构与必填性未知；例如 `definePlugin<{ port: number }>(...)` 可以没有 schema，但安装仍必须提供配置。需要机器可发现的输入与输出描述时，由同一配置声明通过 Standard Schema 1.1 的 Standard JSON Schema 协议导出，不另加一份必填性标记。
+`describePlugin(plugin, { jsonSchemaTarget })` 从 Plugin 的同一声明投影 `PluginDescriptor`，供文档、UI 与代理读取。描述不执行 setup 或 validate，不推测擦除后的 TypeScript 接口。`PluginConfigurationDescriptor.status` 区分 `schemaAbsent`（未声明运行时配置 schema）、`unavailable`（有验证器但无 JSON Schema 出口）、`available`（提供标准 JSON Schema 出口）；默认 target 为 `draft-2020-12`。`schemaAbsent` 不能说明是否需要配置，其结构与必填性未知；例如 `definePlugin<{ port: number }>(...)` 可以没有 schema，但安装仍必须提供配置。需要机器可发现的输入与输出描述时，由同一配置声明通过 Standard Schema 1.1 的 Standard JSON Schema 协议导出，不另加一份必填性标记。
 
 `PluginDescriptor.requires` 保留依赖种类与可选性的关联：Service 的 `optional` 可以为 true 或 false，ExtensionPoint 的 `optional` 始终为 false。按 `kind` 分支读取时，公开类型保留这条保证。
 
-`PlanReport.bindings.before/after` 展示绑定前后差异，`prepareOrder`、`stopOrder`、`publishOrder` 分别说明准备、停止与发布顺序。安装类 `PlanOperation` 携带 before/after `DeclarationSnapshot`，其中只含 pluginName 与公开 origin，不含配置载荷；分组操作只描述 id 与 parentId。`ImpactReason.previousProvider` 与 provider 保留提供者变化原因，包括可选依赖的提供者移除。
+`PlanReport.bindings.before/after` 展示绑定前后差异，`stopOrder` 与 `prepareOrder` 分别说明停止与准备顺序；所有候选准备成功后统一原子发布，因此没有单独的发布顺序。安装类 `PlanOperation` 携带 before/after `DeclarationSnapshot`，其中只含 pluginName 与公开 origin，不含配置载荷；分组操作只描述 id 与 parentId。`ImpactReason.previousProvider` 与 provider 保留提供者变化原因，包括可选依赖的提供者移除。
 
 `BindingReport.optional` 同时判别提供者是否可以缺失：`optional: false` 的 `provider` 必为字符串；只有 `optional: true` 才允许 `provider: undefined`。必需 Service 的提供者缺失时，图构建直接拒绝，不会生成这种报告。`Host.explain()`、诊断快照和 Plan 使用同一个绑定类型。

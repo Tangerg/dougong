@@ -47,7 +47,7 @@ const greeting = definePlugin({
 });
 const description = describePlugin(greeting);
 assert(
-  description.name === greeting.name && description.configuration.status === "schema_absent",
+  description.name === greeting.name && description.configuration.status === "schemaAbsent",
   "Packed declaration description differs",
 );
 assert(
@@ -200,8 +200,8 @@ assert(
   "Unchanged bindings were not projected before and after",
 );
 assert(
-  report.publishOrder.includes("probe"),
-  "Publication order omitted the affected installation",
+  report.prepareOrder.includes("probe"),
+  "Preparation order omitted the affected installation",
 );
 const operation = report.operations.find((item) => item.kind === "install" && item.id === "probe");
 assert(

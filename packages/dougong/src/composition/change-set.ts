@@ -2,6 +2,7 @@ import { DougongError, quarantinedHost, changeForeignCode } from "../contracts/e
 import { captureConfiguration, type ConfigurationValue } from "./configuration.js";
 import { normalizePlugin, type AnyPlugin, type NormalizedPlugin } from "./plugin.js";
 import { normalizePlainRecord, recordFields } from "../internal/record.js";
+import { assertTrimmedText } from "../internal/text.js";
 import type {
   ChangeSet,
   Group,
@@ -32,7 +33,7 @@ const installationUpdateFields = recordFields<InstallationUpdate>()(
   "origin",
 );
 
-type NormalizedInstallationUpdate =
+export type NormalizedInstallationUpdate =
   | {
       readonly kind: "replace";
       readonly plugin: NormalizedPlugin;
@@ -59,19 +60,13 @@ export type ChangeOperation =
     }
   | { readonly kind: "remove"; readonly installation: InstallationRecord }
   | { readonly kind: "group"; readonly group: GroupNode }
-  | { readonly kind: "remove-group"; readonly group: GroupNode };
+  | { readonly kind: "removeGroup"; readonly group: GroupNode };
 
 export interface ChangePort {
-  readonly create: (id: string, group: GroupNode | undefined) => InstallationRecord;
-  readonly resolve: (installation: object) => InstallationRecord;
+  readonly createInstallation: (id: string, group: GroupNode | undefined) => InstallationRecord;
+  readonly resolveInstallation: (installation: object) => InstallationRecord;
   readonly createGroup: (id: string, parent: GroupNode | undefined) => GroupNode;
   readonly resolveGroup: (group: object) => GroupNode;
-}
-
-export function assertId(id: unknown, label: string): asserts id is string {
-  if (typeof id !== "string" || !id.trim() || id.trim() !== id) {
-    throw new TypeError(label + " must be a non-empty trimmed string");
-  }
 }
 
 interface DraftState {
@@ -80,30 +75,34 @@ interface DraftState {
   readonly targets: Set<object>;
 }
 
+type ChangeSetsState =
+  | { readonly phase: "open"; readonly drafts: WeakMap<ChangeSet, DraftState> }
+  | { readonly phase: "closed"; readonly revision: number };
+
 export class ChangeSets {
-  #open: WeakMap<ChangeSet, DraftState> | number = new WeakMap();
+  #state: ChangeSetsState = { phase: "open", drafts: new WeakMap() };
   readonly #pending = new PendingInstallations();
 
   create(port: ChangePort): ChangeSet {
     const draft = new ChangeSetDraft(this);
-    this.#registry().set(draft.handle, { port, operations: [], targets: new Set() });
+    this.#drafts().set(draft.handle, { port, operations: [], targets: new Set() });
     return draft.handle;
   }
 
   take(change: ChangeSet): ReadonlyArray<ChangeOperation> {
-    const registry = this.#registry();
-    const state = registry.get(change);
+    const drafts = this.#drafts();
+    const state = drafts.get(change);
     if (!state)
       throw new DougongError(
         changeForeignCode,
         "ChangeSet belongs to another Host or was already planned",
       );
-    registry.delete(change);
+    drafts.delete(change);
     return Object.freeze(state.operations);
   }
 
   requireOpen(change: ChangeSet) {
-    const state = this.#registry().get(change);
+    const state = this.#drafts().get(change);
     if (!state) throw new TypeError("ChangeSet has already been planned");
     return state;
   }
@@ -113,17 +112,19 @@ export class ChangeSets {
   }
 
   close(revision: number) {
-    this.#open = revision;
+    this.#state = { phase: "closed", revision };
     this.#pending.retire();
   }
 
-  #registry() {
-    if (typeof this.#open === "number") throw quarantinedHost(this.#open);
-    return this.#open;
+  #drafts() {
+    const state = this.#state;
+    if (state.phase === "closed") throw quarantinedHost(state.revision);
+    return state.drafts;
   }
 }
 
 class ChangeSetDraft {
+  readonly #authority: ChangeSets;
   readonly handle: ChangeSet = Object.freeze({
     install: this.install.bind(this),
     update: this.update.bind(this),
@@ -131,7 +132,9 @@ class ChangeSetDraft {
     group: this.group.bind(this),
     removeGroup: this.removeGroup.bind(this),
   });
-  constructor(private readonly authority: ChangeSets) {
+
+  constructor(authority: ChangeSets) {
+    this.#authority = authority;
     Object.freeze(this);
   }
 
@@ -142,11 +145,11 @@ class ChangeSetDraft {
     const input = normalizePlainRecord(options, "Installation options", {
       fields: installationOptionFields,
     });
-    assertId(input.id, "Installation id");
+    assertTrimmedText(input.id, "Installation id");
     const group = input.group === undefined ? undefined : port.resolveGroup(input.group as object);
     const declaration = captureInstallationDeclaration(plugin, input.configuration, input.origin);
     this.#requireOpen();
-    const installation = port.create(input.id, group);
+    const installation = port.createInstallation(input.id, group);
     this.#stage(installation, { kind: "install", installation, declaration });
     return installation.facade as unknown as Installation<Arguments[0]>;
   }
@@ -173,7 +176,7 @@ class ChangeSetDraft {
           ...(hasConfiguration ? { configuration: captureConfiguration(input.configuration) } : {}),
         }
       : { kind: "configure", configuration: captureConfiguration(input.configuration) };
-    const record = port.resolve(installation);
+    const record = port.resolveInstallation(installation);
     this.#stage(record, {
       kind: "update",
       installation: record,
@@ -182,13 +185,13 @@ class ChangeSetDraft {
   }
 
   remove<Declaration extends AnyPlugin>(installation: Installation<Declaration>) {
-    const record = this.#requireOpen().port.resolve(installation);
+    const record = this.#requireOpen().port.resolveInstallation(installation);
     this.#stage(record, { kind: "remove", installation: record });
   }
 
   group(id: string, parent?: Group) {
     const { port } = this.#requireOpen();
-    assertId(id, "Group id");
+    assertTrimmedText(id, "Group id");
     const group = port.createGroup(
       id,
       parent === undefined ? undefined : port.resolveGroup(parent),
@@ -199,18 +202,18 @@ class ChangeSetDraft {
 
   removeGroup(group: Group) {
     const record = this.#requireOpen().port.resolveGroup(group);
-    this.#stage(record, { kind: "remove-group", group: record });
+    this.#stage(record, { kind: "removeGroup", group: record });
   }
 
   #stage(target: object, operation: ChangeOperation) {
     const { targets, operations } = this.#requireOpen();
     if (targets.has(target)) throw new TypeError("A target can appear only once in a ChangeSet");
-    if (operation.kind === "install") this.authority.track(operation.installation);
+    if (operation.kind === "install") this.#authority.track(operation.installation);
     targets.add(target);
     operations.push(Object.freeze(operation));
   }
 
   #requireOpen() {
-    return this.authority.requireOpen(this.handle);
+    return this.#authority.requireOpen(this.handle);
   }
 }

@@ -5,7 +5,7 @@ import { isCancellationReason } from "../src/contracts/errors";
 import type { AsyncDisposable, Disposable } from "../src/contracts/resource";
 import { Lifetime, type Task } from "../src/lifetime/lifetime";
 import { EventHub } from "../src/events/event-hub";
-import { ContributionRegistry } from "../src/contributions/contribution-store";
+import { ContributionRegistry } from "../src/contributions/contribution-registry";
 import { createHost } from "../src/execution/host";
 import { definePlugin } from "../src/composition/plugin";
 
@@ -62,7 +62,7 @@ describe("structured lifetime", () => {
 
   it("uses actual cancellation to close every scoped operation and reclaim late acquisitions", async () => {
     const controller = new AbortController();
-    const owner = new Lifetime({ label: "owner", parentSignal: controller.signal, report() {} });
+    const owner = new Lifetime({ label: "owner", startupSignal: controller.signal, report() {} });
     const ready = Promise.withResolvers<void>();
     const finish = Promise.withResolvers<void>();
     const release = vi.fn<() => void>();
@@ -272,7 +272,7 @@ describe("structured lifetime", () => {
   it("projects nested resource ownership into immutable values", async () => {
     const owner = lifetime();
     expect(() => owner.child("")).toThrow("non-empty");
-    expect(() => owner.child(" padded ")).toThrow("trimmed");
+    expect(() => owner.child(" padded ")).toThrow("whitespace");
     owner.defer(() => undefined);
     const session = owner.child("session");
     session.defer(() => undefined);
@@ -350,7 +350,9 @@ describe("structured lifetime", () => {
     const token = extensionPoint<string>("disposable");
     const listener = vi.fn<() => void>();
     const subscription = hub.stage("notice", listener, owner);
-    const contribution = registry.get<string>(token).stage("owner", "item", "first", owner);
+    const contribution = registry
+      .store<string>(token)
+      .stage("owner/item", "first", owner, () => undefined);
     owner.publish();
     {
       using owned = subscription;
@@ -411,11 +413,13 @@ describe("structured lifetime", () => {
     const token = extensionPoint<string>("replacement");
     const view = registry.view<string>(token);
     const first = lifetime();
-    const old = registry.get<string>(token).stage("owner", "item", "old", first);
+    const old = registry.store<string>(token).stage("owner/item", "old", first, () => undefined);
     first.publish();
     await first.dispose();
     const second = lifetime();
-    const current = registry.get<string>(token).stage("owner", "item", "new", second);
+    const current = registry
+      .store<string>(token)
+      .stage("owner/item", "new", second, () => undefined);
     second.publish();
     old[Symbol.dispose]();
     expect(
@@ -450,7 +454,7 @@ describe("structured lifetime", () => {
     const notified = vi.fn<() => void>();
     const subscription: Disposable = view.subscribe(notified);
     subscription[Symbol.dispose]();
-    registry.get<string>(token).stage("owner", "item", "value", owner);
+    registry.store<string>(token).stage("owner/item", "value", owner, () => undefined);
     owner.publish();
     expect(
       (await Promise.all(view.get().map((id) => view.use(id, (value) => value)))).map(
@@ -496,19 +500,21 @@ describe("structured lifetime", () => {
     const owner = lifetime();
     const registry = new ContributionRegistry(() => undefined);
     const token = extensionPoint<number>("keys");
-    const store = registry.get<number>(token);
-    store.stage("owner:1", "nested:2/item", 1, owner);
-    store.stage("owner:1/nested:2", "item", 2, owner);
+    registry.scope(owner, "owner:1", () => undefined).add(token, "nested:2/item", 1);
+    registry.scope(owner, "owner:1/nested:2", () => undefined).add(token, "item", 2);
     owner.publish();
-    expect([...store.snapshot()]).toEqual(["owner:1/nested:2%2Fitem", "owner:1%2Fnested:2/item"]);
+    expect([...registry.store<number>(token).snapshot()]).toEqual([
+      "owner:1/nested:2%2Fitem",
+      "owner:1%2Fnested:2/item",
+    ]);
     await owner.dispose();
   });
 
   it("preserves undefined as a live contribution value", async () => {
     const owner = lifetime();
     const registry = new ContributionRegistry(() => undefined);
-    const store = registry.get<number | undefined>(extensionPoint("undefined"));
-    const contribution = store.stage("owner", "item", undefined, owner);
+    const store = registry.store<number | undefined>(extensionPoint("undefined"));
+    const contribution = store.stage("owner/item", undefined, owner, () => undefined);
     owner.publish();
     expect(
       (await Promise.all(store.snapshot().map((id) => store.use(id, (value) => value)))).map(

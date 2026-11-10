@@ -1,69 +1,56 @@
-import { shutdownTimeout, type ReleaseFailure } from "../lifetime/lifetime.js";
-import { ContractRegistry } from "../contracts/contract-registry.js";
+import { ContractRegistry, type ContractRegistryWriter } from "../contracts/contract-registry.js";
 import {
   DougongError,
   isCancellationReason,
   quarantinedHost,
-  RecordedFailure,
-  groupConflictCode,
-  groupForeignCode,
-  groupMissingCode,
   hostBusyCode,
   hostQuarantinedCode,
-  installationForeignCode,
   serviceUnavailableCode,
   transitionFailedCode,
 } from "../contracts/errors.js";
+import { RecordedFailure } from "../contracts/recorded-failure.js";
 import {
-  normalizeRequirement,
   normalizeContract,
-  type Service,
-  type OptionalService,
+  normalizeRequirement,
+  requiredContract,
   type ExtensionPoint,
+  type OptionalService,
+  type Service,
 } from "../contracts/contracts.js";
-import { captureLogger, type Logger } from "../contracts/logging.js";
+import type { Logger } from "../contracts/logging.js";
+import { disposeSymbol, type Awaitable } from "../contracts/resource.js";
 import { EventHub } from "../events/event-hub.js";
-import { ContributionRegistry } from "../contributions/contribution-store.js";
+import { ContributionRegistry } from "../contributions/contribution-registry.js";
 import { SnapshotPublisher, batchSnapshotNotifications } from "../observation/snapshot-view.js";
 import { onAbort } from "../internal/abort.js";
 import { SerialQueue } from "../internal/serial-queue.js";
-import { captureDataArray } from "../internal/data-array.js";
+import { combineFailures } from "../internal/failures.js";
 import { resolveValue, type ResolvedValue } from "../internal/async-result.js";
-import { normalizePlainRecord, recordFields } from "../internal/record.js";
-import { ChangeSets, assertId, type ChangeOperation } from "../composition/change-set.js";
-import {
-  captureInstallationDeclaration,
-  claimInstallationId,
-  InstallationRecord,
-  type InstallationDeclaration,
-} from "../composition/installation.js";
+import type { ReleaseFailure } from "../lifetime/lifetime.js";
+import { ChangeSets, type ChangeOperation } from "../composition/change-set.js";
+import { HostIdentities } from "../composition/identities.js";
+import type { InstallationRecord } from "../composition/installation.js";
 import { InstallationGraph } from "../composition/installation-graph.js";
-import { buildInitialGroups, GroupNode } from "../composition/group.js";
-import { compileTransition, type CompositionState } from "../composition/planner.js";
+import { compileTransition } from "../composition/planner.js";
 import {
   PlanAuthority,
-  describeBindings,
+  stalePlan,
   type Plan,
   type PreparedTransition,
 } from "../composition/plan.js";
-import { Instance } from "./instance.js";
-import type { ApplyResult, HostOptions } from "./host-api.js";
 import type {
   ChangeSet,
   Group,
   Installation,
-  InitialInstallation,
+  InstallationState,
 } from "../composition/declarations.js";
-import type { HostStatus, InstallationState } from "../contracts/status.js";
-import type { HostSnapshot, InstallationSnapshot } from "../inspection/diagnostics.js";
-import { disposeSymbol, type Awaitable } from "../contracts/resource.js";
-
-interface CommittedState extends CompositionState {
-  readonly phase: "stopped" | "running" | "quarantined";
-  readonly instances: ReadonlyMap<InstallationRecord, Instance>;
-  readonly unresolved: ReadonlyArray<Instance>;
-  readonly error: RecordedFailure | undefined;
-}
+import type { HostSnapshot, HostStatus } from "../inspection/diagnostics.js";
+import type { ApplyResult, HostOptions } from "./host-api.js";
+import type { CommittedState } from "./committed-state.js";
+import { captureHostOptions } from "./host-options.js";
+import { installationExecution, projectHostSnapshot } from "./host-snapshot.js";
+import { Instance } from "./instance.js";
+import { Retirements, type ExecutionScope } from "./retirements.js";
 
 interface Transition {
   readonly phase: "starting" | "changing" | "stopping";
@@ -71,40 +58,11 @@ interface Transition {
   readonly scopes: ExecutionScope[];
 }
 
-interface ExecutionScope {
-  readonly graph: InstallationGraph;
-  readonly instances: ReadonlyMap<InstallationRecord, Instance>;
-}
-
-interface Retirement {
-  readonly receipt: Promise<void>;
-  readonly settled: Promise<void>;
-}
-
 type FailurePhase = "stop" | "prepare" | "restore" | "publish" | "release";
 
 const quarantineFailureMessage = "Execution could not establish a healthy state";
 
-const hostOptionFields = recordFields<HostOptions>()(
-  "name",
-  "installations",
-  "groups",
-  "logger",
-  "onError",
-  "shutdownTimeoutMilliseconds",
-);
-const initialGroupFields = recordFields<NonNullable<HostOptions["groups"]>[number]>()(
-  "id",
-  "parentId",
-);
-const initialInstallationFields = recordFields<InitialInstallation>()(
-  "id",
-  "plugin",
-  "configuration",
-  "origin",
-  "groupId",
-);
-
+// Failures inside one preparation attempt are returned together; later ones go to the reporter.
 class PreparationFailures {
   #pending: unknown[] | undefined = [];
   readonly #report: (error: unknown) => void;
@@ -122,9 +80,7 @@ class PreparationFailures {
     const failures = this.#pending;
     this.#pending = undefined;
     if (!failures?.length) return fallback;
-    return failures.length === 1
-      ? failures[0]
-      : new AggregateError(failures, "Plugin preparation failed");
+    return combineFailures(failures, "Plugin preparation failed");
   }
 }
 
@@ -139,87 +95,43 @@ export class Engine {
   readonly #commands = new SerialQueue();
   readonly #plans = new PlanAuthority();
   readonly #drafts = new ChangeSets();
-  readonly #installations = new WeakMap<object, InstallationRecord>();
-  readonly #groups = new WeakMap<object, GroupNode>();
+  readonly #identities = new HostIdentities();
+  readonly #retirements: Retirements;
   readonly #publisher: SnapshotPublisher<HostSnapshot>;
-  readonly #retirements = new WeakMap<Instance, Retirement>();
   #state: CommittedState;
   #transition: Transition | undefined;
+  // Diagnostics of the last failed transition: a commit clears it, but never advances because of it.
+  #failure: RecordedFailure | undefined;
+  // Instances that quarantine could not release; late completion only removes entries.
+  #unresolved: ReadonlyArray<Instance> = Object.freeze([]);
   #quarantineWork: Promise<DougongError> | undefined;
   #observationPhase: "active" | "closing" | "closed" = "active";
   #generation = 0;
 
   constructor(options: HostOptions = {}) {
-    const input = normalizePlainRecord(options, "Host options", {
-      fields: hostOptionFields,
-    });
-    const name = input.name === undefined ? "host" : input.name;
-    assertId(name, "Host name");
-    this.name = name;
-    if (input.onError !== undefined && typeof input.onError !== "function")
-      throw new TypeError("Host onError must be a function");
-
-    this.#logger = captureLogger(input.logger === undefined ? console : input.logger);
-    this.#onError = (input.onError ?? ((error: unknown) => this.#logger.error(error))) as (
-      error: unknown,
-    ) => unknown;
-    this.#shutdownTimeoutMilliseconds = shutdownTimeout(input.shutdownTimeoutMilliseconds);
+    const captured = captureHostOptions(options, this.#identities);
+    this.name = captured.name;
+    this.#logger = captured.logger;
+    this.#onError = captured.onError ?? ((error: unknown) => this.#logger.error(error));
+    this.#shutdownTimeoutMilliseconds = captured.shutdownTimeoutMilliseconds;
     this.#contributions = new ContributionRegistry((error) => this.#report(error));
-    const declarations = new Map<InstallationRecord, InstallationDeclaration>();
-    const initialGroups = captureDataArray(
-      input.groups === undefined ? [] : input.groups,
-      "Initial Groups",
+    this.#retirements = new Retirements((instance, error) =>
+      this.#reportReleaseFailure(instance, error),
     );
-    const initialInstallations = captureDataArray(
-      input.installations === undefined ? [] : input.installations,
-      "Initial Installations",
-    );
-    const groupParents = new Map<string, string | undefined>();
-    for (const raw of initialGroups) {
-      const group = normalizePlainRecord(raw, "Initial Group", {
-        fields: initialGroupFields,
-      });
-      assertId(group.id, "Group id");
-      if (group.parentId !== undefined) assertId(group.parentId, "Parent Group id");
-      if (groupParents.has(group.id))
-        throw new DougongError(groupConflictCode, "Duplicate initial Group: " + group.id);
-      groupParents.set(group.id, group.parentId as string | undefined);
-    }
-    const groups = buildInitialGroups(groupParents, (id, parent) => this.#createGroup(id, parent));
-    const ids = new Set<string>();
-    for (const raw of initialInstallations) {
-      const initial = normalizePlainRecord(raw, "Initial Installation", {
-        fields: initialInstallationFields,
-      });
-      assertId(initial.id, "Installation id");
-      if (initial.groupId !== undefined) assertId(initial.groupId, "Installation Group id");
-      claimInstallationId(ids, initial.id);
-      const group =
-        initial.groupId === undefined ? undefined : groups.get(initial.groupId as string);
-      if (initial.groupId !== undefined && !group)
-        throw new DougongError(groupMissingCode, "Initial Group is missing: " + initial.groupId);
-      const record = this.#createInstallation(initial.id, group);
-      declarations.set(
-        record,
-        captureInstallationDeclaration(initial.plugin, initial.configuration, initial.origin),
-      );
-    }
     this.#state = Object.freeze({
       revision: 0,
-      groups,
-      graph: InstallationGraph.build(declarations),
+      groups: captured.groups,
+      graph: InstallationGraph.build(captured.declarations),
       configurations: new Map(),
       phase: "stopped",
       instances: new Map(),
-      unresolved: Object.freeze([]),
-      error: undefined,
     });
     this.#publisher = new SnapshotPublisher(
       () => this.#snapshot(),
       (error) => this.#report(error),
     );
     this.#contracts.commit(this.#state.graph.contractKinds);
-    for (const record of declarations.keys()) this.#attachInstallation(record);
+    for (const record of captured.declarations.keys()) this.#attachInstallation(record);
     Object.freeze(this);
   }
 
@@ -244,21 +156,12 @@ export class Engine {
   explain(id: string) {
     const { graph } = this.#state;
     const installation = graph.byId.get(id);
-    return describeBindings(graph, installation ? [installation] : []);
+    return graph.bindings(installation ? [installation] : []);
   }
 
   change(): ChangeSet {
     this.#assertHealthy();
-    return this.#drafts.create({
-      create: (id, group) => this.#createInstallation(id, group),
-      resolve: (handle) => this.#resolveInstallation(handle),
-      createGroup: (id, parent) => this.#createGroup(id, parent),
-      resolveGroup: (handle) => {
-        const group = this.#groups.get(handle);
-        if (!group) throw new DougongError(groupForeignCode, "Group belongs to another Host");
-        return group;
-      },
-    });
+    return this.#drafts.create(this.#identities);
   }
 
   async plan(change: ChangeSet, signal?: AbortSignal): Promise<Plan> {
@@ -284,6 +187,7 @@ export class Engine {
         validity,
       );
       validity.throwIfAborted();
+      // Validation is application code; a Contract kind claimed meanwhile still rejects the Plan.
       this.#contracts.assertKinds(prepared.graph.contractKinds);
       return this.#plans.issue(prepared, this.#state);
     } catch (error) {
@@ -317,7 +221,7 @@ export class Engine {
         throw new TypeError("Service callback must be a function");
       const normalized = normalizeRequirement(requirement);
       if (normalized.kind === "extensionPoint") throw new TypeError("Expected a Service");
-      const token = normalized.kind === "optional" ? normalized.service : normalized;
+      const token = requiredContract(normalized);
       this.#contracts.assertCompatible(token);
       this.#assertHealthy();
       if (this.#state.phase !== "running")
@@ -386,22 +290,9 @@ export class Engine {
       return this.#result([]);
     }
     const previous = this.#state;
-    const affectedInstances = previous.graph.order
-      .filter((record) => prepared.affected.has(record))
-      .flatMap((record) => previous.instances.get(record) ?? []);
-    for (const instance of affectedInstances) {
-      if (instance.lifetime.busy) {
-        throw new DougongError(hostBusyCode, "Affected work is still in flight", {
-          details: {
-            outcome: "rejected",
-            installation: instance.installation.id,
-            stateRevision: previous.revision,
-          },
-        });
-      }
-    }
+    const affectedInstances = this.#idleAffectedInstances(previous, prepared);
     this.#plans.consume(plan);
-    let writer: ReturnType<ContractRegistry["writer"]>;
+    let writer: ContractRegistryWriter;
     try {
       writer = this.#contracts.writer(prepared.graph.contractKinds);
     } catch (error) {
@@ -411,92 +302,21 @@ export class Engine {
     for (const instance of affectedInstances) instance.lifetime.seal();
     const reserved = this.#transition;
     // Startup validation and preparation share one visible transition; scopes are not snapshot state.
-    this.#transition = reserved ?? {
+    const transition = (this.#transition = reserved ?? {
       phase: prepared.report.intent === "stop" ? "stopping" : "changing",
       affected: prepared.affected,
       scopes: [],
-    };
-    this.#transition.scopes.push(previous);
+    });
+    transition.scopes.push(previous);
     // Diagnostics observers may register new contributions synchronously at transition ingress.
     this.#contributions.beginBatch();
     if (!reserved) this.#notify();
     try {
-      if (previous.phase === "stopped" && prepared.report.intent !== "start") {
-        writer.commit();
-        this.#commit(prepared, new Map(), "stopped");
-        return this.#result(prepared.report.affectedInstallations);
-      }
-      const stopErrors = await this.#dispose([previous], new Set(affectedInstances));
-      if (
-        this.#isQuarantined() ||
-        stopErrors.length ||
-        affectedInstances.some((instance) => instance.lifetime.phase !== "disposed")
-      ) {
-        writer.discard();
-        throw await this.#quarantine(previous, stopErrors, prepared, "stop");
-      }
-      if (prepared.report.intent === "stop") {
-        writer.commit();
-        this.#commit(prepared, new Map(), "stopped");
-        return this.#result(prepared.report.affectedInstallations);
-      }
-      const retained = new Map(previous.instances);
-      for (const record of prepared.affected) retained.delete(record);
-      const instances = new Map(retained);
-      const scope: ExecutionScope = { graph: prepared.graph, instances };
-      this.#transition.scopes.push(scope);
-      const failures = new PreparationFailures((error) => this.#report(error));
-      try {
-        await this.#prepare(prepared, instances, writer, failures);
-        // A concurrent durable claim can still reject this candidate without publishing anything.
-        writer.commit();
-        failures.seal();
-      } catch (error) {
-        writer.discard();
-        const failure = failures.seal(error);
-        if (this.#isQuarantined())
-          throw await this.#quarantine(previous, [failure], prepared, "prepare");
-        const candidates = new Set(
-          [...instances.values()].filter((instance) =>
-            prepared.affected.has(instance.installation),
-          ),
-        );
-        const cleanupErrors = await this.#dispose([scope], candidates);
-        if (
-          this.#isQuarantined() ||
-          cleanupErrors.length ||
-          [...candidates].some((instance) => instance.lifetime.phase !== "disposed")
-        )
-          throw await this.#quarantine(previous, [failure, ...cleanupErrors], prepared, "prepare");
-        if (previous.phase === "stopped") {
-          this.#advance({
-            ...previous,
-            error: new RecordedFailure(failure),
-          });
-          throw this.#transitionError(
-            "Startup failed",
-            failure,
-            "restored",
-            prepared.report.affectedInstallations,
-            "prepare",
-          );
-        }
-        await this.#restore(previous, retained, prepared, failure);
-        throw this.#transitionError(
-          "Change failed; previous declarations were restored",
-          failure,
-          "restored",
-          prepared.report.affectedInstallations,
-          "prepare",
-        );
-      }
-      try {
-        this.#commit(prepared, instances, "running");
-      } catch (error) {
-        writer.discard();
-        throw await this.#quarantine(this.#state, [error], prepared, "publish");
-      }
-      return this.#result(prepared.report.affectedInstallations);
+      if (previous.phase === "stopped" && prepared.report.intent !== "start")
+        return this.#commitStopped(prepared, writer);
+      await this.#stopAffected(previous, affectedInstances, prepared, writer);
+      if (prepared.report.intent === "stop") return this.#commitStopped(prepared, writer);
+      return await this.#startCandidate(prepared, previous, writer, transition);
     } finally {
       this.#transition = undefined;
       this.#detachUncommitted(prepared.graph.declarations.keys());
@@ -507,10 +327,125 @@ export class Engine {
     }
   }
 
+  // Busy rejects before the Plan is consumed, so the caller may retry the same Plan.
+  #idleAffectedInstances(previous: CommittedState, prepared: PreparedTransition) {
+    const instances = previous.graph.order
+      .filter((record) => prepared.affected.has(record))
+      .flatMap((record) => previous.instances.get(record) ?? []);
+    const busy = instances.find((instance) => instance.lifetime.busy);
+    if (busy) {
+      throw new DougongError(hostBusyCode, "Affected work is still in flight", {
+        details: {
+          outcome: "rejected",
+          installation: busy.installation.id,
+          stateRevision: previous.revision,
+        },
+      });
+    }
+    return instances;
+  }
+
+  #commitStopped(prepared: PreparedTransition, writer: ContractRegistryWriter) {
+    writer.commit();
+    this.#commit(prepared, new Map(), "stopped");
+    return this.#result(prepared.report.affectedInstallations);
+  }
+
+  async #stopAffected(
+    previous: CommittedState,
+    affectedInstances: ReadonlyArray<Instance>,
+    prepared: PreparedTransition,
+    writer: ContractRegistryWriter,
+  ) {
+    const stopErrors = await this.#retirements.release([previous], new Set(affectedInstances));
+    if (
+      this.#isQuarantined() ||
+      stopErrors.length ||
+      affectedInstances.some((instance) => instance.lifetime.phase !== "disposed")
+    ) {
+      writer.discard();
+      throw await this.#quarantine(previous, stopErrors, prepared, "stop");
+    }
+  }
+
+  async #startCandidate(
+    prepared: PreparedTransition,
+    previous: CommittedState,
+    writer: ContractRegistryWriter,
+    transition: Transition,
+  ): Promise<ApplyResult> {
+    const retained = new Map(previous.instances);
+    for (const record of prepared.affected) retained.delete(record);
+    const instances = new Map(retained);
+    const scope: ExecutionScope = { graph: prepared.graph, instances };
+    transition.scopes.push(scope);
+    const failures = new PreparationFailures((error) => this.#report(error));
+    try {
+      await this.#prepare(prepared, instances, writer, failures);
+      // A concurrent durable claim can still reject this candidate without publishing anything.
+      writer.commit();
+      failures.seal();
+    } catch (error) {
+      writer.discard();
+      throw await this.#recoverPreparation(
+        previous,
+        retained,
+        prepared,
+        scope,
+        failures.seal(error),
+      );
+    }
+    try {
+      this.#commit(prepared, instances, "running");
+    } catch (error) {
+      writer.discard();
+      throw await this.#quarantine(this.#state, [error], prepared, "publish");
+    }
+    return this.#result(prepared.report.affectedInstallations);
+  }
+
+  // Resolves to the rejection for the failed operation; it is "restored" only when the previous
+  // declarations run again, and otherwise the Host is quarantined.
+  async #recoverPreparation(
+    previous: CommittedState,
+    retained: Map<InstallationRecord, Instance>,
+    prepared: PreparedTransition,
+    scope: ExecutionScope,
+    failure: unknown,
+  ): Promise<DougongError> {
+    if (this.#isQuarantined()) return this.#quarantine(previous, [failure], prepared, "prepare");
+    const candidates = new Set(
+      [...scope.instances.values()].filter((instance) =>
+        prepared.affected.has(instance.installation),
+      ),
+    );
+    const cleanupErrors = await this.#retirements.release([scope], candidates);
+    if (
+      this.#isQuarantined() ||
+      cleanupErrors.length ||
+      [...candidates].some((instance) => instance.lifetime.phase !== "disposed")
+    )
+      return this.#quarantine(previous, [failure, ...cleanupErrors], prepared, "prepare");
+    const affected = prepared.report.affectedInstallations;
+    if (previous.phase === "stopped") {
+      // The committed graph is unchanged, so a failed start records diagnostics without a revision.
+      this.#failure = new RecordedFailure(failure);
+      return this.#transitionError("Startup failed", failure, "restored", affected, "prepare");
+    }
+    await this.#restore(previous, retained, prepared, failure);
+    return this.#transitionError(
+      "Change failed; previous declarations were restored",
+      failure,
+      "restored",
+      affected,
+      "prepare",
+    );
+  }
+
   async #prepare(
     prepared: Pick<PreparedTransition, "graph" | "affected" | "configurations">,
     execution: Map<InstallationRecord, Instance>,
-    writer: ReturnType<ContractRegistry["writer"]>,
+    writer: ContractRegistryWriter,
     failures: PreparationFailures,
   ) {
     const generation = ++this.#generation;
@@ -529,7 +464,7 @@ export class Engine {
             changed: () => {
               if (
                 this.#state.instances.get(record) === instance ||
-                this.#state.unresolved.includes(instance)
+                this.#unresolved.includes(instance)
               )
                 this.#notify();
             },
@@ -554,9 +489,9 @@ export class Engine {
                 dependencies[alias] = this.#contributions.view(requirement, instance.lifetime);
                 continue;
               }
-              const token = requirement.kind === "optional" ? requirement.service : requirement;
-              const provider = prepared.graph.providers.get(token.id);
-              dependencies[alias] = provider ? execution.get(provider)?.read(token.id) : undefined;
+              const contract = requiredContract(requirement).id;
+              const provider = prepared.graph.providers.get(contract);
+              dependencies[alias] = provider ? execution.get(provider)?.read(contract) : undefined;
             }
             try {
               await instance.prepare(
@@ -590,7 +525,7 @@ export class Engine {
     const instances = new Map(retained);
     const scope: ExecutionScope = { graph: previous.graph, instances };
     this.#transition!.scopes.push(scope);
-    const failures = new PreparationFailures((error) => this.#report(error));
+    const failures = new PreparationFailures((failure) => this.#report(failure));
     const writer = this.#contracts.writer(previous.graph.contractKinds);
     try {
       await this.#prepare(
@@ -605,11 +540,9 @@ export class Engine {
       );
       failures.seal();
       writer.commit();
-      this.#advance({
-        ...previous,
-        instances,
-        error: new RecordedFailure(error),
-      });
+      const recorded = new RecordedFailure(error);
+      this.#advance({ ...previous, instances });
+      this.#failure = recorded;
       for (const [record, instance] of instances) {
         if (failed.affected.has(record)) instance.publish();
         this.#assertHealthy();
@@ -618,7 +551,7 @@ export class Engine {
       writer.discard();
       const cleanupErrors = this.#isQuarantined()
         ? []
-        : await this.#dispose(
+        : await this.#retirements.release(
             [scope],
             new Set(
               [...instances.values()].filter((instance) =>
@@ -647,9 +580,8 @@ export class Engine {
       configurations: prepared.configurations,
       phase,
       instances,
-      unresolved: Object.freeze([]),
-      error: undefined,
     });
+    this.#failure = undefined;
     this.#assertHealthy();
     for (const record of prepared.graph.declarations.keys()) {
       if (!previous.graph.declarations.has(record)) this.#attachInstallation(record);
@@ -666,15 +598,16 @@ export class Engine {
 
   #advance(next: Omit<CommittedState, "revision">) {
     this.#assertHealthy();
-    this.#state = Object.freeze({ ...next, revision: this.#state.revision + 1 });
-    const quarantined = next.phase === "quarantined";
-    this.#plans.invalidate(this.#state.revision, quarantined);
-    if (quarantined) {
-      this.#drafts.close(this.#state.revision);
-      for (const [record, declaration] of next.graph.declarations) {
-        record.detach({ status: "quarantined", origin: declaration.origin });
-      }
+    const revision = this.#state.revision + 1;
+    this.#state = Object.freeze({ ...next, revision });
+    if (next.phase !== "quarantined") {
+      this.#plans.invalidate(stalePlan(revision - 1, revision));
+      return;
     }
+    this.#plans.invalidate(quarantinedHost(revision));
+    this.#drafts.close(revision);
+    for (const [record, declaration] of next.graph.declarations)
+      record.detach({ status: "quarantined", origin: declaration.origin });
   }
 
   #releaseFailed(instance: Instance, failure: ReleaseFailure) {
@@ -719,20 +652,13 @@ export class Engine {
       ...new Set(remaining.map((instance) => instance.installation.id)),
     ];
     const work = Promise.resolve().then(async () => {
-      const cleanupErrors = await this.#dispose(execution, new Set(remaining));
+      const cleanupErrors = await this.#retirements.release(execution, new Set(remaining));
       const cause = new AggregateError([...errors, ...cleanupErrors], quarantineFailureMessage);
       // Cleanup completion refines diagnostics; it cannot grant another committed revision.
-      this.#state = Object.freeze({
-        ...this.#state,
-        unresolved: Object.freeze(
-          remaining.filter((instance) => instance.lifetime.phase !== "disposed"),
-        ),
-        error: cleanupErrors.length
-          ? new RecordedFailure(
-              new AggregateError([this.#state.error, ...cleanupErrors], quarantineFailureMessage),
-            )
-          : this.#state.error,
-      });
+      this.#unresolved = Object.freeze(
+        remaining.filter((instance) => instance.lifetime.phase !== "disposed"),
+      );
+      if (cleanupErrors.length) this.#appendFailures(cleanupErrors);
       this.#notify();
       return this.#transitionError(
         "Host is quarantined after execution could not establish a healthy state",
@@ -750,105 +676,20 @@ export class Engine {
     };
     void work.then(forget, forget);
     for (const instance of remaining) instance.lifetime.block();
-    this.#advance({
-      ...previous,
-      phase: "quarantined",
-      instances: new Map(),
-      unresolved: Object.freeze(remaining),
-      error: undefined,
-    });
+    this.#advance({ ...previous, phase: "quarantined", instances: new Map() });
+    this.#unresolved = Object.freeze(remaining);
+    this.#failure = undefined;
     this.#notify();
     // Reading an external Error can execute accessors; availability is already terminal.
-    this.#state = Object.freeze({
-      ...this.#state,
-      error: new RecordedFailure(new AggregateError(errors, quarantineFailureMessage)),
-    });
+    this.#failure = new RecordedFailure(new AggregateError(errors, quarantineFailureMessage));
     this.#notify();
     return work;
   }
 
-  async #dispose(scopes: ReadonlyArray<ExecutionScope>, targets: ReadonlySet<Instance>) {
-    const dependents = new Map<Instance, Set<Instance>>();
-    for (const { graph, instances } of scopes) {
-      for (const [provider, consumers] of graph.dependents) {
-        const instance = instances.get(provider);
-        if (!instance) continue;
-        const bound = dependents.get(instance) ?? new Set<Instance>();
-        for (const consumer of consumers) {
-          const dependent = instances.get(consumer);
-          if (dependent) bound.add(dependent);
-        }
-        dependents.set(instance, bound);
-      }
-    }
-
-    const pending: Promise<void>[] = [];
-    for (const instance of [...targets].reverse()) {
-      const current = this.#retirements.get(instance);
-      if (current) {
-        // The first disposal call owns its failure receipt; quarantine joins without duplicating it.
-        pending.push(current.receipt.catch(() => undefined));
-        continue;
-      }
-      if (instance.lifetime.phase === "disposed") continue;
-      const retirement = this.#retire(instance, [...(dependents.get(instance) ?? [])]);
-      this.#retirements.set(instance, retirement);
-      pending.push(retirement.receipt);
-    }
-    const outcomes = await Promise.allSettled(pending);
-    return outcomes.flatMap((result) =>
-      result.status === "rejected" ? [result.reason as unknown] : [],
+  #appendFailures(errors: ReadonlyArray<unknown>) {
+    this.#failure = new RecordedFailure(
+      new AggregateError([this.#failure, ...errors], quarantineFailureMessage),
     );
-  }
-
-  #retire(instance: Instance, consumers: ReadonlyArray<Instance>): Retirement {
-    const completion = Promise.withResolvers<void>();
-    let deferred = false;
-    const deferReceipt = () => {
-      deferred = true;
-      completion.resolve();
-    };
-    // Register every branch before looking up joins, including bindings across generations.
-    const settled = Promise.resolve().then(async () => {
-      const dependents = consumers.map((consumer) => this.#retirements.get(consumer));
-      void Promise.allSettled(dependents.map((dependent) => dependent?.receipt)).then(() => {
-        // A failed receipt cannot hold the quarantine report open until actual work settles.
-        if (consumers.some((consumer) => consumer.lifetime.phase !== "disposed")) deferReceipt();
-      });
-      await Promise.allSettled(
-        consumers.map((consumer, index) => dependents[index]?.settled ?? consumer.settled),
-      );
-      if (consumers.some((consumer) => consumer.lifetime.phase !== "disposed")) return;
-
-      const busy = instance.lifetime.busy;
-      const release = instance.lifetime.dispose({ cancelForeground: true });
-      if (busy) deferReceipt();
-      const releaseOutcome = release.then(
-        () => {
-          completion.resolve();
-          return { status: "fulfilled" } as const;
-        },
-        (error: unknown) => {
-          if (deferred) this.#reportReleaseFailure(instance, error);
-          else completion.reject(error);
-          return { status: "rejected", reason: error } as const;
-        },
-      );
-      try {
-        await instance.settled;
-      } catch (error) {
-        const outcome = await releaseOutcome;
-        if (outcome.status === "fulfilled" || outcome.reason !== error)
-          this.#reportReleaseFailure(instance, error);
-        throw error;
-      }
-      await releaseOutcome;
-    });
-    void settled.then(completion.resolve, completion.reject);
-    return Object.freeze({
-      receipt: Object.freeze(completion.promise),
-      settled: Object.freeze(settled),
-    });
   }
 
   #reportReleaseFailure(instance: Instance, error: unknown) {
@@ -859,12 +700,7 @@ export class Engine {
       );
       return;
     }
-    this.#state = Object.freeze({
-      ...this.#state,
-      error: new RecordedFailure(
-        new AggregateError([this.#state.error, error], quarantineFailureMessage),
-      ),
-    });
+    this.#appendFailures([error]);
     this.#notify();
     this.#report(
       this.#transitionError(
@@ -917,12 +753,6 @@ export class Engine {
     });
   }
 
-  #createInstallation(id: string, group: GroupNode | undefined) {
-    const record = new InstallationRecord(id, group);
-    this.#installations.set(record.facade, record);
-    return record;
-  }
-
   #attachInstallation(record: InstallationRecord) {
     record.attach(() => ({
       status: this.#installationStatus(record),
@@ -937,19 +767,6 @@ export class Engine {
     }
   }
 
-  #createGroup(id: string, parent: GroupNode | undefined) {
-    const group = new GroupNode(id, parent);
-    this.#groups.set(group.facade, group);
-    return group;
-  }
-
-  #resolveInstallation(handle: object) {
-    const record = this.#installations.get(handle);
-    if (!record)
-      throw new DougongError(installationForeignCode, "Installation belongs to another Host");
-    return record;
-  }
-
   #discardPending(operations: ReadonlyArray<ChangeOperation>) {
     this.#detachUncommitted(
       operations.flatMap((operation) =>
@@ -960,94 +777,25 @@ export class Engine {
 
   #installationStatus(record: InstallationRecord): InstallationState {
     if (!this.#state.graph.declarations.has(record)) return "pending";
-    return this.#installationExecution(record).status;
-  }
-
-  #installationExecution(record: InstallationRecord) {
-    const instance = this.#state.instances.get(record);
-    const changing = this.#transition?.affected.has(record);
-    if (instance) {
-      return { status: changing ? "changing" : "running", instance } as const;
-    }
-    return {
-      status: this.#isQuarantined() ? "quarantined" : changing ? "changing" : "stopped",
-      instance: undefined,
-    } as const;
+    return installationExecution(record, this.#state, this.#transition?.affected).status;
   }
 
   #snapshot(): HostSnapshot {
-    const installations: InstallationSnapshot[] = [...this.#state.graph.declarations].map(
-      ([record, declaration]) => {
-        const execution = this.#installationExecution(record);
-        const description = {
-          id: record.id,
-          groupId: record.groupId,
-          pluginName: declaration.plugin.name,
-          origin: declaration.origin,
-          requires: Object.freeze(
-            Object.values(declaration.plugin.requires).map((token) =>
-              token.kind === "optional" ? token.service.id : token.id,
-            ),
-          ),
-          provides: Object.freeze(
-            Object.values(declaration.plugin.provides).map((token) => token.id),
-          ),
-        };
-        if (!execution.instance) {
-          return Object.freeze({
-            ...description,
-            status: execution.status,
-            generation: undefined,
-            lifetime: undefined,
-          });
-        }
-        return Object.freeze({
-          ...description,
-          status: execution.status,
-          generation: execution.instance.generation,
-          lifetime: execution.instance.lifetime.snapshot(),
-        });
-      },
-    );
-    const members = Map.groupBy(installations, (installation) => installation.groupId);
-    return Object.freeze({
+    return projectHostSnapshot({
       name: this.name,
       status: this.status,
-      stateRevision: this.#state.revision,
-      installations: Object.freeze(installations),
-      groups: Object.freeze(
-        [...this.#state.groups.values()].map((group) =>
-          Object.freeze({
-            id: group.id,
-            parentId: group.parentId,
-            installations: Object.freeze(
-              (members.get(group.id) ?? []).map((installation) => installation.id),
-            ),
-          }),
-        ),
-      ),
-      bindings: describeBindings(this.#state.graph),
-      unresolved: Object.freeze(
-        this.#state.unresolved.map((instance) =>
-          Object.freeze({
-            installation: instance.installation.id,
-            generation: instance.generation,
-            lifetime: instance.lifetime.snapshot(),
-          }),
-        ),
-      ),
-      error: this.#state.error?.snapshot,
+      state: this.#state,
+      changing: this.#transition?.affected,
+      unresolved: this.#unresolved,
+      failure: this.#failure,
     });
   }
 
   #notify() {
-    if (this.#state.unresolved.some((instance) => instance.lifetime.phase === "disposed")) {
-      this.#state = Object.freeze({
-        ...this.#state,
-        unresolved: Object.freeze(
-          this.#state.unresolved.filter((instance) => instance.lifetime.phase !== "disposed"),
-        ),
-      });
+    if (this.#unresolved.some((instance) => instance.lifetime.phase === "disposed")) {
+      this.#unresolved = Object.freeze(
+        this.#unresolved.filter((instance) => instance.lifetime.phase !== "disposed"),
+      );
     }
     if (this.#observationPhase === "closed") return;
     try {
@@ -1067,7 +815,7 @@ export class Engine {
       !this.#isQuarantined() ||
       this.#transition ||
       this.#quarantineWork ||
-      this.#state.unresolved.length
+      this.#unresolved.length
     )
       return;
     this.#observationPhase = "closing";
@@ -1085,9 +833,7 @@ export class Engine {
       } catch (error) {
         errors.push(error);
       }
-      if (errors.length === 1) this.#report(errors[0]);
-      if (errors.length > 1)
-        this.#report(new AggregateError(errors, "Host observation sealing failed"));
+      if (errors.length) this.#report(combineFailures(errors, "Host observation sealing failed"));
     });
   }
 

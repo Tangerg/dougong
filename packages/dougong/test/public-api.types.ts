@@ -916,7 +916,7 @@ function verifyPluginDescriptorTypes() {
     }
   }
 
-  const absent: core.PluginConfigurationDescriptor = { status: "schema_absent" };
+  const absent: core.PluginConfigurationDescriptor = { status: "schemaAbsent" };
   // @ts-expect-error Schema absence no longer claims that no configuration exists.
   const obsolete: core.PluginConfigurationDescriptor = { status: "none" };
 
@@ -971,13 +971,13 @@ const retainedRemovedDeclaration: core.PlanOperation = {
 // @ts-expect-error Provider changes must identify their Contract.
 const missingChangedContract: core.ImpactReason = {
   installation: "planned",
-  kind: "provider_changed",
+  kind: "providerChanged",
   provider: "provider",
 };
 // @ts-expect-error A provider change must identify at least one actual provider.
 const missingChangedProviders: core.ImpactReason = {
   installation: "planned",
-  kind: "provider_changed",
+  kind: "providerChanged",
   contract: "planned/value",
 };
 // @ts-expect-error Direct declaration changes do not carry provider-change fields.
@@ -1003,7 +1003,7 @@ function verifyReportCorrelations(operation: core.PlanOperation, reason: core.Im
     expectTypeOf(operation.before.pluginName).toEqualTypeOf<string>();
     expectTypeOf(operation.after).toEqualTypeOf<undefined>();
   }
-  if (reason.kind === "provider_changed") {
+  if (reason.kind === "providerChanged") {
     expectTypeOf(reason.contract.toUpperCase()).toEqualTypeOf<string>();
     expectTypeOf(reason.provider ?? reason.previousProvider).toEqualTypeOf<string>();
   } else {

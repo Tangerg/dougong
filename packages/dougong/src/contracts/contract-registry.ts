@@ -1,5 +1,5 @@
 import type { ContractIdentity, ContractKind } from "./contracts.js";
-import { DougongError, contractConflictCode } from "./errors.js";
+import { DougongError, contractConflictCode, lifetimeDisposedCode } from "./errors.js";
 
 // A Host must keep each Contract id bound to one kind even after its last Installation leaves.
 
@@ -52,8 +52,9 @@ export class ContractRegistryWriter {
       state.registry.remember(contract);
       return;
     }
+    // A discarded candidate generation can still run until its Lifetime is sealed.
     if (state.phase === "discarded") {
-      throw new Error("Contract registry writer has been discarded");
+      throw new DougongError(lifetimeDisposedCode, "Candidate generation has been discarded");
     }
 
     state.registry.assertCompatible(contract);

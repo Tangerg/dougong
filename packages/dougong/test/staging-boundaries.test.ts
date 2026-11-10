@@ -10,7 +10,7 @@ import {
 } from "../src";
 import { EventHub } from "../src/events/event-hub";
 import { Lifetime } from "../src/lifetime/lifetime";
-import { ContributionRegistry } from "../src/contributions/contribution-store";
+import { ContributionRegistry } from "../src/contributions/contribution-registry";
 
 it.each(["install", "update"])(
   "refuses %s staging when input normalization has already consumed the draft",

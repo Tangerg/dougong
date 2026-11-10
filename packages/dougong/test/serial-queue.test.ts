@@ -27,12 +27,12 @@ describe("SerialQueue", () => {
       trace.push("first:end");
       throw failure;
     });
-    const firstSettled = queue.settled;
+    const firstSettled = queue.settled();
     const second = queue.run(async () => {
       trace.push("second");
       return 2;
     });
-    const settled = queue.settled;
+    const settled = queue.settled();
 
     await Promise.resolve();
     expect(trace).toEqual(["first:start"]);
@@ -52,7 +52,7 @@ describe("SerialQueue", () => {
       await blocked.promise;
       trace.push("first");
     });
-    const observed = queue.settled;
+    const observed = queue.settled();
     Object.defineProperty(observed, "constructor", {
       get() {
         throw new Error("caller-owned observer");
@@ -84,7 +84,7 @@ describe("SerialQueue", () => {
       return 2;
     });
     let settled = false;
-    void queue.settled.then(() => {
+    void queue.settled().then(() => {
       settled = true;
     });
 

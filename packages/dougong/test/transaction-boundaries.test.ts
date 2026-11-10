@@ -783,3 +783,33 @@ it("keeps the revision authority's shared rejection stable across planning calle
     await host.stop();
   }
 });
+
+it("records a failed startup without advancing the committed revision", async () => {
+  const failure = new Error("broken setup");
+  const host = createHost({
+    installations: [
+      {
+        id: "broken",
+        plugin: definePlugin({
+          name: "transaction.broken-startup",
+          setup() {
+            throw failure;
+          },
+        }),
+      },
+    ],
+  });
+  const change = host.change();
+  change.install(definePlugin({ name: "transaction.planned", setup() {} }), { id: "planned" });
+  const plan = await host.plan(change);
+  await expect(host.start()).rejects.toMatchObject({
+    code: "TRANSITION_FAILED",
+    cause: failure,
+    details: { outcome: "restored", stateRevision: 0 },
+  });
+  expect(host.status).toBe("stopped");
+  expect(host.stateRevision).toBe(0);
+  expect(host.diagnostics.get().error).toMatchObject({ message: "broken setup" });
+  await expect(host.apply(plan)).resolves.toMatchObject({ stateRevision: 1 });
+  expect(host.diagnostics.get().error).toBeUndefined();
+});

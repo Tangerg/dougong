@@ -1,8 +1,8 @@
 import { captureConfiguration, type ConfigurationValue } from "dougong";
 import { normalizePlainRecord, recordFields } from "dougong/advanced";
 import { satisfies } from "semver";
-import { PlatformError, apiIncompatibleCode } from "../errors.js";
-import { defineManifest, type Manifest, type ManifestInput } from "./manifest.js";
+import { PlatformError, apiIncompatibleCode, manifestInvalidCode } from "../errors.js";
+import { defineManifest, isTrimmedText, type Manifest, type ManifestInput } from "./manifest.js";
 
 export interface ArtifactInput<Reference> {
   readonly revision: string;
@@ -83,9 +83,8 @@ export function captureArtifact<Reference>(
     fields: artifactFields,
   });
   const revision = declaration.revision;
-  if (typeof revision !== "string" || !revision || revision.trim() !== revision) {
+  if (!isTrimmedText(revision))
     throw new TypeError("Artifact revision must be a non-empty trimmed string");
-  }
   if (!Object.hasOwn(declaration, "reference")) {
     throw new TypeError("Artifact declaration must define reference");
   }
@@ -123,15 +122,8 @@ export function readArtifactOrigin(
   name: string,
 ): ArtifactOrigin | undefined {
   if (value?.kind !== "artifact" || value.platformId !== platformId) return undefined;
-  if (
-    typeof value.revision !== "string" ||
-    !value.revision ||
-    value.revision.trim() !== value.revision ||
-    !value.manifest ||
-    typeof value.manifest !== "object"
-  ) {
+  if (!isTrimmedText(value.revision) || !value.manifest || typeof value.manifest !== "object")
     return undefined;
-  }
   const existing = originProjections.get(value);
   if (existing) return existing.manifest.name === name ? existing : undefined;
   try {
@@ -145,7 +137,9 @@ export function readArtifactOrigin(
     });
     originProjections.set(value, origin);
     return origin;
-  } catch {
-    return undefined;
+  } catch (error) {
+    // An origin whose manifest no longer validates is not this Registration's Artifact.
+    if (error instanceof PlatformError && error.code === manifestInvalidCode) return undefined;
+    throw error;
   }
 }

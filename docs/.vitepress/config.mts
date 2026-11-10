@@ -29,6 +29,7 @@ function chineseSidebar(): DefaultTheme.SidebarItem[] {
       collapsed: false,
       items: [
         { text: "快速开始", link: "/guide/getting-started" },
+        { text: "迁移到 0.11.0", link: "/guide/migrating-to-0.11" },
         { text: "迁移到 0.10.0", link: "/guide/migrating-to-0.10" },
         { text: "迁移到 0.9.0", link: "/guide/migrating-to-0.9" },
         { text: "核心概念", link: "/guide/concepts" },
@@ -49,6 +50,7 @@ function chineseSidebar(): DefaultTheme.SidebarItem[] {
         { text: "Platform 规范", link: "/reference/platform" },
         { text: "错误码", link: "/reference/errors" },
         { text: "机械守卫", link: "/reference/guards" },
+        { text: "0.11.0 Release Notes", link: "/reference/release-0.11.0" },
         { text: "0.10.0 Release Notes", link: "/reference/release-0.10.0" },
         { text: "0.9.0 Release Notes", link: "/reference/release-0.9.0" },
       ],
@@ -73,6 +75,7 @@ function englishSidebar(): DefaultTheme.SidebarItem[] {
       collapsed: false,
       items: [
         { text: "Getting started", link: "/en/guide/getting-started" },
+        { text: "Migrating to 0.11.0", link: "/en/guide/migrating-to-0.11" },
         { text: "Migrating to 0.10.0", link: "/en/guide/migrating-to-0.10" },
         { text: "Migrating to 0.9.0", link: "/en/guide/migrating-to-0.9" },
         { text: "Core concepts", link: "/en/guide/concepts" },
@@ -93,6 +96,7 @@ function englishSidebar(): DefaultTheme.SidebarItem[] {
         { text: "Platform specification", link: "/en/reference/platform" },
         { text: "Error codes", link: "/en/reference/errors" },
         { text: "Mechanical guards", link: "/en/reference/guards" },
+        { text: "0.11.0 release notes", link: "/en/reference/release-0.11.0" },
         { text: "0.10.0 release notes", link: "/en/reference/release-0.10.0" },
         { text: "0.9.0 release notes", link: "/en/reference/release-0.9.0" },
       ],

@@ -1,3 +1,5 @@
+import { assertTrimmedText, isTrimmedText } from "../internal/text.js";
+
 declare const contractBrand: unique symbol;
 declare const contractValueSlot: unique symbol;
 declare const optionalBrand: unique symbol;
@@ -8,7 +10,13 @@ interface ContractValueSlot<T> {
   readonly accept: (value: T) => void;
 }
 
-export type ContractKind = "service" | "extensionPoint" | "event";
+const contractKinds = Object.freeze({
+  service: Object.freeze({ name: "Service", article: "a" }),
+  extensionPoint: Object.freeze({ name: "ExtensionPoint", article: "an" }),
+  event: Object.freeze({ name: "Event", article: "an" }),
+});
+
+export type ContractKind = keyof typeof contractKinds;
 
 export interface ContractIdentity {
   readonly id: string;
@@ -25,11 +33,11 @@ interface Contract<T, Kind extends ContractKind> extends ContractIdentity, Contr
   readonly [contractValueSlot]: ContractValueSlot<T>;
 }
 
-interface ServiceIdentity extends ContractIdentity, ContractBrand {
+export interface ServiceIdentity extends ContractIdentity, ContractBrand {
   readonly kind: "service";
 }
 
-interface ExtensionPointIdentity extends ContractIdentity, ContractBrand {
+export interface ExtensionPointIdentity extends ContractIdentity, ContractBrand {
   readonly kind: "extensionPoint";
 }
 
@@ -54,21 +62,27 @@ export type Requirement = ServiceIdentity | ExtensionPointIdentity | OptionalSer
 
 export type ContractValue<T> = T extends Contract<infer Value, ContractKind> ? Value : never;
 
-function validateId(label: string, id: unknown) {
-  if (isValidContractId(id)) return;
-  throw new TypeError(
-    typeof id === "string" && id.trim()
-      ? `${label} id cannot start or end with whitespace`
-      : `${label} id must be a non-empty string`,
-  );
+export function contractKindName(kind: ContractKind): string {
+  return contractKinds[kind].name;
 }
 
-function isValidContractId(id: unknown): id is string {
-  return typeof id === "string" && id.length > 0 && id === id.trim();
+function expectedContract(kind: ContractKind) {
+  const { article, name } = contractKinds[kind];
+  return `Expected ${article} ${name}`;
+}
+
+function isContractKind(value: unknown): value is ContractKind {
+  return typeof value === "string" && Object.hasOwn(contractKinds, value);
+}
+
+export function requiredContract(
+  requirement: Requirement,
+): ServiceIdentity | ExtensionPointIdentity {
+  return requirement.kind === "optional" ? requirement.service : requirement;
 }
 
 function contract<T, Kind extends ContractKind>(kind: Kind, id: string): Contract<T, Kind> {
-  validateId("Contract", id);
+  assertTrimmedText(id, "Contract id");
   return Object.freeze({ id, kind }) as Contract<T, Kind>;
 }
 
@@ -81,8 +95,7 @@ function readDataProperty(value: object, key: string): unknown {
 
 function readContractIdentity(value: object, kind: unknown): ContractIdentity | undefined {
   const id = readDataProperty(value, "id");
-  if (!isValidContractId(id)) return undefined;
-  if (kind !== "service" && kind !== "extensionPoint" && kind !== "event") return undefined;
+  if (!isTrimmedText(id) || !isContractKind(kind)) return undefined;
   return { id, kind };
 }
 
@@ -106,17 +119,9 @@ export function normalizeContract(
       ? readContractIdentity(value, readDataProperty(value, "kind"))
       : undefined;
   if (!identity || (expected !== undefined && identity.kind !== expected)) {
-    throw new TypeError(
-      message ?? (expected ? `Expected ${contractDescription(expected)}` : "Invalid contract"),
-    );
+    throw new TypeError(message ?? (expected ? expectedContract(expected) : "Invalid contract"));
   }
   return Object.freeze(identity);
-}
-
-function contractDescription(kind: ContractKind) {
-  if (kind === "extensionPoint") return "an ExtensionPoint";
-  if (kind === "event") return "an Event";
-  return "a Service";
 }
 
 export function service<T>(id: string): Service<T> {
@@ -141,7 +146,7 @@ export function optional<T>(token: Service<T>): OptionalService<T> {
 export function normalizeRequirement(
   value: unknown,
   message = "Expected a Service or ExtensionPoint",
-  optionalMessage = "Expected a Service",
+  optionalMessage = expectedContract("service"),
 ): Requirement {
   if (!value || typeof value !== "object") throw new TypeError(message);
   const kind = readDataProperty(value, "kind");

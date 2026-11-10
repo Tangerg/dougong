@@ -210,7 +210,7 @@ it("isolates listener ownership across retired Lifetime signals", async () => {
 
 it("propagates only an actual parent cancellation to child scopes and tasks", async () => {
   const parent = new AbortController();
-  const owner = new Lifetime({ label: "root", report() {}, parentSignal: parent.signal });
+  const owner = new Lifetime({ label: "root", report() {}, startupSignal: parent.signal });
   const child = owner.child("child");
   const ready = Promise.withResolvers<AbortSignal>();
   const gate = Promise.withResolvers<void>();

@@ -33,6 +33,8 @@ export type Observer<T, Child extends AsyncDisposable, Result = void> = (
 
 type Release = () => PromiseLike<void>;
 
+const observationLifetimeLabel = "observation";
+
 type ObservedValue<T> = { readonly present: false } | { readonly present: true; readonly value: T };
 
 interface ObservationBinding<T, Child extends AsyncDisposable> {
@@ -215,7 +217,7 @@ class Observation<T, Child extends AsyncDisposable> {
 
   #createCurrent(signal?: AbortSignal) {
     const { owner } = this.#requireBinding();
-    const current = owner.child("observation");
+    const current = owner.child(observationLifetimeLabel);
     this.#current = captureRelease(
       current,
       "ObservationOwner.child() must return an AsyncDisposable",

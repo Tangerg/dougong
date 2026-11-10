@@ -2,7 +2,6 @@ import { runInNewContext } from "node:vm";
 import budget from "../../../tooling/architecture/public-api.json" with { type: "json" };
 import { describe, expect, it } from "vitest";
 import * as core from "../src/index";
-import { normalizeFailure } from "../src/contracts/errors";
 
 describe("public API surface", () => {
   it("captures structured error context as bounded data without retaining custom resources", () => {
@@ -60,42 +59,6 @@ describe("public API surface", () => {
     expect(core.isCancellationReason(AbortSignal.abort(reason.proxy), reason.proxy)).toBe(true);
   });
 
-  it("does not grant normalization authority through an inherited error prototype", () => {
-    const normalized = normalizeFailure("original", "FIRST_BOUNDARY", "first boundary");
-    const explicit = new Error("explicit failure");
-    Object.setPrototypeOf(explicit, Object.getPrototypeOf(normalized));
-
-    expect(normalizeFailure(explicit, "SECOND_BOUNDARY", "second boundary")).toBe(explicit);
-    expect(normalizeFailure(normalized, "FIRST_BOUNDARY", "first boundary")).toBe(normalized);
-    expect(normalizeFailure(normalized, "SECOND_BOUNDARY", "second boundary")).toMatchObject({
-      code: "SECOND_BOUNDARY",
-      cause: "original",
-    });
-  });
-
-  it("does not grant normalization authority through a copied error constructor", () => {
-    const normalized = normalizeFailure("original", "FIRST_BOUNDARY", "first boundary");
-    const ErrorClass = normalized.constructor as new (
-      code: string,
-      message: string,
-      options: ErrorOptions,
-    ) => Error;
-    const explicit = new ErrorClass("SECOND_BOUNDARY", "explicit failure", { cause: "explicit" });
-
-    expect(normalizeFailure(explicit, "THIRD_BOUNDARY", "third boundary")).toBe(explicit);
-  });
-
-  it("keeps Core's normalization identity and original reason immutable", () => {
-    const original = { reason: "original" };
-    const normalized = normalizeFailure(original, "FIRST_BOUNDARY", "first boundary");
-
-    expect(Reflect.set(normalized, "cause", { reason: "replacement" })).toBe(false);
-    expect(Reflect.set(normalized, "code", "SECOND_BOUNDARY")).toBe(false);
-    expect(Object.isFrozen(normalized)).toBe(true);
-    expect(normalizeFailure(normalized, "FIRST_BOUNDARY", "first boundary")).toBe(normalized);
-    expect(normalizeFailure(normalized, "SECOND_BOUNDARY", "second boundary").cause).toBe(original);
-  });
-
   it("keeps the Core value-export budget explicit", () => {
     expect(Object.keys(core).sort()).toEqual([...budget["dougong"].values].sort());
   });
@@ -105,7 +68,6 @@ describe("public API surface", () => {
       'new RangeError("outside range", { cause: new Error("outside cause") })',
     );
     expect(core.isError(reason)).toBe(true);
-    expect(normalizeFailure(reason, "SETUP_FAILED", "setup failed")).toBe(reason);
     expect(new core.RecordedFailure(reason).snapshot).toMatchObject({
       name: "RangeError",
       message: "outside range",
@@ -418,10 +380,10 @@ describe("public API surface", () => {
 
   it("validates structured error identity at the JavaScript boundary", () => {
     expect(() => new core.DougongError("" as never, "failed")).toThrowError(
-      new TypeError("DougongError code must be a non-empty trimmed string"),
+      new TypeError("DougongError code must be a non-empty string"),
     );
     expect(() => new core.DougongError(" TEST " as never, "failed")).toThrowError(
-      new TypeError("DougongError code must be a non-empty trimmed string"),
+      new TypeError("DougongError code cannot start or end with whitespace"),
     );
     expect(() => new core.DougongError("TEST", null as never)).toThrowError(
       new TypeError("DougongError message must be a string"),

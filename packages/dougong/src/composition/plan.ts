@@ -1,11 +1,11 @@
+import { requiredContract } from "../contracts/contracts.js";
 import {
   DougongError,
-  quarantinedHost,
   planConsumedCode,
   planForeignCode,
   planStaleCode,
 } from "../contracts/errors.js";
-import type { InstallationGraph } from "./installation-graph.js";
+import type { BindingReport, InstallationGraph } from "./installation-graph.js";
 import {
   PendingInstallations,
   type InstallationDeclaration,
@@ -17,14 +17,7 @@ import type { InstallationOrigin } from "./declarations.js";
 import type { ChangeOperation } from "./change-set.js";
 
 export type TransitionIntent = "change" | "start" | "stop";
-export type BindingReport = {
-  readonly installation: string;
-  readonly contract: string;
-} & (
-  | { readonly optional: false; readonly provider: string }
-  | { readonly optional: true; readonly provider: string | undefined }
-);
-export type DirectImpactKind = "installed" | "updated" | "removed" | "start" | "stop";
+export type DirectImpactKind = "installed" | "updated" | "removed" | "started" | "stopped";
 type ProviderChange =
   | { readonly provider: string; readonly previousProvider?: string }
   | { readonly provider?: never; readonly previousProvider: string };
@@ -38,7 +31,7 @@ export type ImpactReason =
     }
   | ({
       readonly installation: string;
-      readonly kind: "provider_changed";
+      readonly kind: "providerChanged";
       readonly contract: string;
     } & ProviderChange);
 export interface DeclarationSnapshot {
@@ -65,7 +58,7 @@ export type PlanOperation =
       readonly after: undefined;
     }
   | {
-      readonly kind: "group" | "remove-group";
+      readonly kind: "group" | "removeGroup";
       readonly id: string;
       readonly parentId: string | undefined;
     };
@@ -81,7 +74,6 @@ export interface PlanReport {
   readonly reasons: ReadonlyArray<ImpactReason>;
   readonly stopOrder: ReadonlyArray<string>;
   readonly prepareOrder: ReadonlyArray<string>;
-  readonly publishOrder: ReadonlyArray<string>;
   readonly execution: { readonly atomicPublication: true; readonly externalEffectsRollback: false };
 }
 declare const planBrand: unique symbol;
@@ -89,14 +81,15 @@ export interface Plan {
   readonly [planBrand]: true;
   readonly report: PlanReport;
 }
+export type ResolvedConfigurations = ReadonlyMap<
+  InstallationRecord,
+  { readonly value: ConfigurationValue | undefined }
+>;
 export interface PreparedTransition {
   readonly groups: ReadonlyMap<string, GroupNode>;
   readonly graph: InstallationGraph;
   readonly affected: ReadonlySet<InstallationRecord>;
-  readonly configurations: ReadonlyMap<
-    InstallationRecord,
-    { readonly value: ConfigurationValue | undefined }
-  >;
+  readonly configurations: ResolvedConfigurations;
   readonly report: PlanReport;
 }
 
@@ -105,12 +98,14 @@ interface PlanBase {
   readonly graph: InstallationGraph;
 }
 
-function stalePlan(expectedRevision: number, stateRevision: number) {
+export function stalePlan(expectedRevision: number, stateRevision: number) {
   return new DougongError(planStaleCode, "Host state changed during or after planning", {
     details: { outcome: "rejected", expectedRevision, stateRevision },
   });
 }
 
+// Issued Plans outlive invalidation so a stale Plan stays distinguishable from a foreign one.
+// Replacing the prepared map at each revision drops every superseded graph without retaining Plans.
 export class PlanAuthority {
   readonly #issued = new WeakMap<Plan, "issued" | "consumed">();
   #prepared = new WeakMap<Plan, PreparedTransition>();
@@ -139,7 +134,7 @@ export class PlanAuthority {
     if (issued === undefined)
       throw new DougongError(planForeignCode, "Plan was not issued by this Host");
     if (issued === "consumed")
-      throw new DougongError(planConsumedCode, "Plan has already been executed");
+      throw new DougongError(planConsumedCode, "Plan has already been consumed");
     const prepared = this.#prepared.get(plan);
     if (!prepared) {
       this.consume(plan);
@@ -153,11 +148,9 @@ export class PlanAuthority {
     this.#prepared.delete(plan);
   }
 
-  invalidate(revision: number, quarantined: boolean) {
-    // A shared revision rejection must remain authoritative after it reaches an individual caller.
-    this.#validation?.abort(
-      Object.freeze(quarantined ? quarantinedHost(revision) : stalePlan(revision - 1, revision)),
-    );
+  // A shared rejection must remain authoritative after it reaches an individual caller.
+  invalidate(reason: DougongError) {
+    this.#validation?.abort(Object.freeze(reason));
     this.#validation = undefined;
     this.#pending.retire();
     this.#pending = new PendingInstallations();
@@ -195,7 +188,7 @@ export function describeOperations(
             after: undefined,
           });
         case "group":
-        case "remove-group":
+        case "removeGroup":
           return Object.freeze({
             kind: operation.kind,
             id: operation.group.id,
@@ -203,30 +196,6 @@ export function describeOperations(
           });
       }
     }),
-  );
-}
-
-export function describeBindings(
-  graph: InstallationGraph,
-  installations: ReadonlyArray<InstallationRecord> = graph.order,
-): ReadonlyArray<BindingReport> {
-  return Object.freeze(
-    installations.flatMap((installation) =>
-      Object.values(graph.declarationFor(installation).plugin.requires).flatMap((requirement) => {
-        if (requirement.kind === "extensionPoint") return [];
-        const token = requirement.kind === "optional" ? requirement.service : requirement;
-        const provider = graph.providers.get(token.id);
-        return [
-          Object.freeze({
-            installation: installation.id,
-            contract: token.id,
-            ...(requirement.kind === "optional"
-              ? { optional: true as const, provider: provider?.id }
-              : { optional: false as const, provider: provider!.id }),
-          }),
-        ];
-      }),
-    ),
   );
 }
 
@@ -248,25 +217,17 @@ export function describeImpact(
       candidate.declarationFor(installation).plugin.requires,
     )) {
       if (requirement.kind === "extensionPoint") continue;
-      const contract = (requirement.kind === "optional" ? requirement.service : requirement).id;
-      const previousProvider = previous.providers.get(contract);
-      const provider = candidate.providers.get(contract);
-      let providers: ProviderChange;
-      if (provider && affected.has(provider)) {
-        providers = {
-          provider: provider.id,
-          ...(previousProvider && { previousProvider: previousProvider.id }),
-        };
-      } else if (previousProvider && affected.has(previousProvider)) {
-        providers = {
-          previousProvider: previousProvider.id,
-          ...(provider && { provider: provider.id }),
-        };
-      } else continue;
+      const contract = requiredContract(requirement).id;
+      const providers = providerChange(
+        previous.providers.get(contract),
+        candidate.providers.get(contract),
+        affected,
+      );
+      if (!providers) continue;
       reasons.push(
         Object.freeze({
           installation: installation.id,
-          kind: "provider_changed",
+          kind: "providerChanged",
           contract,
           ...providers,
         }),
@@ -274,6 +235,24 @@ export function describeImpact(
     }
   }
   return Object.freeze(reasons);
+}
+
+function providerChange(
+  previousProvider: InstallationRecord | undefined,
+  provider: InstallationRecord | undefined,
+  affected: ReadonlySet<InstallationRecord>,
+): ProviderChange | undefined {
+  if (provider && affected.has(provider))
+    return {
+      provider: provider.id,
+      ...(previousProvider && { previousProvider: previousProvider.id }),
+    };
+  if (previousProvider && affected.has(previousProvider))
+    return {
+      previousProvider: previousProvider.id,
+      ...(provider && { provider: provider.id }),
+    };
+  return undefined;
 }
 
 function describeDeclaration(declaration: InstallationDeclaration): DeclarationSnapshot {

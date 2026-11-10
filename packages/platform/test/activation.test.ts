@@ -29,9 +29,9 @@ describe("activation compilation", () => {
     ]);
     expect(report.deferred).toEqual([
       "admission",
-      "module_validation",
-      "configuration_validation",
-      "core_binding",
+      "moduleValidation",
+      "configurationValidation",
+      "coreBinding",
       "setup",
     ]);
     expect(report.blockers).toEqual([]);
@@ -335,7 +335,7 @@ describe("activation compilation", () => {
       code: "REGISTRATION_DEPENDENCY_MISSING",
       details: {
         outcome: "rejected",
-        phase: "artifact_planning",
+        phase: "artifactPlanning",
         dependencyPath: ["consumer", "dependency"],
       },
     });

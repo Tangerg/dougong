@@ -42,7 +42,7 @@ it("reports the exact declarations and provider identities for each change kind"
       { installation: "provider", kind: "installed" },
       {
         installation: "consumer",
-        kind: "provider_changed",
+        kind: "providerChanged",
         contract: value.id,
         provider: "provider",
       },
@@ -64,7 +64,7 @@ it("reports the exact declarations and provider identities for each change kind"
       { installation: "provider", kind: "updated" },
       {
         installation: "consumer",
-        kind: "provider_changed",
+        kind: "providerChanged",
         contract: value.id,
         previousProvider: "provider",
         provider: "provider",
@@ -87,7 +87,7 @@ it("reports the exact declarations and provider identities for each change kind"
       { installation: "provider", kind: "removed" },
       {
         installation: "consumer",
-        kind: "provider_changed",
+        kind: "providerChanged",
         contract: value.id,
         previousProvider: "provider",
       },
@@ -133,7 +133,6 @@ it("explains declaration origins, both binding states and publication order with
   expect(plan.report.bindings.before).toEqual(plan.report.bindings.after);
   expect(plan.report.stopOrder).toEqual(["consumer", "provider"]);
   expect(plan.report.prepareOrder).toEqual(["provider", "consumer"]);
-  expect(plan.report.publishOrder).toEqual(["provider", "consumer"]);
   expect(JSON.stringify(plan.report)).not.toContain("not-public");
   await host.apply(plan);
 
@@ -148,7 +147,7 @@ it("explains declaration origins, both binding states and publication order with
   ]);
   expect(removal.report.reasons).toContainEqual({
     installation: "consumer",
-    kind: "provider_changed",
+    kind: "providerChanged",
     contract: value.id,
     previousProvider: "provider",
   });
@@ -177,7 +176,6 @@ it("reports declaration-only changes without claiming runtime stop or publish wo
   ]);
   expect(plan.report.stopOrder).toEqual([]);
   expect(plan.report.prepareOrder).toEqual([]);
-  expect(plan.report.publishOrder).toEqual([]);
   expect(Object.isFrozen(plan.report.bindings)).toBe(true);
   await host.apply(plan);
 });

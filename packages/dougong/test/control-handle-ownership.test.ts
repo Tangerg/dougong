@@ -1,7 +1,7 @@
 import { expect, it, vi } from "vitest";
 import { extensionPoint } from "../src/contracts/contracts";
 import type { Resource } from "../src/contracts/resource";
-import { ContributionRegistry } from "../src/contributions/contribution-store";
+import { ContributionRegistry } from "../src/contributions/contribution-registry";
 import { EventHub } from "../src/events/event-hub";
 import { Lifetime } from "../src/lifetime/lifetime";
 
@@ -36,10 +36,10 @@ it.each(adoptionMethods)(
     const interruption = owner.interrupt(interrupt);
     const hub = new EventHub();
     const subscription = hub.stage("owned/notice", listener, owner);
-    const store = new ContributionRegistry(() => undefined).get<number>(
+    const store = new ContributionRegistry(() => undefined).store<number>(
       extensionPoint<number>("owned/items"),
     );
-    const contribution = store.stage("owner", "item", 1, owner);
+    const contribution = store.stage("owner/item", 1, owner, () => undefined);
     const handles = [task, deferred, interruption, subscription, contribution];
     owner.publish();
     const signal = await entered.promise;
@@ -124,7 +124,7 @@ it("retains the first ownership and terminal detachment of contribution view sub
   const other = new Lifetime({ label: "other", report() {} });
   const registry = new ContributionRegistry(() => undefined);
   const point = extensionPoint<number>("owned/subscriptions");
-  const contribution = registry.get<number>(point).stage("owner", "item", 1, owner);
+  const contribution = registry.store<number>(point).stage("owner/item", 1, owner, () => undefined);
   const view = registry.view<number>(point, owner);
   owner.publish();
   const before = owner.snapshot();

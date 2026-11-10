@@ -11,7 +11,7 @@ const result = await host.apply(plan);
 console.log(result.stateRevision, result.affectedInstallations);
 ```
 
-规划捕获配置、运行 schema、检查契约与分组、确定绑定、计算受影响闭包，并生成只读 `PlanReport`。规划不会运行 setup、获取插件运行资源或发布监听；schema 验证器是应用代码，应保持无外部副作用。`report` 包含基线版本、操作、前后绑定、来源变化、原因、准备顺序、停止顺序、发布顺序与原子发布承诺。
+规划捕获配置、运行 schema、检查契约与分组、确定绑定、计算受影响闭包，并生成只读 `PlanReport`。规划不会运行 setup、获取插件运行资源或发布监听；schema 验证器是应用代码，应保持无外部副作用。`report` 包含基线版本、操作、前后绑定、来源变化、原因、准备顺序、停止顺序与原子发布承诺。
 
 Plan 只能由签发它的 Host 使用一次。apply 在任何执行副作用之前核对归属、是否已消费和 `stateRevision`。另一个提交或改变运行状态的失败会使旧 Plan 失效。任务计数和通知次数不会使 Plan 失效。
 

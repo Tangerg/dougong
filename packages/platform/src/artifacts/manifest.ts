@@ -6,22 +6,21 @@ import { captureConfiguration } from "dougong";
 import { normalizePlainRecord } from "dougong/advanced";
 import { PlatformError, manifestInvalidCode } from "../errors.js";
 
-const identifier = z
-  .string()
-  .min(1)
-  .refine((value) => value.trim() === value, {
-    error: "cannot start or end with whitespace",
-  });
+// Platform names compare by exact string, so surrounding whitespace would create look-alike identities.
+export function isTrimmedText(value: unknown): value is string {
+  return typeof value === "string" && value.length > 0 && value === value.trim();
+}
 
 // Both components of an Installation ID are URI encoded; malformed UTF-16 cannot identify a Registration.
 export function isRegistrationIdPart(value: unknown): value is string {
-  return (
-    typeof value === "string" &&
-    value.length !== 0 &&
-    value.trim() === value &&
-    value.isWellFormed()
-  );
+  return isTrimmedText(value) && value.isWellFormed();
 }
+
+export const startupActivationEvent = "startup";
+
+const identifier = z
+  .string()
+  .refine(isTrimmedText, { error: "must be a non-empty string without surrounding whitespace" });
 
 const registrationName = z
   .string()
@@ -44,7 +43,7 @@ const manifestSchema = z
     name: registrationName,
     version: identifier.refine(isConcreteVersion, { error: "must be a valid semantic version" }),
     apiVersion: versionRange.default("*"),
-    activation: z.array(identifier).default(["startup"]).readonly(),
+    activation: z.array(identifier).default([startupActivationEvent]).readonly(),
     permissions: z.array(identifier).default([]).readonly(),
     dependencies: dependencyRanges.default({}).readonly(),
   })
@@ -54,7 +53,7 @@ export type Manifest = z.output<typeof manifestSchema>;
 export type ManifestInput = z.input<typeof manifestSchema>;
 
 export function isConcreteVersion(version: string) {
-  return version === version.trim() && valid(version) !== null;
+  return isTrimmedText(version) && valid(version) !== null;
 }
 
 // Untrusted manifests can crash validators; preserve the cause under one public failure code.

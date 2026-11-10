@@ -5,8 +5,8 @@ export class SerialQueue {
   readonly #pending = new Set<() => Promise<void>>();
   #draining = false;
 
-  get settled() {
-    // A barrier observes only the commands already submitted, even if another command arrives later.
+  // A barrier observes only the commands already submitted, even if another command arrives later.
+  settled(): Promise<void> {
     return this.run(() => undefined).then(() => undefined);
   }
 

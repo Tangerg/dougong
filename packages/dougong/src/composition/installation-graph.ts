@@ -1,4 +1,4 @@
-import type { ContractKind } from "../contracts/contracts.js";
+import { requiredContract, type ContractKind } from "../contracts/contracts.js";
 import { rememberContractKind } from "../contracts/contract-registry.js";
 import {
   DougongError,
@@ -8,18 +8,43 @@ import {
 } from "../contracts/errors.js";
 import type { InstallationDeclaration, InstallationRecord } from "./installation.js";
 
-// Immutable candidate plans preserve the previous declaration versions for rollback.
+export type BindingReport = {
+  readonly installation: string;
+  readonly contract: string;
+} & (
+  | { readonly optional: false; readonly provider: string }
+  | { readonly optional: true; readonly provider: string | undefined }
+);
 
-export class InstallationGraph {
-  private constructor(
-    readonly declarations: ReadonlyMap<InstallationRecord, InstallationDeclaration>,
-    readonly byId: ReadonlyMap<string, InstallationRecord>,
-    readonly order: ReadonlyArray<InstallationRecord>,
-    readonly layers: ReadonlyArray<ReadonlyArray<InstallationRecord>>,
-    readonly providers: ReadonlyMap<string, InstallationRecord>,
-    readonly dependents: ReadonlyMap<InstallationRecord, ReadonlySet<InstallationRecord>>,
-    readonly contractKinds: ReadonlyMap<string, ContractKind>,
-  ) {}
+interface GraphStructure {
+  readonly declarations: ReadonlyMap<InstallationRecord, InstallationDeclaration>;
+  readonly byId: ReadonlyMap<string, InstallationRecord>;
+  readonly order: ReadonlyArray<InstallationRecord>;
+  readonly layers: ReadonlyArray<ReadonlyArray<InstallationRecord>>;
+  readonly providers: ReadonlyMap<string, InstallationRecord>;
+  readonly dependents: ReadonlyMap<InstallationRecord, ReadonlySet<InstallationRecord>>;
+  readonly contractKinds: ReadonlyMap<string, ContractKind>;
+}
+
+// Immutable candidate graphs preserve the previous declaration versions for rollback.
+export class InstallationGraph implements GraphStructure {
+  readonly declarations: ReadonlyMap<InstallationRecord, InstallationDeclaration>;
+  readonly byId: ReadonlyMap<string, InstallationRecord>;
+  readonly order: ReadonlyArray<InstallationRecord>;
+  readonly layers: ReadonlyArray<ReadonlyArray<InstallationRecord>>;
+  readonly providers: ReadonlyMap<string, InstallationRecord>;
+  readonly dependents: ReadonlyMap<InstallationRecord, ReadonlySet<InstallationRecord>>;
+  readonly contractKinds: ReadonlyMap<string, ContractKind>;
+
+  private constructor(structure: GraphStructure) {
+    this.declarations = structure.declarations;
+    this.byId = structure.byId;
+    this.order = structure.order;
+    this.layers = structure.layers;
+    this.providers = structure.providers;
+    this.dependents = structure.dependents;
+    this.contractKinds = structure.contractKinds;
+  }
 
   static build(declarations: ReadonlyMap<InstallationRecord, InstallationDeclaration>) {
     const installations = [...declarations.keys()];
@@ -32,24 +57,49 @@ export class InstallationGraph {
       dependencies.indegree,
     );
 
-    return new InstallationGraph(
+    return new InstallationGraph({
       declarations,
-      new Map(installations.map((installation) => [installation.id, installation])),
-      Object.freeze(order),
-      Object.freeze(layers.map((layer) => Object.freeze(layer))),
+      byId: new Map(installations.map((installation) => [installation.id, installation])),
+      order: Object.freeze(order),
+      layers: Object.freeze(layers.map((layer) => Object.freeze(layer))),
       providers,
-      dependencies.dependents,
+      dependents: dependencies.dependents,
       contractKinds,
-    );
+    });
   }
 
   declarationFor(installation: InstallationRecord) {
     const declaration = this.declarations.get(installation);
-    if (!declaration) throw new Error(`Installation '${installation.id}' is not in this plan`);
+    if (!declaration) throw new Error(`Installation '${installation.id}' is not in this graph`);
     return declaration;
   }
 
-  // Use both plans because replacing a Service affects both its old consumers and its new consumers.
+  bindings(
+    installations: ReadonlyArray<InstallationRecord> = this.order,
+  ): ReadonlyArray<BindingReport> {
+    return Object.freeze(
+      installations.flatMap((installation) =>
+        Object.values(this.declarationFor(installation).plugin.requires).flatMap(
+          (requirement): BindingReport[] => {
+            if (requirement.kind === "extensionPoint") return [];
+            const contract = requiredContract(requirement).id;
+            const provider = this.providers.get(contract);
+            return [
+              Object.freeze({
+                installation: installation.id,
+                contract,
+                ...(requirement.kind === "optional"
+                  ? { optional: true as const, provider: provider?.id }
+                  : { optional: false as const, provider: provider!.id }),
+              }),
+            ];
+          },
+        ),
+      ),
+    );
+  }
+
+  // Use both graphs because replacing a Service affects both its old consumers and its new consumers.
   affectedByTransitionTo(other: InstallationGraph, changed: ReadonlyArray<InstallationRecord>) {
     const affected = new Set<InstallationRecord>();
     this.#expand(changed, affected);
@@ -61,8 +111,7 @@ export class InstallationGraph {
     const queue = [...changed];
     const visited = new Set<InstallationRecord>();
     for (let index = 0; index < queue.length; index++) {
-      const installation = queue[index];
-      if (!installation) continue;
+      const installation = queue[index]!;
       if (visited.has(installation)) continue;
       visited.add(installation);
       affected.add(installation);
@@ -109,7 +158,7 @@ function connectRequirements(
 
   for (const [installation, declaration] of declarations) {
     for (const requirement of Object.values(declaration.plugin.requires)) {
-      const token = requirement.kind === "optional" ? requirement.service : requirement;
+      const token = requiredContract(requirement);
       rememberContractKind(contractKinds, token);
       if (token.kind === "extensionPoint") continue;
 
