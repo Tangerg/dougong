@@ -97,17 +97,16 @@ it("reserves a resource before its disposer getter can reenter another Lifetime"
       return release;
     },
   };
-  const relinquish = first.own(resource);
+  first.use(resource);
   try {
     expect(competing).toBeInstanceOf(TypeError);
-    relinquish();
-    second.use(resource);
     await first.dispose();
-    expect(release).not.toHaveBeenCalled();
+    expect(release).toHaveBeenCalledOnce();
+    second.use(resource);
   } finally {
     await Promise.all([first.dispose(), second.dispose()]);
   }
-  expect(release).toHaveBeenCalledOnce();
+  expect(release).toHaveBeenCalledTimes(2);
 });
 
 it("retains the resource claim while cleanup is pending and after its failure", async () => {
@@ -120,13 +119,11 @@ it("retains the resource claim while cleanup is pending and after its failure", 
     return pending.promise;
   });
   const resource = { [Symbol.asyncDispose]: release };
-  const relinquish = first.own(resource);
+  first.use(resource);
   const closing = first.dispose();
   const failure = closing.catch((error: unknown) => error);
   try {
     await started.promise;
-    expect(() => second.use(resource)).toThrow("Resource already has a Lifetime owner");
-    relinquish();
     expect(() => second.use(resource)).toThrow("Resource already has a Lifetime owner");
   } finally {
     pending.reject(new Error("release failed"));

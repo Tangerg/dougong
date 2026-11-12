@@ -1,9 +1,125 @@
 import { expect, it } from "vitest";
-import { createResourceAuthority, createHost, definePlugin } from "dougong";
+import { createResourceAuthority, createHost, definePlugin, type Disposable } from "dougong";
 import { createPlatform } from "../src";
-import { nextTurn, select } from "./fixtures";
+import { nextTurn, select, withDiagnosticsSubscription } from "./fixtures";
 
 const resourceAuthority = createResourceAuthority();
+
+it.each([
+  "registration failure",
+  "missing disposer",
+  "unreadable disposer",
+  "asynchronous handle",
+] as const)(
+  "revokes a rejected Platform observation after %s even if its source retains the listener",
+  async (mode) => {
+    const host = createHost({ resourceAuthority });
+    const failure = new Error(mode);
+    let subscription: Disposable | undefined;
+    const observed = withDiagnosticsSubscription(host, (listener) => {
+      subscription = host.diagnostics.subscribe(listener);
+      if (mode === "registration failure") throw failure;
+      if (mode === "missing disposer") return {} as never;
+      if (mode === "asynchronous handle") return Promise.reject(failure) as never;
+      return {
+        get [Symbol.dispose](): () => void {
+          throw failure;
+        },
+      };
+    });
+    function rejectConstruction() {
+      const loader = { load: () => ({ default: definePlugin({ name: "sample", setup() {} }) }) };
+      const authorizer = { authorize() {} };
+      const logger = { debug() {}, info() {}, warn() {}, error() {} };
+      expect(() =>
+        createPlatform({
+          id: "rejected-observation",
+          host: observed,
+          apiVersion: "1.0.0",
+          loader,
+          authorizer,
+          logger,
+        }),
+      ).toThrow(
+        mode === "missing disposer" || mode === "asynchronous handle"
+          ? "Host diagnostics subscribe() must return a Disposable"
+          : failure,
+      );
+      return [new WeakRef(loader), new WeakRef(authorizer), new WeakRef(logger)];
+    }
+    try {
+      const references = rejectConstruction();
+      for (let pass = 0; pass < 8 && references.some((reference) => reference.deref()); pass++) {
+        await nextTurn();
+        globalThis.gc!();
+      }
+      expect(references.map((reference) => reference.deref())).toEqual([
+        undefined,
+        undefined,
+        undefined,
+      ]);
+      await host.start();
+    } finally {
+      subscription?.[Symbol.dispose]();
+      await host.stop();
+    }
+  },
+);
+
+it("detaches terminal capabilities after failed withdrawal while the Host retains its listener", async () => {
+  const host = createHost({ resourceAuthority });
+  const failure = new Error("withdrawal failed before releasing its source subscription");
+  let subscription: Disposable | undefined;
+  const observed = withDiagnosticsSubscription(host, (listener) => {
+    subscription = host.diagnostics.subscribe(listener);
+    return {
+      [Symbol.dispose]() {
+        throw failure;
+      },
+    };
+  });
+  async function rejectDisposal() {
+    const loader = { load: () => ({ default: definePlugin({ name: "sample", setup() {} }) }) };
+    const authorizer = { authorize() {} };
+    const logger = { debug() {}, info() {}, warn() {}, error() {} };
+    const platform = createPlatform({
+      id: "failed-withdrawal",
+      host: observed,
+      apiVersion: "1.0.0",
+      loader,
+      authorizer,
+      logger,
+    });
+    await expect(platform[Symbol.asyncDispose]()).rejects.toBe(failure);
+    return {
+      view: platform.diagnostics,
+      references: [
+        new WeakRef(platform),
+        new WeakRef(loader),
+        new WeakRef(authorizer),
+        new WeakRef(logger),
+      ],
+    };
+  }
+  try {
+    const { view, references } = await rejectDisposal();
+    for (let pass = 0; pass < 8 && references.some((reference) => reference.deref()); pass++) {
+      await nextTurn();
+      globalThis.gc!();
+    }
+    expect(references.map((reference) => reference.deref())).toEqual([
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+    ]);
+    expect(view.get().status).toBe("disposed");
+    await host.start();
+  } finally {
+    subscription?.[Symbol.dispose]();
+    await host.stop();
+  }
+});
 
 it("detaches terminal handles, diagnostic views and historical failures from live capabilities", async () => {
   const collectGarbage = (globalThis as typeof globalThis & { gc?: () => void }).gc;

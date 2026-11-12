@@ -19,6 +19,7 @@ const terminationSignals = ["SIGINT", "SIGTERM", "SIGHUP"];
 const maximumCapturedBytes = 1024 * 1024;
 const commandTerminationGraceMilliseconds = 2_000;
 const commandTerminationConfirmationMilliseconds = 250;
+const commandGroupPollMilliseconds = 25;
 const interruptCommand = "interrupt";
 const settleCommand = "settle";
 const ignoreCancellation = "ignore";
@@ -33,8 +34,7 @@ class ReleaseCancellation extends Error {
 export class ReleaseSession {
   #cancellation = new AbortController();
   #command;
-  #source;
-  #replacedManifests = new Set();
+  #manifestTransaction = { phase: "unclaimed" };
   #stage;
 
   constructor() {
@@ -181,7 +181,9 @@ export class ReleaseSession {
         });
       }).then(async (outcome) => {
         await nextTurn();
-        // Inherited terminal descriptors let the leader close while descendants still own the release files.
+        // A leader's closed output does not discharge descendants that still own release files.
+        while (termination.phase === "running" && groupExists())
+          await delay(commandGroupPollMilliseconds);
         if (termination.phase !== "running" && groupExists()) {
           await forceRequested;
           await delay(commandTerminationConfirmationMilliseconds);
@@ -255,29 +257,41 @@ export class ReleaseSession {
 
   replaceManifests(entries, source) {
     this.signal.throwIfAborted();
-    this.#source = source;
+    if (this.#manifestTransaction.phase !== "unclaimed")
+      throw new Error("Release manifest ownership has already been established");
+    const ownership = { source, entries: new Set() };
+    this.#manifestTransaction = { phase: "owned", ownership };
     for (const entry of entries) {
       replaceManifest(entry.directory, entry.original, entry.versioned, () =>
-        this.#replacedManifests.add(entry),
+        ownership.entries.add(entry),
       );
       console.log(`  ${entry.name} → ${JSON.parse(entry.versioned).version}`);
     }
   }
 
   async restoreManifests() {
+    const state = this.#manifestTransaction;
+    if (state.phase === "restoration") return state.completion;
     if (this.#command)
       throw new Error("Cannot restore manifests before the release command is confirmed stopped");
-    const owned = [...this.#replacedManifests];
-    this.#replacedManifests.clear();
+    if (state.phase !== "owned") return true;
+    // Reserve one restoration before source inspection yields; unfinished edits retain their owner and outcome.
+    const completion = Promise.resolve().then(() => this.#restoreManifests(state.ownership));
+    this.#manifestTransaction = { phase: "restoration", ownership: state.ownership, completion };
+    return completion;
+  }
+
+  async #restoreManifests(ownership) {
+    const owned = [...ownership.entries];
     if (!owned.length) return true;
     // Cancellation stops publication, not the read-only Git check needed to respect another checkout owner.
-    if (!(await this.#atSource(this.#source, ignoreCancellation))) return false;
+    if (!(await this.#atSource(ownership.source, ignoreCancellation))) return false;
     const errors = [];
-    for (const { directory, original, versioned } of owned) {
+    for (const entry of owned) {
+      const { directory, original, versioned } = entry;
       try {
-        if (!readFileSync(manifestPath(directory)).equals(original)) {
-          replaceManifest(directory, versioned, original);
-        }
+        if (readFileSync(manifestPath(directory)).equals(original)) ownership.entries.delete(entry);
+        else replaceManifest(directory, versioned, original, () => ownership.entries.delete(entry));
       } catch (cause) {
         errors.push(new Error(`Could not restore ${directory}/package.json`, { cause }));
       }
@@ -287,7 +301,9 @@ export class ReleaseSession {
   }
 
   relinquishManifestRestoration() {
-    this.#replacedManifests.clear();
+    if (this.#manifestTransaction.phase === "restoration")
+      throw new Error("Cannot relinquish manifests after restoration has started");
+    this.#manifestTransaction = { phase: "relinquished" };
   }
 
   async recordCommit({ source, reference, commit, directory, message }, indexProjection) {
@@ -378,7 +394,7 @@ export class ReleaseSession {
       await command.completion;
     }
     if (command?.retainedFailure) {
-      const manifests = [...this.#replacedManifests].map(
+      const manifests = [...(this.#manifestTransaction.ownership?.entries ?? [])].map(
         ({ directory }) => `${directory}/package.json`,
       );
       console.error(

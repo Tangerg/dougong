@@ -121,6 +121,7 @@ Host 只在选项缺省时使用默认值；显式传入 null 的名字、安装
 | `normalizePlainRecord` | 捕获普通记录的数据字段。插件配置请用 `captureConfiguration`。 |
 | `recordFields<T>()(...keys)` | 从声明类型建立穷尽的允许字段集合，供 `normalizePlainRecord` 使用。 |
 | `resolveValue(value)` | 按共享异步结果协议解析一次，返回 `Promise<ResolvedValue<Awaited<T>>>`；冻结的 `{ value }` 回执保留已完成结果的身份。 |
+| `assertSynchronous(value, message)` | 按同一协议拒绝异步返回值，并观察其完成或拒绝，避免留下未处理的拒绝。供同步协议适配边界使用；不会撤回已经开始的工作。 |
 | `captureDataArray(input, label)` | 浅拷贝自有的稠密数据索引并冻结数组，不调用输入的方法或迭代器。元素的校验归调用方。 |
 | `captureLogger(logger)` | 接管日志后端时一次捕获四个方法及其原始接收者，保留已知方法的返回类型；未知输入只证明方法形状。 |
 | `capturePluginDeclaration(input)` | 从未知输入捕获并验证不可变的 `AnyPlugin` 声明，复用 `definePlugin` 与 Core 安装边界的同一校验实现；不执行 setup 或 schema，不恢复已擦除的配置和 Service 类型。 |

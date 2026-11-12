@@ -15,6 +15,8 @@ Planning captures configuration, runs schemas, validates contracts and groups, r
 
 A Plan is issued by one Host and can be consumed once. Before execution effects, apply checks authority, consumption and `stateRevision`. Another commit or a failure that changes running state invalidates old Plans. Task counts and notification counts do not.
 
+`apply(plan, signal)` establishes cancellation observation before consuming the Plan or sealing the current generation, then checks cancellation and foreground idleness. Failed native registration, cancellation during attachment, or a foreground borrow admitted by reentrant registration leaves execution unchanged. The same Plan remains usable while its baseline is current. Rejection detaches any established cancellation observation.
+
 Core issues executable Plans only: invalid declarations reject during `host.plan()`, so its report has no constant empty list of blockers. A permanent contract-kind conflict discovered at execution preflight consumes that Plan: correct the declarations and plan again. Platform’s data preview can still report actual blockers.
 
 If another operation commits while schema validation is pending, planning rejects with [`PLAN_STALE`](../reference/errors.md); on quarantine it rejects with [`HOST_QUARANTINED`](../reference/errors.md). Build a new change against the current Host. An uncommitted Installation in an issued Plan becomes `removed` as soon as that revision ends. Keeping an obsolete Plan for its report does not retain the old executable payload.
@@ -47,6 +49,8 @@ Both are optional; omitting one leaves its corresponding wait unbounded. Configu
 Candidate failure cleans candidates and attempts to reconstruct the previous declarations using their validated configuration. Reconstruction creates new Instances; it does not revive disposed objects. Incomplete cleanup or restoration quarantines the Host. Failed consumers retain the providers they transitively use; other independently safe branches continue cleaning up and independent errors are aggregated.
 
 Within a dependency layer, preparation starts in committed declaration order. Asynchronous setup may finish in any order. Publication follows the same declaration order. Updates preserve an Installation’s position. A new Installation takes its position when its draft commits. A single change can remove overlapping Group subtrees. Its impact report lists the Installations removed implicitly by those Groups once in committed declaration order.
+
+Dependency-view acquisition and setup belong to one preparation attempt with the same failure collection and layer cancellation boundary. Each Instance checks cancellation before acquiring dependencies, so a synchronous failure prevents peers that have not started from acquiring views. Preparation already running remains its original Lifetime's settlement obligation; independent failures are returned together or reported.
 
 `stopOrder` describes the dependency order, not wall-clock completion order. Independent consumers may shut down concurrently. Each provider waits for the consumers bound to that generation to exit successfully.
 

@@ -1,5 +1,11 @@
 import { expect, it, vi } from "vitest";
-import { observe, signal, type AsyncDisposable, type ObservationOwner } from "../src";
+import {
+  observe,
+  signal,
+  type AsyncDisposable,
+  type ObservationOwner,
+  type ObservationTask,
+} from "../src";
 
 const nextTurn = () => new Promise<void>((resolve) => setImmediate(resolve));
 
@@ -26,6 +32,118 @@ function ownerWithChildren(child: () => AsyncDisposable): ObservationOwner {
     },
   };
 }
+
+it.each([false, true])(
+  "releases its subscription and child when its drain task is independently cancelled (before start: %s)",
+  async (beforeStart) => {
+    const releaseChild = vi.fn<() => void>();
+    const unsubscribe = vi.fn<() => void>();
+    const base = ownerWithChildren(() => ({
+      async [Symbol.asyncDispose]() {
+        releaseChild();
+      },
+    }));
+    let runner!: ObservationTask;
+    const owner: ObservationOwner = {
+      ...base,
+      spawn(task) {
+        runner = base.spawn(task);
+        return runner;
+      },
+    };
+    const source = signal(0);
+    const seen: number[] = [];
+    const observation = observe(
+      owner,
+      {
+        get: source.get,
+        subscribe(listener) {
+          const subscription = source.subscribe(listener);
+          return {
+            [Symbol.dispose]() {
+              unsubscribe();
+              subscription[Symbol.dispose]();
+            },
+          };
+        },
+      },
+      (value) => seen.push(value),
+    );
+    try {
+      if (!beforeStart) await nextTurn();
+      await runner[Symbol.asyncDispose]();
+      expect(unsubscribe).toHaveBeenCalledOnce();
+      expect(releaseChild).toHaveBeenCalledOnce();
+      source.set(1);
+      await nextTurn();
+      expect(seen).toEqual([0]);
+    } finally {
+      await observation[Symbol.asyncDispose]();
+    }
+    expect(unsubscribe).toHaveBeenCalledOnce();
+    expect(releaseChild).toHaveBeenCalledOnce();
+  },
+);
+
+it("shares a failed cancellation cleanup with later observation disposal", async () => {
+  const failure = new Error("cancelled child release failed");
+  const releaseChild = vi.fn<() => never>(() => {
+    throw failure;
+  });
+  const base = ownerWithChildren(() => ({
+    async [Symbol.asyncDispose]() {
+      releaseChild();
+    },
+  }));
+  let runner!: ObservationTask;
+  const owner: ObservationOwner = {
+    ...base,
+    spawn(task) {
+      runner = base.spawn(task);
+      return runner;
+    },
+  };
+  const observation = observe(owner, signal(0), () => undefined);
+  await expect(runner[Symbol.asyncDispose]()).rejects.toBe(failure);
+  await expect(observation[Symbol.asyncDispose]()).rejects.toBe(failure);
+  expect(releaseChild).toHaveBeenCalledOnce();
+});
+
+it("releases observation resources when its task owner supplies an invalid signal", async () => {
+  const releaseChild = vi.fn<() => void>();
+  const unsubscribe = vi.fn<() => void>();
+  const base = ownerWithChildren(() => ({
+    async [Symbol.asyncDispose]() {
+      releaseChild();
+    },
+  }));
+  let completion!: PromiseLike<unknown>;
+  const owner: ObservationOwner = {
+    ...base,
+    spawn(task) {
+      const result = Promise.resolve().then(() => task({} as AbortSignal));
+      completion = result;
+      return {
+        result,
+        async [Symbol.asyncDispose]() {
+          await result;
+        },
+      };
+    },
+  };
+  const observation = observe(
+    owner,
+    { get: () => 0, subscribe: () => ({ [Symbol.dispose]: unsubscribe }) },
+    () => undefined,
+  );
+  try {
+    await expect(completion).rejects.toBeInstanceOf(TypeError);
+    expect(unsubscribe).toHaveBeenCalledOnce();
+    expect(releaseChild).toHaveBeenCalledOnce();
+  } finally {
+    await observation[Symbol.asyncDispose]();
+  }
+});
 
 it("joins a child's actual native release before creating its replacement", async () => {
   const released = Promise.withResolvers<void>();

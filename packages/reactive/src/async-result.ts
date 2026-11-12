@@ -54,15 +54,29 @@ export function captureThenable(value: unknown): Promise<ResolvedValue<unknown>>
   // Foreign and structural promises use one captured public then, including its receiver.
   const then = (value as { readonly then?: unknown }).then;
   if (typeof then !== "function") return;
-  const result = Promise.withResolvers<unknown>();
+  const result = Promise.withResolvers<ResolvedValue<unknown>>();
+  let accepted = false;
+  const reject = (error: unknown) => {
+    if (accepted) return;
+    accepted = true;
+    result.reject(error);
+  };
   queueMicrotask(() => {
     try {
-      Reflect.apply(then, value, [result.resolve, result.reject]);
+      Reflect.apply(then, value, [
+        (resolved: unknown) => {
+          if (accepted) return;
+          // Accepting an outcome selects its settlement source; it does not prove that source has finished.
+          accepted = true;
+          void resolveValue(resolved).then(result.resolve, result.reject);
+        },
+        reject,
+      ]);
     } catch (error) {
-      result.reject(error);
+      reject(error);
     }
   });
-  return result.promise.then((resolved) => Object.freeze({ value: resolved }));
+  return result.promise;
 }
 
 function hasLocalPromisePrototype(value: object): boolean {

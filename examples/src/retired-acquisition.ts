@@ -85,13 +85,13 @@ async function handoff<T>(
     }
   } catch (error) {
     try {
-      await reservation[asyncDisposeSymbol]();
+      await resolveValue(reservation[asyncDisposeSymbol]());
     } catch (releaseError) {
       throw new AggregateError([error, releaseError], "Resource ownership transfer failed");
     }
     throw error;
   }
-  await reservation[asyncDisposeSymbol]();
+  await resolveValue(reservation[asyncDisposeSymbol]());
   return result;
 }
 
@@ -108,8 +108,8 @@ export async function acquireForLifetime<T>(
     );
 
     // The operation Task owns reporting; rethrowing its projected outcome would report the failure twice.
-    return operation.result.then(
-      ({ value }) => value,
+    return resolveValue(operation.result).then(
+      ({ value: receipt }) => receipt.value,
       (error: unknown) => ({ status: "failed", error }) as const,
     );
   });

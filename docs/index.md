@@ -4,6 +4,7 @@ TypeScript 的显式能力组合、不可变计划与结构化资源所有权。
 
 - [快速开始](./guide/getting-started.md)
 - [升级指南](./guide/upgrading.md)
+- [迁移到 0.12.0](./guide/migrating-to-0.12.md)
 - [迁移到 0.11.0](./guide/migrating-to-0.11.md)
 - [迁移到 0.10.0](./guide/migrating-to-0.10.md)
 - [迁移到 0.9.0](./guide/migrating-to-0.9.md)
@@ -19,6 +20,7 @@ TypeScript 的显式能力组合、不可变计划与结构化资源所有权。
 - [Platform API](./reference/platform.md)
 - [错误码](./reference/errors.md)
 - [机械守卫](./reference/guards.md)
+- [0.12.0 Release Notes](./reference/release-0.12.0.md)
 - [0.11.0 Release Notes](./reference/release-0.11.0.md)
 - [0.10.0 Release Notes](./reference/release-0.10.0.md)
 - [0.9.0 Release Notes](./reference/release-0.9.0.md)

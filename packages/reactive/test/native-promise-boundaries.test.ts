@@ -52,30 +52,39 @@ it("consumes a cross-realm Promise through its captured structural protocol", as
   expect(forward.mock.contexts[0]).toBe(pending.promise);
 });
 
-it("observes actual native settlement without invoking an overridden then function", async () => {
-  const pending = Promise.withResolvers<void>();
-  const fake = vi.fn<(resolve: (value: unknown) => void) => void>((resolve) =>
-    resolve("not settled"),
-  );
-  // oxlint-disable-next-line unicorn/no-thenable -- A Proxy would lose the native brand required by this regression.
-  Object.defineProperty(pending.promise, "then", { value: fake });
-  const captured = captureThenable(pending.promise)!;
-  let settled = false;
-  void captured.then(
-    () => {
-      settled = true;
-    },
-    () => {
-      settled = true;
-    },
-  );
-  await Promise.resolve();
-  expect(settled).toBe(false);
-  expect(fake).not.toHaveBeenCalled();
-  const failure = new Error("native settlement");
-  pending.reject(failure);
-  await expect(captured).rejects.toBe(failure);
-});
+it.each([false, true])(
+  "observes actual native settlement without invoking an overridden then (structural wrapper: %s)",
+  async (wrapped) => {
+    const pending = Promise.withResolvers<void>();
+    const fake = vi.fn<(resolve: (value: unknown) => void) => void>((resolve) =>
+      resolve("not settled"),
+    );
+    // oxlint-disable-next-line unicorn/no-thenable -- A Proxy would lose the native brand required by this regression.
+    Object.defineProperty(pending.promise, "then", { value: fake });
+    const result = {
+      // oxlint-disable-next-line unicorn/no-thenable -- Nesting cannot give the native Promise's public then settlement authority.
+      then(resolve: (value: typeof pending.promise) => void) {
+        resolve(pending.promise);
+      },
+    };
+    const captured = captureThenable(wrapped ? result : pending.promise)!;
+    let settled = false;
+    void captured.then(
+      () => {
+        settled = true;
+      },
+      () => {
+        settled = true;
+      },
+    );
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    expect(fake).not.toHaveBeenCalled();
+    const failure = new Error("native settlement");
+    pending.reject(failure);
+    await expect(captured).rejects.toBe(failure);
+  },
+);
 
 it("does not assimilate a native Promise's already fulfilled payload again", async () => {
   let reads = 0;

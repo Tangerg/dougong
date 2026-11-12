@@ -88,7 +88,8 @@ class Observation<T, Child extends AsyncDisposable> {
     this.#createCurrent();
 
     const { owner } = this.#requireBinding();
-    const runner = owner.spawn((signal) => this.#drain(signal));
+    // Inline spawn must not stop the observation before its cancellation handle has been captured.
+    const runner = owner.spawn((signal) => Promise.resolve().then(() => this.#drain(signal)));
     const cancel = captureRelease(
       runner,
       "ObservationOwner.spawn() must return an ObservationTask",
@@ -163,10 +164,11 @@ class Observation<T, Child extends AsyncDisposable> {
     this.#wakeDrain?.();
   }
 
-  // Stop on drain failure because continuing would observe a value whose resource ownership never established.
   async #drain(signal: AbortSignal) {
-    const detach = onAbort(signal, () => this.#wakeDrain?.());
+    const errors: unknown[] = [];
+    let detach: (() => void) | undefined;
     try {
+      detach = onAbort(signal, () => this.#wakeDrain?.());
       while (this.#state.phase === "active" && !isAborted(signal)) {
         if (!this.#dirty) {
           const wake = Promise.withResolvers<void>();
@@ -180,19 +182,19 @@ class Observation<T, Child extends AsyncDisposable> {
         }
       }
     } catch (error) {
-      if (this.#state.phase !== "active") throw error;
+      errors.push(error);
+    } finally {
+      detach?.();
+    }
+    if (this.#state.phase === "active") {
       try {
         await this.#stop();
-      } catch (cleanupError) {
-        throw new AggregateError(
-          [error, cleanupError],
-          "Observation stopped after a replacement failed",
-        );
+      } catch (error) {
+        errors.push(error);
       }
-      throw error;
-    } finally {
-      detach();
     }
+    if (errors.length === 1) throw errors[0];
+    if (errors.length > 1) throw new AggregateError(errors, "Observation drain and cleanup failed");
   }
 
   // Clear the observed marker during replacement so interruption cannot leave a value without its owner.

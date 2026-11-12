@@ -113,6 +113,17 @@ describe("lifetime retention", () => {
     expect(Object.isFrozen(fixture.child.signal.reason)).toBe(true);
   });
 
+  it.each(["child", "root"] as const)(
+    "detaches structural authority callbacks from a released %s handle",
+    async (kind) => {
+      const fixture = await releasedAuthorityScope(kind);
+      await collect([...fixture.references.values()]);
+      for (const [name, reference] of fixture.references)
+        expect.soft(reference.deref(), `Released ${kind} retained ${name}`).toBeUndefined();
+      expect(fixture.handle.signal.aborted).toBe(true);
+    },
+  );
+
   it("detaches terminal views and root handles after deferred provider retirement", async () => {
     const fixture = await completedLateRetirement();
     await collect([...fixture.references.values()]);
@@ -362,6 +373,44 @@ async function releasedChild() {
   await host.start();
   await release(child);
   return { child, host: new WeakRef(host) };
+}
+
+async function releasedAuthorityScope(kind: "child" | "root") {
+  const backend: { host: Host | undefined } = { host: undefined };
+  const authority = {
+    claim: (resource: Resource) => resourceAuthority.claim(resource),
+    markControlHandle(handle: object) {
+      resourceAuthority.markControlHandle(handle);
+      void backend.host;
+    },
+  };
+  let handle!: LifetimeContext;
+  const host = createHost({
+    resourceAuthority: authority,
+    installations: [
+      {
+        id: "owner",
+        plugin: definePlugin({
+          name: "owner",
+          setup({ lifetime }) {
+            handle = kind === "child" ? lifetime.child("released") : lifetime;
+          },
+        }),
+      },
+    ],
+  });
+  backend.host = host;
+  await host.start();
+  if (kind === "child") await (handle as ChildLifetime)[Symbol.asyncDispose]();
+  else await host.stop();
+  return {
+    handle,
+    references: new Map<string, WeakRef<object>>([
+      ["Host", new WeakRef(host)],
+      ["authority", new WeakRef(authority)],
+      ["backend", new WeakRef(backend)],
+    ]),
+  };
 }
 
 async function historicalSnapshot(fail: boolean) {

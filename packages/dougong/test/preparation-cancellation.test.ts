@@ -4,6 +4,7 @@ import {
   createResourceAuthority,
   createHost,
   definePlugin,
+  extensionPoint,
   service,
   type AsyncDisposable,
 } from "../src";
@@ -11,6 +12,47 @@ import {
 const resourceAuthority = createResourceAuthority();
 
 afterEach(() => vi.useRealTimers());
+
+it("owns dependency preparation failures and cancels peers before acquiring their views", async () => {
+  const failures: Error[] = [];
+  const register = vi.fn<() => never>(() => {
+    const failure = new Error(`dependency control registration ${failures.length + 1} failed`);
+    failures.push(failure);
+    throw failure;
+  });
+  const setup = vi.fn<() => void>();
+  const report = vi.fn<(error: unknown) => void>();
+  const host = createHost({
+    resourceAuthority: {
+      claim: (resource) => resourceAuthority.claim(resource),
+      markControlHandle: register,
+    },
+    onError: report,
+    installations: ["first", "second"].map((id) => ({
+      id,
+      plugin: definePlugin({
+        name: id,
+        requires: { items: extensionPoint<number>(`preparation/${id}`) },
+        setup,
+      }),
+    })),
+  });
+  try {
+    const failure = await host.start().catch((error: unknown) => error);
+    expect(failure).toMatchObject({
+      code: "TRANSITION_FAILED",
+      details: { outcome: "restored", phase: "prepare" },
+    });
+    const { cause } = failure as Error;
+    expect(cause instanceof AggregateError ? cause.errors : [cause]).toEqual(failures);
+    expect(register).toHaveBeenCalledOnce();
+    expect(setup).not.toHaveBeenCalled();
+    expect(report).not.toHaveBeenCalled();
+    expect(host.diagnostics.get()).toMatchObject({ status: "stopped", unresolved: [] });
+  } finally {
+    await host.stop();
+  }
+});
 
 it.each(["start", "change"] as const)(
   "keeps prepared transitive dependencies available during failed %s cleanup",

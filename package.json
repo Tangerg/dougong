@@ -17,8 +17,8 @@
     "typecheck": "tsc --noEmit -p packages/reactive && tsc --noEmit -p packages/dougong && tsc --noEmit -p packages/platform && tsc --noEmit -p examples && tsc --noEmit -p tsconfig.test.json",
     "test": "vitest run",
     "test:watch": "vitest --coverage.enabled=false",
-    "lint": "oxlint packages examples tooling --deny-warnings",
-    "lint:fix": "oxlint packages examples tooling --fix --deny-warnings",
+    "lint": "oxlint --tsconfig=tsconfig.base.json packages examples tooling --deny-warnings",
+    "lint:fix": "oxlint --tsconfig=tsconfig.base.json packages examples tooling --fix --deny-warnings",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "knip": "knip",
@@ -42,11 +42,11 @@
   "lint-staged": {
     "{packages/*,examples}/{src,test}/**/*.ts": [
       "prettier --write",
-      "oxlint --fix --deny-warnings"
+      "oxlint --tsconfig=tsconfig.base.json --fix --deny-warnings"
     ],
     "tooling/**/*.{mjs,mts}": [
       "prettier --write",
-      "oxlint --fix --deny-warnings"
+      "oxlint --tsconfig=tsconfig.base.json --fix --deny-warnings"
     ],
     "*.{json,ts,mjs}": [
       "prettier --write"

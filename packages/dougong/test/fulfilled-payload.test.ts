@@ -4,40 +4,49 @@ import { Lifetime } from "../src/lifetime/lifetime";
 
 const resourceAuthority = createResourceAuthority();
 
-it("acquire must not discard an already-fulfilled native Promise resource on a second then read", async () => {
-  let reads = 0;
-  let releases = 0;
-  const resource = new Proxy(
-    {
-      [Symbol.dispose]() {
-        releases++;
+it.each([false, true])(
+  "acquires an already-fulfilled native resource without resolving it again (structural wrapper: %s)",
+  async (wrapped) => {
+    let reads = 0;
+    let releases = 0;
+    const resource = new Proxy(
+      {
+        [Symbol.dispose]() {
+          releases++;
+        },
       },
-    },
-    {
-      get(target, key, receiver) {
-        if (key === "then" && ++reads > 1) throw new Error("resource assimilated twice");
-        return Reflect.get(target, key, receiver);
+      {
+        get(target, key, receiver) {
+          if (key === "then" && ++reads > 1) throw new Error("resource assimilated twice");
+          return Reflect.get(target, key, receiver);
+        },
       },
-    },
-  );
-  const ready = Promise.resolve(resource);
-  expect(await ready).toBe(resource);
-  expect(reads).toBe(1);
-  const owner = new Lifetime({ resourceAuthority, label: "fulfilled-resource", report() {} });
-  let receipt: unknown;
-  try {
-    receipt = await owner.acquire(() => ready);
-  } catch (error) {
-    receipt = error;
-  }
-  await owner.dispose();
-  expect({
-    receivedResource: (receipt as { resource?: unknown })?.resource === resource,
-    reads,
-    releases,
-    error: receipt instanceof Error ? receipt.message : undefined,
-  }).toEqual({ receivedResource: true, reads: 1, releases: 1, error: undefined });
-});
+    );
+    const ready = Promise.resolve(resource);
+    const result = {
+      // oxlint-disable-next-line unicorn/no-thenable -- Structural fulfillment must preserve a native Promise's acquired resource identity.
+      then(resolve: (value: typeof ready) => void) {
+        resolve(ready);
+      },
+    };
+    expect(await ready).toBe(resource);
+    expect(reads).toBe(1);
+    const owner = new Lifetime({ resourceAuthority, label: "fulfilled-resource", report() {} });
+    let receipt: unknown;
+    try {
+      receipt = await owner.acquire(() => (wrapped ? result : ready));
+    } catch (error) {
+      receipt = error;
+    }
+    await owner.dispose();
+    expect({
+      receivedResource: (receipt as { resource?: unknown })?.resource === resource,
+      reads,
+      releases,
+      error: receipt instanceof Error ? receipt.message : undefined,
+    }).toEqual({ receivedResource: true, reads: 1, releases: 1, error: undefined });
+  },
+);
 
 it("a borrow must deliver the fulfilled callback payload without adopting it again", async () => {
   const capability = service<object>("fulfilled/value");

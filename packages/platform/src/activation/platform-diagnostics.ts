@@ -1,6 +1,7 @@
 import type { HostSnapshot, Logger, SnapshotView } from "dougong";
 import { ReadonlyMapSnapshot, resolveValue } from "dougong/advanced";
 import type { RegistrationRecord, RegistrationSnapshot } from "../catalog/registration.js";
+import type { HostObservation } from "./host-observation.js";
 
 export type PlatformStatus = "active" | "disposing" | "disposed";
 
@@ -48,10 +49,10 @@ export function projectPlatformSnapshot<Reference>(
 // A retained view must not capture its owner's constructor scope after the binding is detached.
 export function diagnosticView<T>(
   view: SnapshotView<T>,
-  binding: { synchronize: (() => void) | undefined },
+  binding: Pick<HostObservation, "synchronize">,
 ): SnapshotView<T> {
   const get = () => {
-    binding.synchronize?.();
+    binding.synchronize();
     return view.get();
   };
   return Object.freeze({

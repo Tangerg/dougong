@@ -297,25 +297,36 @@ export class Engine {
       return this.#result([]);
     }
     const previous = this.#state;
-    const affectedInstances = this.#idleAffectedInstances(previous, prepared);
-    this.#plans.consume(plan);
-    let writer: ContractRegistryWriter;
-    try {
-      writer = this.#contracts.writer(prepared.graph.contractKinds);
-    } catch (error) {
-      this.#detachUncommitted(prepared.graph.declarations.keys());
-      throw error;
-    }
-    for (const instance of affectedInstances) instance.lifetime.seal();
     const reserved = this.#transition;
-    // Startup validation and preparation share one visible transition; scopes are not snapshot state.
-    const transition = (this.#transition =
+    const transition =
       reserved ??
       new ExecutionTransition(
         prepared.report.intent === "stop" ? "stopping" : "changing",
         prepared.affected,
         signal,
-      ));
+      );
+    let affectedInstances: ReadonlyArray<Instance>;
+    try {
+      // Native cancellation registration can reject or reenter application code before admission.
+      this.#assertHealthy();
+      transition.checkpoint();
+      affectedInstances = this.#idleAffectedInstances(previous, prepared);
+    } catch (error) {
+      transition.close();
+      throw error;
+    }
+    this.#plans.consume(plan);
+    let writer: ContractRegistryWriter;
+    try {
+      writer = this.#contracts.writer(prepared.graph.contractKinds);
+    } catch (error) {
+      transition.close();
+      this.#detachUncommitted(prepared.graph.declarations.keys());
+      throw error;
+    }
+    for (const instance of affectedInstances) instance.lifetime.seal();
+    // Startup validation and preparation share one visible transition; scopes are not snapshot state.
+    this.#transition = transition;
     if (previous.phase === "running") transition.scopes.push(previous);
     // Diagnostics observers may register new contributions synchronously at transition ingress.
     this.#contributions.beginBatch();
@@ -513,19 +524,22 @@ export class Engine {
         const preparation = Promise.all(
           instances.map(async (instance) => {
             const signal = instance.lifetime.signal;
-            const dependencies: Record<string, unknown> = Object.create(null);
-            for (const [alias, requirement] of Object.entries(
-              instance.declaration.plugin.requires,
-            )) {
-              if (requirement.kind === "extensionPoint") {
-                dependencies[alias] = this.#contributions.view(requirement, instance.lifetime);
-                continue;
-              }
-              const contract = requiredContract(requirement).id;
-              const provider = prepared.graph.providers.get(contract);
-              dependencies[alias] = provider ? execution.get(provider)?.read(contract) : undefined;
-            }
             try {
+              AbortSignal.prototype.throwIfAborted.call(signal);
+              const dependencies: Record<string, unknown> = Object.create(null);
+              for (const [alias, requirement] of Object.entries(
+                instance.declaration.plugin.requires,
+              )) {
+                if (requirement.kind === "extensionPoint") {
+                  dependencies[alias] = this.#contributions.view(requirement, instance.lifetime);
+                  continue;
+                }
+                const contract = requiredContract(requirement).id;
+                const provider = prepared.graph.providers.get(contract);
+                dependencies[alias] = provider
+                  ? execution.get(provider)?.read(contract)
+                  : undefined;
+              }
               await instance.prepare(
                 Object.freeze(dependencies),
                 prepared.configurations.get(instance.installation)?.value,

@@ -7,8 +7,86 @@ import { executeRelease, releaseTestTimeout } from "./release-fixture.mjs";
 
 const sessionModule = new URL("../release/release-session.mjs", import.meta.url).href;
 const commandTimeoutMilliseconds = 2_000;
+const descendantSafetyTimeoutMilliseconds = 5_000;
+const descendantPollMilliseconds = 10;
 const descendantReady = "descendant ready\n";
 const descendantLateOutput = "descendant completed beyond the deadline\n";
+
+it.each([false, true])(
+  "joins a command group after its leader exits without descendant output (interactive: %s)",
+  async (interactive) => {
+    const workspace = mkdtempSync(join(tmpdir(), "dougong-command-group-"));
+    const release = join(workspace, "release");
+    const completed = join(workspace, "completed");
+    const descendant = `
+      const { existsSync, writeFileSync } = require("node:fs");
+      const expiration = setTimeout(() => process.exit(1), ${descendantSafetyTimeoutMilliseconds});
+      const timer = setInterval(() => {
+        if (!existsSync(${JSON.stringify(release)})) return;
+        clearInterval(timer);
+        clearTimeout(expiration);
+        writeFileSync(${JSON.stringify(completed)}, "");
+      }, ${descendantPollMilliseconds});
+      process.send("ready", () => process.disconnect());
+    `;
+    const leader = `
+      const { spawn } = require("node:child_process");
+      const child = spawn(process.execPath, ["-e", ${JSON.stringify(descendant)}], {
+        stdio: ["ignore", "ignore", "ignore", "ipc"],
+      });
+      child.once("message", () => process.exit(0));
+    `;
+    try {
+      const execution = await executeRelease(
+        [
+          "--input-type=module",
+          "--eval",
+          `
+            import assert from "node:assert/strict";
+            import childProcess from "node:child_process";
+            import { existsSync, writeFileSync } from "node:fs";
+            import { syncBuiltinESMExports } from "node:module";
+            import { setImmediate as nextTurn, setTimeout as delay } from "node:timers/promises";
+            const leaderClosed = Promise.withResolvers();
+            const spawn = childProcess.spawn;
+            childProcess.spawn = (...arguments_) => {
+              const child = spawn(...arguments_);
+              child.once("close", leaderClosed.resolve);
+              return child;
+            };
+            syncBuiltinESMExports();
+            const { ReleaseSession } = await import(${JSON.stringify(sessionModule)});
+            const session = new ReleaseSession();
+            let returned = false;
+            const command = session.run(process.execPath, ["-e", ${JSON.stringify(leader)}], {
+              stdio: "ignore", interactive: ${interactive},
+            }).then(() => { returned = true; });
+            try {
+              await leaderClosed.promise;
+              // Drain the command's own immediate turns while the descendant's exit is explicitly gated.
+              for (let turn = 0; turn < 4; turn++) await nextTurn();
+              const returnedBeforeRelease = returned;
+              writeFileSync(${JSON.stringify(release)}, "");
+              await command;
+              assert.equal(returnedBeforeRelease, false);
+              assert.equal(existsSync(${JSON.stringify(completed)}), true);
+            } finally {
+              writeFileSync(${JSON.stringify(release)}, "");
+              await command;
+              while (!existsSync(${JSON.stringify(completed)})) await delay(${descendantPollMilliseconds});
+              await session.close();
+            }
+          `,
+        ],
+        { cwd: workspace, env: process.env },
+      );
+      expect(execution).toMatchObject({ status: 0, stderr: "" });
+    } finally {
+      rmSync(workspace, { recursive: true, force: true });
+    }
+  },
+  releaseTestTimeout,
+);
 
 it("preserves terminal descriptors for interactive publication authentication", () => {
   const ready = "interactive release command ready";

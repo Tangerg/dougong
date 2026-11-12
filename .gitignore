@@ -16,6 +16,7 @@ docs/.vitepress/cache
 docs/.vitepress/dist
 coverage
 *.tsbuildinfo
+diagrams/*.visual-check.*
 
 # —— 依赖 —— #
 node_modules

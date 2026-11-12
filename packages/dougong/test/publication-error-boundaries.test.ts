@@ -227,10 +227,10 @@ it("preserves a failed publication withdrawal and its parent resources without m
   const withdraw = vi.fn<() => never>(() => {
     throw withdrawalFailure;
   });
-  child.stage((detach) => ({
+  child.stage(() => ({
+    handle: Object.freeze({}),
     publish() {},
     [Symbol.dispose]() {
-      detach();
       withdraw();
     },
   }));

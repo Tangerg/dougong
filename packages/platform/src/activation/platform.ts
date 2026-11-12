@@ -1,9 +1,9 @@
 import {
   asyncDisposeSymbol,
   disposeSymbol,
+  isCancellationReason,
   type AnyPlugin,
   type ApplyResult,
-  type Disposable,
   type Group,
   type Host,
   type HostSnapshot,
@@ -15,6 +15,7 @@ import {
   captureDataArray,
   normalizePlainRecord,
   recordFields,
+  resolveValue,
   SerialQueue,
   SnapshotPublisher,
 } from "dougong/advanced";
@@ -43,6 +44,7 @@ import {
 } from "../errors.js";
 import { recordActivationFailure } from "./activation-failure.js";
 import { LoadedModules } from "./loading.js";
+import { HostObservation } from "./host-observation.js";
 import { ActivationOperation } from "./operation.js";
 import { Preparation } from "./preparation.js";
 import {
@@ -99,7 +101,7 @@ type PlatformState =
       readonly ports: PlatformPorts;
       readonly completion: Promise<void>;
     }
-  | { readonly phase: "disposed" };
+  | { readonly phase: "disposed"; readonly completion: Promise<void> };
 
 // The one command driving Core; callbacks inside it cannot queue another command behind it.
 type CoreCommand<Reference> =
@@ -139,11 +141,10 @@ class DeliveryPlatform<Reference> implements Platform<Reference> {
       return undefined;
     },
   };
-  readonly #viewBinding: { synchronize: (() => void) | undefined };
+  readonly #hostObservation: HostObservation;
   #hostSnapshot: HostSnapshot | undefined;
   #projection: PlatformSnapshot;
   #executing: CoreCommand<Reference> | undefined;
-  #subscription: Disposable | undefined;
   #state: PlatformState;
 
   constructor(options: PlatformOptions<Reference>) {
@@ -171,10 +172,8 @@ class DeliveryPlatform<Reference> implements Platform<Reference> {
       () => (this.#projection = this.#snapshot(this.#projection)),
       ports.reportNotificationFailure,
     );
-    const binding = { synchronize: (() => this.#synchronize()) as (() => void) | undefined };
-    this.#viewBinding = binding;
-    this.diagnostics = diagnosticView(this.#publisher.view, binding);
-    this.#subscription = host.diagnostics.subscribe(() => this.#synchronize());
+    this.#hostObservation = new HostObservation(host.diagnostics, this.#synchronize.bind(this));
+    this.diagnostics = diagnosticView(this.#publisher.view, this.#hostObservation);
     Object.freeze(this);
   }
 
@@ -263,9 +262,7 @@ class DeliveryPlatform<Reference> implements Platform<Reference> {
                 registration.selectedArtifact.manifest.activation.includes(target),
               )
             : target;
-        // Notification can reenter disposal or fail before the queued receipt reaches this scope.
         admittedOperation = this.#beginActivation(roots, removing, signal);
-        this.#publish();
         return { roots, operation: admittedOperation };
       }, signal);
       const loaded = new Map<Artifact<Reference>, AnyPlugin>();
@@ -286,15 +283,11 @@ class DeliveryPlatform<Reference> implements Platform<Reference> {
       );
     } catch (error) {
       if (!admittedOperation) throw error;
-      // Once Core owns execution, its cleanup and health outcome outrank the cancellation request.
-      if (!admittedOperation.handedOff) admittedOperation.checkpoint();
+      // A cancellation request cannot replace an independently settled failure.
+      if (isCancellationReason(admittedOperation.signal, error)) throw error;
       throw recordActivationFailure(admittedOperation.plan, error);
     } finally {
-      if (admittedOperation) {
-        this.#operations.delete(admittedOperation);
-        admittedOperation.finish();
-        this.#publish();
-      }
+      if (admittedOperation) this.#finishActivation(admittedOperation);
     }
   }
 
@@ -304,15 +297,15 @@ class DeliveryPlatform<Reference> implements Platform<Reference> {
 
   #startDisposal() {
     const state = this.#state;
-    if (state.phase === "disposed") return Promise.resolve();
+    if (state.phase === "disposed") return state.completion;
     const command = this.#executing;
     if (command?.kind === "disposal" || command?.operation.handedOff)
       return Promise.reject(this.#busy());
     if (state.phase === "disposing") return state.completion;
     const operations = [...this.#operations];
-    const completion = Promise.all(operations.map((operation) => operation.settled)).then(() =>
-      this.#execute(disposalCommand, () => this.#release()),
-    );
+    const completion: Promise<void> = Promise.all(
+      operations.map((operation) => operation.settled),
+    ).then(() => this.#execute(disposalCommand, () => this.#release(completion)));
     this.#state = { phase: "disposing", ports: state.ports, completion };
     this.#publishBeforeCancellation(() => {
       for (const operation of operations) operation.cancel();
@@ -340,9 +333,24 @@ class DeliveryPlatform<Reference> implements Platform<Reference> {
       this.#publish();
       throw failure;
     }
-    const operation = new ActivationOperation(plan, signal);
+    this.#assertActive();
+    const operation = new ActivationOperation(plan);
     this.#operations.add(operation);
-    return operation;
+    try {
+      // Disposal must own the operation before notification or cancellation attachment can reenter it.
+      this.#publish();
+      operation.admit(signal);
+      return operation;
+    } catch (error) {
+      this.#finishActivation(operation);
+      throw error;
+    }
+  }
+
+  #finishActivation(operation: ActivationOperation<Reference>) {
+    this.#operations.delete(operation);
+    operation.finish();
+    this.#publish();
   }
 
   async #commitActivation(
@@ -433,7 +441,7 @@ class DeliveryPlatform<Reference> implements Platform<Reference> {
     );
     operation.plan.assertCurrent();
     operation.handoff();
-    const result = await host.apply(plan, operation.signal);
+    const { value: result } = await resolveValue(host.apply(plan, operation.signal));
     this.#commitSelections(candidate);
     return result;
   }
@@ -462,16 +470,31 @@ class DeliveryPlatform<Reference> implements Platform<Reference> {
         );
     };
     // Loading survives unrelated commits. Final admission also needs the exact revision of its Core Plan.
-    const subscription = host.diagnostics.subscribe(check);
+    const observation = new HostObservation(host.diagnostics, check);
+    let outcome:
+      | { readonly status: "fulfilled"; readonly value: T }
+      | { readonly status: "rejected"; readonly reason: unknown };
     try {
       check();
       signal.throwIfAborted();
       const result = await prepare(signal);
       signal.throwIfAborted();
-      return result;
-    } finally {
-      subscription[disposeSymbol]();
+      outcome = { status: "fulfilled", value: result };
+    } catch (reason) {
+      outcome = { status: "rejected", reason };
     }
+    try {
+      observation.close();
+    } catch (error) {
+      if (outcome.status === "rejected")
+        throw new AggregateError(
+          [outcome.reason, error],
+          "Activation preparation and diagnostic withdrawal failed",
+        );
+      throw error;
+    }
+    if (outcome.status === "rejected") throw outcome.reason;
+    return outcome.value;
   }
 
   async #removeInstallations(
@@ -482,10 +505,11 @@ class DeliveryPlatform<Reference> implements Platform<Reference> {
     const host = this.#ports().host;
     const change = host.change();
     for (const installation of installations) change.remove(installation);
-    return host.apply(await host.plan(change));
+    const { value: plan } = await resolveValue(host.plan(change));
+    return (await resolveValue(host.apply(plan))).value;
   }
 
-  async #release() {
+  async #release(completion: Promise<void>) {
     const ports = this.#ports();
     const registrations = [...this.#registrations.values()];
     try {
@@ -498,22 +522,16 @@ class DeliveryPlatform<Reference> implements Platform<Reference> {
     this.#commitRemovals(registrations);
     this.#modules.close();
     this.#catalog.close();
-    const subscription = this.#subscription;
-    this.#subscription = undefined;
-    this.#state = { phase: "disposed" };
-    this.#viewBinding.synchronize = undefined;
+    this.#state = { phase: "disposed", completion };
     this.#hostSnapshot = undefined;
     try {
-      subscription?.[disposeSymbol]();
+      batchSnapshotNotifications(() => {
+        // Foreign withdrawal can synchronously read both the boundary and its snapshot.
+        this.#publisher.invalidate();
+        this.#hostObservation.close();
+      }, ports.reportNotificationFailure);
     } finally {
-      try {
-        batchSnapshotNotifications(
-          () => this.#publisher.invalidate(),
-          ports.reportNotificationFailure,
-        );
-      } finally {
-        this.#publisher[disposeSymbol]();
-      }
+      this.#publisher[disposeSymbol]();
     }
   }
 
@@ -649,16 +667,16 @@ class DeliveryPlatform<Reference> implements Platform<Reference> {
   #publish() {
     if (this.#state.phase === "disposed") return;
     const ports = this.#ports();
-    this.#hostSnapshot = ports.host.diagnostics.get();
+    // Diagnostic failures must not interrupt the command's cancellation or settlement.
     batchSnapshotNotifications(() => this.#publisher.invalidate(), ports.reportNotificationFailure);
   }
 
   #synchronize() {
-    if (
-      this.#state.phase !== "disposed" &&
-      this.#ports().host.diagnostics.get() !== this.#hostSnapshot
-    )
-      this.#publish();
+    if (this.#state.phase === "disposed") return;
+    const snapshot = this.#ports().host.diagnostics.get();
+    if (snapshot === this.#hostSnapshot) return;
+    this.#hostSnapshot = snapshot;
+    this.#publish();
   }
 
   #snapshot(previous?: PlatformSnapshot): PlatformSnapshot {

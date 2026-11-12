@@ -25,6 +25,7 @@ import {
   type BackgroundTask,
   type Cleanup,
   type CleanupKind,
+  type CleanupProtocol,
   type Task,
 } from "./obligations.js";
 import {
@@ -87,8 +88,9 @@ export interface ReleaseFailure {
   readonly error: unknown;
 }
 
-// A whole tree shares one observer; a disposed scope drops it so retired handles retain no callbacks.
-interface LifetimeObserver {
+// A retained terminal handle must not keep external authorities or callbacks alive.
+interface LifetimeBinding {
+  readonly resourceAuthority: ResourceAuthority;
   readonly report: (error: unknown) => void;
   readonly releaseFailed: ((failure: ReleaseFailure) => void) | undefined;
   readonly changed: (() => void) | undefined;
@@ -105,7 +107,6 @@ class Visibility {
 }
 
 export class Lifetime {
-  readonly resourceAuthority: ResourceAuthority;
   readonly #label: string;
   #cancellation: { readonly signal: AbortSignal; abort?(reason: unknown): void } =
     new AbortController();
@@ -119,7 +120,7 @@ export class Lifetime {
   readonly #foreground = new Set<Promise<void>>();
   readonly #settlement = Promise.withResolvers<void>();
   readonly #shutdownTimeoutMilliseconds: number | undefined;
-  #observer: LifetimeObserver | undefined;
+  #binding: LifetimeBinding | undefined;
   #phase: LifetimePhase = "active";
   #sequence = 0;
   #detachStartupAbort: (() => void) | undefined;
@@ -132,9 +133,9 @@ export class Lifetime {
     assertTrimmedText(options.label, "Lifetime label");
     if (typeof options.report !== "function")
       throw new TypeError("Lifetime error reporter must be a function");
-    this.resourceAuthority = options.resourceAuthority;
     this.#label = options.label;
-    this.#observer = {
+    this.#binding = {
+      resourceAuthority: options.resourceAuthority,
       report: options.report,
       releaseFailed: options.releaseFailed,
       changed: options.changed,
@@ -174,8 +175,9 @@ export class Lifetime {
       acquire: <T>(factory: (signal: AbortSignal) => AcquisitionResult<T>) => this.acquire(factory),
       interrupt: (callback: Cleanup) => this.interrupt(callback),
     });
-    this.resourceAuthority.markControlHandle(handle);
+    // Authority callbacks can use this ownership capability before registration returns.
     lifetimeAuthorities.set(handle, this);
+    this.resourceAuthority.markControlHandle(handle);
     return handle;
   }
 
@@ -205,6 +207,12 @@ export class Lifetime {
   #treeContains(owner: Lifetime): boolean {
     for (const scope of this.#tree()) if (scope === owner) return true;
     return false;
+  }
+
+  get resourceAuthority() {
+    const binding = this.#binding;
+    if (!binding) throw new DougongError(lifetimeDisposedCode, "Lifetime has been disposed");
+    return binding.resourceAuthority;
   }
 
   get signal() {
@@ -272,11 +280,6 @@ export class Lifetime {
     return resource;
   }
 
-  own(resource: Resource): () => void {
-    const record = this.#adopt(resource);
-    return () => record.forget();
-  }
-
   #adopt(resource: Resource, reservedAcquisition = false) {
     if (!reservedAcquisition) this.#requireActive();
     // A protocol getter may reenter adoption before the release record exists.
@@ -290,6 +293,7 @@ export class Lifetime {
       this.#own(
         () => undefined,
         "cleanup",
+        "asynchronous",
         () => {
           try {
             releaseClaim();
@@ -303,7 +307,7 @@ export class Lifetime {
       ).forget();
       throw error;
     }
-    return this.#own(release, "cleanup", releaseClaim);
+    return this.#own(release, "cleanup", "asynchronous", releaseClaim);
   }
 
   defer(cleanup: Cleanup): AsyncDisposable {
@@ -312,6 +316,25 @@ export class Lifetime {
     const record = this.#own(cleanup, "cleanup");
     const handle = Object.freeze({ [asyncDisposeSymbol]: () => record.dispose() });
     this.resourceAuthority.markControlHandle(handle);
+    return handle;
+  }
+
+  registerSynchronousCleanup(acquire: () => Cleanup): Disposable {
+    const { resourceAuthority } = this.#requireActive();
+    // Admission must precede reference creation; the record must precede external control registration.
+    const record = this.#own(acquire(), "cleanup", "synchronous");
+    const handle = Object.freeze({ [disposeSymbol]: () => record.disposeSynchronously() });
+    try {
+      resourceAuthority.markControlHandle(handle);
+    } catch (error) {
+      try {
+        record.disposeSynchronously();
+      } catch (releaseError) {
+        if (Object.is(error, releaseError)) throw error;
+        throw new AggregateError([error, releaseError], "Cleanup registration and release failed");
+      }
+      throw error;
+    }
     return handle;
   }
 
@@ -343,10 +366,16 @@ export class Lifetime {
       },
     );
     this.#children.add(child);
-    this.#changed();
-    const handle = child.#context({ [asyncDisposeSymbol]: () => child.dispose() });
-    child.#handle = handle;
-    return handle;
+    try {
+      this.#changed();
+      const handle = child.#context({ [asyncDisposeSymbol]: child.dispose.bind(child) });
+      child.#handle = handle;
+      return handle;
+    } catch (error) {
+      // The parent still owns rollback, including work started by a registration callback.
+      void child.stop();
+      throw error;
+    }
   }
 
   spawn<T>(task: BackgroundTask<T>): Task<Awaited<T>> {
@@ -355,7 +384,8 @@ export class Lifetime {
 
   // The caller receives the failure, so it is not also sent to the error reporter.
   run<T>(task: BackgroundTask<T>): Promise<ResolvedValue<Awaited<T>>> {
-    return this.#startTask(task).result;
+    // Authority callbacks see the public receipt before this internal preparation observer starts.
+    return resolveValue(this.#startTask(task).result).then(({ value }) => value);
   }
 
   #startTask<T>(task: BackgroundTask<T>, report?: (error: unknown) => void): Task<Awaited<T>> {
@@ -406,22 +436,33 @@ export class Lifetime {
     return completion;
   }
 
-  stage<T extends Publication>(create: (detach: () => void) => T): T {
+  stage<T extends Publication>(create: (withdraw: () => void) => T): T["handle"] {
     const { report } = this.#requireActive();
-    let record: PublicationRecord | undefined;
-    const publication = create(() => {
-      if (record && !record.failure) this.#publications.delete(record);
-      this.#changed();
+    const record: PublicationRecord<T["handle"]> = new PublicationRecord(++this.#sequence, create, {
+      detach: () => this.#publications.delete(record),
+      changed: () => this.#changed(),
+      releaseFailed: (error) => this.#notifyReleaseFailure(error, "publication"),
+      report,
     });
-    record = new PublicationRecord(++this.#sequence, publication, (error) =>
-      this.#notifyReleaseFailure(error, "publication"),
-    );
     this.#publications.add(record);
+    try {
+      // Registration is application code; shutdown must already own what it can revoke.
+      this.resourceAuthority.markControlHandle(record.handle);
+    } catch (error) {
+      record.withdraw();
+      const failure = record.failure;
+      if (failure)
+        throw new AggregateError(
+          [error, failure.reason],
+          "Publication registration and withdrawal failed",
+        );
+      throw error;
+    }
     batchSnapshotNotifications(() => {
       this.#changed();
-      if (this.published) publication.publish();
+      if (this.published) record.publish();
     }, report);
-    return publication;
+    return record.handle;
   }
 
   borrow<T>(callback: () => Awaitable<T>): Promise<ResolvedValue<Awaited<T>>> {
@@ -470,8 +511,9 @@ export class Lifetime {
       throw new TypeError("Only the root Lifetime may publish declarations");
     if (this.#visibility.published) return;
     this.#visibility.published = true;
-    for (const scope of this.#tree())
-      for (const record of scope.#publications) record.publication.publish();
+    for (const scope of this.#tree()) {
+      for (const record of scope.#publications) record.publish();
+    }
   }
 
   detachStartupSignal() {
@@ -500,7 +542,7 @@ export class Lifetime {
   }
 
   #shutdown(): Promise<void> {
-    const { report } = this.#observer!;
+    const { report } = this.#binding!;
     const entering = [...this.#tree()].filter((scope) => !scope.#completion);
     const errors: unknown[] = [];
     // Reserve every real join before withdrawal or cancellation can reenter a child or its parent.
@@ -595,23 +637,25 @@ export class Lifetime {
     const detach = this.#detachFromParent;
     this.#detachFromParent = undefined;
     detach?.(this);
-    const observer = this.#observer;
-    this.#observer = undefined;
-    observer?.changed?.();
+    const binding = this.#binding;
+    this.#binding = undefined;
+    binding?.changed?.();
   }
 
   #withdraw() {
-    for (const record of [...this.#publications].reverse()) {
-      if (record.withdraw()) this.#publications.delete(record);
-      // A publication may detach before its withdrawal fails; the unfinished obligation still belongs here.
-      else this.#publications.add(record);
-    }
+    for (const record of [...this.#publications].reverse()) record.withdraw();
   }
 
-  #own(cleanup: Cleanup, kind: CleanupKind, releaseClaim?: () => void) {
+  #own(
+    cleanup: Cleanup,
+    kind: CleanupKind,
+    protocol: CleanupProtocol = "asynchronous",
+    releaseClaim?: () => void,
+  ) {
     const records = kind === "cleanup" ? this.#cleanups : this.#interrupts;
     const record: CleanupRecord = new CleanupRecord(++this.#sequence, kind, {
       cleanup,
+      protocol,
       ...(releaseClaim && { releaseClaim }),
       detach: () => {
         records.delete(record);
@@ -626,25 +670,24 @@ export class Lifetime {
   }
 
   #changed() {
-    this.#observer?.changed?.();
+    this.#binding?.changed?.();
   }
 
   #reportError(error: unknown) {
-    const observer = this.#observer;
-    if (observer)
-      assertSynchronous(observer.report(error), "Lifetime error reporters must be synchronous");
+    const binding = this.#binding;
+    if (binding)
+      assertSynchronous(binding.report(error), "Lifetime error reporters must be synchronous");
   }
 
   #notifyReleaseFailure(error: unknown, kind: ObligationKind) {
-    this.#observer?.releaseFailed?.(Object.freeze({ owner: this, kind, error }));
+    this.#binding?.releaseFailed?.(Object.freeze({ owner: this, kind, error }));
   }
 
-  // An accepting scope always still holds its observer; disposal drops both together.
-  #requireActive(): LifetimeObserver {
-    const observer = this.#observer;
-    if (!this.acceptsWork || !observer) {
+  #requireActive(): LifetimeBinding {
+    const binding = this.#binding;
+    if (!this.acceptsWork || !binding) {
       throw new DougongError(lifetimeDisposedCode, "Lifetime is closed to new work");
     }
-    return observer;
+    return binding;
   }
 }

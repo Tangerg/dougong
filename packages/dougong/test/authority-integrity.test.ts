@@ -1,3 +1,4 @@
+import { getEventListeners } from "node:events";
 import { expect, it, vi } from "vitest";
 import {
   createResourceAuthority,
@@ -57,7 +58,9 @@ it("consumes an authorized Plan permanently invalidated by a new Contract kind b
   });
   const plan = await host.plan(change);
   host.contributions(extensionPoint(value.id));
-  await expect(host.apply(plan)).rejects.toMatchObject({ code: "CONTRACT_CONFLICT" });
+  const signal = AbortSignal.any([new AbortController().signal]);
+  await expect(host.apply(plan, signal)).rejects.toMatchObject({ code: "CONTRACT_CONFLICT" });
+  expect(getEventListeners(signal, "abort")).toEqual([]);
   await expect(host.apply(plan)).rejects.toMatchObject({ code: "PLAN_CONSUMED" });
   expect(pending.status).toBe("removed");
   expect(host.stateRevision).toBe(plan.report.baseStateRevision);

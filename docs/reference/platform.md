@@ -35,6 +35,8 @@ Artifact 和 Registration 是由 Catalog、Platform 分别签发的名义句柄�
 
 Platform 状态为 `active/disposing/disposed`。Registration 状态为 `selected/activating/removing/installed/failed/quarantined/removed`，反映选择、正在执行的操作及 Core 执行事实。调用方取消不会覆盖上次实际失败；当前选择激活成功后清除该错误。选择、激活目标及移除列表只捕获数组自己的索引数据。稀疏数组和访问器会被拒绝，不会调用 getter。
 
+Platform 先登记激活操作并发布其投影，再接入调用方取消。取消登记重入关闭时，同一操作已经属于关闭流程，会在加载开始前取消；登记失败则结束这次操作并解除观察，不会留下阻止关闭完成的等待。
+
 `RegistrationSnapshot` 的 `status` 与 `error` 保持关联：`failed` 必有错误，`selected/installed` 没有错误，`activating/removing/quarantined` 可以保留上次失败。当前快照不包含已移除的 Registration；`execution` 复用 Core `InstallationSnapshot` 的已提交状态范围，或在没有本 Registration 拥有的已提交 Installation 时为 `undefined`。活句柄的独立 getter 不保证跨读取的类型收窄；需要关联判断时，读取并使用同一份快照。
 
 当 `status === "installed"` 时，同一快照的 `activeOrigin` 必为 `ArtifactOrigin`，`execution` 必为 `stopped`、`running` 或 `changing`；类型判别后可以直接读取来源。installed 表示已提交来源与选择一致，不能据此断言执行正在运行。来源与执行状态取自同一 Core 安装快照；其他 Registration 状态仍可能保留先前的已提交来源。
@@ -42,6 +44,16 @@ Platform 状态为 `active/disposing/disposed`。Registration 状态为 `selecte
 `status === "quarantined"` 与 `execution === "quarantined"` 在同一快照中双向成立；此时 `activeOrigin` 仍可能为 `undefined`。`execution === undefined` 时，`activeOrigin` 也必为 `undefined`；执行存在则不保证存在 Artifact 来源。
 
 诊断快照在读取或被订阅观察时物化；没有观察者的连续选择不会反复遍历全部 Registration。未变化的快照保持同一对象身份，无关 Core 活动不会通知 Platform 观察者。订阅从当前状态建立比较基线，释放后保留最终快照并断开运行资源。
+
+Host 诊断读取属于观察行为。读取失败传给读取方或通知错误报告器；它不能让已经提交的选择、激活返回命令失败，也不能阻止关闭流程取消已接纳的准备工作。
+
+Platform 创建及加载、最终准入期间的 Host 诊断观察共用同一绑定协议，捕获订阅的同步释放方法及其接收者。接入方即使保存监听器后抛错，或返回缺失、不可读的释放方法，观察建立失败也会撤销本地绑定；构造失败的残留监听器不能经该绑定保留 Platform 的 loader、授权器或 logger。异步订阅句柄被立即拒绝，其拒绝结果会被观察。临时观察在启动对应加载或授权之前校验释放协议，并在调用外部解绑之前撤销本地回调；解绑失败后，残留监听器也不会保留已退出的 Platform 或再访问它的关闭边界。
+
+准备与诊断解绑同时失败时，调用方收到按准备、解绑顺序保留两项原因的 `AggregateError`。取消请求不能掩盖独立失败；只有错误确实携带该请求的取消原因时才按取消处理，不会覆盖之前记录的实际失败。
+
+Host 计划与执行回执也使用[统一异步结果协议](../guide/lifetime.md)。SDK 适配器装饰原生 Promise 的公开方法，不能替换 Core 签发的 Plan、提前结束激活或释放 Registration；激活、移除与关闭都等待 Core 的真实结算，并保留真实失败。
+
+`Platform.status` 描述可用性，退出结果由 `[Symbol.asyncDispose]()` 返回的同一 Promise 表达。Core 移除完成后，Platform 终止可用性并撤销观察绑定；外部解绑回调读取时，实时状态和诊断快照已经同时反映终态。诊断解绑失败会使该回执拒绝，终态通知仍会投递。重复关闭保留原失败且不重试解绑。Core 移除被拒绝时仍保留原有 `active` 状态及选择，以便处理该拒绝。
 
 `ActivationPreview.deferred` 明确包含 `admission`、`moduleValidation`、`configurationValidation`、`coreBinding`、`setup`。预览不是运行验证通过的凭证。activate 捕获选择版本与 Artifact 身份，准备完成后再次核对，过期结果不能覆盖新选择。
 

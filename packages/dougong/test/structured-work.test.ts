@@ -362,6 +362,7 @@ describe("structured work boundaries", () => {
     owner.defer(() => trace.push("root"));
     deepest.defer(() => trace.push("leaf"));
     leaf.stage(() => ({
+      handle: Object.freeze({}),
       publish: () => trace.push("publish"),
       [Symbol.dispose]: () => trace.push("withdraw"),
     }));

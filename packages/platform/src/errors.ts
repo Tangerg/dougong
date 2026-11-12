@@ -1,4 +1,4 @@
-import { DougongError, type ErrorDetails } from "dougong";
+import { DougongError } from "dougong";
 
 export const manifestInvalidCode = "MANIFEST_INVALID";
 export const apiIncompatibleCode = "API_INCOMPATIBLE";
@@ -41,12 +41,4 @@ export type PlatformErrorCode =
 
 export class PlatformError extends DougongError<PlatformErrorCode> {
   override readonly name: string = "PlatformError";
-
-  constructor(
-    code: PlatformErrorCode,
-    message: string,
-    options?: ErrorOptions & { readonly details?: ErrorDetails },
-  ) {
-    super(code, message, options);
-  }
 }

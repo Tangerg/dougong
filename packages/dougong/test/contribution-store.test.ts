@@ -244,6 +244,51 @@ describe("ContributionStore invariants", () => {
     await lifetime.dispose();
   });
 
+  it.each([false, true])(
+    "retains existing views after another view is rejected (reentrant release: %s)",
+    async (releaseBeforeRejection) => {
+      const authority = createResourceAuthority();
+      const failure = new Error("view control registration rejected");
+      let rejectRegistration = false;
+      const lifetime = new Lifetime({
+        label: "view-owner",
+        report() {},
+        resourceAuthority: {
+          claim(resource) {
+            return authority.claim(resource);
+          },
+          markControlHandle(handle) {
+            authority.markControlHandle(handle);
+            if (!rejectRegistration) return;
+            if (releaseBeforeRejection) (handle as Disposable)[Symbol.dispose]();
+            throw failure;
+          },
+        },
+      });
+      const registry = new ContributionRegistry(() => undefined);
+      const point = extensionPoint<number>("contribution/view-reservation");
+      const store = registry.store<number>(point);
+      const view = registry.view<number>(point, lifetime);
+      try {
+        rejectRegistration = true;
+        expect(() => registry.view(point, lifetime)).toThrow(failure);
+        rejectRegistration = false;
+        expect(registry.store(point)).toBe(store);
+        const changed = vi.fn<() => void>();
+        const subscription = view.subscribe(changed);
+        store.stage("owner/item", 1, lifetime, () => undefined);
+        lifetime.publish();
+        expect(view.get()).toEqual(["owner/item"]);
+        expect(changed).toHaveBeenCalledOnce();
+        subscription[Symbol.dispose]();
+      } finally {
+        rejectRegistration = false;
+        await lifetime.dispose();
+      }
+      expect(registry.store(point)).not.toBe(store);
+    },
+  );
+
   it("releases its notification reporter when its last view is sealed", async () => {
     function createRetainedStore() {
       const reporter = { report() {} };

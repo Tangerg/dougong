@@ -1029,7 +1029,7 @@ describe("application-selected identity queues", () => {
 
       operation.resolve();
       await second.result;
-      await Promise.all([firstIdentity.settled, secondIdentity.settled]);
+      await Promise.all([firstIdentity.settled(), secondIdentity.settled()]);
       expect(trace).toEqual(["a:first:start", "b:first:start", "a:first:end", "a:second:start"]);
       expect(delivered).toEqual(["b:first", "a:second"]);
       expect(dispose).toHaveBeenCalledExactlyOnceWith("a:first");

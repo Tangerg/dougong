@@ -6,7 +6,7 @@ import type { ActivationPlan } from "./plan.js";
 export class ActivationOperation<Reference> {
   readonly signal: AbortSignal;
   readonly #controller: AbortController;
-  #phase: "preparing" | "executing" | "settled" = "preparing";
+  #phase: "admitting" | "preparing" | "executing" | "settled" = "admitting";
   #detachCaller: (() => void) | undefined;
   readonly #completion = Promise.withResolvers<void>();
   readonly plan: ActivationPlan<Reference>;
@@ -15,7 +15,7 @@ export class ActivationOperation<Reference> {
     { readonly revision: number; readonly status: "activating" | "removing" }
   >();
 
-  constructor(plan: ActivationPlan<Reference>, signal: AbortSignal | undefined) {
+  constructor(plan: ActivationPlan<Reference>) {
     const controller = new AbortController();
     this.#controller = controller;
     this.signal = controller.signal;
@@ -24,8 +24,15 @@ export class ActivationOperation<Reference> {
       this.#roles.set(registration, { revision, status: "activating" });
     for (const { registration, revision } of plan.removals)
       this.#roles.set(registration, { revision, status: "removing" });
-    if (signal) this.#detachCaller = onAbort(signal, (reason) => controller.abort(reason));
-    this.signal.throwIfAborted();
+  }
+
+  admit(signal: AbortSignal | undefined) {
+    if (this.#phase !== "admitting")
+      throw new Error("Activation operation has already left admission");
+    this.checkpoint();
+    if (signal) this.#detachCaller = onAbort(signal, (reason) => this.#controller.abort(reason));
+    this.checkpoint();
+    this.#phase = "preparing";
   }
 
   get handedOff() {
@@ -40,6 +47,7 @@ export class ActivationOperation<Reference> {
   }
 
   handoff() {
+    if (this.#phase !== "preparing") throw new Error("Activation operation is not preparing");
     this.checkpoint();
     this.#phase = "executing";
   }
@@ -50,7 +58,10 @@ export class ActivationOperation<Reference> {
   }
 
   supersede(registration: RegistrationRecord<Reference>) {
-    if (this.#phase === "preparing" && this.#roles.has(registration)) {
+    if (
+      (this.#phase === "admitting" || this.#phase === "preparing") &&
+      this.#roles.has(registration)
+    ) {
       this.#controller.abort(
         new PlatformError(
           selectionSupersededCode,

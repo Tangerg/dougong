@@ -121,6 +121,7 @@ Use `dougong/advanced` for adapters and domain extensions. These primitives expo
 | `normalizePlainRecord` | Capture the data fields of a plain record. Use `captureConfiguration` when the input is plugin configuration. |
 | `recordFields<T>()(...keys)` | Build an exhaustive accepted-field set from a declaration type for `normalizePlainRecord`. |
 | `resolveValue(value)` | Resolve one asynchronous result through the shared protocol and return `Promise<ResolvedValue<Awaited<T>>>`; the frozen `{ value }` receipt preserves the fulfilled identity. |
+| `assertSynchronous(value, message)` | Reject an asynchronous return through the same protocol while observing its outcome to prevent an unhandled rejection. Use at synchronous adapter boundaries; it cannot revoke work already started. |
 | `captureDataArray(input, label)` | Freeze a shallow copy of dense own index data without invoking the input’s methods or iterator. The caller validates the elements. |
 | `captureLogger(logger)` | Capture the four methods and their original receiver once, preserving known return types; unknown input establishes only the method shape. |
 | `capturePluginDeclaration(input)` | Capture and validate an immutable `AnyPlugin` from unknown input through the same implementation used by `definePlugin` and Core installation; it runs neither setup nor schema and cannot recover erased configuration or Service types. |

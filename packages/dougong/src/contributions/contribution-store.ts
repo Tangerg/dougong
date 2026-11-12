@@ -15,9 +15,7 @@ import {
 } from "../contracts/resource.js";
 import { batchSnapshotNotifications, SnapshotPublisher } from "../observation/snapshot-view.js";
 import {
-  ContributionSubscription,
   ContributionViewHandle,
-  ContributionViewLease,
   type ContributionSource,
   type ContributionView,
   type ContributionViewState,
@@ -37,23 +35,24 @@ type ContributionState<T> =
       readonly phase: "active";
       readonly store: ContributionStore<T>;
       value: T;
-      readonly detachFromOwner: () => void;
       readonly owner: Lifetime;
     }
   | { readonly phase: "disposed" };
 
 class ContributionHandle<T> implements Contribution<T> {
   readonly #contribution: ContributionRecord<T>;
+  readonly #withdraw: () => void;
 
-  constructor(contribution: ContributionRecord<T>) {
+  constructor(contribution: ContributionRecord<T>, withdraw: () => void) {
     this.#contribution = contribution;
+    this.#withdraw = withdraw;
     Object.freeze(this);
   }
 
   readonly update = (value: T) => this.#contribution.update(value);
 
   [disposeSymbol]() {
-    this.#contribution[disposeSymbol]();
+    this.#withdraw();
   }
 }
 
@@ -67,12 +66,11 @@ class ContributionRecord<T> implements Publication {
     id: string,
     initialValue: T,
     owner: Lifetime,
-    detachFromOwner: () => void,
+    withdraw: () => void,
   ) {
     this.#id = id;
-    this.#state = { phase: "active", store, value: initialValue, owner, detachFromOwner };
-    this.handle = new ContributionHandle(this);
-    owner.resourceAuthority.markControlHandle(this.handle);
+    this.#state = { phase: "active", store, value: initialValue, owner };
+    this.handle = new ContributionHandle(this, withdraw);
   }
 
   publish() {
@@ -105,13 +103,7 @@ class ContributionRecord<T> implements Publication {
     const state = this.#state;
     if (state.phase === "disposed") return;
     this.#state = { phase: "disposed" };
-    batchSnapshotNotifications(() => {
-      try {
-        state.store.removeContribution(this.#id, this);
-      } finally {
-        state.detachFromOwner();
-      }
-    });
+    state.store.removeContribution(this.#id, this);
   }
 }
 
@@ -140,15 +132,15 @@ export class ContributionStore<T> implements ContributionSource<T> {
   }
 
   stage(id: string, value: T, owner: Lifetime, remember: () => void): Contribution<T> {
-    // A failed claim can create a zero-reference store without a lease to release it.
+    // A failed claim can create a zero-reference store without a cleanup to release it.
     try {
       if (this.#claims.has(id)) throw new TypeError(`Duplicate contribution '${id}'`);
-      return owner.stage((detach) => {
+      return owner.stage((withdraw) => {
         remember();
-        const contribution = new ContributionRecord(this, id, value, owner, detach);
+        const contribution = new ContributionRecord(this, id, value, owner, withdraw);
         this.#claims.set(id, { contribution, phase: "staged" });
         return contribution;
-      }).handle;
+      });
     } catch (error) {
       this.#releaseIfUnused();
       throw error;
@@ -156,29 +148,17 @@ export class ContributionStore<T> implements ContributionSource<T> {
   }
 
   view(owner: Lifetime): ContributionView<T> {
-    this.#views++;
     const state: ContributionViewState<T> = {
       binding: { phase: "active", source: this, owner },
     };
-    let releaseView: (() => void) | undefined;
-    const viewLease = new ContributionViewLease(state, () => {
-      const release = releaseView;
-      releaseView = undefined;
-      try {
-        release?.();
-      } finally {
+    owner.registerSynchronousCleanup(() => {
+      this.#views++;
+      return () => {
+        state.binding = undefined;
         this.#views--;
         this.#releaseIfUnused();
-      }
+      };
     });
-    try {
-      releaseView = owner.own(viewLease);
-    } catch (error) {
-      state.binding = undefined;
-      this.#views--;
-      this.#releaseIfUnused();
-      throw error;
-    }
     return new ContributionViewHandle(state);
   }
 
@@ -214,28 +194,19 @@ export class ContributionStore<T> implements ContributionSource<T> {
   }
 
   subscribe(listener: () => void, owner?: Lifetime) {
-    const publisherSubscription = this.#publisher.view.subscribe(listener);
-    if (!owner) return publisherSubscription;
-    this.#subscriptions++;
-    let releaseFromOwner: (() => void) | undefined;
-    const subscription = new ContributionSubscription(publisherSubscription, () => {
-      const release = releaseFromOwner;
-      releaseFromOwner = undefined;
-      try {
-        release?.();
-      } finally {
-        this.#subscriptions--;
-        this.#releaseIfUnused();
-      }
+    if (!owner) return this.#publisher.view.subscribe(listener);
+    return owner.registerSynchronousCleanup(() => {
+      const subscription = this.#publisher.view.subscribe(listener);
+      this.#subscriptions++;
+      return () => {
+        try {
+          subscription[disposeSymbol]();
+        } finally {
+          this.#subscriptions--;
+          this.#releaseIfUnused();
+        }
+      };
     });
-    try {
-      releaseFromOwner = owner.own(subscription);
-      owner.resourceAuthority.markControlHandle(subscription);
-    } catch (error) {
-      subscription[disposeSymbol]();
-      throw error;
-    }
-    return subscription;
   }
 
   publishClaim(id: string, contribution: ContributionRecord<T>) {

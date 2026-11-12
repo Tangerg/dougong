@@ -8,7 +8,7 @@ import { Lifetime } from "../src/lifetime/lifetime";
 
 const resourceAuthority = createResourceAuthority();
 
-const adoptionMethods = ["use", "own", "acquire"] as const;
+const adoptionMethods = ["use", "acquire"] as const;
 
 async function rejectAdoption(
   owner: Lifetime,

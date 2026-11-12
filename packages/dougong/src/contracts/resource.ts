@@ -21,6 +21,7 @@ export interface AsyncDisposable {
 export type Resource = Disposable | AsyncDisposable;
 
 export interface Publication extends Disposable {
+  readonly handle: object;
   publish(): void;
 }
 
@@ -53,8 +54,12 @@ class ResourceIdentityAuthority implements ResourceAuthority {
     }
     const reservation: ResourceIdentity = { kind: "claim" };
     this.#identities.set(resource, reservation);
+    let binding: { readonly resource: Resource } | undefined = { resource };
     return () => {
-      if (this.#identities.get(resource) === reservation) this.#identities.delete(resource);
+      const current = binding;
+      binding = undefined;
+      if (current && this.#identities.get(current.resource) === reservation)
+        this.#identities.delete(current.resource);
     };
   }
 
@@ -65,6 +70,33 @@ class ResourceIdentityAuthority implements ResourceAuthority {
 
 export function createResourceAuthority(): ResourceAuthority {
   return Object.freeze(new ResourceIdentityAuthority());
+}
+
+type ClaimReleaseState =
+  | { readonly phase: "owned"; readonly release: () => unknown }
+  | { readonly phase: "releasing" | "released" }
+  | { readonly phase: "failed"; readonly error: unknown };
+
+class ClaimRelease {
+  #state: ClaimReleaseState;
+
+  constructor(release: () => unknown) {
+    this.#state = { phase: "owned", release };
+  }
+
+  readonly release = () => {
+    const state = this.#state;
+    if (state.phase === "failed") throw state.error;
+    if (state.phase !== "owned") return;
+    this.#state = { phase: "releasing" };
+    try {
+      assertSynchronous(state.release(), "ResourceAuthority claim release must be synchronous");
+      this.#state = { phase: "released" };
+    } catch (error) {
+      this.#state = { phase: "failed", error };
+      throw error;
+    }
+  };
 }
 
 export function captureResourceAuthority(value: unknown): ResourceAuthority {
@@ -81,11 +113,7 @@ export function captureResourceAuthority(value: unknown): ResourceAuthority {
         assertSynchronous(release, "ResourceAuthority.claim must be synchronous");
         throw new TypeError("ResourceAuthority.claim must return a release function");
       }
-      return () =>
-        assertSynchronous(
-          Reflect.apply(release, undefined, []),
-          "ResourceAuthority claim release must be synchronous",
-        );
+      return new ClaimRelease(() => Reflect.apply(release, undefined, [])).release;
     },
     markControlHandle(handle: object) {
       assertSynchronous(

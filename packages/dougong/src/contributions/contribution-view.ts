@@ -1,7 +1,7 @@
 import { DougongError, lifetimeDisposedCode } from "../contracts/errors.js";
 import type { Lifetime } from "../lifetime/lifetime.js";
 import type { ResolvedValue } from "../internal/async-result.js";
-import { disposeSymbol, type Awaitable, type Disposable } from "../contracts/resource.js";
+import type { Awaitable, Disposable } from "../contracts/resource.js";
 import type { SnapshotView } from "../observation/snapshot-view.js";
 
 export interface ContributionView<T> extends SnapshotView<ReadonlyArray<string>> {
@@ -88,53 +88,5 @@ export class ContributionViewHandle<T> implements ContributionView<T> {
       throw new DougongError(lifetimeDisposedCode, "Contribution view owner is closed");
     }
     return binding;
-  }
-}
-
-// The owner's release revokes the view, then returns the store reference it counted.
-export class ContributionViewLease<T> implements Disposable {
-  #binding:
-    | {
-        readonly state: ContributionViewState<T>;
-        readonly release: () => void;
-      }
-    | undefined;
-
-  constructor(state: ContributionViewState<T>, release: () => void) {
-    this.#binding = { state, release };
-    Object.freeze(this);
-  }
-
-  [disposeSymbol]() {
-    const binding = this.#binding;
-    if (!binding) return;
-    this.#binding = undefined;
-    binding.state.binding = undefined;
-    binding.release();
-  }
-}
-
-export class ContributionSubscription implements Disposable {
-  #binding:
-    | {
-        readonly subscription: Disposable;
-        readonly release: () => void;
-      }
-    | undefined;
-
-  constructor(subscription: Disposable, release: () => void) {
-    this.#binding = { subscription, release };
-    Object.freeze(this);
-  }
-
-  [disposeSymbol]() {
-    const binding = this.#binding;
-    if (!binding) return;
-    this.#binding = undefined;
-    try {
-      binding.subscription[disposeSymbol]();
-    } finally {
-      binding.release();
-    }
   }
 }

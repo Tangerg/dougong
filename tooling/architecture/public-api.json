@@ -118,6 +118,7 @@
       "SerialQueue",
       "normalizePlainRecord",
       "recordFields",
+      "assertSynchronous",
       "resolveValue",
       "captureDataArray",
       "captureLogger",

@@ -4,6 +4,7 @@ Explicit capability composition, immutable plans and structured resource ownersh
 
 - [Getting started](./guide/getting-started.md)
 - [Upgrading](./guide/upgrading.md)
+- [Migrating to 0.12.0](./guide/migrating-to-0.12.md)
 - [Migrating to 0.11.0](./guide/migrating-to-0.11.md)
 - [Migrating to 0.10.0](./guide/migrating-to-0.10.md)
 - [Migrating to 0.9.0](./guide/migrating-to-0.9.md)
@@ -19,6 +20,7 @@ Explicit capability composition, immutable plans and structured resource ownersh
 - [Platform API](./reference/platform.md)
 - [Error codes](./reference/errors.md)
 - [Mechanical guards](./reference/guards.md)
+- [0.12.0 release notes](./reference/release-0.12.0.md)
 - [0.11.0 release notes](./reference/release-0.11.0.md)
 - [0.10.0 release notes](./reference/release-0.10.0.md)
 - [0.9.0 release notes](./reference/release-0.9.0.md)

@@ -1,4 +1,11 @@
-import { createHost, definePlugin, service, type AnyPlugin, type ResourceAuthority } from "dougong";
+import {
+  createHost,
+  definePlugin,
+  service,
+  type AnyPlugin,
+  type Host,
+  type ResourceAuthority,
+} from "dougong";
 import {
   createPlatform,
   MemoryLoader,
@@ -8,6 +15,18 @@ import {
 } from "../src";
 
 export const VALUE = service<{ value: number }>("platform-test/value");
+
+export function withDiagnosticsSubscription(
+  host: Host,
+  subscribe: Host["diagnostics"]["subscribe"],
+): Host {
+  const diagnostics = { get: () => host.diagnostics.get(), subscribe };
+  return new Proxy(host, {
+    get(target, property, receiver) {
+      return property === "diagnostics" ? diagnostics : Reflect.get(target, property, receiver);
+    },
+  });
+}
 
 export function valuePlugin(name: string, value: number) {
   return definePlugin({ name, provides: { value: VALUE }, setup: () => ({ value: { value } }) });

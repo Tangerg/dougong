@@ -3,8 +3,6 @@ import typescript from "typescript";
 import { existsSync } from "node:fs";
 import { sourceExtensions } from "./rules.mjs";
 
-export const sourceDirectory = ".";
-
 export function compilerOptions() {
   const source = typescript.readJsonConfigFile("tsconfig.base.json", typescript.sys.readFile);
   const configuration = typescript.parseJsonSourceFileConfigFileContent(

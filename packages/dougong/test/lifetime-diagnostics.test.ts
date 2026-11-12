@@ -128,10 +128,10 @@ it("preserves the original child publication failure at its owner without a seco
   const withdraw = vi.fn<() => never>(() => {
     throw original;
   });
-  child.stage((detach) => ({
+  child.stage(() => ({
+    handle: Object.freeze({}),
     publish() {},
     [Symbol.dispose]() {
-      detach();
       withdraw();
     },
   }));

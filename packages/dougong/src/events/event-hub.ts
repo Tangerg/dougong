@@ -15,7 +15,6 @@ interface ListenerBinding<T> {
   readonly hub: EventHub;
   readonly listener: EventListener<T>;
   readonly owner: Lifetime;
-  readonly detach: () => void;
 }
 
 class ListenerRegistration<T> implements Publication {
@@ -28,12 +27,11 @@ class ListenerRegistration<T> implements Publication {
     eventId: string,
     listener: EventListener<T>,
     owner: Lifetime,
-    detach: () => void,
+    withdraw: () => void,
   ) {
     this.#eventId = eventId;
-    this.#binding = { hub, listener, owner, detach };
-    this.handle = Object.freeze({ [disposeSymbol]: () => this[disposeSymbol]() });
-    owner.resourceAuthority.markControlHandle(this.handle);
+    this.#binding = { hub, listener, owner };
+    this.handle = Object.freeze({ [disposeSymbol]: withdraw });
   }
 
   publish() {
@@ -54,7 +52,6 @@ class ListenerRegistration<T> implements Publication {
     if (!binding) return;
     this.#binding = undefined;
     binding.hub.delete(this.#eventId, this);
-    binding.detach();
   }
 }
 
@@ -115,8 +112,9 @@ export class EventHub {
   }
 
   stage<T>(eventId: string, listener: EventListener<T>, owner: Lifetime): Disposable {
-    return owner.stage((detach) => new ListenerRegistration(this, eventId, listener, owner, detach))
-      .handle;
+    return owner.stage(
+      (withdraw) => new ListenerRegistration(this, eventId, listener, owner, withdraw),
+    );
   }
 
   add<T>(eventId: string, registration: ListenerRegistration<T>) {

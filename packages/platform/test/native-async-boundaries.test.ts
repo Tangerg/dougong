@@ -139,9 +139,14 @@ it.each([
   },
 );
 
-it.each(promiseKinds)(
-  "waits for a %s Loader result instead of installing a shadow module",
-  async (kind) => {
+it.each([
+  { kind: "native", wrapped: false },
+  { kind: "native", wrapped: true },
+  { kind: "subclass", wrapped: false },
+  { kind: "subclass", wrapped: true },
+] as const)(
+  "waits for a $kind Loader result instead of a shadow module (structural wrapper: $wrapped)",
+  async ({ kind, wrapped }) => {
     const setup = vi.fn<() => void>();
     const shadowSetup = vi.fn<() => void>();
     const module = { default: definePlugin({ name: "sample", setup }) };
@@ -158,7 +163,14 @@ it.each(promiseKinds)(
       loader: {
         load() {
           entered.resolve();
-          return pending.promise;
+          return wrapped
+            ? {
+                // oxlint-disable-next-line unicorn/no-thenable -- Loader adapters may resolve through another native result.
+                then(resolve: (value: typeof pending.promise) => void) {
+                  resolve(pending.promise);
+                },
+              }
+            : pending.promise;
         },
       },
     });
