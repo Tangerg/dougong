@@ -35,6 +35,8 @@ Core 只签发可执行的 Plan：声明不成立时，`host.plan()` 直接拒�
 
 执行阶段的取消以 `TRANSITION_FAILED`、`details.outcome: "restored"` 报告成功清理或恢复；不能完成清理或恢复时报告 `HOST_QUARANTINED`。原取消原因保留在失败原因中。提交前最后一次检查接受取消；开始发布后已经确定的提交结果不会被迟到取消改写。取消不能撤回外部 I/O。
 
+Use `isRestoredCancellation(signal, error)` to classify a restored transaction caused by that caller's cancellation. Use `isCancellationReason(signal, error)` for pre-execution cancellation. Do not unwrap arbitrary causes or replace a quarantine result with `signal.reason`. Classification does not retire the Host; keep waiting for the original lifecycle operations before taking over external resources.
+
 启动或变更尚未结算时，`stop()` 与 `host[Symbol.asyncDispose]()` 仍以 `HOST_BUSY` 拒绝，避免验证器、setup 或清理回调等待自己。应用应先取消自己持有的执行请求，再等待其结果。
 
 两种等待预算分别由实际义务的所有者负责，不互相回退，也不限制正常启动：

@@ -1430,6 +1430,49 @@ function verifyPluginAuthoring() {
   const text = core.service<string>("authoring/text");
   const count = core.service<number>("authoring/count");
 
+  function defineLabeledPlugin<
+    Requires extends core.Requirements = {},
+    Provides extends core.Provisions = {},
+  >(
+    declaration: Pick<
+      core.PluginAuthoring<void, Requires, Provides>,
+      "name" | "requires" | "provides"
+    > & {
+      readonly setup: (
+        context: core.PluginContext<NoInfer<Requires>> & { readonly label: string },
+      ) => ReturnType<core.PluginAuthoring<void, Requires, NoInfer<Provides>>["setup"]>;
+    },
+  ): core.AnyPlugin {
+    return capturePluginDeclaration({
+      ...declaration,
+      setup: (context: core.PluginContext<Requires>) =>
+        declaration.setup({ ...context, label: "application" }),
+    });
+  }
+  defineLabeledPlugin({
+    name: "labeled",
+    requires: { text },
+    provides: { count },
+    setup({ dependencies, label }) {
+      expectTypeOf(dependencies.text).toEqualTypeOf<string>();
+      expectTypeOf(label).toEqualTypeOf<string>();
+      return { count: 1 };
+    },
+  });
+  // @ts-expect-error Adapting context cannot erase a required dependency declaration.
+  defineLabeledPlugin<{ text: typeof text }>({ name: "missing.requires", setup() {} });
+  // @ts-expect-error Adapting context cannot erase a required provision declaration.
+  defineLabeledPlugin<{}, { count: typeof count }>({
+    name: "missing.provides",
+    setup: () => ({ count: 1 }),
+  });
+  defineLabeledPlugin({
+    name: "wrong.output",
+    provides: { count },
+    // @ts-expect-error Adapted setup still implements the original provided Service types.
+    setup: () => ({ count: "wrong" }),
+  });
+
   function rejectMissingDeclarations() {
     // @ts-expect-error A nonempty requirement contract must exist in the actual declaration.
     core.definePlugin<void, { text: typeof text }>({ name: "missing.requires", setup() {} });

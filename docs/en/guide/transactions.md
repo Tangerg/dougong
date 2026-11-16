@@ -35,6 +35,8 @@ Execution first checks foreground borrows on affected generations. A live borrow
 
 Cancellation during execution reports `TRANSITION_FAILED` with `details.outcome: "restored"` after successful cleanup or reconstruction, or `HOST_QUARANTINED` when cleanup or recovery cannot complete. The original cancellation reason remains in the failure cause. A final check accepts cancellation before commit; once publication begins, late cancellation cannot rewrite the committed outcome. Cancellation cannot undo external I/O.
 
+Use `isRestoredCancellation(signal, error)` to classify a restored transaction caused by that caller's cancellation. Use `isCancellationReason(signal, error)` for pre-execution cancellation. Do not unwrap arbitrary causes or replace a quarantine result with `signal.reason`. Classification does not retire the Host; keep waiting for the original lifecycle operations before taking over external resources.
+
 While startup or change is unsettled, `stop()` and `host[Symbol.asyncDispose]()` still reject with `HOST_BUSY`, so a validator, setup or cleanup callback cannot await itself. Applications cancel their own execution request and then await its outcome.
 
 Each waiting budget belongs to the owner of its actual obligations. Neither falls back to the other or limits normal startup:

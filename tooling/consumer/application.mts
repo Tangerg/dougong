@@ -6,12 +6,24 @@ import {
   extensionPoint,
   describePlugin,
   service,
+  isRestoredCancellation,
+  type AnyPlugin,
+  type PluginAuthoring,
+  type PluginContext,
+  type Provisions,
+  type Requirements,
   type ChildLifetime,
   type LifetimeContext,
   type PlanReport,
   type ResolvedValue,
 } from "dougong";
-import { captureDataArray, ReadonlyMapSnapshot, resolveValue, SerialQueue } from "dougong/advanced";
+import {
+  captureDataArray,
+  capturePluginDeclaration,
+  ReadonlyMapSnapshot,
+  resolveValue,
+  SerialQueue,
+} from "dougong/advanced";
 import { bridge, computed } from "@dougongjs/reactive";
 import type * as Reactive from "@dougongjs/reactive";
 import { createPlatform, MemoryLoader } from "@dougongjs/platform";
@@ -23,16 +35,43 @@ function assert(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Error(message);
 }
 
+const cancellation = new Error("packed caller cancelled");
+assert(
+  isRestoredCancellation(
+    AbortSignal.abort(cancellation),
+    new DougongError("TRANSITION_FAILED", "startup cancelled", {
+      cause: cancellation,
+      details: { outcome: "restored" },
+    }),
+  ),
+  "Packed cancellation classifier lost restored transaction evidence",
+);
+
 const GREETING = service<{ greet(name: string): string }>("consumer/greeting");
 const ACTIONS = extensionPoint<() => string>("consumer/actions");
 const REMOTE = service<{ value: string }>("consumer/remote");
 let owner!: LifetimeContext;
 let released = 0;
 let setups = 0;
-const greeting = definePlugin({
+function defineLabeledPlugin<Requires extends Requirements = {}, Provides extends Provisions = {}>(
+  declaration: Pick<PluginAuthoring<void, Requires, Provides>, "name" | "requires" | "provides"> & {
+    readonly setup: (
+      context: PluginContext<NoInfer<Requires>> & { readonly label: string },
+    ) => ReturnType<PluginAuthoring<void, Requires, NoInfer<Provides>>["setup"]>;
+  },
+): AnyPlugin {
+  return capturePluginDeclaration({
+    ...declaration,
+    setup: (context: PluginContext<Requires>) =>
+      declaration.setup({ ...context, label: "consumer" }),
+  });
+}
+
+const greeting = defineLabeledPlugin({
   name: "consumer.greeting",
   provides: { greeting: GREETING },
-  setup({ lifetime, contributions, metadata, logger }) {
+  setup({ lifetime, contributions, metadata, logger, label }) {
+    assert(label === "consumer", "Packed authoring context lost its adapter's value");
     assert(
       metadata.installationId === "greeting" && typeof logger.debug === "function",
       "Packed Plugin context omitted its execution metadata or logger",

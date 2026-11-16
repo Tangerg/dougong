@@ -420,7 +420,8 @@ export class Engine {
         retained,
         prepared,
         scope,
-        failures.seal(error),
+        error,
+        failures,
         transition,
       );
     }
@@ -440,16 +441,20 @@ export class Engine {
     retained: Map<InstallationRecord, Instance>,
     prepared: PreparedTransition,
     scope: ExecutionScope,
-    failure: unknown,
+    cause: unknown,
+    failures: PreparationFailures,
     transition: ExecutionTransition,
   ): Promise<DougongError> {
-    if (this.#isQuarantined()) return this.#quarantine(previous, [failure], prepared, "prepare");
+    if (this.#isQuarantined())
+      return this.#quarantine(previous, [failures.seal(cause)], prepared, "prepare");
     const candidates = new Set(
       [...scope.instances.values()].filter((instance) =>
         prepared.affected.has(instance.installation),
       ),
     );
     const cleanupErrors = await this.#retirements.release([scope], candidates);
+    // Cancellation can enter recovery before setup rejects independently; join its receipt first.
+    const failure = failures.seal(cause);
     if (
       this.#isQuarantined() ||
       cleanupErrors.length ||

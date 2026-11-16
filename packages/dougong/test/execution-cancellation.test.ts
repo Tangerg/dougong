@@ -1,5 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
-import { createHost, createResourceAuthority, definePlugin, service } from "../src";
+import {
+  createHost,
+  createResourceAuthority,
+  definePlugin,
+  isCancellationReason,
+  isRestoredCancellation,
+  service,
+} from "../src";
 import { onAbort } from "../src/advanced";
 
 const resourceAuthority = createResourceAuthority();
@@ -26,7 +33,11 @@ describe("execution cancellation", () => {
       ],
     });
     const reason = new Error("cancelled before startup");
-    await expect(host.start(AbortSignal.abort(reason))).rejects.toBe(reason);
+    const signal = AbortSignal.abort(reason);
+    const failure = await host.start(signal).catch((error: unknown) => error);
+    expect(failure).toBe(reason);
+    expect(isCancellationReason(signal, failure)).toBe(true);
+    expect(isRestoredCancellation(signal, failure)).toBe(false);
     expect(validate).not.toHaveBeenCalled();
     expect(setup).not.toHaveBeenCalled();
     expect(host.status).toBe("stopped");
@@ -129,10 +140,12 @@ describe("execution cancellation", () => {
     expect(returned).toBe(false);
     expect(host.status).toBe("starting");
     release.resolve();
-    expect(await outcome).toMatchObject({
+    const failure = await outcome;
+    expect(failure).toMatchObject({
       code: "TRANSITION_FAILED",
       details: { outcome: "restored", phase: "prepare" },
     });
+    expect(isRestoredCancellation(controller.signal, failure)).toBe(true);
     expect(cleanup).toHaveBeenCalledOnce();
     expect(host.status).toBe("stopped");
     expect(host.stateRevision).toBe(0);
@@ -182,10 +195,12 @@ describe("execution cancellation", () => {
     const outcome = applying.catch((error: unknown) => error);
     await entered.promise;
     controller.abort();
-    expect(await outcome).toMatchObject({
+    const failure = await outcome;
+    expect(failure).toMatchObject({
       code: "TRANSITION_FAILED",
       details: { outcome: "restored", phase: "prepare" },
     });
+    expect(isRestoredCancellation(controller.signal, failure)).toBe(true);
     expect(events).toEqual(["setup:1", "release:1", "release:candidate", "setup:2"]);
     expect((await host.use(value, (current) => current)).value).toBe(2);
     expect(host.status).toBe("running");
@@ -275,10 +290,12 @@ describe("execution cancellation", () => {
     await entered.promise;
     controller.abort();
     try {
-      expect(await outcome).toMatchObject({
+      const failure = await outcome;
+      expect(failure).toMatchObject({
         code: "HOST_QUARANTINED",
         details: { outcome: "quarantined" },
       });
+      expect(isRestoredCancellation(controller.signal, failure)).toBe(false);
       expect(host.status).toBe("quarantined");
       expect(host.diagnostics.get().unresolved).toHaveLength(1);
       expect(cleanup).not.toHaveBeenCalled();
@@ -373,10 +390,12 @@ describe("execution restoration deadlines", () => {
       expect(restorationSignal.reason).toMatchObject({ name: "TimeoutError" });
       expect(cleanup).not.toHaveBeenCalled();
       await vi.advanceTimersByTimeAsync(shutdownTimeoutMilliseconds);
-      expect(await outcome).toMatchObject({
+      const failure = await outcome;
+      expect(failure).toMatchObject({
         code: "HOST_QUARANTINED",
         details: { outcome: "quarantined", phase: "restore" },
       });
+      expect(isRestoredCancellation(controller.signal, failure)).toBe(false);
       expect(host.status).toBe("quarantined");
       expect(host.diagnostics.get().unresolved).toHaveLength(1);
       expect(cleanup).not.toHaveBeenCalled();

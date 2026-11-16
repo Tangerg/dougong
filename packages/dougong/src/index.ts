@@ -28,6 +28,7 @@ export type {
 export {
   definePlugin,
   type Plugin,
+  type PluginAuthoring,
   type AnyPlugin,
   type PluginContext,
   type Requirements,
@@ -80,6 +81,7 @@ export {
   ConfigurationValidationError,
   isError,
   isCancellationReason,
+  isRestoredCancellation,
   type ErrorDetails,
 } from "./contracts/errors.js";
 export { RecordedFailure, type ErrorSnapshot } from "./contracts/recorded-failure.js";

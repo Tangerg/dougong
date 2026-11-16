@@ -38,6 +38,7 @@
       "isCancellationReason",
       "isError",
       "isLogger",
+      "isRestoredCancellation",
       "optional",
       "service"
     ],
@@ -52,6 +53,7 @@
       "AnyPlugin",
       "Awaitable",
       "Plugin",
+      "PluginAuthoring",
       "PluginContext",
       "PluginDescriptor",
       "PluginConfigurationDescriptor",

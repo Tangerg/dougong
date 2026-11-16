@@ -7,12 +7,12 @@ The main `dougong` package is the actual kernel. Its default surface exposes one
 | Responsibility | Exports |
 | --- | --- |
 | 契约 / Contracts | `service`, `extensionPoint`, `event`, `optional`, `ContractKind`, `ContractValue`, `Service`, `ExtensionPoint`, `Event`, `OptionalService`, `Requirement` |
-| 插件 / Plugins | `definePlugin`, `describePlugin`, `PluginDescriptor`, `PluginConfigurationDescriptor`, `PluginDescriptionOptions`, `Plugin`, `AnyPlugin`, `PluginContext`, `Requirements`, `Provisions`, `ResolvedRequirement`, `ResolvedRequirements`, `ProvidedServices`, `InstanceMetadata` |
+| 插件 / Plugins | `definePlugin`, `describePlugin`, `PluginDescriptor`, `PluginConfigurationDescriptor`, `PluginDescriptionOptions`, `Plugin`, `PluginAuthoring`, `AnyPlugin`, `PluginContext`, `Requirements`, `Provisions`, `ResolvedRequirement`, `ResolvedRequirements`, `ProvidedServices`, `InstanceMetadata` |
 | 安装与计划 / Installation and planning | `ChangeSet`, `Group`, `Installation`, `InstallationOptions`, `InstallationArguments`, `InstallationUpdate`, `InstallationOrigin`, `InitialInstallation`, `Plan`, `PlanReport`, `BindingReport`, `ImpactReason`, `PlanOperation`, `DeclarationSnapshot`, `captureConfiguration`, `ConfigurationValue` |
 | 运行 / Execution | `createHost`, `Host`, `HostOptions`, `ApplyResult`, `HostStatus`, `InstallationState` |
 | 资源 / Resources | `createResourceAuthority`, `ResourceAuthority`, `LifetimeContext`, `ChildLifetime`, `LifetimeOwnership`, `Task`, `Cleanup`, `BackgroundTask`, `LifetimePhase`, `LifetimeSnapshot`, `UnresolvedObligation`, `Disposable`, `AsyncDisposable`, `Resource`, `Awaitable`, `ResolvedValue`, `disposeSymbol`, `asyncDisposeSymbol` |
 | 事件与贡献 / Events and contributions | `Contribution`, `ContributionView`, `ContributionOperations`, `EventListener`, `EventArguments`, `EventOperations` |
-| 观察与错误 / Observation and errors | `HostSnapshot`, `InstallationSnapshot`, `GroupSnapshot`, `SnapshotView`, `isLogger`, `Logger`, `DougongError`, `ConfigurationValidationError`, `RecordedFailure`, `isError`, `isCancellationReason`, `ErrorSnapshot`, `ErrorDetails` |
+| 观察与错误 / Observation and errors | `HostSnapshot`, `InstallationSnapshot`, `GroupSnapshot`, `SnapshotView`, `isLogger`, `Logger`, `DougongError`, `ConfigurationValidationError`, `RecordedFailure`, `isError`, `isCancellationReason`, `isRestoredCancellation`, `ErrorSnapshot`, `ErrorDetails` |
 
 A plugin receives a `LifetimeContext` with work and resource registration capabilities. Its `child(label)` returns a `ChildLifetime` the caller may dispose. Only the Engine can stop the entire Instance.
 
@@ -27,6 +27,8 @@ Contract identities use their own data fields. A token from another JavaScript r
 Without a `configuration` schema, `ConfigurationInput` must be directly assignable to `Configuration`; ordinary callers declare the same configuration type for both. Incompatible input and output require an actual Standard Schema: installation accepts its input, and `setup` receives a deeply readonly view of its output. Explicit `Plugin<...>` annotations enforce the same relationships as `definePlugin`.
 
 `AnyPlugin` is an erased declaration boundary and proves no particular configuration or Service value type. Loaders use `capturePluginDeclaration` from `dougong/advanced` to accept unknown module data without asserting it to a concrete `Plugin<...>`.
+
+`PluginAuthoring<Configuration, Requires, Provides, ConfigurationInput>` is the unbranded declaration accepted by `definePlugin`. Context adapters can derive their authoring fields with `Pick<PluginAuthoring<void, Requires, Provides>, "name" | "requires" | "provides">` and their setup result with `ReturnType<PluginAuthoring<void, Requires, Provides>["setup"]>`, then pass the composed Core declaration to `capturePluginDeclaration`. Keep `NoInfer` on callback dependency and provision types so setup cannot invent undeclared contracts. The adapter owns its added context; Core continues to own declaration capture, graph transitions and Lifetime shutdown. It must not cast a callback requiring extra context directly to `Plugin`.
 
 ## Host and installation
 
@@ -98,6 +100,8 @@ The terminal reporter must also finish synchronously without a business result. 
 `ErrorDetails` carries outcome, phase, stateRevision and optional installation, contract, dependency path and impact. `RecordedFailure` is a bounded diagnostic projection detached from resource graphs; direct callers still receive the cause of the original rejection.
 
 `isCancellationReason` uses the native signal's reason identity. An arbitrary error with the same name is not cancellation; an `AbortError.cause` data property holding that reason also establishes the relation. See [Lifetime and resources](../guide/lifetime.md) for the full contract.
+
+`isRestoredCancellation(signal, error)` recognizes only a `TRANSITION_FAILED` receipt with the original transaction's `restored` outcome and a direct cause that matches `isCancellationReason`. It does not search arbitrary cause chains or suppress cleanup, restoration, quarantine or independent failures. Pre-execution cancellation retains the original signal reason and uses `isCancellationReason`. This read-only classifier does not stop a Host, release external resources or authorize replacement; applications still join their original lifecycle operations.
 
 `apply`, `start` and `stop` resolve with an immutable `ApplyResult` containing `stateRevision` and `affectedInstallations`; failure rejects. A no-op preserves the revision and returns an empty affected list. The result contains no constant success discriminator.
 

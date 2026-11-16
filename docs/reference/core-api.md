@@ -7,12 +7,12 @@
 | 责任 | 导出 |
 | --- | --- |
 | 契约 / Contracts | `service`, `extensionPoint`, `event`, `optional`, `ContractKind`, `ContractValue`, `Service`, `ExtensionPoint`, `Event`, `OptionalService`, `Requirement` |
-| 插件 / Plugins | `definePlugin`, `describePlugin`, `PluginDescriptor`, `PluginConfigurationDescriptor`, `PluginDescriptionOptions`, `Plugin`, `AnyPlugin`, `PluginContext`, `Requirements`, `Provisions`, `ResolvedRequirement`, `ResolvedRequirements`, `ProvidedServices`, `InstanceMetadata` |
+| 插件 / Plugins | `definePlugin`, `describePlugin`, `PluginDescriptor`, `PluginConfigurationDescriptor`, `PluginDescriptionOptions`, `Plugin`, `PluginAuthoring`, `AnyPlugin`, `PluginContext`, `Requirements`, `Provisions`, `ResolvedRequirement`, `ResolvedRequirements`, `ProvidedServices`, `InstanceMetadata` |
 | 安装与计划 / Installation and planning | `ChangeSet`, `Group`, `Installation`, `InstallationOptions`, `InstallationArguments`, `InstallationUpdate`, `InstallationOrigin`, `InitialInstallation`, `Plan`, `PlanReport`, `BindingReport`, `ImpactReason`, `PlanOperation`, `DeclarationSnapshot`, `captureConfiguration`, `ConfigurationValue` |
 | 运行 / Execution | `createHost`, `Host`, `HostOptions`, `ApplyResult`, `HostStatus`, `InstallationState` |
 | 资源 / Resources | `createResourceAuthority`, `ResourceAuthority`, `LifetimeContext`, `ChildLifetime`, `LifetimeOwnership`, `Task`, `Cleanup`, `BackgroundTask`, `LifetimePhase`, `LifetimeSnapshot`, `UnresolvedObligation`, `Disposable`, `AsyncDisposable`, `Resource`, `Awaitable`, `ResolvedValue`, `disposeSymbol`, `asyncDisposeSymbol` |
 | 事件与贡献 / Events and contributions | `Contribution`, `ContributionView`, `ContributionOperations`, `EventListener`, `EventArguments`, `EventOperations` |
-| 观察与错误 / Observation and errors | `HostSnapshot`, `InstallationSnapshot`, `GroupSnapshot`, `SnapshotView`, `isLogger`, `Logger`, `DougongError`, `ConfigurationValidationError`, `RecordedFailure`, `isError`, `isCancellationReason`, `ErrorSnapshot`, `ErrorDetails` |
+| 观察与错误 / Observation and errors | `HostSnapshot`, `InstallationSnapshot`, `GroupSnapshot`, `SnapshotView`, `isLogger`, `Logger`, `DougongError`, `ConfigurationValidationError`, `RecordedFailure`, `isError`, `isCancellationReason`, `isRestoredCancellation`, `ErrorSnapshot`, `ErrorDetails` |
 
 插件上下文的 `LifetimeContext` 只授予工作与资源登记能力；`child(label)` 返回可以提前释放的 `ChildLifetime`。关闭整个 Instance 始终经过 Engine。
 
@@ -27,6 +27,8 @@
 没有 `configuration` schema 时，`ConfigurationInput` 必须能直接赋给 `Configuration`；常规用法只给出同一个配置类型。输入输出不兼容时，`configuration` 必须是真实的 Standard Schema，安装接受其输入，`setup` 接受其输出的深只读视图。显式 `Plugin<...>` 注解与 `definePlugin` 的检查一致，不能通过结构注解绕过这些关联。
 
 `AnyPlugin` 表示类型已擦除的声明边界，不证明配置或 Service 的具体类型。加载器从未知数据进入 Core 时使用 `dougong/advanced` 的 `capturePluginDeclaration`，不会把未知模块断言成一个具体的 `Plugin<...>`。
+
+`PluginAuthoring<Configuration, Requires, Provides, ConfigurationInput>` is the unbranded declaration accepted by `definePlugin`. Context adapters can derive their authoring fields with `Pick<PluginAuthoring<void, Requires, Provides>, "name" | "requires" | "provides">` and their setup result with `ReturnType<PluginAuthoring<void, Requires, Provides>["setup"]>`, then pass the composed Core declaration to `capturePluginDeclaration`. Keep `NoInfer` on callback dependency and provision types so setup cannot invent undeclared contracts. The adapter owns its added context; Core continues to own declaration capture, graph transitions and Lifetime shutdown. It must not cast a callback requiring extra context directly to `Plugin`.
 
 ## Host 与安装
 
@@ -98,6 +100,8 @@ Host 状态为 `stopped`、`starting`、`running`、`changing`、`stopping`、`q
 `ErrorDetails` 给出 outcome、phase、stateRevision 和可选的安装、契约、依赖路径与影响范围。`RecordedFailure` 是有界脱离资源图的诊断投影；原始拒绝的 cause 仍由直接调用者接收。
 
 `isCancellationReason` 按原生信号的取消原因身份分类，不把任意同名错误视为取消；带有同一原因的 `AbortError.cause` 数据属性也可建立因果。完整契约见[生命周期与资源](../guide/lifetime.md)。
+
+`isRestoredCancellation(signal, error)` recognizes only a `TRANSITION_FAILED` receipt with the original transaction's `restored` outcome and a direct cause that matches `isCancellationReason`. It does not search arbitrary cause chains or suppress cleanup, restoration, quarantine or independent failures. Pre-execution cancellation retains the original signal reason and uses `isCancellationReason`. This read-only classifier does not stop a Host, release external resources or authorize replacement; applications still join their original lifecycle operations.
 
 `apply`、`start`、`stop` 成功时 resolve 不可变 `ApplyResult`，只含 `stateRevision` 与 `affectedInstallations`；失败 reject。无变更时保留原修订并返回空的影响列表，不附加固定成功标记。
 

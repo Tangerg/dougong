@@ -111,11 +111,11 @@ type ConfigurationDeclaration<Input, Output> = [Input] extends [Output]
   ? { readonly configuration?: PluginSchema<Input, Output> }
   : { readonly configuration: PluginSchema<Input, Output> };
 
-type PluginAuthoring<
-  Configuration,
-  Requires extends Requirements,
-  Provides extends Provisions,
-  ConfigurationInput,
+export type PluginAuthoring<
+  Configuration = void,
+  Requires extends Requirements = {},
+  Provides extends Provisions = {},
+  ConfigurationInput = Configuration,
 > = {
   readonly name: string;
   readonly configuration?: PluginSchema<ConfigurationInput, Configuration>;

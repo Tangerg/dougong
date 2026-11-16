@@ -178,6 +178,18 @@ export function isCancellationReason(signal: AbortSignal, error: unknown) {
   );
 }
 
+// Restoration belongs to the original Host transaction, not an arbitrary cause chain.
+// This classifies its receipt; it does not retire the Host or its external resources.
+export function isRestoredCancellation(signal: AbortSignal, error: unknown): boolean {
+  if (!isCancellationReason(signal, ownDataField(error, "cause")?.value)) return false;
+  return (
+    isError(error) &&
+    error instanceof DougongError &&
+    ownDataField(error, "code")?.value === transitionFailedCode &&
+    ownDataField(ownDataField(error, "details")?.value, "outcome")?.value === "restored"
+  );
+}
+
 export class ConfigurationValidationError extends DougongError {
   override name = "ConfigurationValidationError";
   readonly issues: ReadonlyArray<StandardSchemaV1.Issue>;
