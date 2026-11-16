@@ -20,6 +20,7 @@ Explicit capability composition, immutable plans and structured resource ownersh
 - [Platform API](./reference/platform.md)
 - [Error codes](./reference/errors.md)
 - [Mechanical guards](./reference/guards.md)
+- [0.13.0 release notes](./reference/release-0.13.0.md)
 - [0.12.0 release notes](./reference/release-0.12.0.md)
 - [0.11.0 release notes](./reference/release-0.11.0.md)
 - [0.10.0 release notes](./reference/release-0.10.0.md)

@@ -11,3 +11,4 @@
 | 0.10.0 | [迁移到 0.10.0](./migrating-to-0.10.md) | [0.10.0 Release Notes](../reference/release-0.10.0.md) |
 | 0.11.0 | [迁移到 0.11.0](./migrating-to-0.11.md) | [0.11.0 Release Notes](../reference/release-0.11.0.md) |
 | 0.12.0 | [迁移到 0.12.0](./migrating-to-0.12.md) | [0.12.0 Release Notes](../reference/release-0.12.0.md) |
+| 0.13.0 | [Optional cancellation and authoring adoption](../reference/release-0.13.0.md) | [0.13.0 release notes](../reference/release-0.13.0.md) |

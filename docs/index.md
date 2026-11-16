@@ -20,6 +20,7 @@ TypeScript 的显式能力组合、不可变计划与结构化资源所有权。
 - [Platform API](./reference/platform.md)
 - [错误码](./reference/errors.md)
 - [机械守卫](./reference/guards.md)
+- [0.13.0 release notes](./reference/release-0.13.0.md)
 - [0.12.0 Release Notes](./reference/release-0.12.0.md)
 - [0.11.0 Release Notes](./reference/release-0.11.0.md)
 - [0.10.0 Release Notes](./reference/release-0.10.0.md)
