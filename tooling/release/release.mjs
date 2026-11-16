@@ -6,7 +6,7 @@ import { createInterface } from "node:readline/promises";
 import { candidateOutput } from "../consumer/package-candidates.mjs";
 import { ReleaseRequest } from "./release-request.mjs";
 import { inspectReleaseRepository } from "./release-repository.mjs";
-import { captureReleaseRegistry, registryVisibilityTimeoutMinutes } from "./release-registry.mjs";
+import { captureReleaseRegistry } from "./release-registry.mjs";
 import { ReleaseSession } from "./release-session.mjs";
 
 function step(message) {
@@ -80,14 +80,6 @@ async function publishCandidates(session, request, repository, registry, candida
       if (published.length) console.error(`  Already on the registry: ${published.join(", ")}`);
       console.error(`  Fix the cause and re-run \`${resumeCommand}\`; it resumes from here.`);
       throw new Error(`${name} failed to publish.`, { cause });
-    }
-    // A successful upload can remain unreadable; dependents require a confirmed provider first.
-    if (!(await registry.waitForVisibility(name))) {
-      if (published.length) console.error(`  Already published: ${published.join(", ")}`);
-      console.error(`  Re-running \`${resumeCommand}\` resumes from here.`);
-      throw new Error(
-        `${name}: npm accepted ${version}, but it was not readable within ${registryVisibilityTimeoutMinutes} minutes; processing may still be pending.`,
-      );
     }
     await registry.verifyPublishedPackage(entry, candidate, stage);
     published.push(name);

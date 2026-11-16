@@ -5,7 +5,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { differingFile } from "../consumer/package-candidates.mjs";
 import { packageArchiveIn, readPackageFiles } from "../package-archive.mjs";
 
-export const registryVisibilityTimeoutMinutes = 30;
+const registryVisibilityTimeoutMinutes = 30;
 const millisecondsPerSecond = 1_000;
 const millisecondsPerMinute = 60_000;
 // Publish-time scanning can exceed fifteen minutes; queries and waits share one budget.
@@ -165,31 +165,81 @@ class ReleaseRegistry {
   async verifyPublishedPackage(entry, candidate, stage) {
     const { name } = entry;
     const version = this.#request.version;
-    const downloaded = mkdtempSync(join(stage, "registry-"));
-    await this.#session.run(
+    const deadline = performance.now() + registryVisibilityTimeoutMilliseconds;
+    let announced = false;
+    while (true) {
+      const remaining = Math.floor(deadline - performance.now());
+      if (remaining <= 0)
+        throw new Error(
+          `${name}@${version} was not readable within ${registryVisibilityTimeoutMinutes} minutes; processing may still be pending. Re-running \`${this.#request.resumeCommand}\` resumes verification.`,
+        );
+      const downloaded = mkdtempSync(join(stage, "registry-"));
+      try {
+        if (await this.#downloadPackage(name, downloaded, remaining)) {
+          if (performance.now() > deadline) continue;
+          const publishedFiles = readPackageFiles(packageArchiveIn(downloaded));
+          const file = differingFile(candidate.files, publishedFiles);
+          if (file !== undefined)
+            throw new Error(
+              `${name}@${version} is published but its ${file} differs from this build; release a new version instead of resuming`,
+            );
+          await this.assertDistributionTag(entry);
+          return;
+        }
+      } finally {
+        rmSync(downloaded, { recursive: true, force: true });
+      }
+      if (!announced) {
+        console.log(`  waiting for ${name}@${version} to become downloadable...`);
+        announced = true;
+      }
+      const remainingAfterRead = Math.floor(deadline - performance.now());
+      if (remainingAfterRead <= 0) continue;
+      await delay(Math.min(registryPollIntervalMilliseconds, remainingAfterRead), undefined, {
+        signal: this.#session.signal,
+      });
+    }
+  }
+
+  async #downloadPackage(name, destination, timeout) {
+    const version = this.#request.version;
+    const result = await this.#session.execute(
       "npm",
-      this.#arguments(name, ["pack", `${name}@${version}`, "--pack-destination", downloaded]),
-      { stdio: "ignore" },
+      this.#arguments(name, [
+        "pack",
+        `${name}@${version}`,
+        "--pack-destination",
+        destination,
+        "--json",
+      ]),
+      { encoding: "utf8", timeout, killSignal: "SIGKILL" },
     );
-    const publishedFiles = readPackageFiles(packageArchiveIn(downloaded));
-    rmSync(downloaded, { recursive: true, force: true });
-    const file = differingFile(candidate.files, publishedFiles);
-    if (file !== undefined)
-      throw new Error(
-        `${name}@${version} is published but its ${file} differs from this build; release a new version instead of resuming`,
-      );
-    await this.assertDistributionTag(entry);
+    const unavailable = (reason, cause) => {
+      throw new Error(`Cannot download ${name}@${version}: ${reason}`, { cause });
+    };
+    if (result.error) unavailable(result.error.message, result.error);
+    if (result.signal) unavailable(`npm pack terminated by ${result.signal}`);
+    if (result.status === 0) return true;
+    let response;
+    try {
+      response = JSON.parse(result.stdout);
+    } catch (cause) {
+      unavailable("npm pack returned invalid JSON", cause);
+    }
+    // npm can expose version metadata before its immutable tarball reaches the registry edge.
+    if (response?.error?.code === "E404") return false;
+    unavailable(`npm pack failed (${response?.error?.code ?? result.status})`);
   }
 
   // Explicit E404 proves absence; every other observation failure leaves publication unknown.
-  async #hasVersion(name, timeoutMilliseconds = registryVisibilityTimeoutMilliseconds) {
+  async #hasVersion(name) {
     const version = this.#request.version;
     const result = await this.#session.execute(
       "npm",
       this.#arguments(name, ["view", `${name}@${version}`, "version", "--prefer-online", "--json"]),
       {
         encoding: "utf8",
-        timeout: timeoutMilliseconds,
+        timeout: registryVisibilityTimeoutMilliseconds,
         killSignal: "SIGKILL",
       },
     );
@@ -210,26 +260,5 @@ class ReleaseRegistry {
     }
     if (response?.error?.code === "E404") return false;
     unreadable(`npm query failed (${response?.error?.code ?? result.status})`);
-  }
-
-  async waitForVisibility(name) {
-    const deadline = performance.now() + registryVisibilityTimeoutMilliseconds;
-    let announced = false;
-    while (true) {
-      const remaining = Math.floor(deadline - performance.now());
-      if (remaining <= 0) return false;
-      const visible = await this.#hasVersion(name, remaining);
-      if (performance.now() > deadline) return false;
-      if (visible) return true;
-      if (!announced) {
-        console.log(`  waiting for ${name}@${this.#request.version} to become readable...`);
-        announced = true;
-      }
-      const remainingAfterQuery = Math.floor(deadline - performance.now());
-      if (remainingAfterQuery <= 0) return false;
-      await delay(Math.min(registryPollIntervalMilliseconds, remainingAfterQuery), undefined, {
-        signal: this.#session.signal,
-      });
-    }
   }
 }

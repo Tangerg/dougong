@@ -25,7 +25,7 @@ import { cleanReleaseGit, installReleaseFixture } from "../release-command-fixtu
 
 const workspace = process.cwd();
 const visibility = process.env.DOUGONG_RELEASE_VISIBILITY;
-const queryMilliseconds = Number(process.env.DOUGONG_RELEASE_QUERY_MILLISECONDS ?? 0);
+const readMilliseconds = Number(process.env.DOUGONG_RELEASE_READ_MILLISECONDS ?? 0);
 const terminationBoundary = process.env.DOUGONG_RELEASE_TERMINATION_BOUNDARY ?? "registry-wait";
 const terminationSignal = process.env.DOUGONG_RELEASE_TERMINATION_SIGNAL;
 const nativeDelay = timers.setTimeout;
@@ -49,7 +49,17 @@ function recordClock() {
 }
 recordClock();
 process.once("exit", recordClock);
-if (!["immediate", "delayed", "never", "unreadable"].includes(visibility)) {
+if (
+  ![
+    "immediate",
+    "delayed",
+    "never",
+    "unreadable",
+    "archive-delayed",
+    "archive-never",
+    "archive-unreadable",
+  ].includes(visibility)
+) {
   throw new TypeError(`Unknown fixture visibility: ${visibility}`);
 }
 
@@ -64,13 +74,13 @@ timers.setTimeout = async (delayMilliseconds, _value, options) => {
   // A synchronous clock advance would conceal a caller that forgot to await the timer.
   await Promise.resolve();
   elapsedMilliseconds += delayMilliseconds;
-  if (visibility === "delayed") {
+  if (visibility === "delayed" || visibility === "archive-delayed") {
     const pending = join(workspace, "pending");
     mkdirSync(join(workspace, "published"), { recursive: true });
     for (const directory of readdirSync(pending)) {
       renameSync(join(pending, directory), join(workspace, "published", directory));
     }
-  } else if (visibility !== "never") {
+  } else if (visibility !== "never" && visibility !== "archive-never") {
     throw new Error(`Unexpected registry polling wait: ${visibility}`);
   }
   if (terminationSignal && terminationBoundary === "registry-wait") {
@@ -97,6 +107,18 @@ function packageAt(state, reference) {
       const manifest = JSON.parse(readFileSync(join(directory, "package/package.json"), "utf8"));
       return `${manifest.name}@${manifest.version}` === reference;
     });
+}
+
+function advanceRegistryRead(reference, timeoutMilliseconds) {
+  if (!packageAt("pending", reference)) return;
+  if (Number.isFinite(timeoutMilliseconds) && readMilliseconds >= timeoutMilliseconds) {
+    elapsedMilliseconds += timeoutMilliseconds;
+    return {
+      status: null,
+      error: Object.assign(new Error("npm registry read ETIMEDOUT"), { code: "ETIMEDOUT" }),
+    };
+  }
+  elapsedMilliseconds += readMilliseconds;
 }
 
 const registryTagsPath = join(workspace, "dist-tags.json");
@@ -367,10 +389,24 @@ installReleaseFixture((name, commandArguments, options, nativeSpawn, execute) =>
       }
       writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
     } else {
-      if (commandArguments.length !== 4 || commandArguments[2] !== "--pack-destination")
+      if (
+        commandArguments.length !== 5 ||
+        commandArguments[2] !== "--pack-destination" ||
+        commandArguments[4] !== "--json"
+      )
         process.exit(99);
+      const interrupted = advanceRegistryRead(commandArguments[1], timeoutMilliseconds);
+      if (interrupted) return interrupted;
       source = packageAt("published", commandArguments[1]);
-      if (!source) return { status: 1, stderr: "Package version is not published" };
+      if (!source)
+        return {
+          status: 1,
+          stdout: JSON.stringify({
+            error: {
+              code: ["unreadable", "archive-unreadable"].includes(visibility) ? "E503" : "E404",
+            },
+          }),
+        };
     }
     const archive = join(stage, basename(name === "pnpm" ? options.cwd : source) + ".tgz");
     const prefix = name === "npm" ? process.env.DOUGONG_RELEASE_PUBLISHED_ARCHIVE_PREFIX : "";
@@ -413,20 +449,14 @@ installReleaseFixture((name, commandArguments, options, nativeSpawn, execute) =>
       commandArguments.slice(2).join(" ") !== "version --prefer-online --json"
     )
       process.exit(99);
-    if (packageAt("pending", commandArguments[1])) {
-      if (Number.isFinite(timeoutMilliseconds) && queryMilliseconds >= timeoutMilliseconds) {
-        elapsedMilliseconds += timeoutMilliseconds;
-        return {
-          status: null,
-          error: Object.assign(new Error("npm query ETIMEDOUT"), { code: "ETIMEDOUT" }),
-        };
-      }
-      elapsedMilliseconds += queryMilliseconds;
-    }
+    const interrupted = advanceRegistryRead(commandArguments[1], timeoutMilliseconds);
+    if (interrupted) return interrupted;
     if (visibility === "unreadable" && packageAt("pending", commandArguments[1])) {
       return { status: 1, stdout: JSON.stringify({ error: { code: "E503" } }) };
     }
-    const directory = packageAt("published", commandArguments[1]);
+    const directory =
+      packageAt("published", commandArguments[1]) ??
+      (visibility.startsWith("archive-") ? packageAt("pending", commandArguments[1]) : undefined);
     if (directory) {
       const manifest = JSON.parse(readFileSync(join(directory, "package/package.json"), "utf8"));
       return { status: 0, stdout: JSON.stringify(manifest.version) };

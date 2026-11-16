@@ -84,7 +84,7 @@ async function runRelease(
     publishFailure,
     concurrentEdit,
     visibility = "immediate",
-    visibilityQueryMilliseconds = 0,
+    registryReadMilliseconds = 0,
     oneTimePassword,
     interruptAt,
     terminationSignal,
@@ -251,7 +251,7 @@ async function runRelease(
               DOUGONG_RELEASE_PUBLISH_FAILURE: publicationFailure ?? "",
               DOUGONG_RELEASE_CONCURRENT_EDIT: concurrentEdit ?? "",
               DOUGONG_RELEASE_VISIBILITY: visibility,
-              DOUGONG_RELEASE_QUERY_MILLISECONDS: String(visibilityQueryMilliseconds),
+              DOUGONG_RELEASE_READ_MILLISECONDS: String(registryReadMilliseconds),
               DOUGONG_RELEASE_PUBLISHED_ARCHIVE_PREFIX: publishedArchivePrefix,
               DOUGONG_RELEASE_INTERRUPT: interruption ?? "",
               DOUGONG_RELEASE_INTERRUPT_AFTER: String(interruptAfter),
@@ -637,7 +637,7 @@ it.each([undefined, "123456"])(
     );
     const publication = result.calls.filter(
       ({ command, commandArguments }) =>
-        command === "npm" && ["publish", "view"].includes(commandArguments[0]),
+        command === "npm" && ["publish", "view", "pack"].includes(commandArguments[0]),
     );
     expect(
       publication.map(({ commandArguments }) =>
@@ -645,8 +645,9 @@ it.each([undefined, "123456"])(
       ),
     ).toEqual([
       ...packages.map(() => "version"),
+      "pack",
       "dist-tags",
-      ...packages.slice(1).flatMap(() => ["publish", "version", "dist-tags"]),
+      ...packages.slice(1).flatMap(() => ["publish", "pack", "dist-tags"]),
       ...packages.map(() => "dist-tags"),
     ]);
     for (const { commandArguments } of publication.filter(
@@ -1358,18 +1359,61 @@ it("waits for registry visibility before publishing dependents", async () => {
   const publication = result.calls.filter(
     ({ command, commandArguments, delayMilliseconds }) =>
       delayMilliseconds !== undefined ||
-      (command === "npm" &&
-        (commandArguments[0] === "publish" ||
-          (commandArguments[0] === "view" && commandArguments[2] === "version"))),
+      (command === "npm" && (commandArguments[0] === "publish" || commandArguments[0] === "pack")),
+  );
+  const firstPublication = publication.findIndex(
+    ({ commandArguments }) => commandArguments?.[0] === "publish",
   );
   expect(
     publication
-      .slice(packages.length)
+      .slice(firstPublication)
       .map(({ commandArguments, delayMilliseconds }) =>
         delayMilliseconds === undefined ? commandArguments[0] : "wait",
       ),
-  ).toEqual(packages.slice(1).flatMap(() => ["publish", "view", "wait", "view"]));
+  ).toEqual(packages.slice(1).flatMap(() => ["publish", "pack", "wait", "pack"]));
   expect(result.recorded).toEqual(["update-ref", "tag", "push"]);
+});
+
+it("waits for downloadable tarballs when registry metadata appears first", async () => {
+  const result = await runRelease(() => undefined, {
+    dryRun: false,
+    visibility: "archive-delayed",
+  });
+  expect(result.status).toBe(0);
+  expect(Object.keys(result.published)).toEqual(packages);
+  expect(result.recorded).toEqual(["update-ref", "tag", "push"]);
+  expect(
+    result.calls.filter(({ delayMilliseconds }) => delayMilliseconds !== undefined),
+  ).toHaveLength(2);
+});
+
+it("bounds tarball availability by the publication deadline", async () => {
+  const result = await runRelease(() => undefined, {
+    dryRun: false,
+    visibility: "archive-never",
+  });
+  expect(result.status).toBe(1);
+  expect(result.elapsedMilliseconds).toBe(30 * 60_000);
+  expect(result.stderr).toContain("not readable within 30 minutes");
+  expect(result.recorded).toEqual([]);
+  expect(
+    result.calls.filter(
+      ({ command, commandArguments }) => command === "npm" && commandArguments[0] === "publish",
+    ),
+  ).toHaveLength(1);
+});
+
+it("preserves unexpected tarball failures without retrying them", async () => {
+  const result = await runRelease(() => undefined, {
+    dryRun: false,
+    visibility: "archive-unreadable",
+  });
+  expect(result.status).toBe(1);
+  expect(result.stderr).toContain("E503");
+  expect(result.recorded).toEqual([]);
+  expect(result.calls.filter(({ delayMilliseconds }) => delayMilliseconds !== undefined)).toEqual(
+    [],
+  );
 });
 
 it.each(["never", "unreadable"])(
@@ -1393,11 +1437,11 @@ it.each(["never", "unreadable"])(
   },
 );
 
-it("charges slow visibility queries against the same deadline as polling waits", async () => {
+it("charges slow package reads against the same deadline as polling waits", async () => {
   const result = await runRelease(() => undefined, {
     dryRun: false,
     visibility: "never",
-    visibilityQueryMilliseconds: 30_000,
+    registryReadMilliseconds: 30_000,
   });
   expect(result.status).toBe(1);
   expect(result.elapsedMilliseconds).toBe(30 * 60_000);
@@ -1406,33 +1450,33 @@ it("charges slow visibility queries against the same deadline as polling waits",
   const publication = result.calls.findIndex(
     ({ command, commandArguments }) => command === "npm" && commandArguments[0] === "publish",
   );
-  const queries = result.calls
+  const reads = result.calls
     .slice(publication)
-    .filter(({ command, commandArguments }) => command === "npm" && commandArguments[0] === "view");
-  expect(queries).toHaveLength(40);
-  for (const query of queries) {
-    expect(query.timeoutMilliseconds + query.elapsedMilliseconds).toBe(30 * 60_000);
+    .filter(({ command, commandArguments }) => command === "npm" && commandArguments[0] === "pack");
+  expect(reads).toHaveLength(40);
+  for (const read of reads) {
+    expect(read.timeoutMilliseconds + read.elapsedMilliseconds).toBe(30 * 60_000);
   }
 });
 
-it("terminates a visibility query at the remaining deadline instead of granting another budget", async () => {
+it("terminates a package read at the remaining deadline instead of granting another budget", async () => {
   const result = await runRelease(() => undefined, {
     dryRun: false,
     visibility: "never",
-    visibilityQueryMilliseconds: 29 * 60_000,
+    registryReadMilliseconds: 29 * 60_000,
   });
   expect(result.status).toBe(1);
   expect(result.elapsedMilliseconds).toBe(30 * 60_000);
-  expect(result.stderr).toContain("Cannot determine whether");
+  expect(result.stderr).toContain("Cannot download");
   expect(result.stderr).toContain("ETIMEDOUT");
   expect(result.recorded).toEqual([]);
   expect(
     result.calls.filter(({ delayMilliseconds }) => delayMilliseconds !== undefined),
   ).toHaveLength(1);
-  const lastQuery = result.calls.findLast(
-    ({ command, commandArguments }) => command === "npm" && commandArguments[0] === "view",
+  const lastRead = result.calls.findLast(
+    ({ command, commandArguments }) => command === "npm" && commandArguments[0] === "pack",
   );
-  expect(lastQuery.timeoutMilliseconds).toBe(45_000);
+  expect(lastRead.timeoutMilliseconds).toBe(45_000);
 });
 
 it("finishes release recording after every upload already completed", async () => {
